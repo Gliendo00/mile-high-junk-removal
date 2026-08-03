@@ -2,7 +2,7 @@
    Built from the "Organic" design system (project/ds/styles.css) with the
    site's chosen tweaks (lime-green accent, sharp corners, compact spacing)
    baked in as fixed tokens instead of a runtime props panel. */
-@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Antonio:wght@700&family=Figtree:wght@400;600;700&display=swap');
 
 :root {
   --color-bg: color-mix(in srgb, #69c22a 8%, white);
@@ -42,8 +42,8 @@
   --color-accent-2-800: #3d472b;
   --color-accent-2-900: #272e1b;
 
-  --font-heading: "Caprasimo", system-ui, sans-serif;
-  --font-heading-weight: 400;
+  --font-heading: "Antonio", system-ui, sans-serif;
+  --font-heading-weight: 700;
   --font-body: "Figtree", system-ui, sans-serif;
 
   --space-1: 4.4px;
