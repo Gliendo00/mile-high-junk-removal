@@ -185,12 +185,14 @@ input[type="file"].input { padding: 10px; }
 @media (prefers-reduced-motion: reduce) { .nav-utility-cta { animation: none; } }
 
 .nav-brand-row {
+  background: linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
+}
+.nav-brand-row-inner {
+  display: flex; justify-content: center; align-items: center; padding-block: 20px;
   background:
     linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
-    url("images/denver-skyline-illustration.png") center 25% / cover no-repeat,
-    linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
+    url("images/denver-skyline-illustration.png") center 35% / cover no-repeat;
 }
-.nav-brand-row-inner { display: flex; justify-content: center; padding-block: 20px; }
 .nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
 .nav-brand-logo { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; flex: none; }
 .nav-brand-word {
