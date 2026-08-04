@@ -159,8 +159,16 @@ a.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
 .nav-brand img, .nav-brand-logo { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-neutral-900) 12%, transparent); }
 
 @keyframes nav-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 55%, transparent); }
-  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--color-accent) 0%, transparent); }
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--color-accent) 60%, transparent),
+      0 0 10px 2px color-mix(in srgb, var(--color-accent) 55%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 9px color-mix(in srgb, var(--color-accent) 0%, transparent),
+      0 0 26px 8px color-mix(in srgb, var(--color-accent) 90%, transparent);
+  }
 }
 
 /* two-tier header: dark bar (phone + links + CTA) stays pinned, logo band scrolls away normally */
