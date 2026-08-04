@@ -223,6 +223,11 @@ a.tag-outline:hover { background: var(--color-accent-100); }
 }
 .nav .btn { white-space: nowrap; }
 
+.trust-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; text-align: center; }
+@media (max-width: 560px) {
+  .trust-stats { grid-template-columns: repeat(2, 1fr); gap: 24px 16px; }
+}
+
 /* — layout — */
 .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 32px; }
 .placeholder-photo {
