@@ -2,7 +2,7 @@
    Built from the "Organic" design system (project/ds/styles.css) with the
    site's chosen tweaks (lime-green accent, sharp corners, compact spacing)
    baked in as fixed tokens instead of a runtime props panel. */
-@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Antonio:wght@700&family=Figtree:wght@400;600;700&display=swap');
 
 :root {
   --color-bg: color-mix(in srgb, #69c22a 8%, white);
@@ -42,8 +42,8 @@
   --color-accent-2-800: #3d472b;
   --color-accent-2-900: #272e1b;
 
-  --font-heading: "Caprasimo", system-ui, sans-serif;
-  --font-heading-weight: 400;
+  --font-heading: "Antonio", system-ui, sans-serif;
+  --font-heading-weight: 700;
   --font-body: "Figtree", system-ui, sans-serif;
 
   --space-1: 4.4px;
@@ -80,7 +80,7 @@ body {
 }
 *, *::before, *::after { box-sizing: border-box; }
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-family: var(--font-heading); font-weight: 900; font-style: italic;
   line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
 }
 h1 { font-size: 42px; }
@@ -152,10 +152,61 @@ input[type="file"].input { padding: 10px; }
 .tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
 
 /* — navigation — */
-.nav { display: flex; flex-wrap: wrap; row-gap: 10px; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4); }
-.nav-brand { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 18px; margin-right: auto; white-space: nowrap; }
-.nav a { color: inherit; text-decoration: none; font-size: 14px; white-space: nowrap; }
-.nav a:hover { color: var(--color-accent); }
+.nav-brand { font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 22px; margin-right: auto; white-space: nowrap; }
+.nav-brand .accent { color: var(--color-accent-700); }
+.nav-brand img, .nav-brand-logo { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-neutral-900) 12%, transparent); }
+
+@keyframes nav-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 55%, transparent); }
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--color-accent) 0%, transparent); }
+}
+
+/* two-tier header: dark bar (phone + links + CTA) stays pinned, logo band scrolls away normally */
+.nav-utility {
+  background: #000; color: var(--color-neutral-100);
+  position: sticky; top: 0; z-index: 20;
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--color-neutral-900) 10%, transparent);
+}
+.nav-utility-inner { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding-block: 11px; }
+.nav-utility-phone, .nav-utility-cta { padding: 6px 18px; font-size: 12.5px; flex: none; white-space: nowrap; }
+.nav-utility-links { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.nav-utility-links a {
+  color: inherit; text-decoration: none; font-size: 13.5px; font-weight: 600;
+  position: relative; padding-bottom: 3px; white-space: nowrap;
+}
+.nav-utility-links a::after {
+  content: ''; position: absolute; left: 0; right: 100%; bottom: 0; height: 2px;
+  background: var(--color-accent-200); border-radius: 2px; transition: right 0.18s ease;
+}
+.nav-utility-links a:hover { color: var(--color-accent-200); }
+.nav-utility-links a:hover::after, .nav-utility-links a[aria-current='page']::after { right: 0; }
+.nav-utility-links a[aria-current='page'] { color: var(--color-accent-200); }
+.nav-utility-cta { animation: nav-pulse 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .nav-utility-cta { animation: none; } }
+
+.nav-brand-row {
+  background:
+    linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
+    url("images/denver-skyline-illustration.png") center 25% / cover no-repeat,
+    linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
+}
+.nav-brand-row-inner { display: flex; justify-content: center; padding-block: 20px; }
+.nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
+.nav-brand-logo { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; flex: none; }
+.nav-brand-word {
+  font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 38px; white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+}
+.nav-brand-word-plain { color: var(--color-text); }
+
+@media (max-width: 860px) {
+  .nav-utility-links { display: none; }
+}
+@media (max-width: 560px) {
+  .nav-brand-word { font-size: 21px; }
+  .nav-brand-logo { width: 40px; height: 40px; }
+  .nav-brand-row-inner { padding-block: 14px; }
+}
 .nav .btn { white-space: nowrap; }
 
 /* — layout — */
