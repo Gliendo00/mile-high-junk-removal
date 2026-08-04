@@ -185,20 +185,26 @@ input[type="file"].input { padding: 10px; }
 @media (prefers-reduced-motion: reduce) { .nav-utility-cta { animation: none; } }
 
 .nav-brand-row {
-  background: linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
+  background:
+    linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
+    url("images/denver-skyline-illustration.jpg") center 25% / cover no-repeat,
+    linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
 }
 .nav-brand-row-inner { display: flex; justify-content: center; padding-block: 20px; }
-.nav-brand-centered { display: flex; align-items: center; gap: 14px; text-decoration: none; color: inherit; }
-.nav-brand-logo { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; flex: none; }
-.nav-brand-word { font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 30px; white-space: nowrap; }
+.nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
+.nav-brand-logo { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; flex: none; }
+.nav-brand-word {
+  font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 38px; white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+}
 .nav-brand-word-plain { color: var(--color-text); }
 
 @media (max-width: 860px) {
   .nav-utility-links { display: none; }
 }
 @media (max-width: 560px) {
-  .nav-brand-word { font-size: 19px; }
-  .nav-brand-logo { width: 38px; height: 38px; }
+  .nav-brand-word { font-size: 21px; }
+  .nav-brand-logo { width: 40px; height: 40px; }
   .nav-brand-row-inner { padding-block: 14px; }
 }
 .nav .btn { white-space: nowrap; }
