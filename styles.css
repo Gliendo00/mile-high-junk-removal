@@ -140,6 +140,8 @@ input[type="file"].input { padding: 10px; }
   display: flex; flex-direction: column; gap: var(--space-2);
   padding: var(--space-3); border-radius: calc(var(--radius-lg) * 1.15); background: var(--color-surface);
 }
+a.card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+a.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
 .card-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 17px; line-height: 1.2; }
 .card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
 .card-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: color-mix(in srgb, var(--color-text) 50%, transparent); }
