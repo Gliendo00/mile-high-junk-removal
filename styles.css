@@ -232,12 +232,30 @@ a.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
 }
 .placeholder-photo svg { opacity: 0.6; }
 
+/* — reviews carousel — */
+.reviews-carousel {
+  overflow: hidden; position: relative;
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 40px, black calc(100% - 40px), transparent);
+  mask-image: linear-gradient(90deg, transparent, black 40px, black calc(100% - 40px), transparent);
+}
+.reviews-track { display: flex; gap: 22px; width: max-content; animation: reviews-scroll 42s linear infinite; }
+.reviews-carousel:hover .reviews-track { animation-play-state: paused; }
+.reviews-track .card { flex: 0 0 320px; }
+@keyframes reviews-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reviews-track { animation: none; }
+  .reviews-carousel { overflow-x: auto; }
+}
+
 @media (max-width: 860px) {
   .wrap { padding-inline: 20px; }
   .hero-grid, .why-grid { grid-template-columns: 1fr !important; }
   .services-grid, .price-grid { grid-template-columns: repeat(2, 1fr) !important; }
-  .testi-grid, .gallery-grid { grid-template-columns: repeat(2, 1fr) !important; }
-  .nav-links { display: none !important; }
+  .gallery-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .reviews-track .card { flex-basis: 280px; }
 }
 @media (max-width: 560px) {
   .services-grid, .price-grid { grid-template-columns: 1fr !important; }
