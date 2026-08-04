@@ -1,9 +1,9 @@
 // Vercel serverless function — sends the contact form as an email via Resend
 // so leads land in the inbox without the visitor's email client opening.
 // Configure RESEND_API_KEY (required) as an environment variable in Vercel.
-// Optional: RESEND_FROM_EMAIL (defaults to Resend's shared sandbox sender
-// until milehighjunkremoval.net is verified in Resend) and CONTACT_TO_EMAIL
-// (defaults to contact@milehighjunkremoval.net).
+// Optional: RESEND_FROM_EMAIL (defaults to an address on the now-verified
+// milehighjunkremoval.net domain) and CONTACT_TO_EMAIL (defaults to
+// contact@milehighjunkremoval.net).
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -31,7 +31,7 @@ module.exports = async (req, res) => {
     : [];
 
   const fromEmail =
-    process.env.RESEND_FROM_EMAIL || "Mile High Junk Removal <onboarding@resend.dev>";
+    process.env.RESEND_FROM_EMAIL || "Mile High Junk Removal <leads@milehighjunkremoval.net>";
   const toEmail = process.env.CONTACT_TO_EMAIL || "contact@milehighjunkremoval.net";
 
   const html =
