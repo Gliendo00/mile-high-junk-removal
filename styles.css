@@ -203,7 +203,7 @@ a.tag-outline:hover { background: var(--color-accent-100); }
   display: flex; justify-content: center; align-items: center; padding-block: 20px;
   background:
     linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
-    url("images/denver-skyline-illustration.png") center / cover no-repeat;
+    url("images/denver-skyline-illustration.webp") center / cover no-repeat;
 }
 .nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
 .nav-brand-logo { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; flex: none; }
