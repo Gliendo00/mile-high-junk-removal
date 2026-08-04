@@ -112,10 +112,10 @@ img { display: block; max-width: 100%; }
   border-radius: var(--pill-radius);
 }
 .btn svg { display: block; }
-.btn-primary { background: var(--color-accent); color: var(--color-bg); }
+.btn-primary { background: var(--color-accent); color: #fff; box-shadow: var(--shadow-md); }
 .btn-primary:hover { background: var(--color-accent-600); }
 .btn-primary:active { background: var(--color-accent-700); }
-.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary { border-width: 2px; border-color: var(--color-text); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
 
