@@ -260,11 +260,11 @@ a.tag-outline:hover { background: var(--color-accent-100); }
 @media (max-width: 860px) {
   .wrap { padding-inline: 20px; }
   .hero-grid, .why-grid { grid-template-columns: 1fr !important; }
-  .services-grid, .price-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .services-grid, .price-grid, .blog-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .gallery-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .reviews-track .card { flex-basis: 280px; }
 }
 @media (max-width: 560px) {
-  .services-grid, .price-grid { grid-template-columns: 1fr !important; }
+  .services-grid, .price-grid, .blog-grid { grid-template-columns: 1fr !important; }
   h1 { font-size: 34px !important; }
 }
