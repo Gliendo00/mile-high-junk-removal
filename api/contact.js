@@ -61,12 +61,14 @@ module.exports = async (req, res) => {
 
     if (!resendRes.ok) {
       const errText = await resendRes.text();
+      console.error("Resend API error:", resendRes.status, errText);
       res.status(502).json({ error: "Failed to send.", detail: errText });
       return;
     }
 
     res.status(200).json({ ok: true });
   } catch (err) {
+    console.error("Contact form send failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Failed to send." });
   }
 };
