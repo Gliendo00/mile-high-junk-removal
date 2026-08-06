@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to content</a>
 
 <!-- NAV -->
 <div class="nav-brand-row">
@@ -25,6 +26,9 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c0 9.4 6.6 16 16 16l1.4-4.4-5-2-1.7 2C11.9 14 10 12.1 8.4 9.3l2-1.7-2-5L4 4Z"></path></svg>
       303-990-1812
     </a>
+    <button type="button" class="nav-hamburger" id="nav-hamburger" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+      <span></span><span></span><span></span>
+    </button>
     <nav class="nav-utility-links">
       <a href="index.html#services">Services</a>
       <a href="index.html#why-us">Why Us</a>
@@ -37,15 +41,27 @@
     </nav>
     <a href="https://book.housecallpro.com/book/Mile-High-Junk-Removal/8230fedac3414ef4bcb18b0fc8e8e460?v2=true" class="btn btn-primary nav-utility-cta">Book Now</a>
   </div>
+  <nav id="mobile-menu" class="mobile-menu" aria-label="Mobile">
+    <div class="wrap">
+      <a href="index.html#services">Services</a>
+      <a href="index.html#why-us">Why Us</a>
+      <a href="index.html#gallery">Gallery</a>
+      <a href="index.html#reviews">Reviews</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="index.html#service-areas">Service Areas</a>
+      <a href="blog.html">Blog</a>
+      <a href="index.html#contact">Contact</a>
+    </div>
+  </nav>
 </header>
 
-<main>
+<main id="main">
 
   <!-- POST HERO -->
   <section class="wrap" style="padding-block:var(--section-pad)">
     <div style="max-width:720px">
       <a href="blog.html" style="font-size:13px;color:var(--color-accent-700);text-decoration:none">← Back to Blog</a>
-      <h6 style="color:var(--color-accent-700);margin-top:16px">Behind the Scenes</h6>
+      <p class="eyebrow" style="color:var(--color-accent-700);margin-top:16px">Behind the Scenes</p>
       <h1 style="max-width:680px">What Actually Happens to Your Junk After We Haul It Away</h1>
       <div class="text-muted" style="font-size:13px">August 4, 2026 · 3 min read</div>
     </div>
@@ -151,5 +167,6 @@
   <p class="text-muted" style="font-size:12px;margin:0">© Mile High Junk Removal. Fully Insured.</p>
 </div>
 
+<script src="nav.js" defer></script>
 </body>
 </html>

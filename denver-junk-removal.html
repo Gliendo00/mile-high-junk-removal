@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to content</a>
 
 <!-- NAV -->
 <div class="nav-brand-row">
@@ -25,6 +26,9 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c0 9.4 6.6 16 16 16l1.4-4.4-5-2-1.7 2C11.9 14 10 12.1 8.4 9.3l2-1.7-2-5L4 4Z"></path></svg>
       303-990-1812
     </a>
+    <button type="button" class="nav-hamburger" id="nav-hamburger" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+      <span></span><span></span><span></span>
+    </button>
     <nav class="nav-utility-links">
       <a href="index.html#services">Services</a>
       <a href="index.html#why-us">Why Us</a>
@@ -37,14 +41,26 @@
     </nav>
     <a href="https://book.housecallpro.com/book/Mile-High-Junk-Removal/8230fedac3414ef4bcb18b0fc8e8e460?v2=true" class="btn btn-primary nav-utility-cta">Book Now</a>
   </div>
+  <nav id="mobile-menu" class="mobile-menu" aria-label="Mobile">
+    <div class="wrap">
+      <a href="index.html#services">Services</a>
+      <a href="index.html#why-us">Why Us</a>
+      <a href="index.html#gallery">Gallery</a>
+      <a href="index.html#reviews">Reviews</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="index.html#service-areas">Service Areas</a>
+      <a href="blog.html">Blog</a>
+      <a href="index.html#contact">Contact</a>
+    </div>
+  </nav>
 </header>
 
-<main>
+<main id="main">
 
   <!-- LOCATION HERO -->
   <section class="wrap" style="padding-block:var(--section-pad)">
     <div style="max-width:680px">
-      <h6 style="color:var(--color-accent-700)">Denver Junk Removal</h6>
+      <p class="eyebrow" style="color:var(--color-accent-700)">Denver Junk Removal</p>
       <h1 style="max-width:640px">Junk Removal in Denver, CO</h1>
       <p style="font-size:17px;opacity:0.85;max-width:640px;margin-bottom:8px">Denver is home base — most of our jobs happen within a few miles of downtown, so same-day and next-day slots are almost always open. From a LoDo loft cleanout to a Washington Park garage purge, we know the city's parking, alleys, and HOA quirks well enough to get in and out fast.</p>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:20px">
@@ -66,7 +82,7 @@
 
   <!-- NEIGHBORHOODS -->
   <section class="wrap" style="padding-block:var(--section-pad)">
-    <h6 style="color:var(--color-accent-700)">Areas we cover</h6>
+    <p class="eyebrow" style="color:var(--color-accent-700)">Areas we cover</p>
     <h2 style="max-width:600px;margin-bottom:24px">Denver neighborhoods we serve</h2>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:32px">
       <span class="tag tag-outline">LoDo</span>
@@ -87,7 +103,7 @@
   <!-- SERVICES -->
   <section style="background:var(--color-surface);padding-block:var(--section-pad)">
     <div class="wrap">
-      <h6 style="color:var(--color-accent-700)">What we haul</h6>
+      <p class="eyebrow" style="color:var(--color-accent-700)">What we haul</p>
       <h2 style="max-width:560px;margin-bottom:32px">Services available in Denver</h2>
       <div class="services-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px">
       <a href="home-cleanouts.html" class="card elev-sm" style="text-decoration:none;color:inherit">
@@ -124,7 +140,7 @@
 
   <!-- LOCAL REVIEW -->
   <section class="wrap" style="padding-block:var(--section-pad)">
-    <h6 style="color:var(--color-accent-700)">From Denver</h6>
+    <p class="eyebrow" style="color:var(--color-accent-700)">From Denver</p>
     <h2 style="max-width:560px;margin-bottom:28px">What Denver customers are saying</h2>
     <div class="why-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:1080px">
       <div class="card elev-sm">
@@ -143,7 +159,7 @@
   <!-- FAQ -->
   <section style="padding-block:var(--section-pad)">
     <div class="wrap">
-      <h6 style="color:var(--color-accent-700)">Common questions</h6>
+      <p class="eyebrow" style="color:var(--color-accent-700)">Common questions</p>
       <h2 style="max-width:600px;margin-bottom:28px">Denver junk removal FAQ</h2>
       <div style="display:flex;flex-direction:column;gap:22px;max-width:640px">
       <div>
@@ -164,7 +180,7 @@
 
   <!-- OTHER AREAS -->
   <section class="wrap" style="padding-block:var(--section-pad)">
-    <h6 style="color:var(--color-accent-700)">Also serving</h6>
+    <p class="eyebrow" style="color:var(--color-accent-700)">Also serving</p>
     <h2 style="max-width:560px;margin-bottom:28px">Other areas we work in</h2>
     <div style="display:flex;flex-wrap:wrap;gap:10px">
       <a href="aurora-junk-removal.html" class="tag tag-outline">Aurora</a>
@@ -256,5 +272,6 @@
   <p class="text-muted" style="font-size:12px;margin:0">© Mile High Junk Removal. Fully Insured.</p>
 </div>
 
+<script src="nav.js" defer></script>
 </body>
 </html>
