@@ -1,0 +1,105 @@
+/* Booking wizard — page-scoped styles, isolated from the shared styles.css.
+   Reuses the site's existing CSS custom properties (colors, fonts, spacing)
+   defined in ../styles.css so the page matches the rest of the site. */
+
+.wizard-wrap { max-width: 760px; margin: 0 auto; padding-inline: 32px; }
+@media (max-width: 560px) { .wizard-wrap { padding-inline: 20px; } }
+
+/* — step indicator — */
+.wizard-steps {
+  display: flex; list-style: none; margin: 0 0 var(--space-8); padding: 0;
+  counter-reset: wizard-step;
+}
+.wizard-steps li {
+  flex: 1; text-align: center; position: relative;
+  font-size: 11px; font-weight: 600; opacity: 0.55;
+}
+.wizard-steps li::before {
+  counter-increment: wizard-step; content: counter(wizard-step);
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; margin: 0 auto 6px; border-radius: 50%;
+  background: var(--color-surface); border: 1.5px solid var(--color-divider);
+  font-family: var(--font-heading); font-weight: 700;
+}
+.wizard-steps li::after {
+  content: ''; position: absolute; top: 13px; left: -50%; width: 100%; height: 1.5px;
+  background: var(--color-divider); z-index: -1;
+}
+.wizard-steps li:first-child::after { display: none; }
+.wizard-steps li.is-active,
+.wizard-steps li.is-done { opacity: 1; }
+.wizard-steps li.is-active::before,
+.wizard-steps li.is-done::before { background: var(--color-accent-700); border-color: var(--color-accent-700); color: #fff; }
+.wizard-steps li.is-done::after,
+.wizard-steps li.is-active::after { background: var(--color-accent-700); }
+@media (max-width: 560px) { .wizard-steps li span { display: none; } }
+
+/* — step panels — */
+.wizard-step { display: flex; flex-direction: column; gap: 18px; }
+.wizard-step[hidden] { display: none; }
+
+.wizard-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.wizard-actions .btn { padding: 12px 24px; }
+.wizard-error {
+  display: none; font-size: 13px; color: #b3261e;
+  background: color-mix(in srgb, #b3261e 8%, transparent); border-radius: var(--radius-sm); padding: 10px 14px;
+}
+.wizard-error.is-visible { display: block; }
+
+/* — service selection cards (step 1) — */
+.service-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 700px) { .service-options { grid-template-columns: 1fr; } }
+.service-option { position: relative; }
+.service-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.service-option label {
+  display: flex; flex-direction: column; gap: 8px; cursor: pointer;
+  padding: 20px 16px; border-radius: var(--radius-lg); background: var(--color-surface);
+  border: 2px solid var(--color-divider); height: 100%; box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.service-option label:hover { transform: translateY(-2px); }
+.service-option input:focus-visible + label { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.service-option input:checked + label { border-color: var(--color-accent-700); background: var(--color-accent-100); }
+.service-option .service-title { font-family: var(--font-body); font-weight: 700; font-size: 15px; }
+.service-option .service-desc { font-size: 12.5px; opacity: 0.75; margin: 0; }
+
+.job-details-panel { display: flex; flex-direction: column; gap: 18px; }
+.job-details-panel[hidden] { display: none; }
+
+/* — field grid — */
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 560px) { .field-grid { grid-template-columns: 1fr; } }
+.field-note { font-size: 12px; opacity: 0.7; margin: 4px 0 0; }
+
+/* — photos (step 3) — */
+.photo-drop {
+  border: 1.5px dashed color-mix(in srgb, var(--color-text) 25%, transparent);
+  border-radius: var(--radius-lg); padding: 24px; text-align: center; background: var(--color-surface);
+}
+.photo-drop input { display: block; margin: 10px auto 0; }
+.photo-preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-top: 14px; }
+.photo-preview {
+  position: relative; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden;
+  box-shadow: var(--shadow-sm); background: var(--color-surface);
+}
+.photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+.photo-preview button {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: rgba(0,0,0,0.65); color: #fff; font-size: 13px; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+
+/* — review (step 6) — */
+.review-group { border: 1px solid var(--color-divider); border-radius: var(--radius-lg); padding: 16px 18px; background: var(--color-surface); }
+.review-group-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.review-group-head h4 { margin: 0; }
+.review-group dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13.5px; }
+.review-group dt { opacity: 0.65; }
+.review-group dd { margin: 0; }
+.review-edit-link {
+  background: none; border: none; color: var(--color-accent-700); font-weight: 600;
+  font-size: 12.5px; cursor: pointer; padding: 2px 4px; text-decoration: underline;
+}
+
+.wizard-success { display: none; }
+.wizard-success.is-visible { display: flex; flex-direction: column; gap: 10px; }

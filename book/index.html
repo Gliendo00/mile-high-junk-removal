@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-WC7NX6SETQ"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-WC7NX6SETQ');
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<title>Book Online | Mile High Junk Removal</title>
+<meta name="description" content="Book junk removal, a 15-yard dumpster rental, or light demo online with Mile High Junk Removal. Tell us the details, pick a preferred date, and we'll confirm your appointment.">
+<link rel="canonical" href="https://www.milehighjunkremoval.net/book/">
+<link rel="icon" href="../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="book.css">
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to content</a>
+
+<!-- NAV -->
+<div class="nav-brand-row">
+  <div class="wrap nav-brand-row-inner">
+    <a href="../index.html" class="nav-brand-centered">
+      <img src="../images/mile-high-junk-removal-logo.webp" alt="Mile High Junk Removal" class="nav-brand-logo">
+      <span class="nav-brand-word nav-brand-word-plain">Mile High Junk Removal</span>
+    </a>
+  </div>
+</div>
+<header class="nav-utility">
+  <div class="wrap nav-utility-inner">
+    <a href="tel:3039901812" class="btn btn-primary nav-utility-phone">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c0 9.4 6.6 16 16 16l1.4-4.4-5-2-1.7 2C11.9 14 10 12.1 8.4 9.3l2-1.7-2-5L4 4Z"></path></svg>
+      303-990-1812
+    </a>
+    <button type="button" class="nav-hamburger" id="nav-hamburger" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+      <span></span><span></span><span></span>
+    </button>
+    <nav class="nav-utility-links">
+      <a href="../index.html">Home</a>
+      <a href="../index.html#services">Services</a>
+      <a href="../pricing.html">Pricing</a>
+      <a href="../blog.html">Blog</a>
+      <a href="../index.html#contact">Contact</a>
+    </nav>
+    <a href="tel:3039901812" class="btn btn-primary nav-utility-cta">Call Us</a>
+  </div>
+  <nav id="mobile-menu" class="mobile-menu" aria-label="Mobile">
+    <div class="wrap">
+      <a href="../index.html">Home</a>
+      <a href="../index.html#services">Services</a>
+      <a href="../pricing.html">Pricing</a>
+      <a href="../blog.html">Blog</a>
+      <a href="../index.html#contact">Contact</a>
+    </div>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="wrap wizard-wrap" style="padding-block:var(--section-pad)">
+    <p class="eyebrow" style="color:var(--color-accent-700)">Book online</p>
+    <h1 style="font-size:34px;margin-bottom:8px">Get your job on the schedule</h1>
+    <p class="text-muted" style="margin-bottom:32px">Tell us about the job, pick a preferred date, and we'll confirm your appointment by phone or text.</p>
+
+    <ol class="wizard-steps" id="wizard-steps">
+      <li data-step="1" class="is-active"><span>Service</span></li>
+      <li data-step="2"><span>Details</span></li>
+      <li data-step="3"><span>Photos</span></li>
+      <li data-step="4"><span>Date &amp; Time</span></li>
+      <li data-step="5"><span>Your Info</span></li>
+      <li data-step="6"><span>Review</span></li>
+    </ol>
+
+    <div class="wizard-error" id="wizard-error"></div>
+
+    <!-- STEP 1 — CHOOSE SERVICE -->
+    <section class="wizard-step" data-step="1">
+      <h2 style="font-size:20px">What do you need?</h2>
+      <div class="service-options">
+        <div class="service-option">
+          <input type="radio" name="serviceType" id="service-junk_removal" value="junk_removal">
+          <label for="service-junk_removal">
+            <div class="service-title">Junk Removal</div>
+            <p class="service-desc">Furniture, appliances, cleanouts &mdash; we haul it away.</p>
+          </label>
+        </div>
+        <div class="service-option">
+          <input type="radio" name="serviceType" id="service-dumpster_rental" value="dumpster_rental">
+          <label for="service-dumpster_rental">
+            <div class="service-title">15-Yard Dumpster Rental</div>
+            <p class="service-desc">A dumpster dropped at your property for your project.</p>
+          </label>
+        </div>
+        <div class="service-option">
+          <input type="radio" name="serviceType" id="service-light_demo" value="light_demo">
+          <label for="service-light_demo">
+            <div class="service-title">Light Demo</div>
+            <p class="service-desc">Sheds, decks, fences, interior teardown &mdash; small demo jobs.</p>
+          </label>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <span></span>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </div>
+    </section>
+
+    <!-- STEP 2 — JOB DETAILS -->
+    <section class="wizard-step" data-step="2" hidden>
+      <h2 style="font-size:20px">Job details</h2>
+
+      <div id="details-junk_removal" class="job-details-panel" hidden>
+        <div class="field">
+          <label for="jr-items">What needs to be removed?</label>
+          <textarea class="input" id="jr-items" rows="3" maxlength="2000" placeholder="e.g. a couch, mattress, and several boxes"></textarea>
+        </div>
+        <div class="field">
+          <label for="jr-location">Where are the items located?</label>
+          <input class="input" id="jr-location" type="text" maxlength="200" placeholder="e.g. garage, backyard, 2nd floor apartment">
+        </div>
+        <div class="field">
+          <label for="jr-stairs">Any stairs?</label>
+          <select class="input" id="jr-stairs">
+            <option value="">Select one&hellip;</option>
+            <option value="none">No stairs</option>
+            <option value="some">Some stairs</option>
+            <option value="multiple_flights">Multiple flights</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="jr-notes">Additional details</label>
+          <textarea class="input" id="jr-notes" rows="3" maxlength="2000" placeholder="Anything else we should know?"></textarea>
+        </div>
+      </div>
+
+      <div id="details-dumpster_rental" class="job-details-panel" hidden>
+        <div class="field">
+          <label for="dr-material">What type of material?</label>
+          <input class="input" id="dr-material" type="text" maxlength="200" placeholder="e.g. household junk, construction debris, yard waste">
+        </div>
+        <div class="field-grid">
+          <div class="field">
+            <label for="dr-delivery">Desired delivery date</label>
+            <input class="input" id="dr-delivery" type="date">
+          </div>
+          <div class="field">
+            <label for="dr-pickup">Desired pickup date</label>
+            <input class="input" id="dr-pickup" type="date">
+          </div>
+        </div>
+        <div class="field">
+          <label for="dr-placement">Where should the dumpster be placed?</label>
+          <input class="input" id="dr-placement" type="text" maxlength="200" placeholder="e.g. driveway, curb, side yard">
+        </div>
+        <div class="field">
+          <label for="dr-notes">Additional details</label>
+          <textarea class="input" id="dr-notes" rows="3" maxlength="2000" placeholder="Anything else we should know?"></textarea>
+        </div>
+      </div>
+
+      <div id="details-light_demo" class="job-details-panel" hidden>
+        <div class="field">
+          <label for="ld-what">What needs to be demolished?</label>
+          <textarea class="input" id="ld-what" rows="3" maxlength="2000" placeholder="e.g. a wood shed, an interior wall"></textarea>
+        </div>
+        <div class="field">
+          <label for="ld-size">Approximate size</label>
+          <input class="input" id="ld-size" type="text" maxlength="200" placeholder="e.g. 10x12 shed, 200 sq ft deck">
+        </div>
+        <div class="field">
+          <label for="ld-debris">Is debris removal needed?</label>
+          <select class="input" id="ld-debris">
+            <option value="">Select one&hellip;</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ld-notes">Additional details</label>
+          <textarea class="input" id="ld-notes" rows="3" maxlength="2000" placeholder="Anything else we should know?"></textarea>
+        </div>
+      </div>
+
+      <div class="wizard-actions">
+        <button type="button" class="btn btn-secondary" data-back>Back</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </div>
+    </section>
+
+    <!-- STEP 3 — PHOTOS -->
+    <section class="wizard-step" data-step="3" hidden>
+      <h2 style="font-size:20px">Add photos (optional)</h2>
+      <p class="text-muted">Photos help us prepare, but aren't required to submit your request.</p>
+      <div class="photo-drop">
+        <p style="margin:0;font-size:13px">Choose photos from your device</p>
+        <input class="input" id="photo-input" type="file" accept="image/*" multiple>
+        <p class="field-note">Photo upload isn't wired up to storage yet in this preview &mdash; your selected photos are shown below for reference only and won't be sent when you submit. We'll follow up to collect photos, or you can text them anytime to 303-990-1812.</p>
+      </div>
+      <div class="photo-preview-grid" id="photo-preview-grid"></div>
+      <div class="wizard-actions">
+        <button type="button" class="btn btn-secondary" data-back>Back</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </div>
+    </section>
+
+    <!-- STEP 4 — DATE & TIME -->
+    <section class="wizard-step" data-step="4" hidden>
+      <h2 style="font-size:20px">Preferred date &amp; time</h2>
+      <p class="text-muted">These are your <strong>preferred</strong> times &mdash; we don't have real-time availability yet, so we'll call or text to confirm the exact window.</p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="pref-date">Preferred appointment date</label>
+          <input class="input" id="pref-date" type="date">
+        </div>
+        <div class="field">
+          <label for="pref-window">Preferred time window</label>
+          <select class="input" id="pref-window">
+            <option value="">Select one&hellip;</option>
+            <option value="morning">Morning (8am&ndash;11am)</option>
+            <option value="midday">Midday (11am&ndash;2pm)</option>
+            <option value="afternoon">Afternoon (2pm&ndash;5pm)</option>
+            <option value="evening">Evening (5pm&ndash;7pm)</option>
+          </select>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <button type="button" class="btn btn-secondary" data-back>Back</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </div>
+    </section>
+
+    <!-- STEP 5 — CUSTOMER INFORMATION -->
+    <section class="wizard-step" data-step="5" hidden>
+      <h2 style="font-size:20px">Your information</h2>
+      <div class="field-grid">
+        <div class="field">
+          <label for="cust-first">First name</label>
+          <input class="input" id="cust-first" type="text" maxlength="80" autocomplete="given-name">
+        </div>
+        <div class="field">
+          <label for="cust-last">Last name</label>
+          <input class="input" id="cust-last" type="text" maxlength="80" autocomplete="family-name">
+        </div>
+        <div class="field">
+          <label for="cust-phone">Phone</label>
+          <input class="input" id="cust-phone" type="tel" maxlength="30" placeholder="(303) 000-0000" autocomplete="tel">
+        </div>
+        <div class="field">
+          <label for="cust-email">Email <span class="text-muted" style="font-weight:400">(optional)</span></label>
+          <input class="input" id="cust-email" type="email" maxlength="254" placeholder="you@example.com" autocomplete="email">
+        </div>
+      </div>
+      <div class="field">
+        <label for="cust-address">Street address</label>
+        <input class="input" id="cust-address" type="text" maxlength="200" autocomplete="address-line1">
+      </div>
+      <div class="field-grid">
+        <div class="field">
+          <label for="cust-city">City</label>
+          <input class="input" id="cust-city" type="text" maxlength="80" autocomplete="address-level2">
+        </div>
+        <div class="field">
+          <label for="cust-state">State</label>
+          <input class="input" id="cust-state" type="text" maxlength="2" value="CO" style="text-transform:uppercase" autocomplete="address-level1">
+        </div>
+      </div>
+      <div class="field" style="max-width:200px">
+        <label for="cust-zip">ZIP</label>
+        <input class="input" id="cust-zip" type="text" maxlength="10" autocomplete="postal-code">
+      </div>
+      <div class="wizard-actions">
+        <button type="button" class="btn btn-secondary" data-back>Back</button>
+        <button type="button" class="btn btn-primary" data-next>Next</button>
+      </div>
+    </section>
+
+    <!-- STEP 6 — REVIEW -->
+    <section class="wizard-step" data-step="6" hidden>
+      <h2 style="font-size:20px">Review your request</h2>
+      <div id="review-content" style="display:flex;flex-direction:column;gap:14px"></div>
+      <div class="wizard-actions">
+        <button type="button" class="btn btn-secondary" data-back>Back</button>
+        <button type="button" class="btn btn-primary" id="submit-booking">Submit Request</button>
+      </div>
+      <div class="card elev-sm wizard-success" id="wizard-success">
+        <div style="display:flex;align-items:center;gap:10px">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-700)" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12.5 11 15.5 16 9"></path></svg>
+          <div class="card-title">Request received!</div>
+        </div>
+        <p class="card-body">Thanks &mdash; we've got your booking request and will reach out to confirm your appointment. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.</p>
+      </div>
+    </section>
+  </section>
+</main>
+
+<script src="../nav.js"></script>
+<script src="book.js"></script>
+</body>
+</html>
