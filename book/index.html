@@ -210,8 +210,9 @@
       <p class="text-muted">Photos help us prepare, but aren't required to submit your request.</p>
       <div class="photo-drop">
         <p style="margin:0;font-size:13px">Choose photos from your device</p>
-        <input class="input" id="photo-input" type="file" accept="image/*" multiple>
-        <p class="field-note">Photo upload isn't wired up to storage yet in this preview &mdash; your selected photos are shown below for reference only and won't be sent when you submit. We'll follow up to collect photos, or you can text them anytime to 303-990-1812.</p>
+        <input class="input" id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+        <p class="field-note">Up to 6 photos (JPG, PNG, or WEBP). Large photos are automatically resized before upload &mdash; no need to resize them yourself. Photos upload after your booking is confirmed; if one fails to upload, your booking still goes through. You can always text photos to 303-990-1812 instead.</p>
+        <p class="field-note" id="photo-select-note" hidden></p>
       </div>
       <div class="photo-preview-grid" id="photo-preview-grid"></div>
       <div class="wizard-actions">
@@ -306,6 +307,7 @@
           <div class="card-title">Request received!</div>
         </div>
         <p class="card-body">Thanks &mdash; we've got your booking request and will reach out to confirm your appointment. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.</p>
+        <p class="field-note" id="photo-upload-status" hidden></p>
       </div>
     </section>
   </section>

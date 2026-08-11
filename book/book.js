@@ -6,7 +6,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var currentStep = 1;
   var state = {
     serviceType: null,
-    photos: [], // File objects kept in memory for preview only — never uploaded in this iteration.
+    photos: [], // File objects kept in memory until submit; uploaded only after the booking is confirmed.
   };
 
   var errorBox = document.getElementById('wizard-error');
@@ -66,13 +66,38 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // — STEP 3: photo previews (in-memory only, never uploaded) —
+  // — STEP 3: photo selection + local previews. Photos are uploaded after the
+  // booking itself is confirmed (see the submit handler below) — never before.
+  var MAX_PHOTOS = 6;
+  var ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
   var photoInput = document.getElementById('photo-input');
   var photoGrid = document.getElementById('photo-preview-grid');
+  var photoSelectNote = document.getElementById('photo-select-note');
   photoInput.addEventListener('change', function () {
-    var files = Array.prototype.slice.call(photoInput.files || []);
-    state.photos = state.photos.concat(files);
+    var incoming = Array.prototype.slice.call(photoInput.files || []);
     photoInput.value = '';
+
+    var accepted = incoming.filter(function (f) {
+      return ALLOWED_PHOTO_TYPES.indexOf(f.type) !== -1;
+    });
+    var rejectedType = incoming.length - accepted.length;
+
+    var room = MAX_PHOTOS - state.photos.length;
+    var toAdd = accepted.slice(0, Math.max(0, room));
+    var rejectedCap = accepted.length - toAdd.length;
+
+    state.photos = state.photos.concat(toAdd);
+
+    if (rejectedType > 0 || rejectedCap > 0) {
+      var msgs = [];
+      if (rejectedType > 0) msgs.push(rejectedType + (rejectedType === 1 ? ' file wasn’t a supported photo type (JPG, PNG, WEBP only).' : ' files weren’t a supported photo type (JPG, PNG, WEBP only).'));
+      if (rejectedCap > 0) msgs.push('Only ' + MAX_PHOTOS + ' photos allowed — ' + rejectedCap + (rejectedCap === 1 ? ' photo was' : ' photos were') + ' not added.');
+      photoSelectNote.textContent = msgs.join(' ');
+      photoSelectNote.hidden = false;
+    } else {
+      photoSelectNote.hidden = true;
+    }
+
     renderPhotoPreviews();
   });
   function renderPhotoPreviews() {
@@ -95,6 +120,144 @@ document.addEventListener('DOMContentLoaded', function () {
       wrap.appendChild(img);
       wrap.appendChild(removeBtn);
       photoGrid.appendChild(wrap);
+    });
+    photoInput.disabled = state.photos.length >= MAX_PHOTOS;
+  }
+
+  // — client-side compression, purely a convenience so customers never have to
+  // manually resize phone photos. The server independently re-enforces the 4MB
+  // cap, MIME/magic-byte checks, and photo count regardless of what the client
+  // sends — this pipeline is not a security boundary.
+  var UPLOAD_MAX_BYTES = 4 * 1024 * 1024; // must match api/upload-photo.js
+  var COMPRESS_TRIGGER_BYTES = 3.8 * 1024 * 1024; // only bother compressing if already close to/over the cap
+  var COMPRESS_TARGET_BYTES = 3.5 * 1024 * 1024; // aim comfortably under the server's 4MB limit
+  var MAX_DIMENSION = 2000; // px, longer side — plenty of detail for evaluating a job, far smaller than a typical phone original
+  var JPEG_QUALITY_STEPS = [0.82, 0.7, 0.55, 0.4];
+
+  // Returns a Promise<Blob> ready to upload. Never rejects for "just didn't
+  // need compressing" — only rejects on a genuine failure (bad/corrupt image),
+  // which the caller treats as "this one photo failed" without touching the
+  // booking itself.
+  function prepareFileForUpload(file) {
+    if (file.size <= COMPRESS_TRIGGER_BYTES) {
+      return Promise.resolve(file);
+    }
+    return compressImage(file).catch(function () {
+      // Fall back to the original file — the server will reject it if it's
+      // still over the limit, which surfaces as a normal per-photo failure.
+      return file;
+    });
+  }
+
+  function compressImage(file) {
+    return loadImageSource(file).then(function (source) {
+      var width = source.naturalWidth || source.width;
+      var height = source.naturalHeight || source.height;
+      if (!width || !height) throw new Error('Could not read image dimensions.');
+
+      var scale = Math.min(1, MAX_DIMENSION / Math.max(width, height)); // never upscale
+      var targetWidth = Math.max(1, Math.round(width * scale));
+      var targetHeight = Math.max(1, Math.round(height * scale));
+
+      var canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
+      if (typeof source.close === 'function') source.close(); // release ImageBitmap memory
+
+      return compressToTargetSize(canvas, 0);
+    });
+  }
+
+  function compressToTargetSize(canvas, stepIndex) {
+    if (stepIndex >= JPEG_QUALITY_STEPS.length) {
+      return Promise.reject(new Error('Could not compress photo under the size limit.'));
+    }
+    return canvasToBlob(canvas, 'image/jpeg', JPEG_QUALITY_STEPS[stepIndex]).then(function (blob) {
+      if (!blob) return Promise.reject(new Error('Compression produced no output.'));
+      if (blob.size <= COMPRESS_TARGET_BYTES) return blob;
+      return compressToTargetSize(canvas, stepIndex + 1);
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise(function (resolve, reject) {
+      try {
+        canvas.toBlob(function (blob) {
+          resolve(blob);
+        }, type, quality);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function loadImageSource(file) {
+    if (window.createImageBitmap) {
+      return createImageBitmap(file).catch(function () {
+        return loadImageViaElement(file);
+      });
+    }
+    return loadImageViaElement(file);
+  }
+
+  function loadImageViaElement(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not load image.'));
+      };
+      img.src = url;
+    });
+  }
+
+  // Uploads one photo, returning a Promise<boolean> that resolves to whether
+  // it succeeded — never rejects, so one failure can't stop the others.
+  function uploadPhoto(uploadToken, file) {
+    return prepareFileForUpload(file)
+      .then(function (blobToUpload) {
+        var photoType = blobToUpload.type || file.type;
+        return fetch('/api/upload-photo', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + uploadToken,
+            'Content-Type': 'application/octet-stream',
+            'X-Photo-Type': photoType,
+          },
+          body: blobToUpload,
+        });
+      })
+      .then(function (res) {
+        return res.ok;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  // Uploads all selected photos sequentially (simpler and avoids any race on
+  // the server's per-booking photo-count check). Reports progress via callback
+  // and resolves to the number that succeeded — never rejects.
+  function uploadAllPhotos(uploadToken, photos, onProgress) {
+    var successCount = 0;
+    var chain = Promise.resolve();
+    photos.forEach(function (file, index) {
+      chain = chain.then(function () {
+        onProgress(index + 1, photos.length);
+        return uploadPhoto(uploadToken, file).then(function (ok) {
+          if (ok) successCount++;
+        });
+      });
+    });
+    return chain.then(function () {
+      return successCount;
     });
   }
 
@@ -230,7 +393,9 @@ document.addEventListener('DOMContentLoaded', function () {
     reviewContent.appendChild(reviewGroup('Job Details', 2, detailRows));
 
     reviewContent.appendChild(
-      reviewGroup('Photos', 3, [['Selected photos', state.photos.length + (state.photos.length === 1 ? ' photo' : ' photos') + ' (not uploaded in this preview)']])
+      reviewGroup('Photos', 3, [
+        ['Selected photos', state.photos.length ? state.photos.length + (state.photos.length === 1 ? ' photo, uploaded after you submit' : ' photos, uploaded after you submit') : 'None selected'],
+      ])
     );
 
     // Dumpster rental's delivery date + time window are already shown above
@@ -290,6 +455,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // — submit —
   var submitBtn = document.getElementById('submit-booking');
   var successBox = document.getElementById('wizard-success');
+  var photoUploadStatus = document.getElementById('photo-upload-status');
   submitBtn.addEventListener('click', function () {
     clearError();
     submitBtn.disabled = true;
@@ -357,10 +523,38 @@ document.addEventListener('DOMContentLoaded', function () {
             return body;
           });
       })
-      .then(function () {
+      .then(function (body) {
+        // The booking itself is confirmed the moment we get here — everything
+        // below is best-effort photo upload and must never undo that.
         document.querySelector('.wizard-step[data-step="6"] .wizard-actions').style.display = 'none';
         reviewContent.style.display = 'none';
         successBox.classList.add('is-visible');
+
+        var uploadToken = body && body.uploadToken;
+        var photos = state.photos;
+
+        if (!photos.length) return;
+
+        if (!uploadToken) {
+          // Defensive fallback — shouldn't happen once upload is configured,
+          // but the booking must never appear to have failed because of this.
+          photoUploadStatus.textContent = 'Photos could not be uploaded automatically. Please text them to 303-990-1812.';
+          photoUploadStatus.hidden = false;
+          return;
+        }
+
+        photoUploadStatus.hidden = false;
+        photoUploadStatus.textContent = 'Uploading photo 1 of ' + photos.length + '…';
+
+        uploadAllPhotos(uploadToken, photos, function (current, total) {
+          photoUploadStatus.textContent = 'Uploading photo ' + current + ' of ' + total + '…';
+        }).then(function (successCount) {
+          if (successCount === photos.length) {
+            photoUploadStatus.textContent = photos.length === 1 ? '1 of 1 photo uploaded.' : successCount + ' of ' + photos.length + ' photos uploaded.';
+          } else {
+            photoUploadStatus.textContent = successCount + ' of ' + photos.length + ' photos uploaded. The rest didn’t make it — no problem, text them to 303-990-1812 and we’ll add them to your booking.';
+          }
+        });
       })
       .catch(function (err) {
         showError(err && err.isServerMessage && err.message ? err.message : GENERIC_ERROR);

@@ -4,6 +4,7 @@
 // Required environment variables (server-side only, never read by the browser):
 //   SUPABASE_URL
 //   SUPABASE_SECRET_KEY
+//   UPLOAD_TOKEN_SECRET — signs the short-lived photo-upload token (see below)
 //
 // Column names below match the live schema exactly:
 //   customers(id, first_name, last_name, phone, email, address, city, state, zip, created_at)
@@ -11,9 +12,19 @@
 //            description, estimated_price, final_price, internal_notes, created_at, updated_at)
 //   dumpster_rentals(id, booking_id UNIQUE, delivery_date, pickup_date, material_type,
 //                     placement_notes, created_at)
-//   booking_photos — not written to yet; Supabase Storage isn't configured.
+//   booking_photos(id, booking_id, storage_path, created_at) — written by api/upload-photo.js.
+//
+// On success this endpoint never returns the raw booking UUID. Instead it returns a
+// short-lived, HMAC-signed "uploadToken" scoped to exactly this booking, which the
+// browser presents to POST /api/upload-photo to attach photos. See verifyUploadToken
+// in api/upload-photo.js for the corresponding verification logic (kept as a small,
+// duplicated helper in both files rather than a shared module, matching this project's
+// existing pattern of self-contained /api functions).
 
 const { createClient } = require("@supabase/supabase-js");
+const crypto = require("crypto");
+
+const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 const SERVICE_TYPES = ["junk_removal", "dumpster_rental", "light_demo"];
 const STAIRS_OPTIONS = ["none", "some", "multiple_flights"];
@@ -162,8 +173,19 @@ module.exports = async (req, res) => {
       }
     }
 
-    // Intentionally does not return the booking UUID — the browser doesn't need it yet.
-    res.status(200).json({ ok: true });
+    // Intentionally never returns the raw booking UUID. If photo upload is
+    // configured, mint a short-lived token scoped to exactly this booking so
+    // the browser can attach photos via POST /api/upload-photo without ever
+    // holding a general-purpose booking identifier.
+    const uploadTokenSecret = process.env.UPLOAD_TOKEN_SECRET;
+    let uploadToken;
+    if (uploadTokenSecret) {
+      uploadToken = signUploadToken(bookingId, uploadTokenSecret);
+    } else {
+      console.error("Booking submission succeeded but UPLOAD_TOKEN_SECRET is not configured — photo upload will be unavailable for this booking.");
+    }
+
+    res.status(200).json(uploadToken ? { ok: true, uploadToken } : { ok: true });
   } catch (err) {
     console.error("Booking submission failed with an unexpected error:", err);
     if (!res.headersSent) {
@@ -178,6 +200,13 @@ async function safeDelete(supabase, table, id) {
   } catch (err) {
     console.error("Rollback failed for " + table + " id " + id + ":", err);
   }
+}
+
+function signUploadToken(bookingId, secret) {
+  const payload = JSON.stringify({ bookingId, exp: Date.now() + UPLOAD_TOKEN_TTL_MS });
+  const payloadB64 = Buffer.from(payload, "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(payloadB64).digest("base64url");
+  return payloadB64 + "." + sig;
 }
 
 function validateBooking(body) {
