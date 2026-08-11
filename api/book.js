@@ -258,65 +258,149 @@ async function sendBookingNotificationEmail(data) {
   }
 }
 
+// Presentation only — every value that reaches the HTML goes through
+// escapeHtml() (via infoRowText/infoRow's callers below) or is a
+// server-derived href built from safe parts (digits-only for tel:,
+// encodeURIComponent for the Maps query string), never raw customer input
+// concatenated straight into an attribute.
 function buildBookingNotificationHtml(data, serviceLabel, customerName) {
   const c = data.customer;
   const j = data.jobDetails;
 
-  const topRows = [
-    ["Service", serviceLabel],
-    ["Customer", customerName],
-    ["Phone", c.phone],
-    ["Email", c.email || "—"],
-    ["Requested Date", data.appointmentDate],
-    ["Requested Time / Time Window", TIME_WINDOW_LABELS[data.schedule.timeWindow] || data.schedule.timeWindow],
-    ["Service Address", c.streetAddress],
-    ["City", c.city],
-    ["State", c.state],
-    ["ZIP", c.zip],
-  ];
+  const telHref = buildTelHref(c.phone);
+  const phoneValueHtml = telHref
+    ? '<a href="' + escapeHtml(telHref) + '" style="color:#161616;text-decoration:none;">' + escapeHtml(c.phone) + "</a>"
+    : escapeHtml(c.phone);
+
+  let customerSection = sectionHeading("Customer") + infoRow("Phone", phoneValueHtml);
+  if (c.email) {
+    const mailtoHtml =
+      '<a href="mailto:' + escapeHtml(c.email) + '" style="color:#161616;text-decoration:none;">' + escapeHtml(c.email) + "</a>";
+    customerSection += infoRow("Email", mailtoHtml);
+  }
+
+  const appointmentSection =
+    sectionHeading("Requested Appointment") +
+    infoRowText("Requested Date", formatHumanDate(data.appointmentDate)) +
+    infoRowText("Requested Time / Window", TIME_WINDOW_LABELS[data.schedule.timeWindow] || data.schedule.timeWindow);
+
+  const mapsQuery = c.streetAddress + ", " + c.city + ", " + c.state + " " + c.zip;
+  const mapsHref = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(mapsQuery);
+  const addressValueHtml =
+    '<a href="' + escapeHtml(mapsHref) + '" style="color:#161616;text-decoration:none;">' +
+    escapeHtml(c.streetAddress) +
+    "<br>" +
+    escapeHtml(c.city + ", " + c.state + " " + c.zip) +
+    "</a>";
+  const addressSection = sectionHeading("Service Address") + infoRow("Address", addressValueHtml);
 
   // Only the fields relevant to the selected service type are included —
   // nothing blank or irrelevant to other service types.
-  const detailRows = [];
+  let detailRows = "";
   if (data.serviceType === "junk_removal") {
-    detailRows.push(["Items to Remove", j.itemsDescription]);
-    detailRows.push(["Pickup Location", j.location]);
-    detailRows.push(["Stairs", STAIRS_LABELS[j.stairs] || j.stairs]);
+    detailRows += infoRowText("Items to Remove", j.itemsDescription);
+    detailRows += infoRowText("Pickup Location", j.location);
+    detailRows += infoRowText("Stairs", STAIRS_LABELS[j.stairs] || j.stairs);
   } else if (data.serviceType === "dumpster_rental") {
-    detailRows.push(["Material Type", j.materialType]);
-    detailRows.push(["Delivery Date", j.deliveryDate]);
-    detailRows.push(["Pickup Date", j.pickupDate]);
-    detailRows.push(["Placement Notes", j.placementLocation]);
+    detailRows += infoRowText("Material Type", j.materialType);
+    detailRows += infoRowText("Delivery Date", formatHumanDate(j.deliveryDate));
+    detailRows += infoRowText("Pickup Date", formatHumanDate(j.pickupDate));
+    detailRows += infoRowText("Placement Notes", j.placementLocation);
   } else if (data.serviceType === "light_demo") {
-    detailRows.push(["What Needs to Be Demolished", j.demoDescription]);
-    detailRows.push(["Approximate Size", j.approximateSize]);
-    detailRows.push(["Debris Removal Needed", j.debrisRemovalNeeded === "yes" ? "Yes" : "No"]);
+    detailRows += infoRowText("What Needs to Be Demolished", j.demoDescription);
+    detailRows += infoRowText("Approximate Size", j.approximateSize);
+    detailRows += infoRowText("Debris Removal Needed", j.debrisRemovalNeeded === "yes" ? "Yes" : "No");
   }
   if (j.additionalDetails) {
-    detailRows.push(["Additional Details", j.additionalDetails]);
+    detailRows += infoRowText("Additional Details", j.additionalDetails);
   }
+  const jobDetailsSection = sectionHeading("Job Details") + detailRows;
+
+  const fontStack = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
   return (
-    "<p style=\"font-size:18px;font-weight:bold;margin:0 0 12px\">NEW BOOKING REQUEST</p>" +
-    renderRows(topRows) +
-    "<hr style=\"border:none;border-top:1px solid #ddd;margin:16px 0\">" +
-    renderRows(detailRows) +
-    "<p style=\"margin-top:20px\"><em>Customer may have uploaded photos with this booking. View Supabase to review booking photos.</em></p>"
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3e6;">' +
+    '<tr><td align="center" style="padding:28px 14px;font-family:' +
+    fontStack +
+    ';">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e3e8dc;">' +
+    // header
+    '<tr><td style="background:#141414;padding:26px 30px 22px;">' +
+    '<div style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.12em;opacity:0.85;">MILE HIGH JUNK REMOVAL</div>' +
+    '<div style="color:#8ce85a;font-size:23px;font-weight:800;letter-spacing:0.02em;margin-top:6px;">NEW BOOKING REQUEST</div>' +
+    "</td></tr>" +
+    // service + name banner
+    '<tr><td style="background:#eaf7de;padding:18px 30px;border-bottom:1px solid #d7ecc4;">' +
+    '<div style="font-size:19px;font-weight:800;color:#1c1c1c;">' +
+    escapeHtml(serviceLabel) +
+    " — " +
+    escapeHtml(customerName) +
+    "</div>" +
+    "</td></tr>" +
+    // customer
+    '<tr><td style="padding:26px 30px 6px;">' + customerSection + "</td></tr>" +
+    // appointment
+    '<tr><td style="padding:10px 30px 6px;">' + appointmentSection + "</td></tr>" +
+    // address
+    '<tr><td style="padding:10px 30px 6px;">' + addressSection + "</td></tr>" +
+    // job details
+    '<tr><td style="padding:10px 30px 22px;">' + jobDetailsSection + "</td></tr>" +
+    // photos footer
+    '<tr><td style="background:#f6f8f2;padding:18px 30px;border-top:1px solid #ececec;">' +
+    '<div style="font-size:12.5px;color:#666666;font-style:italic;line-height:1.5;">Customer may have uploaded photos with this booking. View Supabase to review booking photos.</div>' +
+    "</td></tr>" +
+    "</table>" +
+    "</td></tr>" +
+    "</table>"
   );
 }
 
-function renderRows(rows) {
-  return rows
-    .map(function (pair) {
-      return (
-        "<p style=\"margin:0 0 8px\"><strong>" +
-        escapeHtml(pair[0]) +
-        ":</strong><br>" +
-        escapeHtml(String(pair[1])).replace(/\n/g, "<br>") +
-        "</p>"
-      );
-    })
-    .join("");
+function sectionHeading(title) {
+  return (
+    '<div style="font-size:12px;font-weight:800;letter-spacing:0.09em;text-transform:uppercase;color:#3f7a1a;margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #dff0c9;">' +
+    escapeHtml(title) +
+    "</div>"
+  );
+}
+
+// valueHtml must already be escaped/safely constructed by the caller — this
+// function does not escape it, so every call site below either passes it
+// through escapeHtml() directly (infoRowText) or builds an <a> tag from
+// escapeHtml()-wrapped parts only (the phone/email/address blocks above).
+function infoRow(label, valueHtml) {
+  return (
+    '<div style="margin:0 0 14px;">' +
+    '<div style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#8a8a8a;margin-bottom:3px;">' +
+    escapeHtml(label) +
+    "</div>" +
+    '<div style="font-size:15px;color:#161616;font-weight:600;line-height:1.4;">' +
+    valueHtml +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function infoRowText(label, value) {
+  return infoRow(label, escapeHtml(String(value)).replace(/\n/g, "<br>"));
+}
+
+function formatHumanDate(isoDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return String(isoDate);
+  try {
+    const parsed = new Date(isoDate + "T00:00:00");
+    if (Number.isNaN(parsed.getTime())) return isoDate;
+    return parsed.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  } catch (err) {
+    return isoDate;
+  }
+}
+
+// Builds a tel: href from digits only — never from the raw display string —
+// so no customer-supplied character can end up inside the href attribute.
+function buildTelHref(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return null;
+  return digits.length === 10 ? "tel:+1" + digits : "tel:+" + digits;
 }
 
 function escapeHtml(s) {
