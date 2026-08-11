@@ -269,13 +269,13 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
 
   const telHref = buildTelHref(c.phone);
   const phoneValueHtml = telHref
-    ? '<a href="' + escapeHtml(telHref) + '" style="color:#161616;text-decoration:none;">' + escapeHtml(c.phone) + "</a>"
+    ? '<a href="' + escapeHtml(telHref) + '" style="color:#2f6f13;text-decoration:none;">' + escapeHtml(c.phone) + "</a>"
     : escapeHtml(c.phone);
 
   let customerSection = sectionHeading("Customer") + infoRow("Phone", phoneValueHtml);
   if (c.email) {
     const mailtoHtml =
-      '<a href="mailto:' + escapeHtml(c.email) + '" style="color:#161616;text-decoration:none;">' + escapeHtml(c.email) + "</a>";
+      '<a href="mailto:' + escapeHtml(c.email) + '" style="color:#2f6f13;text-decoration:none;">' + escapeHtml(c.email) + "</a>";
     customerSection += infoRow("Email", mailtoHtml);
   }
 
@@ -287,7 +287,7 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
   const mapsQuery = c.streetAddress + ", " + c.city + ", " + c.state + " " + c.zip;
   const mapsHref = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(mapsQuery);
   const addressValueHtml =
-    '<a href="' + escapeHtml(mapsHref) + '" style="color:#161616;text-decoration:none;">' +
+    '<a href="' + escapeHtml(mapsHref) + '" style="color:#2f6f13;text-decoration:none;">' +
     escapeHtml(c.streetAddress) +
     "<br>" +
     escapeHtml(c.city + ", " + c.state + " " + c.zip) +
@@ -323,7 +323,7 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
     '<tr><td align="center" style="padding:28px 14px;font-family:' +
     fontStack +
     ';">' +
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e3e8dc;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:720px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e3e8dc;">' +
     // header
     '<tr><td style="background:#141414;padding:26px 30px 22px;">' +
     '<div style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.12em;opacity:0.85;">MILE HIGH JUNK REMOVAL</div>' +
@@ -338,13 +338,13 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
     "</div>" +
     "</td></tr>" +
     // customer
-    '<tr><td style="padding:26px 30px 6px;">' + customerSection + "</td></tr>" +
+    '<tr><td style="padding:28px 30px 8px;">' + customerSection + "</td></tr>" +
     // appointment
-    '<tr><td style="padding:10px 30px 6px;">' + appointmentSection + "</td></tr>" +
+    '<tr><td style="padding:14px 30px 8px;">' + appointmentSection + "</td></tr>" +
     // address
-    '<tr><td style="padding:10px 30px 6px;">' + addressSection + "</td></tr>" +
+    '<tr><td style="padding:14px 30px 8px;">' + addressSection + "</td></tr>" +
     // job details
-    '<tr><td style="padding:10px 30px 22px;">' + jobDetailsSection + "</td></tr>" +
+    '<tr><td style="padding:14px 30px 28px;">' + jobDetailsSection + "</td></tr>" +
     // photos footer
     '<tr><td style="background:#f6f8f2;padding:18px 30px;border-top:1px solid #ececec;">' +
     '<div style="font-size:12.5px;color:#666666;font-style:italic;line-height:1.5;">Customer may have uploaded photos with this booking. View Supabase to review booking photos.</div>' +
@@ -357,7 +357,7 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
 
 function sectionHeading(title) {
   return (
-    '<div style="font-size:12px;font-weight:800;letter-spacing:0.09em;text-transform:uppercase;color:#3f7a1a;margin:0 0 12px;padding-bottom:6px;border-bottom:2px solid #dff0c9;">' +
+    '<div style="font-size:13px;font-weight:800;letter-spacing:0.09em;text-transform:uppercase;color:#3f7a1a;margin:0 0 14px;padding-bottom:8px;border-bottom:2px solid #dff0c9;">' +
     escapeHtml(title) +
     "</div>"
   );
@@ -369,11 +369,11 @@ function sectionHeading(title) {
 // escapeHtml()-wrapped parts only (the phone/email/address blocks above).
 function infoRow(label, valueHtml) {
   return (
-    '<div style="margin:0 0 14px;">' +
-    '<div style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#8a8a8a;margin-bottom:3px;">' +
+    '<div style="margin:0 0 18px;">' +
+    '<div style="font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#8a8a8a;margin-bottom:4px;">' +
     escapeHtml(label) +
     "</div>" +
-    '<div style="font-size:15px;color:#161616;font-weight:600;line-height:1.4;">' +
+    '<div style="font-size:16px;color:#161616;font-weight:600;line-height:1.5;">' +
     valueHtml +
     "</div>" +
     "</div>"
