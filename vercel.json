@@ -1,0 +1,25 @@
+{
+  "redirects": [
+    { "source": "/service-areas/aurora-co", "destination": "/aurora-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/littleton-co", "destination": "/littleton-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/thornton-co", "destination": "/thornton-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/englewood-co", "destination": "/englewood-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/arvada-co", "destination": "/arvada-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/parker-co", "destination": "/parker-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/castle-rock-co", "destination": "/castle-rock-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/all-surrounding-areas", "destination": "/#service-areas", "permanent": true },
+    { "source": "/services/home-cleanouts", "destination": "/home-cleanouts.html", "permanent": true },
+    { "source": "/services/office-junk-removal", "destination": "/office-junk-removal.html", "permanent": true },
+    { "source": "/services/furniture-removal", "destination": "/furniture-removal.html", "permanent": true },
+    { "source": "/services/yard-waste-removal", "destination": "/yard-waste-removal.html", "permanent": true },
+
+    { "source": "/service-areas/denver-co", "destination": "/denver-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/lakewood-co", "destination": "/lakewood-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/westminster-co", "destination": "/westminster-junk-removal.html", "permanent": true },
+    { "source": "/service-areas/broomfield-co", "destination": "/broomfield-junk-removal.html", "permanent": true },
+    { "source": "/services/estate-cleanouts", "destination": "/estate-cleanouts.html", "permanent": true },
+    { "source": "/services/electronics-recycling", "destination": "/electronics-recycling.html", "permanent": true },
+    { "source": "/services/appliance-disposal", "destination": "/appliance-disposal.html", "permanent": true },
+    { "source": "/services/dumpster-rental", "destination": "/dumpster-rental.html", "permanent": true }
+  ]
+}
