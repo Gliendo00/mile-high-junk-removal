@@ -38,6 +38,19 @@ document.addEventListener('DOMContentLoaded', function () {
     if (n === 6) renderReview();
   }
 
+  // Dumpster rental collects its delivery date + time window together in
+  // step 2, so step 4 (the generic Date & Time step) doesn't apply to it.
+  function nextStepNumber(n) {
+    var next = n + 1;
+    if (next === 4 && state.serviceType === 'dumpster_rental') next = 5;
+    return next;
+  }
+  function prevStepNumber(n) {
+    var prev = n - 1;
+    if (prev === 4 && state.serviceType === 'dumpster_rental') prev = 3;
+    return prev;
+  }
+
   // — STEP 1: service selection —
   var serviceRadios = Array.prototype.slice.call(document.querySelectorAll('input[name="serviceType"]'));
   serviceRadios.forEach(function (radio) {
@@ -108,6 +121,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!val('dr-delivery')) return 'Please choose a desired delivery date.';
         if (!val('dr-pickup')) return 'Please choose a desired pickup date.';
         if (val('dr-pickup') < val('dr-delivery')) return 'Pickup date must be on or after the delivery date.';
+        if (!val('dr-window')) return 'Please choose a preferred delivery time window.';
         if (!val('dr-placement')) return 'Please tell us where the dumpster should be placed.';
       } else if (state.serviceType === 'light_demo') {
         if (!val('ld-what')) return 'Please describe what needs to be demolished.';
@@ -118,7 +132,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     if (n === 3) return null; // photos optional
     if (n === 4) {
-      if (!val('pref-date')) return 'Please choose a preferred appointment date.';
+      if (!val('pref-date')) return 'Please choose a preferred date.';
       if (!val('pref-window')) return 'Please choose a preferred time window.';
       return null;
     }
@@ -158,12 +172,14 @@ document.addEventListener('DOMContentLoaded', function () {
         showError(err);
         return;
       }
-      if (currentStep < TOTAL_STEPS) goToStep(currentStep + 1);
+      var next = nextStepNumber(currentStep);
+      if (next <= TOTAL_STEPS) goToStep(next);
     });
   });
   document.querySelectorAll('[data-back]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      if (currentStep > 1) goToStep(currentStep - 1);
+      var prev = prevStepNumber(currentStep);
+      if (prev >= 1) goToStep(prev);
     });
   });
 
@@ -199,6 +215,7 @@ document.addEventListener('DOMContentLoaded', function () {
         ['Material', val('dr-material')],
         ['Delivery date', val('dr-delivery')],
         ['Pickup date', val('dr-pickup')],
+        ['Delivery time window', windowLabels[val('dr-window')] || '—'],
         ['Placement', val('dr-placement')],
         ['Notes', val('dr-notes') || '—'],
       ];
@@ -216,12 +233,17 @@ document.addEventListener('DOMContentLoaded', function () {
       reviewGroup('Photos', 3, [['Selected photos', state.photos.length + (state.photos.length === 1 ? ' photo' : ' photos') + ' (not uploaded in this preview)']])
     );
 
-    reviewContent.appendChild(
-      reviewGroup('Preferred Date & Time', 4, [
-        ['Date', val('pref-date')],
-        ['Time window', windowLabels[val('pref-window')] || '—'],
-      ])
-    );
+    // Dumpster rental's delivery date + time window are already shown above
+    // under Job Details (step 2) — step 4 doesn't apply to it, so this group
+    // is skipped entirely rather than showing an empty/redundant entry.
+    if (state.serviceType !== 'dumpster_rental') {
+      reviewContent.appendChild(
+        reviewGroup('Preferred Date & Time', 4, [
+          ['Date', val('pref-date')],
+          ['Time window', windowLabels[val('pref-window')] || '—'],
+        ])
+      );
+    }
 
     reviewContent.appendChild(
       reviewGroup('Your Information', 5, [
@@ -298,10 +320,11 @@ document.addEventListener('DOMContentLoaded', function () {
       };
     }
 
+    var timeWindow = state.serviceType === 'dumpster_rental' ? val('dr-window') : val('pref-window');
     var payload = {
       serviceType: state.serviceType,
       jobDetails: jobDetails,
-      schedule: { date: val('pref-date'), timeWindow: val('pref-window') },
+      schedule: { date: val('pref-date'), timeWindow: timeWindow },
       customer: {
         firstName: val('cust-first'),
         lastName: val('cust-last'),

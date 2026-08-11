@@ -209,7 +209,11 @@ function validateBooking(body) {
   const scheduleIn = body.schedule && typeof body.schedule === "object" ? body.schedule : {};
   const date = sanitizeText(scheduleIn.date, 10);
   const timeWindow = sanitizeText(scheduleIn.timeWindow, 20);
-  if (!isValidFutureDate(date)) return { ok: false, error: "Please choose a valid appointment date." };
+  // For dumpster_rental the delivery date collected below is the appointment date —
+  // no generic preferred date is collected or required for that service type.
+  if (serviceType !== "dumpster_rental" && !isValidFutureDate(date)) {
+    return { ok: false, error: "Please choose a valid preferred date." };
+  }
   if (!TIME_WINDOWS.includes(timeWindow)) return { ok: false, error: "Please choose a valid time window." };
 
   const jobIn = body.jobDetails && typeof body.jobDetails === "object" ? body.jobDetails : {};

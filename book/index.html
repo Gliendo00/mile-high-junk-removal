@@ -156,6 +156,16 @@
           </div>
         </div>
         <div class="field">
+          <label for="dr-window">Preferred delivery time window</label>
+          <select class="input" id="dr-window">
+            <option value="">Select one&hellip;</option>
+            <option value="morning">Morning (8am&ndash;11am)</option>
+            <option value="midday">Midday (11am&ndash;2pm)</option>
+            <option value="afternoon">Afternoon (2pm&ndash;5pm)</option>
+            <option value="evening">Evening (5pm&ndash;7pm)</option>
+          </select>
+        </div>
+        <div class="field">
           <label for="dr-placement">Where should the dumpster be placed?</label>
           <input class="input" id="dr-placement" type="text" maxlength="200" placeholder="e.g. driveway, curb, side yard">
         </div>
@@ -210,13 +220,14 @@
       </div>
     </section>
 
-    <!-- STEP 4 — DATE & TIME -->
+    <!-- STEP 4 — DATE & TIME (junk removal / light demo only — dumpster rental
+         collects its delivery date + time window together in step 2) -->
     <section class="wizard-step" data-step="4" hidden>
       <h2 style="font-size:20px">Preferred date &amp; time</h2>
       <p class="text-muted">These are your <strong>preferred</strong> times &mdash; we don't have real-time availability yet, so we'll call or text to confirm the exact window.</p>
       <div class="field-grid">
         <div class="field">
-          <label for="pref-date">Preferred appointment date</label>
+          <label for="pref-date">Preferred date</label>
           <input class="input" id="pref-date" type="date">
         </div>
         <div class="field">
