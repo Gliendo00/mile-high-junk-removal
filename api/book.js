@@ -27,10 +27,17 @@ const crypto = require("crypto");
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 const SERVICE_TYPES = ["junk_removal", "dumpster_rental", "light_demo"];
+const SERVICE_LABELS = { junk_removal: "Junk Removal", dumpster_rental: "15-Yard Dumpster Rental", light_demo: "Light Demo" };
 const STAIRS_OPTIONS = ["none", "some", "multiple_flights"];
 const STAIRS_LABELS = { none: "No stairs", some: "Some stairs", multiple_flights: "Multiple flights" };
 const YES_NO = ["yes", "no"];
 const TIME_WINDOWS = ["morning", "midday", "afternoon", "evening"];
+const TIME_WINDOW_LABELS = {
+  morning: "Morning (8am–11am)",
+  midday: "Midday (11am–2pm)",
+  afternoon: "Afternoon (2pm–5pm)",
+  evening: "Evening (5pm–7pm)",
+};
 
 const MAX = {
   name: 80,
@@ -173,6 +180,12 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Best-effort admin notification — sent only after every required row for
+    // this booking (customer, booking, and dumpster_rentals when applicable)
+    // has been saved. Awaited so it completes before the response is sent, but
+    // fully self-contained: nothing it does can change the response below.
+    await sendBookingNotificationEmail(data);
+
     // Intentionally never returns the raw booking UUID. If photo upload is
     // configured, mint a short-lived token scoped to exactly this booking so
     // the browser can attach photos via POST /api/upload-photo without ever
@@ -200,6 +213,116 @@ async function safeDelete(supabase, table, id) {
   } catch (err) {
     console.error("Rollback failed for " + table + " id " + id + ":", err);
   }
+}
+
+// Admin notification email via Resend, mirroring the raw-fetch pattern already
+// used in api/contact.js (no @resend/node dependency in this project). Reuses
+// the same RESEND_API_KEY / RESEND_FROM_EMAIL / CONTACT_TO_EMAIL env vars —
+// no new sending identity or recipient variable is introduced. Every failure
+// path here only logs server-side and returns normally: this function must
+// never throw, since its caller awaits it in the middle of an already-
+// successful booking response.
+async function sendBookingNotificationEmail(data) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error("Booking notification email skipped: RESEND_API_KEY is not configured.");
+    return;
+  }
+
+  try {
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "Mile High Junk Removal <leads@milehighjunkremoval.net>";
+    const toEmail = process.env.CONTACT_TO_EMAIL || "contact@milehighjunkremoval.net";
+    const serviceLabel = SERVICE_LABELS[data.serviceType] || data.serviceType;
+    const customerName = data.customer.firstName + " " + data.customer.lastName;
+
+    const resendRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [toEmail],
+        subject: "New Booking Request — " + serviceLabel + " — " + customerName,
+        html: buildBookingNotificationHtml(data, serviceLabel, customerName),
+      }),
+    });
+
+    if (!resendRes.ok) {
+      const errText = await resendRes.text();
+      console.error("Booking notification email failed:", resendRes.status, errText);
+    }
+  } catch (err) {
+    console.error("Booking notification email failed:", err && err.stack ? err.stack : err);
+  }
+}
+
+function buildBookingNotificationHtml(data, serviceLabel, customerName) {
+  const c = data.customer;
+  const j = data.jobDetails;
+
+  const topRows = [
+    ["Service", serviceLabel],
+    ["Customer", customerName],
+    ["Phone", c.phone],
+    ["Email", c.email || "—"],
+    ["Requested Date", data.appointmentDate],
+    ["Requested Time / Time Window", TIME_WINDOW_LABELS[data.schedule.timeWindow] || data.schedule.timeWindow],
+    ["Service Address", c.streetAddress],
+    ["City", c.city],
+    ["State", c.state],
+    ["ZIP", c.zip],
+  ];
+
+  // Only the fields relevant to the selected service type are included —
+  // nothing blank or irrelevant to other service types.
+  const detailRows = [];
+  if (data.serviceType === "junk_removal") {
+    detailRows.push(["Items to Remove", j.itemsDescription]);
+    detailRows.push(["Pickup Location", j.location]);
+    detailRows.push(["Stairs", STAIRS_LABELS[j.stairs] || j.stairs]);
+  } else if (data.serviceType === "dumpster_rental") {
+    detailRows.push(["Material Type", j.materialType]);
+    detailRows.push(["Delivery Date", j.deliveryDate]);
+    detailRows.push(["Pickup Date", j.pickupDate]);
+    detailRows.push(["Placement Notes", j.placementLocation]);
+  } else if (data.serviceType === "light_demo") {
+    detailRows.push(["What Needs to Be Demolished", j.demoDescription]);
+    detailRows.push(["Approximate Size", j.approximateSize]);
+    detailRows.push(["Debris Removal Needed", j.debrisRemovalNeeded === "yes" ? "Yes" : "No"]);
+  }
+  if (j.additionalDetails) {
+    detailRows.push(["Additional Details", j.additionalDetails]);
+  }
+
+  return (
+    "<p style=\"font-size:18px;font-weight:bold;margin:0 0 12px\">NEW BOOKING REQUEST</p>" +
+    renderRows(topRows) +
+    "<hr style=\"border:none;border-top:1px solid #ddd;margin:16px 0\">" +
+    renderRows(detailRows) +
+    "<p style=\"margin-top:20px\"><em>Customer may have uploaded photos with this booking. View Supabase to review booking photos.</em></p>"
+  );
+}
+
+function renderRows(rows) {
+  return rows
+    .map(function (pair) {
+      return (
+        "<p style=\"margin:0 0 8px\"><strong>" +
+        escapeHtml(pair[0]) +
+        ":</strong><br>" +
+        escapeHtml(String(pair[1])).replace(/\n/g, "<br>") +
+        "</p>"
+      );
+    })
+    .join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
 }
 
 function signUploadToken(bookingId, secret) {
