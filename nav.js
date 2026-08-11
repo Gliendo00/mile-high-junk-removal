@@ -1,4 +1,14 @@
 document.addEventListener('DOMContentLoaded', function () {
+  // GA4: fire phone_click for any tel: link anywhere on the page (nav bar,
+  // sticky mobile call bar, in-page CTAs, booking pages, etc). Attached
+  // before the hamburger-menu guard below so it never depends on that markup.
+  document.addEventListener('click', function (e) {
+    var telLink = e.target.closest ? e.target.closest('a[href^="tel:"]') : null;
+    if (telLink && typeof window.gtag === 'function') {
+      window.gtag('event', 'phone_click');
+    }
+  });
+
   var toggle = document.getElementById('nav-hamburger');
   var menu = document.getElementById('mobile-menu');
   if (!toggle || !menu) return;

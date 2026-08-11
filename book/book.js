@@ -9,6 +9,12 @@ document.addEventListener('DOMContentLoaded', function () {
     photos: [], // File objects kept in memory until submit; uploaded only after the booking is confirmed.
   };
 
+  // GA4: booking flow entered. Fires once per page load — not on step
+  // navigation — since this runs a single time here, not inside goToStep().
+  if (typeof window.gtag === 'function') {
+    window.gtag('event', 'booking_started');
+  }
+
   var errorBox = document.getElementById('wizard-error');
   var stepEls = Array.prototype.slice.call(document.querySelectorAll('.wizard-step'));
   var stepIndicatorEls = Array.prototype.slice.call(document.querySelectorAll('#wizard-steps li'));
@@ -56,6 +62,9 @@ document.addEventListener('DOMContentLoaded', function () {
   serviceRadios.forEach(function (radio) {
     radio.addEventListener('change', function () {
       state.serviceType = radio.value;
+      if (typeof window.gtag === 'function') {
+        window.gtag('event', 'booking_service_selected', { service_type: radio.value });
+      }
     });
   });
 
@@ -266,6 +275,19 @@ document.addEventListener('DOMContentLoaded', function () {
   ['dr-delivery', 'dr-pickup', 'pref-date'].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.min = todayStr;
+  });
+
+  // GA4: booking_date_selected fires when the visitor picks a preferred date
+  // (junk removal / light demo) or a dumpster delivery date. No date value or
+  // other PII is sent — just the fact that a date was chosen.
+  ['pref-date', 'dr-delivery'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', function () {
+      if (el.value && typeof window.gtag === 'function') {
+        window.gtag('event', 'booking_date_selected');
+      }
+    });
   });
 
   // — validation per step —
@@ -529,6 +551,15 @@ document.addEventListener('DOMContentLoaded', function () {
         document.querySelector('.wizard-step[data-step="6"] .wizard-actions').style.display = 'none';
         reviewContent.style.display = 'none';
         successBox.classList.add('is-visible');
+
+        // GA4: the most important conversion event. Fires exactly once, only
+        // after the backend has confirmed the booking was saved (never on
+        // validation failure, a failed request, or mere submit-click) — the
+        // submit button also stays disabled from here on, so this branch
+        // can't be re-entered by a second click.
+        if (typeof window.gtag === 'function') {
+          window.gtag('event', 'booking_form_completed');
+        }
 
         var uploadToken = body && body.uploadToken;
         var photos = state.photos;
