@@ -118,6 +118,9 @@ img { display: block; max-width: 100%; }
 
 .hr { height: 1px; border: 0; margin: var(--space-4) 0; background: var(--color-divider); }
 
+.bbb-seal { display: flex; }
+.bbb-seal img { width: 280px; }
+
 /* — buttons — */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
