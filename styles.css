@@ -255,6 +255,11 @@ a.tag-outline:hover { background: var(--color-accent-100); }
   .nav-utility-links { display: none; }
   .nav-hamburger { display: flex; }
   .nav-utility-phone { display: none; }
+  .nav-brand-row-inner {
+    background:
+      linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
+      url("images/denver-skyline-illustration-900w.webp") center / cover no-repeat;
+  }
 }
 @media (min-width: 861px) {
   .mobile-menu { display: none !important; }
