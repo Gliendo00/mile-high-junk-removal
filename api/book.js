@@ -31,12 +31,39 @@ const SERVICE_LABELS = { junk_removal: "Junk Removal", dumpster_rental: "15-Yard
 const STAIRS_OPTIONS = ["none", "some", "multiple_flights"];
 const STAIRS_LABELS = { none: "No stairs", some: "Some stairs", multiple_flights: "Multiple flights" };
 const YES_NO = ["yes", "no"];
-const TIME_WINDOWS = ["morning", "midday", "afternoon", "evening"];
+// "morning"/"midday"/"afternoon"/"evening" are the legacy broad windows —
+// still sent for a dumpster rental's delivery window (dr-window in the
+// booking form, unchanged). "w_*" are the newer 2-hour arrival windows sent
+// by the junk removal / light demo date & time step.
+const TIME_WINDOWS = [
+  "morning",
+  "midday",
+  "afternoon",
+  "evening",
+  "w_0400_0600",
+  "w_0600_0800",
+  "w_0800_1000",
+  "w_1000_1200",
+  "w_1200_1400",
+  "w_1400_1600",
+  "w_1600_1800",
+  "w_1800_2000",
+  "w_2000_2200",
+];
 const TIME_WINDOW_LABELS = {
   morning: "Morning (8am–11am)",
   midday: "Midday (11am–2pm)",
   afternoon: "Afternoon (2pm–5pm)",
   evening: "Evening (5pm–7pm)",
+  w_0400_0600: "4:00 AM – 6:00 AM",
+  w_0600_0800: "6:00 AM – 8:00 AM",
+  w_0800_1000: "8:00 AM – 10:00 AM",
+  w_1000_1200: "10:00 AM – 12:00 PM",
+  w_1200_1400: "12:00 PM – 2:00 PM",
+  w_1400_1600: "2:00 PM – 4:00 PM",
+  w_1600_1800: "4:00 PM – 6:00 PM",
+  w_1800_2000: "6:00 PM – 8:00 PM",
+  w_2000_2200: "8:00 PM – 10:00 PM",
 };
 
 const MAX = {

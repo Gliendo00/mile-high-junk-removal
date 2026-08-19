@@ -288,21 +288,26 @@ a.tag-outline:hover { background: var(--color-accent-100); }
 .placeholder-photo svg { opacity: 0.6; }
 
 /* — reviews carousel — */
+/* Auto-scroll is driven by JS (scrollLeft on this element) rather than a CSS
+   animation so the same scroll position can be paused, dragged, and resumed
+   without ever jumping — see the script at the end of the reviews section. */
 .reviews-carousel {
-  overflow: hidden; position: relative;
+  overflow-x: auto; overflow-y: hidden; position: relative;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; -ms-overflow-style: none;
+  cursor: grab;
   -webkit-mask-image: linear-gradient(90deg, transparent, black 40px, black calc(100% - 40px), transparent);
   mask-image: linear-gradient(90deg, transparent, black 40px, black calc(100% - 40px), transparent);
 }
-.reviews-track { display: flex; gap: 22px; width: max-content; animation: reviews-scroll 42s linear infinite; }
-.reviews-carousel:hover .reviews-track { animation-play-state: paused; }
+.reviews-carousel::-webkit-scrollbar { display: none; }
+.reviews-carousel.is-dragging { cursor: grabbing; scroll-behavior: auto; }
+.reviews-carousel.is-dragging .reviews-track { user-select: none; }
+.reviews-track { display: flex; gap: 22px; width: max-content; }
 .reviews-track .card { flex: 0 0 320px; }
-@keyframes reviews-scroll {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}
 @media (prefers-reduced-motion: reduce) {
-  .reviews-track { animation: none; }
-  .reviews-carousel { overflow-x: auto; }
+  /* JS also checks prefers-reduced-motion and skips the auto-scroll loop
+     entirely; manual scroll/drag/swipe still works either way. */
+  .reviews-carousel { scroll-behavior: auto; }
 }
 
 @media (max-width: 860px) {

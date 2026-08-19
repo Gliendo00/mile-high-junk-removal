@@ -211,25 +211,24 @@
           <label for="dr-material">What type of material?</label>
           <input class="input" id="dr-material" type="text" maxlength="200" placeholder="e.g. household junk, construction debris, yard waste">
         </div>
-        <div class="field-grid">
-          <div class="field">
-            <label for="dr-delivery">Desired delivery date</label>
-            <input class="input" id="dr-delivery" type="date">
-          </div>
-          <div class="field">
-            <label for="dr-pickup">Desired pickup date</label>
-            <input class="input" id="dr-pickup" type="date">
-          </div>
-        </div>
+
         <div class="field">
-          <label for="dr-window">Preferred delivery time window</label>
-          <select class="input" id="dr-window">
-            <option value="">Select one&hellip;</option>
-            <option value="morning">Morning (8am&ndash;11am)</option>
-            <option value="midday">Midday (11am&ndash;2pm)</option>
-            <option value="afternoon">Afternoon (2pm&ndash;5pm)</option>
-            <option value="evening">Evening (5pm&ndash;7pm)</option>
-          </select>
+          <label id="dr-delivery-date-label">Desired delivery date</label>
+          <div class="date-bubble-row" id="dr-delivery-date-bubble-row" role="group" aria-labelledby="dr-delivery-date-label"></div>
+        </div>
+
+        <div class="field">
+          <label id="dr-delivery-window-label">Choose your preferred 2-hour delivery window</label>
+          <div class="time-bubble-grid" id="dr-delivery-time-bubble-grid" role="group" aria-labelledby="dr-delivery-window-label"></div>
+          <p class="field-note time-bubble-note">Need an earlier or later delivery? We're available 24/7 for inquiries. Contact us to request a time outside these delivery windows.</p>
+        </div>
+
+        <input type="hidden" id="dr-delivery">
+        <input type="hidden" id="dr-window">
+
+        <div class="field">
+          <label for="dr-pickup">Desired pickup date</label>
+          <input class="input" id="dr-pickup" type="date">
         </div>
         <div class="field">
           <label for="dr-placement">Where should the dumpster be placed?</label>
@@ -292,22 +291,21 @@
     <section class="wizard-step" data-step="4" hidden>
       <h2 style="font-size:20px">Preferred date &amp; time</h2>
       <p class="text-muted">These are your <strong>preferred</strong> times &mdash; we don't have real-time availability yet, so we'll call or text to confirm the exact window.</p>
-      <div class="field-grid">
-        <div class="field">
-          <label for="pref-date">Preferred date</label>
-          <input class="input" id="pref-date" type="date">
-        </div>
-        <div class="field">
-          <label for="pref-window">Preferred time window</label>
-          <select class="input" id="pref-window">
-            <option value="">Select one&hellip;</option>
-            <option value="morning">Morning (8am&ndash;11am)</option>
-            <option value="midday">Midday (11am&ndash;2pm)</option>
-            <option value="afternoon">Afternoon (2pm&ndash;5pm)</option>
-            <option value="evening">Evening (5pm&ndash;7pm)</option>
-          </select>
-        </div>
+
+      <div class="field">
+        <label id="date-bubble-label">Preferred date</label>
+        <div class="date-bubble-row" id="date-bubble-row" role="group" aria-labelledby="date-bubble-label"></div>
       </div>
+
+      <div class="field">
+        <label id="time-bubble-label">Choose your preferred 2-hour arrival window</label>
+        <div class="time-bubble-grid" id="time-bubble-grid" role="group" aria-labelledby="time-bubble-label"></div>
+        <p class="field-note time-bubble-note">Need a different time? We're available 24/7 for inquiries. Contact us to request a time outside these booking windows.</p>
+      </div>
+
+      <input type="hidden" id="pref-date">
+      <input type="hidden" id="pref-window">
+
       <div class="wizard-actions">
         <button type="button" class="btn btn-secondary" data-back>Back</button>
         <button type="button" class="btn btn-primary" data-next>Next</button>

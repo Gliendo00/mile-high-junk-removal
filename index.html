@@ -527,6 +527,7 @@
 
   <script>
   (function () {
+    var carousel = document.querySelector('.reviews-carousel');
     var track = document.getElementById('reviews-track');
     var badge = document.getElementById('reviews-live-badge');
     if (!track) return;
@@ -561,8 +562,104 @@
         var html = data.reviews.map(cardHtml).join('');
         track.innerHTML = html + html; // duplicate set so the loop is seamless
         if (badge) badge.style.display = 'inline-flex';
+        recomputeSpeed(); // card count/lengths changed, so the loop width did too
       })
       .catch(function () { /* keep the static reviews already in the page */ });
+
+    // — auto-scroll + drag/swipe, replacing the old CSS @keyframes animation —
+    // scrollLeft is advanced a little every frame instead, so pausing, manual
+    // dragging/swiping/trackpad scrolling, and resuming are all just reads and
+    // writes of the same single position: nothing ever resets or snaps.
+    if (!carousel) return;
+
+    var AUTO_SCROLL_DURATION_SEC = 42; // time to scroll through one full (unduplicated) set — matches the old animation
+    var prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var isFinePointer = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+    var speedPxPerSec = 0;
+    function recomputeSpeed() {
+      speedPxPerSec = (track.scrollWidth / 2) / AUTO_SCROLL_DURATION_SEC;
+    }
+    recomputeSpeed();
+    window.addEventListener('resize', recomputeSpeed);
+
+    var isHovering = false;
+    var isDragging = false;
+    var isTouching = false;
+    var isWheeling = false;
+    var wheelIdleTimer = null;
+    var dragStartX = 0;
+    var dragStartScrollLeft = 0;
+    var lastTs = null;
+
+    function isPaused() {
+      return isHovering || isDragging || isTouching || isWheeling;
+    }
+
+    // Keeps the visible position inside the first (unduplicated) copy of the
+    // track by jumping back/forward a half-width whenever it drifts past one
+    // edge — since the second half is an identical duplicate, this is
+    // invisible and lets both auto-scroll and manual dragging loop forever.
+    function maintainLoop() {
+      var halfWidth = track.scrollWidth / 2;
+      if (halfWidth <= 0) return;
+      if (carousel.scrollLeft >= halfWidth) carousel.scrollLeft -= halfWidth;
+    }
+
+    function tick(ts) {
+      if (lastTs === null) lastTs = ts;
+      var dt = (ts - lastTs) / 1000;
+      lastTs = ts;
+      if (!prefersReducedMotion && !isPaused()) {
+        carousel.scrollLeft += speedPxPerSec * dt;
+        maintainLoop();
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    if (isFinePointer) {
+      carousel.addEventListener('mouseenter', function () { isHovering = true; });
+      carousel.addEventListener('mouseleave', function () { isHovering = false; });
+
+      carousel.addEventListener('mousedown', function (e) {
+        isDragging = true;
+        dragStartX = e.pageX;
+        dragStartScrollLeft = carousel.scrollLeft;
+        carousel.classList.add('is-dragging');
+      });
+      window.addEventListener('mousemove', function (e) {
+        if (!isDragging) return;
+        e.preventDefault();
+        carousel.scrollLeft = dragStartScrollLeft - (e.pageX - dragStartX);
+        maintainLoop();
+      });
+      window.addEventListener('mouseup', function () {
+        if (!isDragging) return;
+        isDragging = false;
+        carousel.classList.remove('is-dragging');
+      });
+    }
+
+    // Touch swiping is native (overflow-x: auto handles panning + momentum on
+    // its own) — these listeners only pause the auto-scroll while a touch is
+    // active so it doesn't fight the user's swipe.
+    carousel.addEventListener('touchstart', function () { isTouching = true; }, { passive: true });
+    carousel.addEventListener('touchend', function () { isTouching = false; }, { passive: true });
+    carousel.addEventListener('touchcancel', function () { isTouching = false; }, { passive: true });
+
+    // Trackpad horizontal scrolling is also native; pause auto-scroll during
+    // an active wheel gesture and resume shortly after it goes quiet.
+    carousel.addEventListener('wheel', function () {
+      isWheeling = true;
+      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = setTimeout(function () { isWheeling = false; }, 150);
+    }, { passive: true });
+
+    // Covers every other way scrollLeft can change (scrollbar drag, keyboard
+    // scrolling when the carousel is focused, etc.) so the loop never visibly
+    // runs off the end of the duplicated content.
+    carousel.addEventListener('scroll', maintainLoop, { passive: true });
   })();
   </script>
 

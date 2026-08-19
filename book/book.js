@@ -40,7 +40,8 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     clearError();
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    if (n === 2) showJobDetailsPanel();
+    if (n === 2) { showJobDetailsPanel(); dumpsterDeliveryPicker.init(); }
+    if (n === 4) prefDateTimePicker.init();
     if (n === 6) renderReview();
   }
 
@@ -270,24 +271,204 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // — min date = today, for all date inputs —
+  // — min date = today, for the remaining native date input (dumpster pickup) —
   var todayStr = new Date().toISOString().slice(0, 10);
-  ['dr-delivery', 'dr-pickup', 'pref-date'].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (el) el.min = todayStr;
-  });
+  var drPickupInput = document.getElementById('dr-pickup');
+  if (drPickupInput) drPickupInput.min = todayStr;
 
-  // GA4: booking_date_selected fires when the visitor picks a preferred date
-  // (junk removal / light demo) or a dumpster delivery date. No date value or
-  // other PII is sent — just the fact that a date was chosen.
-  ['pref-date', 'dr-delivery'].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', function () {
-      if (el.value && typeof window.gtag === 'function') {
+  // — date & time bubbles (junk removal / light demo step 4, and the dumpster
+  // rental delivery date/window in step 2) — replacing native date inputs and
+  // the old broad morning/midday/afternoon/evening dropdowns. Same-day
+  // availability is evaluated in America/Denver local time regardless of the
+  // visitor's own timezone.
+  var DENVER_TZ = 'America/Denver';
+  var ARRIVAL_WINDOWS = [
+    { id: 'w_0400_0600', label: '4:00 AM – 6:00 AM', startHour: 4 },
+    { id: 'w_0600_0800', label: '6:00 AM – 8:00 AM', startHour: 6 },
+    { id: 'w_0800_1000', label: '8:00 AM – 10:00 AM', startHour: 8 },
+    { id: 'w_1000_1200', label: '10:00 AM – 12:00 PM', startHour: 10 },
+    { id: 'w_1200_1400', label: '12:00 PM – 2:00 PM', startHour: 12 },
+    { id: 'w_1400_1600', label: '2:00 PM – 4:00 PM', startHour: 14 },
+    { id: 'w_1600_1800', label: '4:00 PM – 6:00 PM', startHour: 16 },
+    { id: 'w_1800_2000', label: '6:00 PM – 8:00 PM', startHour: 18 },
+    { id: 'w_2000_2200', label: '8:00 PM – 10:00 PM', startHour: 20 },
+  ];
+  // Dumpster rental delivery only offers 6am–8pm starts — no 4–6am or
+  // 8–10pm — while junk removal / light demo keep the full 4am–10pm range.
+  var DUMPSTER_DELIVERY_WINDOWS = ARRIVAL_WINDOWS.filter(function (w) {
+    return w.id !== 'w_0400_0600' && w.id !== 'w_2000_2200';
+  });
+  var DATE_BUBBLE_COUNT = 14; // ~2 weeks of selectable dates
+
+  function getDenverNow() {
+    var fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: DENVER_TZ,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    var parts = {};
+    fmt.formatToParts(new Date()).forEach(function (p) { parts[p.type] = p.value; });
+    var hour = parseInt(parts.hour, 10);
+    if (hour === 24) hour = 0; // some engines report midnight as "24" with hour12:false
+    return {
+      year: parseInt(parts.year, 10),
+      month: parseInt(parts.month, 10),
+      day: parseInt(parts.day, 10),
+      hour: hour,
+      minute: parseInt(parts.minute, 10),
+    };
+  }
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+  // Returns a UTC-midnight Date representing the calendar date `offsetDays`
+  // after Denver's current date. Using UTC internally (anchored on Denver's
+  // y/m/d) keeps calendar-day arithmetic simple and immune to the browser's
+  // own timezone — every format/read of this Date below explicitly uses
+  // timeZone: 'UTC' so nothing silently reinterprets it.
+  function denverDateAtOffset(offsetDays) {
+    var now = getDenverNow();
+    var d = new Date(Date.UTC(now.year, now.month - 1, now.day));
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return d;
+  }
+  function isoDate(d) {
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  }
+  // Windows (from the given list) available for the date at `offsetDays` from
+  // Denver "today". For today (offset 0), a window disappears once its start
+  // time has passed; future dates always show the full list.
+  function windowsForDate(offsetDays, windows) {
+    if (offsetDays > 0) return windows.slice();
+    var now = getDenverNow();
+    var nowDecimalHour = now.hour + now.minute / 60;
+    return windows.filter(function (w) { return w.startHour > nowDecimalHour; });
+  }
+  function firstOffsetWithWindows(windows) {
+    for (var i = 0; i < DATE_BUBBLE_COUNT; i++) {
+      if (windowsForDate(i, windows).length > 0) return i;
+    }
+    return 0;
+  }
+
+  // Builds one date-bubbles + time-bubbles picker wired to a given pair of
+  // hidden inputs. Used twice below: once for the junk removal / light demo
+  // preferred date (step 4), once for the dumpster rental delivery date
+  // (step 2) — each keeps its own selection and its own list of windows.
+  function createDateTimePicker(opts) {
+    var dateRowEl = opts.dateRowEl;
+    var timeGridEl = opts.timeGridEl;
+    var dateInput = document.getElementById(opts.dateInputId);
+    var windowInput = document.getElementById(opts.windowInputId);
+    var windows = opts.windows;
+    var emptyMessage = opts.emptyMessage;
+    var selectedOffset = null; // null until this picker has been initialized once
+
+    function renderDateBubbles() {
+      if (!dateRowEl) return;
+      dateRowEl.innerHTML = '';
+      for (var i = 0; i < DATE_BUBBLE_COUNT; i++) {
+        var d = denverDateAtOffset(i);
+        var weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+        var month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'date-bubble';
+        btn.setAttribute('data-offset', i);
+        if (i === selectedOffset) btn.classList.add('is-selected');
+        btn.innerHTML =
+          '<span class="db-weekday">' + weekday + '</span>' +
+          '<span class="db-month">' + month + '</span>' +
+          '<span class="db-day">' + d.getUTCDate() + '</span>';
+        btn.addEventListener('click', function () {
+          selectDate(Number(this.getAttribute('data-offset')));
+        });
+        dateRowEl.appendChild(btn);
+      }
+    }
+
+    function selectDate(offset) {
+      var wasChanged = selectedOffset !== offset;
+      selectedOffset = offset;
+      dateInput.value = isoDate(denverDateAtOffset(offset));
+      Array.prototype.forEach.call(dateRowEl.querySelectorAll('.date-bubble'), function (b) {
+        b.classList.toggle('is-selected', Number(b.getAttribute('data-offset')) === offset);
+      });
+
+      // Drop a previously chosen window if it no longer applies to the new
+      // date (e.g. it just expired for today, or the date changed entirely).
+      var stillAvailable = windowsForDate(offset, windows).some(function (w) { return w.id === windowInput.value; });
+      if (!stillAvailable) windowInput.value = '';
+
+      renderTimeBubbles(offset);
+
+      if (wasChanged && typeof window.gtag === 'function') {
         window.gtag('event', 'booking_date_selected');
       }
-    });
+    }
+
+    function renderTimeBubbles(offset) {
+      if (!timeGridEl) return;
+      var available = windowsForDate(offset, windows);
+      var selected = windowInput.value;
+      timeGridEl.innerHTML = '';
+      if (!available.length) {
+        var empty = document.createElement('p');
+        empty.className = 'time-bubble-empty';
+        empty.textContent = emptyMessage;
+        timeGridEl.appendChild(empty);
+        return;
+      }
+      available.forEach(function (w) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'time-bubble';
+        btn.textContent = w.label;
+        if (w.id === selected) btn.classList.add('is-selected');
+        btn.addEventListener('click', function () {
+          windowInput.value = w.id;
+          Array.prototype.forEach.call(timeGridEl.querySelectorAll('.time-bubble'), function (b) {
+            b.classList.toggle('is-selected', b === btn);
+          });
+        });
+        timeGridEl.appendChild(btn);
+      });
+    }
+
+    // Called every time this picker's step is shown. The very first time,
+    // default to the next date/time that actually has an available window
+    // (today, unless today's windows have all passed — then the next date
+    // with windows) so the visitor never lands on an empty state. After
+    // that, re-render around whatever they've already chosen rather than
+    // resetting their selection.
+    function init() {
+      if (selectedOffset === null) {
+        selectedOffset = firstOffsetWithWindows(windows);
+        renderDateBubbles();
+        dateInput.value = isoDate(denverDateAtOffset(selectedOffset));
+        renderTimeBubbles(selectedOffset);
+      } else {
+        renderDateBubbles();
+        renderTimeBubbles(selectedOffset);
+      }
+    }
+
+    return { init: init };
+  }
+
+  var prefDateTimePicker = createDateTimePicker({
+    dateRowEl: document.getElementById('date-bubble-row'),
+    timeGridEl: document.getElementById('time-bubble-grid'),
+    dateInputId: 'pref-date',
+    windowInputId: 'pref-window',
+    windows: ARRIVAL_WINDOWS,
+    emptyMessage: 'No more arrival windows today — please choose another date above.',
+  });
+  var dumpsterDeliveryPicker = createDateTimePicker({
+    dateRowEl: document.getElementById('dr-delivery-date-bubble-row'),
+    timeGridEl: document.getElementById('dr-delivery-time-bubble-grid'),
+    dateInputId: 'dr-delivery',
+    windowInputId: 'dr-window',
+    windows: DUMPSTER_DELIVERY_WINDOWS,
+    emptyMessage: 'No more delivery windows today — please choose another date above.',
   });
 
   // — validation per step —
@@ -376,12 +557,19 @@ document.addEventListener('DOMContentLoaded', function () {
     light_demo: 'Light Demo',
   };
   var stairsLabels = { none: 'No stairs', some: 'Some stairs', multiple_flights: 'Multiple flights' };
+  // The legacy morning/midday/afternoon/evening keys are no longer written
+  // by any current step, but are kept here in case an older in-progress
+  // booking (loaded from a stale cached copy of this page) still submits
+  // one. The w_* entries are the current 2-hour arrival/delivery windows,
+  // shared by the step-4 preferred date & time and the dumpster rental
+  // delivery date & time (dr-window).
   var windowLabels = {
     morning: 'Morning (8am–11am)',
     midday: 'Midday (11am–2pm)',
     afternoon: 'Afternoon (2pm–5pm)',
     evening: 'Evening (5pm–7pm)',
   };
+  ARRIVAL_WINDOWS.forEach(function (w) { windowLabels[w.id] = w.label; });
 
   function renderReview() {
     reviewContent.innerHTML = '';
@@ -398,9 +586,9 @@ document.addEventListener('DOMContentLoaded', function () {
     } else if (state.serviceType === 'dumpster_rental') {
       detailRows = [
         ['Material', val('dr-material')],
-        ['Delivery date', val('dr-delivery')],
+        ['Desired delivery date', val('dr-delivery')],
+        ['Preferred delivery window', windowLabels[val('dr-window')] || '—'],
         ['Pickup date', val('dr-pickup')],
-        ['Delivery time window', windowLabels[val('dr-window')] || '—'],
         ['Placement', val('dr-placement')],
         ['Notes', val('dr-notes') || '—'],
       ];
