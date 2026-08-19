@@ -298,7 +298,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var DUMPSTER_DELIVERY_WINDOWS = ARRIVAL_WINDOWS.filter(function (w) {
     return w.id !== 'w_0400_0600' && w.id !== 'w_2000_2200';
   });
-  var DATE_BUBBLE_COUNT = 14; // ~2 weeks of selectable dates
+  var MONTH_COUNT = 6; // current month + next 5 months, selectable via the month bubbles
 
   function getDenverNow() {
     var fmt = new Intl.DateTimeFormat('en-US', {
@@ -319,97 +319,187 @@ document.addEventListener('DOMContentLoaded', function () {
     };
   }
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
-  // Returns a UTC-midnight Date representing the calendar date `offsetDays`
-  // after Denver's current date. Using UTC internally (anchored on Denver's
-  // y/m/d) keeps calendar-day arithmetic simple and immune to the browser's
-  // own timezone — every format/read of this Date below explicitly uses
-  // timeZone: 'UTC' so nothing silently reinterprets it.
-  function denverDateAtOffset(offsetDays) {
-    var now = getDenverNow();
-    var d = new Date(Date.UTC(now.year, now.month - 1, now.day));
-    d.setUTCDate(d.getUTCDate() + offsetDays);
-    return d;
+  // Returns a UTC-midnight Date representing the given Denver-local calendar
+  // date (month is 1-12). Using UTC internally keeps calendar-day arithmetic
+  // simple and immune to the browser's own timezone — every format/read of a
+  // Date built this way below explicitly uses timeZone: 'UTC' so nothing
+  // silently reinterprets it.
+  function denverDateYMD(year, month, day) {
+    return new Date(Date.UTC(year, month - 1, day));
   }
   function isoDate(d) {
     return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
   }
-  // Windows (from the given list) available for the date at `offsetDays` from
-  // Denver "today". For today (offset 0), a window disappears once its start
-  // time has passed; future dates always show the full list.
-  function windowsForDate(offsetDays, windows) {
-    if (offsetDays > 0) return windows.slice();
+  // Number of days in the given month (1-12) — correctly handles 28/29/30/31
+  // and leap-year February, since day 0 of the following month is always the
+  // last day of this one and the JS engine's own calendar math resolves it.
+  function daysInMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+  // {year, month} (month 1-12) for Denver "this month" plus offsetMonths,
+  // with year rollover (e.g. Dec + 1 -> Jan of next year) handled by plain
+  // integer division/modulo rather than any special-casing.
+  function denverMonthAtOffset(offsetMonths) {
     var now = getDenverNow();
+    var totalMonths = (now.month - 1) + offsetMonths;
+    return {
+      year: now.year + Math.floor(totalMonths / 12),
+      month: (totalMonths % 12) + 1,
+    };
+  }
+  // All selectable dates (as UTC-midnight Date objects) in the given Denver
+  // month. The current month starts from today and skips earlier days in
+  // that month; every other month (always in the future, since
+  // denverMonthAtOffset never looks backward) includes every day from the
+  // 1st through the end of the month.
+  function datesForMonth(year, month) {
+    var now = getDenverNow();
+    var isCurrentMonth = year === now.year && month === now.month;
+    var startDay = isCurrentMonth ? now.day : 1;
+    var total = daysInMonth(year, month);
+    var dates = [];
+    for (var day = startDay; day <= total; day++) dates.push(denverDateYMD(year, month, day));
+    return dates;
+  }
+  // Windows (from the given list) available for the given date. For today, a
+  // window disappears once its start time has passed; every other date
+  // (always in the future) always shows the full list.
+  function windowsForDate(date, windows) {
+    var now = getDenverNow();
+    var isToday = date.getUTCFullYear() === now.year && date.getUTCMonth() + 1 === now.month && date.getUTCDate() === now.day;
+    if (!isToday) return windows.slice();
     var nowDecimalHour = now.hour + now.minute / 60;
     return windows.filter(function (w) { return w.startHour > nowDecimalHour; });
   }
-  function firstOffsetWithWindows(windows) {
-    for (var i = 0; i < DATE_BUBBLE_COUNT; i++) {
-      if (windowsForDate(i, windows).length > 0) return i;
+  // First date — walking forward from today, across months up to
+  // MONTH_COUNT — that has at least one available window. Used to pick the
+  // initial default month/date so a visitor never lands on an empty state
+  // (e.g. it's 9pm and today's windows have all passed).
+  function firstAvailableDate(windows) {
+    for (var m = 0; m < MONTH_COUNT; m++) {
+      var ym = denverMonthAtOffset(m);
+      var dates = datesForMonth(ym.year, ym.month);
+      for (var i = 0; i < dates.length; i++) {
+        if (windowsForDate(dates[i], windows).length > 0) return { year: ym.year, month: ym.month, date: dates[i] };
+      }
     }
-    return 0;
+    var now = getDenverNow();
+    return { year: now.year, month: now.month, date: denverDateYMD(now.year, now.month, now.day) };
   }
 
-  // Builds one date-bubbles + time-bubbles picker wired to a given pair of
-  // hidden inputs. Used twice below: once for the junk removal / light demo
-  // preferred date (step 4), once for the dumpster rental delivery date
-  // (step 2) — each keeps its own selection and its own list of windows.
+  // Builds one month-bubbles + date-bubbles + time-bubbles picker wired to a
+  // given pair of hidden inputs. Used twice below: once for the junk removal
+  // / light demo preferred date (step 4), once for the dumpster rental
+  // delivery date (step 2) — each keeps its own selection and its own list
+  // of windows.
   function createDateTimePicker(opts) {
+    var monthRowEl = opts.monthRowEl;
     var dateRowEl = opts.dateRowEl;
     var timeGridEl = opts.timeGridEl;
     var dateInput = document.getElementById(opts.dateInputId);
     var windowInput = document.getElementById(opts.windowInputId);
     var windows = opts.windows;
     var emptyMessage = opts.emptyMessage;
-    var selectedOffset = null; // null until this picker has been initialized once
+    var selectedYear = null; // null until this picker has been initialized once
+    var selectedMonth = null;
+    var selectedDate = null; // Date | null — null whenever a month switch has cleared it
+
+    function renderMonthBubbles() {
+      if (!monthRowEl) return;
+      monthRowEl.innerHTML = '';
+      var now = getDenverNow();
+      for (var m = 0; m < MONTH_COUNT; m++) {
+        var ym = denverMonthAtOffset(m);
+        var label = denverDateYMD(ym.year, ym.month, 1).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+        if (ym.year !== now.year) label += ' ' + ym.year; // disambiguate a January that's actually next year
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'month-bubble';
+        btn.setAttribute('data-year', ym.year);
+        btn.setAttribute('data-month', ym.month);
+        if (ym.year === selectedYear && ym.month === selectedMonth) btn.classList.add('is-selected');
+        btn.textContent = label;
+        btn.addEventListener('click', function () {
+          selectMonth(Number(this.getAttribute('data-year')), Number(this.getAttribute('data-month')));
+        });
+        monthRowEl.appendChild(btn);
+      }
+    }
+
+    // Switching months always invalidates whatever date was selected (a date
+    // from one month is never valid in another), so the date and time
+    // window selections are cleared and the customer must pick a new date
+    // from the newly shown month.
+    function selectMonth(year, month) {
+      if (year === selectedYear && month === selectedMonth) return; // already showing this month
+      selectedYear = year;
+      selectedMonth = month;
+      selectedDate = null;
+      dateInput.value = '';
+      windowInput.value = '';
+      renderMonthBubbles();
+      renderDateBubbles();
+      renderTimeBubbles();
+    }
 
     function renderDateBubbles() {
       if (!dateRowEl) return;
       dateRowEl.innerHTML = '';
-      for (var i = 0; i < DATE_BUBBLE_COUNT; i++) {
-        var d = denverDateAtOffset(i);
+      var dates = datesForMonth(selectedYear, selectedMonth);
+      var selectedIso = selectedDate ? isoDate(selectedDate) : null;
+      dates.forEach(function (d) {
+        var iso = isoDate(d);
         var weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
         var month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'date-bubble';
-        btn.setAttribute('data-offset', i);
-        if (i === selectedOffset) btn.classList.add('is-selected');
+        btn.setAttribute('data-date', iso);
+        if (iso === selectedIso) btn.classList.add('is-selected');
         btn.innerHTML =
           '<span class="db-weekday">' + weekday + '</span>' +
           '<span class="db-month">' + month + '</span>' +
           '<span class="db-day">' + d.getUTCDate() + '</span>';
         btn.addEventListener('click', function () {
-          selectDate(Number(this.getAttribute('data-offset')));
+          selectDate(d);
         });
         dateRowEl.appendChild(btn);
-      }
+      });
     }
 
-    function selectDate(offset) {
-      var wasChanged = selectedOffset !== offset;
-      selectedOffset = offset;
-      dateInput.value = isoDate(denverDateAtOffset(offset));
+    function selectDate(date) {
+      var iso = isoDate(date);
+      var wasChanged = !selectedDate || isoDate(selectedDate) !== iso;
+      selectedDate = date;
+      dateInput.value = iso;
       Array.prototype.forEach.call(dateRowEl.querySelectorAll('.date-bubble'), function (b) {
-        b.classList.toggle('is-selected', Number(b.getAttribute('data-offset')) === offset);
+        b.classList.toggle('is-selected', b.getAttribute('data-date') === iso);
       });
 
       // Drop a previously chosen window if it no longer applies to the new
       // date (e.g. it just expired for today, or the date changed entirely).
-      var stillAvailable = windowsForDate(offset, windows).some(function (w) { return w.id === windowInput.value; });
+      var stillAvailable = windowsForDate(date, windows).some(function (w) { return w.id === windowInput.value; });
       if (!stillAvailable) windowInput.value = '';
 
-      renderTimeBubbles(offset);
+      renderTimeBubbles();
 
       if (wasChanged && typeof window.gtag === 'function') {
         window.gtag('event', 'booking_date_selected');
       }
     }
 
-    function renderTimeBubbles(offset) {
+    function renderTimeBubbles() {
       if (!timeGridEl) return;
-      var available = windowsForDate(offset, windows);
-      var selected = windowInput.value;
       timeGridEl.innerHTML = '';
+      if (!selectedDate) {
+        var prompt = document.createElement('p');
+        prompt.className = 'time-bubble-empty';
+        prompt.textContent = 'Choose a date above.';
+        timeGridEl.appendChild(prompt);
+        return;
+      }
+      var available = windowsForDate(selectedDate, windows);
+      var selected = windowInput.value;
       if (!available.length) {
         var empty = document.createElement('p');
         empty.className = 'time-bubble-empty';
@@ -434,27 +524,31 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Called every time this picker's step is shown. The very first time,
-    // default to the next date/time that actually has an available window
-    // (today, unless today's windows have all passed — then the next date
-    // with windows) so the visitor never lands on an empty state. After
-    // that, re-render around whatever they've already chosen rather than
-    // resetting their selection.
+    // default to the next month/date/time that actually has an available
+    // window (today, unless today's windows have all passed — then the next
+    // date with windows, walking into later months if needed) so the
+    // visitor never lands on an empty state. After that, re-render around
+    // whatever they've already chosen rather than resetting their selection
+    // — this is what keeps the month/date/time selection intact across
+    // Back/Next navigation through the wizard.
     function init() {
-      if (selectedOffset === null) {
-        selectedOffset = firstOffsetWithWindows(windows);
-        renderDateBubbles();
-        dateInput.value = isoDate(denverDateAtOffset(selectedOffset));
-        renderTimeBubbles(selectedOffset);
-      } else {
-        renderDateBubbles();
-        renderTimeBubbles(selectedOffset);
+      if (selectedYear === null) {
+        var first = firstAvailableDate(windows);
+        selectedYear = first.year;
+        selectedMonth = first.month;
+        selectedDate = first.date;
+        dateInput.value = isoDate(selectedDate);
       }
+      renderMonthBubbles();
+      renderDateBubbles();
+      renderTimeBubbles();
     }
 
     return { init: init };
   }
 
   var prefDateTimePicker = createDateTimePicker({
+    monthRowEl: document.getElementById('month-bubble-row'),
     dateRowEl: document.getElementById('date-bubble-row'),
     timeGridEl: document.getElementById('time-bubble-grid'),
     dateInputId: 'pref-date',
@@ -463,6 +557,7 @@ document.addEventListener('DOMContentLoaded', function () {
     emptyMessage: 'No more arrival windows today — please choose another date above.',
   });
   var dumpsterDeliveryPicker = createDateTimePicker({
+    monthRowEl: document.getElementById('dr-delivery-month-bubble-row'),
     dateRowEl: document.getElementById('dr-delivery-date-bubble-row'),
     timeGridEl: document.getElementById('dr-delivery-time-bubble-grid'),
     dateInputId: 'dr-delivery',
