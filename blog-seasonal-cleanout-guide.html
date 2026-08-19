@@ -127,7 +127,37 @@
       <span></span><span></span><span></span>
     </button>
     <nav class="nav-utility-links">
-      <a href="index.html#services">Services</a>
+      <div class="nav-dropdown" id="services-dropdown">
+        <button type="button" class="nav-dropdown-trigger" id="services-trigger" aria-haspopup="true" aria-expanded="false" aria-controls="services-menu">
+          Services
+          <svg class="nav-dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+        <div class="nav-dropdown-panel" id="services-menu">
+          <div class="nav-dropdown-columns">
+            <div>
+              <p class="nav-dropdown-heading">Residential</p>
+              <ul class="nav-dropdown-list">
+                <li><a href="home-cleanouts.html">Home Cleanouts</a></li>
+                <li><a href="furniture-removal.html">Furniture Removal</a></li>
+                <li><a href="estate-cleanouts.html">Estate Cleanouts</a></li>
+                <li><a href="appliance-disposal.html">Appliance Disposal</a></li>
+              </ul>
+            </div>
+            <div>
+              <p class="nav-dropdown-heading">Commercial</p>
+              <ul class="nav-dropdown-list">
+                <li><a href="commercial-junk-removal.html" class="nav-dropdown-featured">Commercial Junk Removal</a></li>
+                <li><a href="property-management-junk-removal.html">Property Management</a></li>
+                <li><a href="office-junk-removal.html">Office Junk Removal</a></li>
+                <li><a href="dumpster-rental.html">Dumpster Rental</a></li>
+              </ul>
+            </div>
+          </div>
+          <div class="nav-dropdown-footer">
+            <a href="index.html#services" class="nav-dropdown-viewall">View All Services →</a>
+          </div>
+        </div>
+      </div>
       <a href="index.html#why-us">Why Us</a>
       <a href="index.html#gallery">Gallery</a>
       <a href="index.html#reviews">Reviews</a>
@@ -140,7 +170,25 @@
   </div>
   <nav id="mobile-menu" class="mobile-menu" aria-label="Mobile">
     <div class="wrap">
-      <a href="index.html#services">Services</a>
+      <div class="mobile-accordion" id="mobile-services-accordion">
+        <button type="button" class="mobile-accordion-trigger" id="mobile-services-trigger" aria-expanded="false" aria-controls="mobile-services-panel">
+          Services
+          <svg class="nav-dropdown-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+        <div class="mobile-accordion-panel" id="mobile-services-panel">
+          <p class="mobile-accordion-heading">Residential</p>
+          <a href="home-cleanouts.html">Home Cleanouts</a>
+          <a href="furniture-removal.html">Furniture Removal</a>
+          <a href="estate-cleanouts.html">Estate Cleanouts</a>
+          <a href="appliance-disposal.html">Appliance Disposal</a>
+          <p class="mobile-accordion-heading">Commercial</p>
+          <a href="commercial-junk-removal.html" class="nav-dropdown-featured">Commercial Junk Removal</a>
+          <a href="property-management-junk-removal.html">Property Management</a>
+          <a href="office-junk-removal.html">Office Junk Removal</a>
+          <a href="dumpster-rental.html">Dumpster Rental</a>
+          <a href="index.html#services" class="mobile-accordion-viewall">View All Services →</a>
+        </div>
+      </div>
       <a href="index.html#why-us">Why Us</a>
       <a href="index.html#gallery">Gallery</a>
       <a href="index.html#reviews">Reviews</a>
