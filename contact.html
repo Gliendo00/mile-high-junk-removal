@@ -155,8 +155,8 @@
   <section style="background:var(--color-surface);padding-block:var(--section-pad)">
     <div class="wrap" style="max-width:720px">
       <p class="eyebrow" style="color:var(--color-accent-700)">Get in touch</p>
-      <h1 style="margin-bottom:14px">Contact Mile High Junk Removal</h1>
-      <p style="opacity:0.8;margin-bottom:28px">Reach out for a free quote on junk removal, a home or estate cleanout, or a dumpster rental anywhere in the Denver metro. Call or text us directly, book a time online, or send a few photos below and we'll get right back to you.</p>
+      <h1 style="margin-bottom:14px">Get Your Free Junk Removal Quote</h1>
+      <p style="opacity:0.8;margin-bottom:28px">Tell us what you need removed and we'll get back to you with pricing and availability. Call or text us directly, book a time online, or send a few photos below.</p>
       <div style="display:flex;gap:14px;flex-wrap:wrap">
         <a href="tel:3039901812" class="btn btn-primary" style="padding:14px 26px;font-size:15px">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4c0 9.4 6.6 16 16 16l1.4-4.4-5-2-1.7 2C11.9 14 10 12.1 8.4 9.3l2-1.7-2-5L4 4Z"></path></svg>
@@ -224,6 +224,10 @@
           <div class="field">
             <label for="cf-email">Email</label>
             <input class="input" id="cf-email" name="Email" type="email" placeholder="you@example.com" required>
+          </div>
+          <div class="field">
+            <label for="cf-address">Service address or ZIP code</label>
+            <input class="input" id="cf-address" name="Address" type="text" placeholder="Address or ZIP code">
           </div>
           <div class="field">
             <label for="cf-message">What needs to go?</label>
@@ -296,6 +300,9 @@
           return { filename: f.name, base64: base64 };
         });
       })).then(function (photos) {
+        var address = document.getElementById('cf-address').value.trim();
+        var message = document.getElementById('cf-message').value;
+        var fullMessage = address ? 'Service address/ZIP: ' + address + '\n\n' + message : message;
         return fetch('/api/contact', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -303,7 +310,7 @@
             name: document.getElementById('cf-name').value,
             phone: document.getElementById('cf-phone').value,
             email: document.getElementById('cf-email').value,
-            message: document.getElementById('cf-message').value,
+            message: fullMessage,
             photos: photos,
           }),
         });
