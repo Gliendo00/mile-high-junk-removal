@@ -31,15 +31,35 @@ const SERVICE_LABELS = { junk_removal: "Junk Removal", dumpster_rental: "15-Yard
 const STAIRS_OPTIONS = ["none", "some", "multiple_flights"];
 const STAIRS_LABELS = { none: "No stairs", some: "Some stairs", multiple_flights: "Multiple flights" };
 const YES_NO = ["yes", "no"];
-// "morning"/"midday"/"afternoon"/"evening" are the legacy broad windows —
-// still sent for a dumpster rental's delivery window (dr-window in the
-// booking form, unchanged). "w_*" are the newer 2-hour arrival windows sent
-// by the junk removal / light demo date & time step.
-const TIME_WINDOWS = [
-  "morning",
-  "midday",
-  "afternoon",
-  "evening",
+// Every accepted time-window value: its display label, and the America/Denver
+// hour (0–23) it begins at — the latter drives the same-day expiration check
+// in isTimeWindowExpired() below. "morning"/"midday"/"afternoon"/"evening" are
+// the legacy broad windows, kept valid for any service type for backwards
+// compatibility with bookings submitted before the 2-hour-window date & time
+// UI shipped. The "w_*" ids are the current 2-hour windows.
+const TIME_WINDOW_DEFS = {
+  morning: { label: "Morning (8am–11am)", startHour: 8 },
+  midday: { label: "Midday (11am–2pm)", startHour: 11 },
+  afternoon: { label: "Afternoon (2pm–5pm)", startHour: 14 },
+  evening: { label: "Evening (5pm–7pm)", startHour: 17 },
+  w_0400_0600: { label: "4:00 AM – 6:00 AM", startHour: 4 },
+  w_0600_0800: { label: "6:00 AM – 8:00 AM", startHour: 6 },
+  w_0800_1000: { label: "8:00 AM – 10:00 AM", startHour: 8 },
+  w_1000_1200: { label: "10:00 AM – 12:00 PM", startHour: 10 },
+  w_1200_1400: { label: "12:00 PM – 2:00 PM", startHour: 12 },
+  w_1400_1600: { label: "2:00 PM – 4:00 PM", startHour: 14 },
+  w_1600_1800: { label: "4:00 PM – 6:00 PM", startHour: 16 },
+  w_1800_2000: { label: "6:00 PM – 8:00 PM", startHour: 18 },
+  w_2000_2200: { label: "8:00 PM – 10:00 PM", startHour: 20 },
+};
+const TIME_WINDOW_LABELS = Object.keys(TIME_WINDOW_DEFS).reduce(function (acc, id) {
+  acc[id] = TIME_WINDOW_DEFS[id].label;
+  return acc;
+}, {});
+
+const LEGACY_TIME_WINDOWS = ["morning", "midday", "afternoon", "evening"];
+// Junk removal / light demo: the full 4am–10pm range.
+const STANDARD_ARRIVAL_WINDOWS = [
   "w_0400_0600",
   "w_0600_0800",
   "w_0800_1000",
@@ -50,20 +70,19 @@ const TIME_WINDOWS = [
   "w_1800_2000",
   "w_2000_2200",
 ];
-const TIME_WINDOW_LABELS = {
-  morning: "Morning (8am–11am)",
-  midday: "Midday (11am–2pm)",
-  afternoon: "Afternoon (2pm–5pm)",
-  evening: "Evening (5pm–7pm)",
-  w_0400_0600: "4:00 AM – 6:00 AM",
-  w_0600_0800: "6:00 AM – 8:00 AM",
-  w_0800_1000: "8:00 AM – 10:00 AM",
-  w_1000_1200: "10:00 AM – 12:00 PM",
-  w_1200_1400: "12:00 PM – 2:00 PM",
-  w_1400_1600: "2:00 PM – 4:00 PM",
-  w_1600_1800: "4:00 PM – 6:00 PM",
-  w_1800_2000: "6:00 PM – 8:00 PM",
-  w_2000_2200: "8:00 PM – 10:00 PM",
+// Dumpster rental delivery: 6am–8pm only — no 4–6am or 8–10pm — matching
+// DUMPSTER_DELIVERY_WINDOWS in book/book.js.
+const DUMPSTER_DELIVERY_WINDOWS = STANDARD_ARRIVAL_WINDOWS.filter(function (id) {
+  return id !== "w_0400_0600" && id !== "w_2000_2200";
+});
+// The time windows accepted per service type. Legacy values remain valid for
+// every service type (they always were), but the new w_* windows are scoped
+// per service so, e.g., a dumpster_rental booking cannot be submitted with a
+// junk-removal-only window like 4–6am.
+const TIME_WINDOWS_BY_SERVICE = {
+  junk_removal: LEGACY_TIME_WINDOWS.concat(STANDARD_ARRIVAL_WINDOWS),
+  light_demo: LEGACY_TIME_WINDOWS.concat(STANDARD_ARRIVAL_WINDOWS),
+  dumpster_rental: LEGACY_TIME_WINDOWS.concat(DUMPSTER_DELIVERY_WINDOWS),
 };
 
 const MAX = {
@@ -472,12 +491,24 @@ function validateBooking(body) {
   const scheduleIn = body.schedule && typeof body.schedule === "object" ? body.schedule : {};
   const date = sanitizeText(scheduleIn.date, 10);
   const timeWindow = sanitizeText(scheduleIn.timeWindow, 20);
-  // For dumpster_rental the delivery date collected below is the appointment date —
-  // no generic preferred date is collected or required for that service type.
-  if (serviceType !== "dumpster_rental" && !isValidFutureDate(date)) {
-    return { ok: false, error: "Please choose a valid preferred date." };
+
+  const allowedWindows = TIME_WINDOWS_BY_SERVICE[serviceType] || [];
+  if (!allowedWindows.includes(timeWindow)) {
+    return { ok: false, error: "That time window isn't valid for this service. Please choose another time." };
   }
-  if (!TIME_WINDOWS.includes(timeWindow)) return { ok: false, error: "Please choose a valid time window." };
+
+  // For dumpster_rental the delivery date collected below is the appointment date —
+  // no generic preferred date is collected or required for that service type, so its
+  // date + window are validated in the dumpster_rental branch below instead (against
+  // deliveryDate), not here.
+  if (serviceType !== "dumpster_rental") {
+    if (!isValidDenverFutureDate(date)) {
+      return { ok: false, error: "Please choose a valid preferred date." };
+    }
+    if (isTimeWindowExpired(date, timeWindow)) {
+      return { ok: false, error: "That arrival window is no longer available. Please choose another time." };
+    }
+  }
 
   const jobIn = body.jobDetails && typeof body.jobDetails === "object" ? body.jobDetails : {};
   const additionalDetails = sanitizeText(jobIn.additionalDetails, MAX.long);
@@ -498,7 +529,12 @@ function validateBooking(body) {
     const pickupDate = sanitizeText(jobIn.pickupDate, 10);
     const placementLocation = sanitizeText(jobIn.placementLocation, MAX.short);
     if (!materialType) return { ok: false, error: "Please describe the type of material." };
-    if (!isValidFutureDate(deliveryDate)) return { ok: false, error: "Please choose a valid delivery date." };
+    if (!isValidDenverFutureDate(deliveryDate)) return { ok: false, error: "Please choose a valid delivery date." };
+    if (isTimeWindowExpired(deliveryDate, timeWindow)) {
+      return { ok: false, error: "That delivery window is no longer available. Please choose another time." };
+    }
+    // Pickup date has no associated time window and isn't part of this
+    // date/time feature — kept on the original (non-Denver-specific) check.
     if (!isValidFutureDate(pickupDate)) return { ok: false, error: "Please choose a valid pickup date." };
     if (new Date(pickupDate) < new Date(deliveryDate)) {
       return { ok: false, error: "Pickup date must be on or after the delivery date." };
@@ -593,4 +629,70 @@ function isValidFutureDate(value) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return parsed.getTime() >= today.getTime();
+}
+
+// Current America/Denver local time as {year, month (1–12), day, hour,
+// minute} — deliberately never the server process's own local time (UTC on
+// Vercel), so "today" and window-expiration checks match what the customer
+// actually saw in the browser regardless of where this function runs. The
+// IANA timeZone database entry for America/Denver resolves MST/MDT (DST)
+// automatically, so no manual DST math is needed here. Mirrors the
+// client-side getDenverNow() in book/book.js.
+function getDenverNow() {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Denver",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = {};
+  fmt.formatToParts(new Date()).forEach(function (p) { parts[p.type] = p.value; });
+  let hour = parseInt(parts.hour, 10);
+  if (hour === 24) hour = 0; // some engines report midnight as "24" with hour12:false
+  return {
+    year: parseInt(parts.year, 10),
+    month: parseInt(parts.month, 10),
+    day: parseInt(parts.day, 10),
+    hour: hour,
+    minute: parseInt(parts.minute, 10),
+  };
+}
+function pad2(n) {
+  return n < 10 ? "0" + n : "" + n;
+}
+function denverTodayIso() {
+  const now = getDenverNow();
+  return now.year + "-" + pad2(now.month) + "-" + pad2(now.day);
+}
+
+// Denver-timezone counterpart to isValidFutureDate() above, used for the
+// schedule date (junk removal / light demo) and the dumpster delivery date —
+// both of which pair with a time window and so must use the same "today" as
+// the expiration check below. Zero-padded ISO (YYYY-MM-DD) strings compare
+// correctly with a plain string comparison for "is it today or later", so no
+// Date-object month/year rollover arithmetic is needed for that part. The
+// Date.UTC() round-trip below only checks that the value is a real calendar
+// date (rejects e.g. month 13 or day 40, which JS silently normalizes rather
+// than erroring on) — UTC is used purely for that check, so it carries no
+// timezone/DST ambiguity of its own.
+function isValidDenverFutureDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  const asUtc = new Date(Date.UTC(y, m - 1, d));
+  if (asUtc.getUTCFullYear() !== y || asUtc.getUTCMonth() !== m - 1 || asUtc.getUTCDate() !== d) return false;
+  return value >= denverTodayIso();
+}
+
+// True only when `date` (already known to be today-or-later in Denver terms
+// via isValidDenverFutureDate) is today in America/Denver AND the given
+// window's start time has already passed. Future dates are never expired. An
+// unrecognized window on today's date is treated as expired/unavailable
+// rather than silently accepted — TIME_WINDOWS_BY_SERVICE is what actually
+// enforces "is this a recognized/allowed window" and runs before this check.
+function isTimeWindowExpired(date, timeWindowId) {
+  if (date !== denverTodayIso()) return false;
+  const def = TIME_WINDOW_DEFS[timeWindowId];
+  if (!def) return true;
+  const now = getDenverNow();
+  const nowDecimalHour = now.hour + now.minute / 60;
+  return def.startHour <= nowDecimalHour;
 }
