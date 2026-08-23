@@ -357,6 +357,98 @@ a.tag-outline:hover { background: var(--color-accent-100); }
   .trust-stats { grid-template-columns: repeat(2, 1fr); gap: 24px 16px; }
 }
 
+/* — before/after comparison slider — */
+.ba-slider-wrap { max-width: 560px; margin: 0 auto; }
+.ba-slider-frame {
+  position: relative; width: 100%; aspect-ratio: 4 / 5; overflow: hidden;
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+  background: var(--color-neutral-200);
+  touch-action: pan-y;
+  --ba-pos: 50%;
+}
+.ba-slider-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: center;
+  -webkit-user-drag: none; user-select: none; pointer-events: none;
+}
+.ba-slider-before { clip-path: inset(0 calc(100% - var(--ba-pos)) 0 0); }
+.ba-slider-label {
+  position: absolute; top: 14px; z-index: 2;
+  font-family: var(--font-heading); font-weight: 900; font-style: italic;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #fff; background: color-mix(in srgb, #000 55%, transparent);
+  padding: 5px 12px; border-radius: var(--pill-radius);
+}
+.ba-slider-label-before { left: 14px; }
+.ba-slider-label-after { right: 14px; }
+.ba-slider-handle {
+  position: absolute; top: 0; bottom: 0; left: var(--ba-pos); z-index: 3;
+  width: 3px; background: #fff; transform: translateX(-50%);
+  cursor: ew-resize; touch-action: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 20%, transparent);
+}
+.ba-slider-handle-grip {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 42px; height: 42px; border-radius: 50%;
+  background: #fff; box-shadow: var(--shadow-lg);
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  color: var(--color-accent-700);
+}
+.ba-slider-handle:focus-visible { outline: none; }
+.ba-slider-handle:focus-visible .ba-slider-handle-grip { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  .ba-slider-handle-grip { width: 36px; height: 36px; }
+}
+
+/* — social carousel — */
+.social-carousel {
+  overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.social-carousel::-webkit-scrollbar { display: none; }
+.social-track { display: flex; gap: 16px; padding: 2px; width: max-content; }
+.social-card {
+  flex: 0 0 240px; display: flex; flex-direction: column;
+  text-decoration: none; color: inherit;
+  border-radius: var(--radius-lg); background: var(--color-surface);
+  box-shadow: var(--shadow-sm); overflow: hidden;
+  scroll-snap-align: start;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.social-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.social-card:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.social-card-media { position: relative; display: block; background: var(--color-neutral-200); }
+.social-card-media img { width: 100%; height: auto; aspect-ratio: 4 / 5; object-fit: cover; display: block; }
+.social-card-play {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(to top, color-mix(in srgb, #000 42%, transparent), transparent 55%);
+}
+.social-card-meta { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px 12px; }
+.social-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--color-accent-700);
+}
+.social-card-caption {
+  font-size: 12.5px; opacity: 0.75;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.social-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer;
+  background: #fff; box-shadow: var(--shadow-md); color: var(--color-text);
+  display: flex; align-items: center; justify-content: center; z-index: 2;
+}
+.social-arrow:hover { background: var(--color-accent-100); }
+.social-arrow:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.social-arrow-prev { left: -10px; }
+.social-arrow-next { right: -10px; }
+@media (max-width: 860px) {
+  .social-track .social-card { flex: 0 0 78vw; max-width: 300px; }
+  .social-arrow { display: none; }
+}
+
 /* — layout — */
 .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 32px; }
 .placeholder-photo {
