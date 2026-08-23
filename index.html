@@ -383,6 +383,16 @@
     var userInteracted = false;
     var demoRafId = null;
     var io = null;
+    var baAnalyticsSent = false;
+
+    function trackBaInteraction(method) {
+      if (baAnalyticsSent) return;
+      baAnalyticsSent = true;
+      if (typeof window.gtag !== 'function') return;
+      try {
+        window.gtag('event', 'before_after_interaction', { interaction_method: method, section: 'before_after' });
+      } catch (err) {}
+    }
 
     function cancelDemo() {
       if (demoRafId !== null) {
@@ -391,13 +401,15 @@
       }
       if (io) { io.disconnect(); io = null; }
     }
-    function markInteracted() {
-      if (userInteracted) return;
-      userInteracted = true;
-      cancelDemo();
+    function markInteracted(method) {
+      if (!userInteracted) {
+        userInteracted = true;
+        cancelDemo();
+      }
+      trackBaInteraction(method);
     }
-    frame.addEventListener('pointerdown', markInteracted);
-    handle.addEventListener('keydown', markInteracted);
+    frame.addEventListener('pointerdown', function () { markInteracted('pointer'); });
+    handle.addEventListener('keydown', function () { markInteracted('keyboard'); });
 
     function easeInOutCubic(t) {
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -587,7 +599,7 @@
     </div>
 
     <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:24px">
-      <a href="https://www.instagram.com/milehigh_junkremoval/" target="_blank" rel="noopener noreferrer" class="tag tag-outline">Follow us on Instagram</a>
+      <a href="https://www.instagram.com/milehigh_junkremoval/" target="_blank" rel="noopener noreferrer" class="tag tag-outline" id="social-follow-instagram">Follow us on Instagram</a>
       <a href="https://www.facebook.com/MileHighJunkRemoval/" target="_blank" rel="noopener noreferrer" class="tag tag-outline">Follow us on Facebook</a>
       <a href="https://www.tiktok.com/@mile.high.junk.removal" target="_blank" rel="noopener noreferrer" class="tag tag-outline">Follow us on TikTok</a>
     </div>
@@ -607,16 +619,22 @@
     var IG_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"></rect><circle cx="12" cy="12" r="4"></circle><circle cx="17.3" cy="6.7" r="0.5" fill="currentColor" stroke="none"></circle></svg>';
     var PLAY_ICON = '<svg width="30" height="30" viewBox="0 0 24 24" fill="#fff"><polygon points="9,6.5 18.5,12 9,17.5"></polygon></svg>';
 
+    function trackSocialEvent(name, params) {
+      if (typeof window.gtag !== 'function') return;
+      try { window.gtag('event', name, params); } catch (err) {}
+    }
+
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, function (c) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
       });
     }
 
-    function cardHtml(p) {
+    function cardHtml(p, index) {
       var altText = p.caption ? p.caption : 'Instagram post from Mile High Junk Removal';
       return '' +
         '<a class="social-card" href="' + escapeHtml(p.permalink) + '" target="_blank" rel="noopener noreferrer" ' +
+           'data-card-position="' + (index + 1) + '" data-media-type="' + (p.isVideo ? 'video' : 'image') + '" ' +
            'aria-label="View this Instagram ' + (p.isReel ? 'reel' : 'post') + ' — opens in a new tab">' +
           '<span class="social-card-media">' +
             '<img src="' + escapeHtml(p.image) + '" alt="' + escapeHtml(altText) + '" width="400" height="500" loading="lazy" decoding="async">' +
@@ -643,20 +661,43 @@
           if (statusEl) statusEl.style.display = 'block';
           return;
         }
-        track.innerHTML = posts.map(cardHtml).join('');
+        track.innerHTML = posts.map(function (p, i) { return cardHtml(p, i); }).join('');
         wrapEl.style.display = 'block';
       })
       .catch(function () {
         if (statusEl) statusEl.style.display = 'block';
       });
 
+    track.addEventListener('click', function (e) {
+      var card = e.target.closest ? e.target.closest('.social-card') : null;
+      if (!card) return;
+      trackSocialEvent('instagram_post_click', {
+        card_position: Number(card.getAttribute('data-card-position')),
+        media_type: card.getAttribute('data-media-type'),
+        section: 'instagram_carousel'
+      });
+    });
+
     function scrollByCard(dir) {
       var card = track.querySelector('.social-card');
       var amount = card ? (card.getBoundingClientRect().width + 16) : 240;
       carousel.scrollBy({ left: amount * dir, behavior: prefersReducedMotion ? 'auto' : 'smooth' });
     }
-    if (prevBtn) prevBtn.addEventListener('click', function () { scrollByCard(-1); });
-    if (nextBtn) nextBtn.addEventListener('click', function () { scrollByCard(1); });
+    if (prevBtn) prevBtn.addEventListener('click', function () {
+      scrollByCard(-1);
+      trackSocialEvent('instagram_carousel_navigation', { direction: 'previous', section: 'instagram_carousel' });
+    });
+    if (nextBtn) nextBtn.addEventListener('click', function () {
+      scrollByCard(1);
+      trackSocialEvent('instagram_carousel_navigation', { direction: 'next', section: 'instagram_carousel' });
+    });
+
+    var followLink = document.getElementById('social-follow-instagram');
+    if (followLink) {
+      followLink.addEventListener('click', function () {
+        trackSocialEvent('instagram_follow_click', { section: 'instagram_carousel' });
+      });
+    }
   })();
   </script>
 
