@@ -1,26 +1,30 @@
 // Vercel serverless function — fetches the newest Instagram posts server-side
 // so the access token never reaches the browser.
 //
-// Deliberately uses "Instagram API with Facebook Login" (graph.facebook.com),
-// not the newer "Instagram API with Instagram Login" (graph.instagram.com).
-// Per Meta's current IG Media field reference, `caption` is documented as
-// "Available for Instagram API with Facebook Login only" — the Instagram
-// Login flavor cannot return captions at all — and this feed shows a short
-// caption preview on each card, so Facebook Login is the only option that
-// supports what this UI needs. That means the Instagram professional account
-// must stay linked to a Facebook Page (already true for this business).
+// Uses "Instagram API with Instagram Login" (graph.instagram.com) — the
+// account (milehigh_junkremoval, IG user id 17841477969534048) is connected
+// through Business Login for Instagram directly, not via a linked Facebook
+// Page, so this does NOT use the graph.facebook.com Page-discovery flow.
 //
-// Configure IG_ACCESS_TOKEN and IG_BUSINESS_ACCOUNT_ID as environment
-// variables in Vercel. IG_BUSINESS_ACCOUNT_ID is the Instagram Business
-// Account ID exposed on the linked Facebook Page (GET /{page-id}?fields=
-// instagram_business_account). IG_ACCESS_TOKEN needs the `instagram_basic`
-// and `pages_show_list` (or `pages_read_engagement`) permissions — a Meta
-// System User access token (Business Manager > System Users) is recommended
-// over a regular long-lived user/page token for this read-only server job,
-// since it can be issued to never expire, avoiding a recurring manual
-// renewal step. This is a single business reading only its own account's
-// media, so it only needs Standard Access — no Meta App Review or Business
-// Verification is required.
+// Trade-off vs. the Facebook Login flavor: per Meta's current IG Media field
+// reference, both `caption` and `media_product_type` are documented as
+// "Available for Instagram API with Facebook Login only" — Instagram Login
+// cannot return either one. That means this endpoint can't return a caption
+// preview, and can't tell a Reel apart from a plain feed video (both are
+// just media_type "VIDEO"). The response below always sends caption: "" and
+// isReel: false for that reason — the frontend already renders correctly
+// with no caption and no "Reel" label, so no UI changes were needed.
+//
+// Configure these two environment variables in Vercel:
+//   INSTAGRAM_ACCESS_TOKEN — long-lived Instagram User access token for the
+//     milehigh_junkremoval account, obtained via Business Login for
+//     Instagram with the `instagram_business_basic` scope (the only scope
+//     this read-only feed needs). Long-lived tokens last 60 days and must
+//     be refreshed via graph.instagram.com/refresh_access_token before they
+//     expire (refresh window: at least 24h old, not yet expired).
+//   INSTAGRAM_USER_ID — the Instagram-scoped user ID for the account
+//     (17841477969534048). Not a secret, but kept as an env var rather than
+//     hardcoded so this file has no account-specific literals.
 var POST_LIMIT = 6;
 
 // Only persists for the lifetime of a warm serverless instance — not a
@@ -32,8 +36,8 @@ var POST_LIMIT = 6;
 var lastGood = null;
 
 module.exports = async (req, res) => {
-  var token = process.env.IG_ACCESS_TOKEN;
-  var igUserId = process.env.IG_BUSINESS_ACCOUNT_ID;
+  var token = process.env.INSTAGRAM_ACCESS_TOKEN;
+  var igUserId = process.env.INSTAGRAM_USER_ID;
 
   if (!token || !igUserId) {
     res.status(200).json({ posts: [], available: false });
@@ -41,9 +45,13 @@ module.exports = async (req, res) => {
   }
 
   try {
-    var fields = "id,media_type,media_product_type,media_url,thumbnail_url,permalink,caption,timestamp";
+    // caption and media_product_type are deliberately omitted — both require
+    // Instagram API with Facebook Login and would otherwise just come back
+    // empty; requesting only what this flavor actually supports keeps the
+    // request (and any Meta-side field errors) honest.
+    var fields = "id,media_type,media_url,thumbnail_url,permalink,timestamp";
     var url =
-      "https://graph.facebook.com/v25.0/" + encodeURIComponent(igUserId) +
+      "https://graph.instagram.com/v25.0/" + encodeURIComponent(igUserId) +
       "/media?fields=" + fields + "&limit=" + POST_LIMIT +
       "&access_token=" + encodeURIComponent(token);
 
@@ -68,19 +76,19 @@ module.exports = async (req, res) => {
       .filter(function (p) { return p && p.id && !seen[p.id] && (seen[p.id] = true); })
       .slice(0, POST_LIMIT)
       .map(function (p) {
-        // media_type is only ever CAROUSEL_ALBUM, IMAGE, or VIDEO — Reels are
-        // VIDEO media with media_product_type "REELS", not a separate
-        // media_type value. isVideo drives which URL/play-icon to use;
-        // isReel is just for the "Reel" label so a plain feed video isn't
-        // mislabeled.
+        // media_type is only ever CAROUSEL_ALBUM, IMAGE, or VIDEO. Video vs.
+        // Reel can't be distinguished under Instagram Login (that's
+        // media_product_type, which this flavor doesn't return), so every
+        // video is just treated as a video — isReel stays false rather than
+        // guessing.
         var isVideo = p.media_type === "VIDEO";
         return {
           id: p.id,
           isVideo: isVideo,
-          isReel: p.media_product_type === "REELS",
+          isReel: false,
           image: isVideo ? (p.thumbnail_url || p.media_url) : p.media_url,
           permalink: p.permalink,
-          caption: truncateCaption(p.caption),
+          caption: "",
           timestamp: p.timestamp,
         };
       })
@@ -103,9 +111,3 @@ module.exports = async (req, res) => {
     res.status(200).json({ posts: [], available: false });
   }
 };
-
-function truncateCaption(caption) {
-  if (!caption) return "";
-  var firstLine = caption.split("\n")[0].trim();
-  return firstLine.length > 90 ? firstLine.slice(0, 87).trim() + "…" : firstLine;
-}

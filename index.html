@@ -375,6 +375,72 @@
     });
 
     setPos(50);
+
+    // — one-time auto demo sweep (50% -> 25% -> 75% -> 50%) the first time the
+    // slider is meaningfully in view, so first-time visitors notice it's
+    // interactive. Any user interaction — pointer, touch, or keyboard —
+    // cancels it immediately and permanently; it never re-triggers or loops.
+    var userInteracted = false;
+    var demoRafId = null;
+    var io = null;
+
+    function cancelDemo() {
+      if (demoRafId !== null) {
+        cancelAnimationFrame(demoRafId);
+        demoRafId = null;
+      }
+      if (io) { io.disconnect(); io = null; }
+    }
+    function markInteracted() {
+      if (userInteracted) return;
+      userInteracted = true;
+      cancelDemo();
+    }
+    frame.addEventListener('pointerdown', markInteracted);
+    handle.addEventListener('keydown', markInteracted);
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function runDemo() {
+      if (userInteracted) return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+      var waypoints = [50, 25, 75, 50];
+      var SEGMENT_MS = 900; // 3 segments * 900ms = 2.7s total, within the 2.5-3.5s target
+      var segmentIndex = 0;
+      var segmentStart = null;
+
+      function step(ts) {
+        if (userInteracted) { demoRafId = null; return; }
+        if (segmentStart === null) segmentStart = ts;
+        var t = Math.min(1, (ts - segmentStart) / SEGMENT_MS);
+        var from = waypoints[segmentIndex];
+        var to = waypoints[segmentIndex + 1];
+        setPos(from + (to - from) * easeInOutCubic(t));
+        if (t >= 1) {
+          segmentIndex++;
+          segmentStart = ts;
+          if (segmentIndex >= waypoints.length - 1) { demoRafId = null; return; }
+        }
+        demoRafId = requestAnimationFrame(step);
+      }
+      demoRafId = requestAnimationFrame(step);
+    }
+
+    if ('IntersectionObserver' in window) {
+      io = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].isIntersecting) {
+            if (io) { io.disconnect(); io = null; }
+            runDemo();
+            break;
+          }
+        }
+      }, { threshold: 0.45 });
+      io.observe(frame);
+    }
   })();
   </script>
 
