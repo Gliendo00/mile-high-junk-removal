@@ -65,11 +65,6 @@
         "https://www.instagram.com/milehigh_junkremoval/",
         "https://www.tiktok.com/@mile.high.junk.removal"
       ],
-      "aggregateRating": {
-        "@type": "AggregateRating",
-        "ratingValue": "5.0",
-        "reviewCount": "185"
-      },
       "review": [
         {
           "@type": "Review",
@@ -260,7 +255,7 @@
       </picture>
     </div>
     <div>
-      <span class="tag tag-accent-2" style="margin-bottom:18px">⭐ ⭐ ⭐ ⭐ ⭐ Over 180 five-star reviews on Google!</span>
+      <span class="tag tag-accent-2" style="margin-bottom:18px">⭐ ⭐ ⭐ ⭐ ⭐ <span data-review-count="badge">5-Star Rated on Google!</span></span>
       <h1 style="font-size:49px;max-width:560px">Junk Removal<br>in Denver, CO<br>Same-Day Service</h1>
       <div style="display:flex;flex-direction:column;gap:10px;font-size:19px;font-weight:600;opacity:0.9;margin-bottom:28px">
         <div>⭐ 5-Star Rated</div>
@@ -294,7 +289,7 @@
   <section style="background:var(--color-surface);padding-block:var(--trust-pad)">
     <div class="wrap trust-stats">
       <div><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">500+</div><div style="font-size:13px;opacity:0.75">Projects completed across Denver</div></div>
-      <div><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">180+</div><div style="font-size:13px;opacity:0.75">5-star Google reviews</div></div>
+      <div><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)" data-review-count="stat">5-Star</div><div style="font-size:13px;opacity:0.75">Google Reviews</div></div>
       <div><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">Same-day</div><div style="font-size:13px;opacity:0.75">&amp; next-day availability</div></div>
       <div><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">up to 1 hr</div><div style="font-size:13px;opacity:0.75">Labor included with every job</div></div>
     </div>
@@ -852,16 +847,39 @@
       return out;
     }
 
+    // Updates every [data-review-count] element with the live count from
+    // /api/reviews. Only runs when totalReviews is a valid positive number —
+    // any missing/invalid/zero value is left alone entirely, so the
+    // count-neutral fallback copy already in the HTML keeps showing. Never
+    // falls back to a guessed number here; that's the whole point.
+    function updateReviewCount(totalReviews) {
+      var n = Number(totalReviews);
+      if (!Number.isFinite(n) || n <= 0) return;
+      n = Math.floor(n);
+      var templates = {
+        badge: n + '+ five-star reviews on Google!',
+        stat: n + '+',
+        'hero-line': n + '+ 5-star Google reviews',
+        'cta-line': n + '+ 5-star reviews',
+        footer: n + '+ Google Reviews'
+      };
+      document.querySelectorAll('[data-review-count]').forEach(function (el) {
+        var key = el.getAttribute('data-review-count');
+        if (Object.prototype.hasOwnProperty.call(templates, key)) el.textContent = templates[key];
+      });
+    }
+
     fetch('/api/reviews')
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        updateReviewCount(data.totalReviews); // independent of the reviews list below
         if (!data.reviews || !data.reviews.length) return;
         var unique = dedupeReviews(data.reviews);
         track.innerHTML = unique.map(cardHtml).join(''); // one card per unique review — never duplicated
         if (badge) badge.style.display = 'inline-flex';
         recomputeSpeed(); // card count/lengths changed, so the scrollable distance did too
       })
-      .catch(function () { /* keep the static reviews already in the page */ });
+      .catch(function () { /* keep the static reviews and count-neutral copy already in the page */ });
 
     // — auto-scroll + drag/swipe, replacing the old CSS @keyframes animation —
     // scrollLeft is advanced a little every frame instead, so pausing, manual
@@ -1027,7 +1045,7 @@
     <div class="wrap" style="max-width:640px">
       <p class="eyebrow" style="color:var(--color-accent-700)">Get a quote</p>
       <h2 style="margin-bottom:12px">Tell us what needs to go</h2>
-      <p class="text-muted" style="font-size:13px;margin-bottom:16px">⭐ 180+ 5-star Google reviews • 🛡️ Fully insured • 🚚 Same-day service • ♻️ Donation &amp; recycling first • 🏠 Locally owned &amp; operated</p>
+      <p class="text-muted" style="font-size:13px;margin-bottom:16px">⭐ <span data-review-count="hero-line">5-Star Google Reviews</span> • 🛡️ Fully insured • 🚚 Same-day service • ♻️ Donation &amp; recycling first • 🏠 Locally owned &amp; operated</p>
       <p style="opacity:0.8;margin-bottom:32px">Fill this out and we'll get back to you — or text a photo of your junk to <a href="sms:3039901812">303-990-1812</a> for a fast quote, or email us directly at <a href="mailto:contact@milehighjunkremoval.net">contact@milehighjunkremoval.net</a>.</p>
       <form id="contact-form" style="display:flex;flex-direction:column;gap:18px">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
@@ -1145,7 +1163,7 @@
   <section id="contact-us" style="background:var(--color-accent-800);color:var(--color-neutral-100);padding-block:var(--cta-pad)">
     <div class="wrap" style="display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap">
       <div>
-        <p style="font-size:12px;letter-spacing:0.02em;opacity:0.75;margin:0 0 6px;font-weight:600">⭐ 180+ 5-star reviews · 🛡️ Fully insured · 🚚 Same-day service · ♻️ Donation &amp; recycling first · 🏠 Locally owned</p>
+        <p style="font-size:12px;letter-spacing:0.02em;opacity:0.75;margin:0 0 6px;font-weight:600">⭐ <span data-review-count="cta-line">5-Star Reviews</span> · 🛡️ Fully insured · 🚚 Same-day service · ♻️ Donation &amp; recycling first · 🏠 Locally owned</p>
         <h2 style="color:var(--color-neutral-100);margin-bottom:8px">Reclaim your space today</h2>
         <p style="opacity:0.85;margin:0">Call or text 303-990-1812 for a free estimate — let us haul your stress away.</p>
         <div style="display:flex;gap:16px;margin-top:16px">
@@ -1182,7 +1200,7 @@
       <span style="font-family:var(--font-heading);font-size:19px;color:var(--color-accent-700)">5.0</span>
       <div>
         <div style="display:flex;gap:1px;color:var(--color-accent)"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg></div>
-        <div style="font-size:11px;opacity:0.7">180+ Google Reviews</div>
+        <div style="font-size:11px;opacity:0.7" data-review-count="footer">5-Star Google Reviews</div>
       </div>
     </div>
     <div style="display:flex;gap:14px;margin-top:12px">
