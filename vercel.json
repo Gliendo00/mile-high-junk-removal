@@ -1,5 +1,7 @@
 {
   "redirects": [
+    { "source": "/index.html", "destination": "/", "permanent": true },
+
     { "source": "/service-areas/aurora-co", "destination": "/aurora-junk-removal.html", "permanent": true },
     { "source": "/service-areas/littleton-co", "destination": "/littleton-junk-removal.html", "permanent": true },
     { "source": "/service-areas/thornton-co", "destination": "/thornton-junk-removal.html", "permanent": true },
