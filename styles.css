@@ -7,8 +7,8 @@
    since @import blocks discovery until this file itself has downloaded. */
 
 :root {
-  --color-bg: color-mix(in srgb, #69c22a 8%, white);
-  --color-surface: color-mix(in srgb, #69c22a 15%, white);
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
   --color-text: #201e1d;
   --color-accent: #69c22a;
   --color-accent-2: #7a8a5e;
@@ -352,9 +352,30 @@ a.tag-outline:hover { background: var(--color-accent-100); }
   border-top: 1px solid color-mix(in srgb, var(--color-neutral-100) 15%, transparent) !important;
 }
 
-.trust-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; text-align: center; }
+.trust-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; text-align: center; }
+.stat-card {
+  background: #fff;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-lg);
+  padding: 26px 16px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.stat-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.stat-card > div:first-child {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 12px;
+  margin-bottom: 6px;
+}
+.stat-card > div:first-child::after {
+  content: '';
+  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 2px;
+  background: var(--color-accent);
+}
 @media (max-width: 560px) {
-  .trust-stats { grid-template-columns: repeat(2, 1fr); gap: 24px 16px; }
+  .trust-stats { grid-template-columns: repeat(2, 1fr); gap: 16px; }
 }
 
 /* — before/after comparison slider — */
