@@ -179,6 +179,24 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 .btn-pill-accent { background: var(--color-accent-2-100); border-color: var(--color-accent-2-200); color: var(--color-accent-2-800); }
 .btn-pill-accent:hover { background: var(--color-accent-2-200); }
 
+.btn-urgent { background: #cc2a1a; color: #fff; box-shadow: var(--shadow-md); }
+.btn-urgent:hover { background: #a8210f; }
+.btn-urgent:active { background: #8c1b0d; }
+@keyframes urgent-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, #cc2a1a 55%, transparent),
+      0 0 10px 2px color-mix(in srgb, #cc2a1a 50%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 9px color-mix(in srgb, #cc2a1a 0%, transparent),
+      0 0 26px 8px color-mix(in srgb, #cc2a1a 85%, transparent);
+  }
+}
+.btn-urgent-pulse { animation: urgent-pulse 2.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .btn-urgent-pulse { animation: none; } }
+
 /* — navigation — */
 .nav-brand { font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 22px; margin-right: auto; white-space: nowrap; }
 .nav-brand .accent { color: var(--color-accent-700); }
