@@ -22,6 +22,12 @@
     { "source": "/services/estate-cleanouts", "destination": "/estate-cleanouts.html", "permanent": true },
     { "source": "/services/electronics-recycling", "destination": "/electronics-recycling.html", "permanent": true },
     { "source": "/services/appliance-disposal", "destination": "/appliance-disposal.html", "permanent": true },
-    { "source": "/services/dumpster-rental", "destination": "/dumpster-rental.html", "permanent": true }
+    { "source": "/services/dumpster-rental", "destination": "/dumpster-rental.html", "permanent": true },
+
+    { "source": "/service-areas/highlands-ranch-co", "destination": "/highlands-ranch-junk-removal.html", "permanent": true },
+    { "source": "/services/commercial-junk-removal", "destination": "/commercial-junk-removal.html", "permanent": true },
+    { "source": "/services/storage-unit-cleanouts", "destination": "/storage-unit-cleanouts.html", "permanent": true },
+    { "source": "/services/contractor-remodeler-junk-removal", "destination": "/contractor-remodeler-junk-removal.html", "permanent": true },
+    { "source": "/services/property-management-junk-removal", "destination": "/property-management-junk-removal.html", "permanent": true }
   ]
 }
