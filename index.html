@@ -309,7 +309,7 @@
   </section>
 
   <!-- TRUST STRIP -->
-  <section style="background:var(--color-surface);padding-block:var(--trust-pad)">
+  <section style="background:var(--color-neutral-100);padding-block:var(--trust-pad)">
     <div class="wrap trust-stats">
       <div class="stat-card"><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)">750+</div><div style="font-size:13px;opacity:0.75">Projects completed across Denver</div></div>
       <div class="stat-card"><div style="font-family:var(--font-heading);font-size:30px;color:var(--color-accent-700)" data-review-count="stat">5-Star</div><div style="font-size:13px;opacity:0.75">Google Reviews</div></div>
@@ -571,7 +571,7 @@
   </section>
 
   <!-- WHY US -->
-  <section id="why-us" style="background:var(--color-surface);padding-block:var(--section-pad)">
+  <section id="why-us" style="background:var(--color-neutral-100);padding-block:var(--section-pad)">
     <div class="wrap why-grid" style="display:grid;grid-template-columns:0.9fr 1.1fr;gap:56px;align-items:center">
       <div>
         <img src="images/mile-high-junk-removal-why-us.webp" width="1080" height="1080" alt="Two Mile High Junk Removal crew members high-fiving next to their trailer during a job in Denver" class="washed"
@@ -1106,40 +1106,42 @@
   </section>
 
   <!-- CONTACT FORM -->
-  <section id="contact" style="background:var(--color-surface);padding-block:var(--section-pad)">
+  <section id="contact" style="background:var(--color-neutral-100);padding-block:var(--section-pad)">
     <div class="wrap" style="max-width:640px">
       <p class="eyebrow" style="color:var(--color-accent-700)">Get a quote</p>
       <h2 style="margin-bottom:12px">Tell us what needs to go</h2>
       <p class="text-muted" style="font-size:13px;margin-bottom:16px">⭐ <span data-review-count="hero-line">5-Star Google Reviews</span> • 🛡️ Fully insured • 🚚 Same-day service • ♻️ Donation &amp; recycling first • 🏠 Locally owned &amp; operated</p>
       <p style="opacity:0.8;margin-bottom:32px">Fill this out and we'll get back to you — or text a photo of your junk to <a href="sms:3039901812">303-990-1812</a> for a fast quote, or email us directly at <a href="mailto:contact@milehighjunkremoval.net">contact@milehighjunkremoval.net</a>.</p>
-      <form id="contact-form" style="display:flex;flex-direction:column;gap:18px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
-          <div class="field">
-            <label for="cf-name">Name</label>
-            <input class="input" id="cf-name" name="Name" type="text" placeholder="Your name" required>
+      <div id="cf-card" style="background:#fff;border:1px solid color-mix(in srgb, var(--color-text) 8%, transparent);border-radius:16px;box-shadow:var(--shadow-md);padding:28px 28px 24px">
+        <form id="contact-form" style="display:flex;flex-direction:column;gap:18px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+            <div class="field">
+              <label for="cf-name">Name</label>
+              <input class="input" id="cf-name" name="Name" type="text" placeholder="Your name" required>
+            </div>
+            <div class="field">
+              <label for="cf-phone">Phone</label>
+              <input class="input" id="cf-phone" name="Phone" type="tel" placeholder="(303) 000-0000" required>
+              <p class="text-muted" style="font-size:12px;margin:4px 0 0">We'll only use this to text or call you about your quote — never spam.</p>
+            </div>
           </div>
           <div class="field">
-            <label for="cf-phone">Phone</label>
-            <input class="input" id="cf-phone" name="Phone" type="tel" placeholder="(303) 000-0000" required>
-            <p class="text-muted" style="font-size:12px;margin:4px 0 0">We'll only use this to text or call you about your quote — never spam.</p>
+            <label for="cf-email">Email</label>
+            <input class="input" id="cf-email" name="Email" type="email" placeholder="you@example.com" required>
           </div>
-        </div>
-        <div class="field">
-          <label for="cf-email">Email</label>
-          <input class="input" id="cf-email" name="Email" type="email" placeholder="you@example.com" required>
-        </div>
-        <div class="field">
-          <label for="cf-message">What needs to go?</label>
-          <textarea class="input" id="cf-message" name="Message" rows="4" placeholder="A few details on items, location and timing"></textarea>
-        </div>
-        <div class="field">
-          <label for="cf-photos">Photos (optional)</label>
-          <input class="input" id="cf-photos" name="Photos" type="file" accept="image/*" multiple>
-          <p class="text-muted" style="font-size:12px;margin:4px 0 0">Up to 6 photos, 4MB total.</p>
-        </div>
-        <div id="cf-error" style="display:none;font-size:13px;color:#b3261e"></div>
-        <button type="submit" id="cf-submit" class="btn btn-primary" style="align-self:flex-start;padding:14px 26px;font-size:15px">Get My Free Quote</button>
-      </form>
+          <div class="field">
+            <label for="cf-message">What needs to go?</label>
+            <textarea class="input" id="cf-message" name="Message" rows="4" placeholder="A few details on items, location and timing"></textarea>
+          </div>
+          <div class="field">
+            <label for="cf-photos">Photos (optional)</label>
+            <input class="input" id="cf-photos" name="Photos" type="file" accept="image/*" multiple>
+            <p class="text-muted" style="font-size:12px;margin:4px 0 0">Up to 6 photos, 4MB total.</p>
+          </div>
+          <div id="cf-error" style="display:none;font-size:13px;color:#b3261e"></div>
+          <button type="submit" id="cf-submit" class="btn btn-primary" style="align-self:flex-start;padding:14px 26px;font-size:15px">Get My Free Quote</button>
+        </form>
+      </div>
       <div id="cf-success" class="card elev-sm" style="display:none">
         <div style="display:flex;align-items:center;gap:10px">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-700)" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12.5 11 15.5 16 9"></path></svg>
@@ -1211,7 +1213,7 @@
         });
       }).then(function (res) {
         if (!res.ok) throw new Error('Request failed');
-        form.style.display = 'none';
+        document.getElementById('cf-card').style.display = 'none';
         successBox.style.display = 'flex';
         successBox.style.flexDirection = 'column';
         successBox.style.gap = '10px';

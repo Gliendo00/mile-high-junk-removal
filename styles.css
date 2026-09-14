@@ -155,6 +155,7 @@ img { display: block; max-width: 100%; }
 .input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
 textarea.input { min-height: 90px; resize: vertical; border-radius: var(--radius-md); }
 input[type="file"].input { padding: 10px; }
+#contact-form .input { border-color: color-mix(in srgb, var(--color-text) 22%, transparent); }
 
 /* — cards — */
 .card {
