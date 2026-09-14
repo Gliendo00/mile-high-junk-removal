@@ -19,9 +19,16 @@ document.addEventListener('DOMContentLoaded', function () {
   var stepEls = Array.prototype.slice.call(document.querySelectorAll('.wizard-step'));
   var stepIndicatorEls = Array.prototype.slice.call(document.querySelectorAll('#wizard-steps li'));
 
-  function showError(msg) {
+  function showError(msg, fieldId) {
     errorBox.textContent = msg;
     errorBox.classList.add('is-visible');
+    var field = fieldId ? document.getElementById(fieldId) : null;
+    if (field && field.type !== 'hidden') {
+      field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      field.focus({ preventScroll: true });
+    } else {
+      errorBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   }
   function clearError() {
     errorBox.classList.remove('is-visible');
@@ -569,45 +576,45 @@ document.addEventListener('DOMContentLoaded', function () {
   // — validation per step —
   function validateStep(n) {
     if (n === 1) {
-      if (!state.serviceType) return 'Please choose a service to continue.';
+      if (!state.serviceType) return { message: 'Please choose a service to continue.', fieldId: 'service-junk_removal' };
       return null;
     }
     if (n === 2) {
       if (state.serviceType === 'junk_removal') {
-        if (!val('jr-items')) return 'Please describe what needs to be removed.';
-        if (!val('jr-location')) return 'Please tell us where the items are located.';
-        if (!val('jr-stairs')) return 'Please select a stairs option.';
+        if (!val('jr-items')) return { message: 'Please describe what needs to be removed.', fieldId: 'jr-items' };
+        if (!val('jr-location')) return { message: 'Please tell us where the items are located.', fieldId: 'jr-location' };
+        if (!val('jr-stairs')) return { message: 'Please select a stairs option.', fieldId: 'jr-stairs' };
       } else if (state.serviceType === 'dumpster_rental') {
-        if (!val('dr-material')) return 'Please describe the type of material.';
-        if (!val('dr-delivery')) return 'Please choose a desired delivery date.';
-        if (!val('dr-pickup')) return 'Please choose a desired pickup date.';
-        if (val('dr-pickup') < val('dr-delivery')) return 'Pickup date must be on or after the delivery date.';
-        if (!val('dr-window')) return 'Please choose a preferred delivery time window.';
-        if (!val('dr-placement')) return 'Please tell us where the dumpster should be placed.';
+        if (!val('dr-material')) return { message: 'Please describe the type of material.', fieldId: 'dr-material' };
+        if (!val('dr-delivery')) return { message: 'Please choose a desired delivery date.', fieldId: null };
+        if (!val('dr-pickup')) return { message: 'Please choose a desired pickup date.', fieldId: 'dr-pickup' };
+        if (val('dr-pickup') < val('dr-delivery')) return { message: 'Pickup date must be on or after the delivery date.', fieldId: 'dr-pickup' };
+        if (!val('dr-window')) return { message: 'Please choose a preferred delivery time window.', fieldId: null };
+        if (!val('dr-placement')) return { message: 'Please tell us where the dumpster should be placed.', fieldId: 'dr-placement' };
       } else if (state.serviceType === 'light_demo') {
-        if (!val('ld-what')) return 'Please describe what needs to be demolished.';
-        if (!val('ld-size')) return 'Please give an approximate size.';
-        if (!val('ld-debris')) return 'Please select whether debris removal is needed.';
+        if (!val('ld-what')) return { message: 'Please describe what needs to be demolished.', fieldId: 'ld-what' };
+        if (!val('ld-size')) return { message: 'Please give an approximate size.', fieldId: 'ld-size' };
+        if (!val('ld-debris')) return { message: 'Please select whether debris removal is needed.', fieldId: 'ld-debris' };
       }
       return null;
     }
     if (n === 3) return null; // photos optional
     if (n === 4) {
-      if (!val('pref-date')) return 'Please choose a preferred date.';
-      if (!val('pref-window')) return 'Please choose a preferred time window.';
+      if (!val('pref-date')) return { message: 'Please choose a preferred date.', fieldId: null };
+      if (!val('pref-window')) return { message: 'Please choose a preferred time window.', fieldId: null };
       return null;
     }
     if (n === 5) {
-      if (!val('cust-first')) return 'First name is required.';
-      if (!val('cust-last')) return 'Last name is required.';
-      if (!val('cust-phone')) return 'Phone number is required.';
-      if (!isValidPhone(val('cust-phone'))) return 'Please enter a valid phone number.';
+      if (!val('cust-first')) return { message: 'First name is required.', fieldId: 'cust-first' };
+      if (!val('cust-last')) return { message: 'Last name is required.', fieldId: 'cust-last' };
+      if (!val('cust-phone')) return { message: 'Phone number is required.', fieldId: 'cust-phone' };
+      if (!isValidPhone(val('cust-phone'))) return { message: 'Please enter a valid phone number.', fieldId: 'cust-phone' };
       var email = val('cust-email');
-      if (email && !isValidEmail(email)) return 'Please enter a valid email address.';
-      if (!val('cust-address')) return 'Street address is required.';
-      if (!val('cust-city')) return 'City is required.';
-      if (!/^[A-Za-z]{2}$/.test(val('cust-state'))) return 'Please enter a valid 2-letter state.';
-      if (!/^\d{5}(-\d{4})?$/.test(val('cust-zip'))) return 'Please enter a valid ZIP code.';
+      if (email && !isValidEmail(email)) return { message: 'Please enter a valid email address.', fieldId: 'cust-email' };
+      if (!val('cust-address')) return { message: 'Street address is required.', fieldId: 'cust-address' };
+      if (!val('cust-city')) return { message: 'City is required.', fieldId: 'cust-city' };
+      if (!/^[A-Za-z]{2}$/.test(val('cust-state'))) return { message: 'Please enter a valid 2-letter state.', fieldId: 'cust-state' };
+      if (!/^\d{5}(-\d{4})?$/.test(val('cust-zip'))) return { message: 'Please enter a valid ZIP code.', fieldId: 'cust-zip' };
       return null;
     }
     return null;
@@ -630,7 +637,7 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.addEventListener('click', function () {
       var err = validateStep(currentStep);
       if (err) {
-        showError(err);
+        showError(err.message, err.fieldId);
         return;
       }
       var next = nextStepNumber(currentStep);

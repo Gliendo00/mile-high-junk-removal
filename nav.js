@@ -1,11 +1,16 @@
 document.addEventListener('DOMContentLoaded', function () {
-  // GA4: fire phone_click for any tel: link anywhere on the page (nav bar,
-  // sticky mobile call bar, in-page CTAs, booking pages, etc). Attached
-  // before the hamburger-menu guard below so it never depends on that markup.
+  // GA4: fire phone_click for any tel: link, and sms_click for any sms:
+  // link, anywhere on the page (nav bar, sticky mobile call bar, in-page
+  // CTAs, booking pages, etc). Attached before the hamburger-menu guard
+  // below so it never depends on that markup.
   document.addEventListener('click', function (e) {
     var telLink = e.target.closest ? e.target.closest('a[href^="tel:"]') : null;
     if (telLink && typeof window.gtag === 'function') {
       window.gtag('event', 'phone_click');
+    }
+    var smsLink = e.target.closest ? e.target.closest('a[href^="sms:"]') : null;
+    if (smsLink && typeof window.gtag === 'function') {
+      window.gtag('event', 'sms_click');
     }
   });
 

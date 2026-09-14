@@ -97,7 +97,6 @@
       <span></span><span></span><span></span>
     </button>
     <nav class="nav-utility-links">
-      <a href="/">Home</a>
       <div class="nav-dropdown" id="services-dropdown">
         <button type="button" class="nav-dropdown-trigger" id="services-trigger" aria-haspopup="true" aria-expanded="false" aria-controls="services-menu">
           Services
@@ -129,13 +128,23 @@
                 <li><a href="../dumpster-rental.html">Dumpster Rental</a></li>
               </ul>
             </div>
+            <div>
+              <p class="nav-dropdown-heading">Same-Day Service</p>
+              <ul class="nav-dropdown-list">
+                <li><a href="../same-day-junk-removal.html">Same-Day Junk Removal</a></li>
+              </ul>
+            </div>
           </div>
           <div class="nav-dropdown-footer">
             <a href="../services.html" class="nav-dropdown-viewall">View All Services →</a>
           </div>
         </div>
       </div>
+      <a href="/#why-us">Why Us</a>
+      <a href="/#gallery">Gallery</a>
+      <a href="/#reviews">Reviews</a>
       <a href="../pricing.html">Pricing</a>
+      <a href="/#service-areas">Service Areas</a>
       <a href="../blog.html">Blog</a>
       <a href="../contact.html">Contact</a>
     </nav>
@@ -143,7 +152,6 @@
   </div>
   <nav id="mobile-menu" class="mobile-menu" aria-label="Mobile">
     <div class="wrap">
-      <a href="/">Home</a>
       <div class="mobile-accordion" id="mobile-services-accordion">
         <button type="button" class="mobile-accordion-trigger" id="mobile-services-trigger" aria-expanded="false" aria-controls="mobile-services-panel">
           Services
@@ -162,10 +170,16 @@
           <a href="../office-junk-removal.html">Office Junk Removal</a>
           <p class="mobile-accordion-heading">Dumpster Rental</p>
           <a href="../dumpster-rental.html">Dumpster Rental</a>
+          <p class="mobile-accordion-heading">Same-Day Service</p>
+          <a href="../same-day-junk-removal.html">Same-Day Junk Removal</a>
           <a href="../services.html" class="mobile-accordion-viewall">View All Services →</a>
         </div>
       </div>
+      <a href="/#why-us">Why Us</a>
+      <a href="/#gallery">Gallery</a>
+      <a href="/#reviews">Reviews</a>
       <a href="../pricing.html">Pricing</a>
+      <a href="/#service-areas">Service Areas</a>
       <a href="../blog.html">Blog</a>
       <a href="../contact.html">Contact</a>
     </div>
@@ -187,7 +201,7 @@
       <li data-step="6"><span>Review</span></li>
     </ol>
 
-    <div class="wizard-error" id="wizard-error"></div>
+    <div class="wizard-error" id="wizard-error" role="alert"></div>
 
     <!-- STEP 1 — CHOOSE SERVICE -->
     <section class="wizard-step" data-step="1">
@@ -429,6 +443,63 @@
     </section>
   </section>
 </main>
+
+<!-- FOOTER -->
+<footer class="site-footer">
+<div class="wrap" style="padding-block:56px;display:flex;justify-content:space-between;gap:40px;flex-wrap:wrap">
+  <div style="max-width:280px">
+    <div class="nav-brand" style="margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:18px">
+      <img src="../images/mile-high-junk-removal-logo.webp" alt="Mile High Junk Removal" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none" loading="lazy">
+      <span>Mile High Junk Removal</span>
+    </div>
+    <p class="text-muted">Locally owned junk removal serving Denver, Aurora and the Front Range.</p>
+    <div style="display:inline-flex;align-items:center;gap:10px;padding:8px 14px;border-radius:var(--pill-radius);background:rgba(245,244,238,0.08);border:1px solid rgba(245,244,238,0.16);margin-top:14px">
+      <span style="font-family:var(--font-heading);font-size:19px">5.0</span>
+      <div>
+        <div style="display:flex;gap:1px;color:var(--color-accent)"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 14.9 8.9 22 9.5 16.5 14.3 18.2 21.5 12 17.6 5.8 21.5 7.5 14.3 2 9.5 9.1 8.9"></polygon></svg></div>
+        <div style="font-size:11px;opacity:0.7">5-Star Google Reviews</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:14px;margin-top:12px">
+      <a href="https://www.facebook.com/MileHighJunkRemoval/" aria-label="Facebook" target="_blank" rel="noopener noreferrer">
+        <img src="../images/mile-high-social-facebook.png" alt="" style="width:30px;height:30px;display:block">
+      </a>
+      <a href="https://www.instagram.com/milehigh_junkremoval/" aria-label="Instagram" target="_blank" rel="noopener noreferrer">
+        <img src="../images/mile-high-social-instagram.png" alt="" style="width:30px;height:30px;display:block">
+      </a>
+      <a href="https://www.tiktok.com/@mile.high.junk.removal" aria-label="TikTok" target="_blank" rel="noopener noreferrer">
+        <img src="../images/mile-high-social-tiktok.png" alt="" style="width:30px;height:30px;display:block">
+      </a>
+    </div>
+  </div>
+  <div style="display:flex;gap:64px;flex-wrap:wrap">
+    <div>
+      <h6 style="margin-bottom:14px">Company</h6>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:14px">
+        <a href="../services.html">Services</a>
+        <a href="/#why-us">Why Us</a>
+        <a href="/#gallery">Gallery</a>
+        <a href="/#reviews">Reviews</a>
+        <a href="../pricing.html">Pricing</a>
+        <a href="/#service-areas">Service Areas</a>
+        <a href="../blog.html">Blog</a>
+      <a href="../contact.html">Contact</a>
+      </div>
+    </div>
+    <div>
+      <h6 style="margin-bottom:14px">Contact</h6>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:14px">
+        <a href="tel:3039901812">303-990-1812</a>
+        <span class="text-muted">Call or text for a free estimate</span>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="wrap" style="padding-bottom:28px">
+  <div class="hr"></div>
+  <p class="text-muted" style="font-size:12px;margin:0">© Mile High Junk Removal. Licensed &amp; Insured · <a href="https://www.bbb.org/us/co/aurora/profile/junk-removal/mile-high-junk-removal-1296-1000200692/#sealclick" target="_blank" rel="nofollow">BBB Accredited</a></p>
+</div>
+</footer>
 
 <script src="../nav.js"></script>
 <script src="book.js"></script>

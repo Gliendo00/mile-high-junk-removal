@@ -329,6 +329,29 @@
     var successBox = document.getElementById('cf-success');
     var MAX_BYTES = 4 * 1024 * 1024;
 
+    // GA4: fire once, on the first real interaction with any form field —
+    // never on page load, never more than once per page view.
+    var formStarted = false;
+    function trackFormStart() {
+      if (formStarted) return;
+      formStarted = true;
+      if (typeof window.gtag === 'function') window.gtag('event', 'contact_form_start');
+    }
+    form.addEventListener('focusin', trackFormStart);
+
+    // GA4: fire once, only after a confirmed successful submission —
+    // guarded so a future code change can never double-count a lead.
+    var leadTracked = false;
+    function trackLead() {
+      if (leadTracked) return;
+      leadTracked = true;
+      if (typeof window.gtag === 'function') window.gtag('event', 'generate_lead');
+    }
+
+    function trackError(reason) {
+      if (typeof window.gtag === 'function') window.gtag('event', 'contact_form_submit_error', { reason: reason });
+    }
+
     function fileToBase64(file) {
       return new Promise(function (resolve, reject) {
         var reader = new FileReader();
@@ -349,6 +372,7 @@
 
       if (!form.checkValidity()) {
         form.reportValidity();
+        trackError('validation');
         return;
       }
 
@@ -357,6 +381,7 @@
       var totalBytes = files.reduce(function (sum, f) { return sum + f.size; }, 0);
       if (totalBytes > MAX_BYTES) {
         showError('Those photos are too large to send here (4MB total). Try fewer or smaller photos, or email them directly to contact@milehighjunkremoval.net.');
+        trackError('file_size');
         return;
       }
 
@@ -384,11 +409,13 @@
         });
       }).then(function (res) {
         if (!res.ok) throw new Error('Request failed');
+        trackLead();
         form.style.display = 'none';
         successBox.style.display = 'flex';
         successBox.style.flexDirection = 'column';
         successBox.style.gap = '10px';
       }).catch(function () {
+        trackError('submission_failed');
         showError('Something went wrong sending that — please call or text 303-990-1812, or email contact@milehighjunkremoval.net directly.');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Get My Free Quote';
