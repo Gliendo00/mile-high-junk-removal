@@ -29,6 +29,10 @@
     { "source": "/services/storage-unit-cleanouts", "destination": "/storage-unit-cleanouts.html", "permanent": true },
     { "source": "/services/contractor-remodeler-junk-removal", "destination": "/contractor-remodeler-junk-removal.html", "permanent": true },
     { "source": "/services/property-management-junk-removal", "destination": "/property-management-junk-removal.html", "permanent": true },
-    { "source": "/book", "destination": "/book/", "permanent": true }
+    { "source": "/book", "destination": "/book/", "permanent": true },
+    { "source": "/privacy-policy.html", "destination": "/privacy-policy", "permanent": true }
+  ],
+  "rewrites": [
+    { "source": "/privacy-policy", "destination": "/privacy-policy.html" }
   ]
 }
