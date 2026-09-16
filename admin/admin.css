@@ -69,6 +69,41 @@
   padding: 14px 14px 48px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Top-level section nav (Requests / Clients). Shown on every admin page */
+/* except login — two tabs, deliberately: this stays a small operations */
+/* tool, not a growing CRM sidebar. */
+/* ------------------------------------------------------------------ */
+.admin-nav-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--color-dark, #14150f);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.admin-nav-tab {
+  flex: 1 1 0;
+  text-align: center;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+}
+.admin-nav-tab.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+@media (min-width: 860px) {
+  .admin-nav-tabs { max-width: 1040px; margin: 0 auto; justify-content: flex-start; }
+  .admin-nav-tab { flex: none; padding: 0 22px; }
+}
+
 /* Tap targets everywhere in /admin meet the ~44px minimum recommended for
    comfortable one-handed phone use. */
 .admin-btn {
@@ -395,6 +430,26 @@
 
 .admin-load-more { display: flex; justify-content: center; margin-top: 16px; }
 
+/* Client search — same sizing/focus treatment as .admin-field input
+   (16px font avoids iOS auto-zoom on focus) so it reads as part of the
+   same design system rather than a bolted-on control. */
+.admin-search-bar { margin-bottom: 14px; }
+.admin-search-input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  font-size: 16px;
+  font-family: var(--font-body);
+  box-sizing: border-box;
+  background: #fff;
+}
+.admin-search-input:focus {
+  outline: 2px solid var(--color-accent-700, #2f6f13);
+  outline-offset: 1px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Shared status-picker bottom sheet (admin/status-ui.js)              */
 /* ------------------------------------------------------------------ */
@@ -605,6 +660,13 @@
   color: var(--color-text, #201e1d);
 }
 .admin-quick-btn[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+/* Client profile has only Call/Text/Email (no Directions) — a clean
+   3-column grid instead of leaving a gap in the 4-column desktop layout
+   sized for the booking detail page's four actions. */
+.admin-contact-actions.is-triple { grid-template-columns: repeat(3, 1fr); }
+@media (min-width: 520px) {
+  .admin-contact-actions.is-triple { grid-template-columns: repeat(3, 1fr); }
+}
 
 .admin-status-manage {
   display: flex;

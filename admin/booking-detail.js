@@ -154,6 +154,14 @@ document.addEventListener('DOMContentLoaded', function () {
     var name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') : '';
     set('d-name', name || 'Unknown client');
 
+    var viewClientLink = document.getElementById('d-view-client-link');
+    if (customer && booking.customerId) {
+      viewClientLink.href = '/admin/client/?id=' + encodeURIComponent(booking.customerId);
+      viewClientLink.style.display = 'inline-flex';
+    } else {
+      viewClientLink.style.display = 'none';
+    }
+
     applyStatusDisplay(booking.status);
 
     var whenParts = [formatDate(booking.appointmentDate)];

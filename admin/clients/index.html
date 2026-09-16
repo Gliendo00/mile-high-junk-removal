@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Clients</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <a class="admin-brand" href="/admin/">
+    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </a>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<nav class="admin-nav-tabs" aria-label="Admin sections">
+  <a href="/admin/" class="admin-nav-tab">Requests</a>
+  <a href="/admin/clients/" class="admin-nav-tab is-active" aria-current="page">Clients</a>
+</nav>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <div class="admin-list-heading">
+    <h1>Clients</h1>
+  </div>
+
+  <div class="admin-search-bar">
+    <input type="search" id="client-search" class="admin-search-input" placeholder="Search name, phone, or email" aria-label="Search clients" autocomplete="off">
+  </div>
+
+  <div id="loading" class="admin-loading">Loading clients…</div>
+  <div id="empty" class="admin-empty" style="display:none">No clients yet.</div>
+  <ul id="client-list" class="admin-booking-list" style="display:none"></ul>
+
+  <div id="load-more-wrap" class="admin-load-more" style="display:none">
+    <button type="button" id="load-more-btn" class="admin-btn admin-btn-outline">Load more</button>
+  </div>
+</main>
+
+<script src="../clients-list.js"></script>
+</body>
+</html>

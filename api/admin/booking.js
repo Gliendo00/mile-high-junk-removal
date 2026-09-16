@@ -103,6 +103,10 @@ module.exports = async (req, res) => {
       ok: true,
       booking: {
         id: booking.id,
+        // Exposed only so the admin UI can link to this booking's client
+        // profile (/admin/client/?id=) — never used by this route itself
+        // to authorize anything; requireAdmin() above already did that.
+        customerId: booking.customer_id,
         serviceType: booking.service_type,
         serviceLabel: serviceLabel(booking.service_type),
         appointmentDate: booking.appointment_date,
