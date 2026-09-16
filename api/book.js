@@ -7,7 +7,8 @@
 //   UPLOAD_TOKEN_SECRET — signs the short-lived photo-upload token (see below)
 //
 // Column names below match the live schema exactly:
-//   customers(id, first_name, last_name, phone, email, address, city, state, zip, created_at)
+//   customers(id, first_name, last_name, phone, email, address, city, state, zip,
+//             phone_normalized, email_normalized, created_at)
 //   bookings(id, customer_id, service_type, appointment_date, time_window, status,
 //            description, estimated_price, final_price, internal_notes, created_at, updated_at,
 //            service_address, service_city, service_state, service_zip)
@@ -33,6 +34,7 @@
 const { createClient } = require("@supabase/supabase-js");
 const crypto = require("crypto");
 const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
+const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -191,6 +193,12 @@ module.exports = async (req, res) => {
           city: data.customer.city,
           state: data.customer.state,
           zip: data.customer.zip,
+          // Phase 3B Step 4a.2: written on every new customer for future
+          // repeat-client matching (see api/_lib/customer-identity.js).
+          // No lookup happens here — this endpoint still unconditionally
+          // creates a new customer row every time, exactly as before.
+          phone_normalized: normalizePhone(data.customer.phone),
+          email_normalized: normalizeEmail(data.customer.email),
         })
         .select("id")
         .single();
