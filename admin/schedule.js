@@ -214,7 +214,11 @@ document.addEventListener('DOMContentLoaded', function () {
     loadingEl.style.display = 'block';
     clearError();
 
-    fetch('/api/admin/schedule?range=' + encodeURIComponent(range))
+    // Served by api/admin/bookings.js's ?view=schedule mode rather than a
+    // dedicated api/admin/schedule.js file — see the countsOnly/scheduleView
+    // comment in that file (Vercel Hobby plan's 12-Serverless-Function
+    // limit; docs/phase-3/vercel-function-limit.md).
+    fetch('/api/admin/bookings?view=schedule&range=' + encodeURIComponent(range))
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';

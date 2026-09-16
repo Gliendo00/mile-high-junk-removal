@@ -15,6 +15,7 @@ implemented incrementally, one reviewed stage at a time.
 
 - [database-schema-updates.md](./database-schema-updates.md) — the confirmed `ON DELETE CASCADE` behavior of all three `bookings`/`customers`/`dumpster_rentals`/`booking_photos` foreign keys, verified directly against production Supabase, and why it matters for the not-yet-built archive/delete stage.
 - [schedule-architecture.md](./schedule-architecture.md) — Stage 1: `/admin/` becomes the Schedule homepage, Requests moves to `/admin/requests/`, and how the Today/Tomorrow/Week views are built without introducing a second operational-status system.
+- [vercel-function-limit.md](./vercel-function-limit.md) — a real Preview deployment failure hit during Stage 1 verification: this project's Vercel Hobby plan caps a deployment at 12 Serverless Functions, and Stage 1 initially exceeded it. How it was fixed, and what it means for later stages that each want their own new endpoint.
 - [test-matrix.md](./test-matrix.md) — automated test coverage for Stage 1, backed by [tests/phase3c-schedule.test.js](../../tests/phase3c-schedule.test.js), plus the full existing suite re-run to confirm no regression.
 
 ## Status

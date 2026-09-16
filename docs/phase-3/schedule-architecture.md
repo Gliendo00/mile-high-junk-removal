@@ -78,23 +78,34 @@ never disappear from the Schedule because of an unexpected value.
 
 ## Requests badge
 
-`GET /api/admin/new-count` returns only `{ ok: true, new: <int> }` via a
-single count-only query (`status IS NULL`, matching `api/admin/bookings.js`'s
-own "new" definition exactly) — no booking or customer rows. It exists as
-its own endpoint specifically because the badge loads on every admin page,
-not just Requests, and pulling a full page of booking data just to render
-one integer would be wasteful. `admin/nav-badge.js` (a new shared script,
-loaded the same way `admin/status-ui.js` already is) fetches this on every
-page load and shows/hides the badge — failing safe to "hidden" on any error
-or non-200 response rather than showing a stale count or redirecting the
-page; the page's own primary data fetch already owns the "session expired →
-redirect to login" behavior.
+`GET /api/admin/bookings?countsOnly=1` returns only `{ ok: true, summary:
+{...} }` (the same six-way status summary `bookings.js` already computes on
+every call, `new` included) — no booking or customer rows. `admin/nav-badge.js`
+(a new shared script, loaded the same way `admin/status-ui.js` already is)
+fetches this on every page load and shows/hides the badge based on
+`summary.new` — failing safe to "hidden" on any error or non-200 response
+rather than showing a stale count or redirecting the page; the page's own
+primary data fetch already owns the "session expired → redirect to login"
+behavior.
+
+This was originally implemented as its own endpoint,
+`api/admin/new-count.js`, specifically because the badge loads on every
+admin page (not just Requests) and pulling a full page of booking data just
+to render one integer would be wasteful. That file was removed during
+Preview verification: this project's Vercel deployment is on the **Hobby
+plan's 12-Serverless-Function-per-deployment limit**, and this project was
+already at exactly 12 before Stage 1 — adding both `schedule.js` and
+`new-count.js` as new files pushed it to 14 and the first Preview deployment
+failed outright. Folding the counts-only response into `bookings.js` (which
+already runs these exact queries) restored the total to 12 with zero loss of
+functionality. See [vercel-function-limit.md](./vercel-function-limit.md)
+for the full finding and its implications for later Phase 3C stages.
 
 ## Security posture (unchanged from Phase 2/3A/3B)
 
-Both new endpoints (`api/admin/schedule.js`, `api/admin/new-count.js`) follow
-the exact pattern already established and tested for every other
-`/api/admin/*` route:
+`api/admin/schedule.js` (and the `?countsOnly=1` mode added to the existing
+`api/admin/bookings.js`) follow the exact pattern already established and
+tested for every other `/api/admin/*` route:
 
 - `requireAdmin(req, res)` first, before any data access; `Cache-Control:
   no-store` on every response (set inside `requireAdmin` itself).

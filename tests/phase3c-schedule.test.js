@@ -1,7 +1,12 @@
 // Local, offline test harness for Phase 3C Stage 1: the read-only Schedule
-// endpoint (api/admin/schedule.js), the Requests badge count endpoint
-// (api/admin/new-count.js), and the accompanying static-file/navigation
-// restructuring (Requests moved to /admin/requests/, Schedule at /admin/).
+// view and the Requests badge count — both served by api/admin/bookings.js
+// as ?view=schedule and ?countsOnly=1 modes rather than their own separate
+// endpoint files (see the scheduleView/countsOnly comments in that file for
+// why: the Vercel Hobby plan's 12-Serverless-Function-per-deployment limit,
+// hit for real during this stage's Preview verification — see
+// docs/phase-3/vercel-function-limit.md) — plus the accompanying
+// static-file/navigation restructuring (Requests moved to /admin/requests/,
+// Schedule at /admin/).
 //
 // Same approach as tests/phase1-api.test.js, tests/phase2-admin-api.test.js,
 // and tests/phase3a-admin-status-write.test.js: "@supabase/supabase-js" is
@@ -153,8 +158,7 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
 
-const scheduleHandler = require("../api/admin/schedule.js");
-const newCountHandler = require("../api/admin/new-count.js");
+const bookingsHandler = require("../api/admin/bookings.js");
 
 // ---------------------------------------------------------------------
 // req/res mocks (identical shape to phase2/phase3a's)
@@ -263,14 +267,23 @@ function freshDb(bookings) {
   };
 }
 
+// Served by api/admin/bookings.js's ?view=schedule mode (folded in during
+// Preview verification after a separate api/admin/schedule.js function
+// pushed this deployment over the Vercel Hobby plan's 12-Serverless-Function
+// limit — see docs/phase-3/vercel-function-limit.md), not its own endpoint.
 function getSchedule(db, cookie, query) {
   currentFakeService = createFakeServiceClient(db);
-  return run(scheduleHandler, makeReq({ cookie: cookie, query: query || {} }));
+  return run(bookingsHandler, makeReq({ cookie: cookie, query: Object.assign({ view: "schedule" }, query || {}) }));
 }
 
-function getNewCount(db, cookie) {
+// The Requests badge count is served by api/admin/bookings.js's
+// ?countsOnly=1 mode (folded in during Preview verification, after a
+// separate api/admin/new-count.js function pushed this deployment over the
+// Vercel Hobby plan's 12-Serverless-Function limit — see
+// docs/phase-3/vercel-function-limit.md), not a standalone endpoint.
+function getCountsOnly(db, cookie) {
   currentFakeService = createFakeServiceClient(db);
-  return run(newCountHandler, makeReq({ cookie: cookie }));
+  return run(bookingsHandler, makeReq({ cookie: cookie, query: { countsOnly: "1" } }));
 }
 
 // ---------------------------------------------------------------------
@@ -314,7 +327,7 @@ test("GET schedule: POST is rejected with 405 (method-scoped)", async () => {
   adminAuthed();
   const db = freshDb([]);
   currentFakeService = createFakeServiceClient(db);
-  const res = await run(scheduleHandler, makeReq({ method: "POST", cookie: "mhjr_admin_at=at-good" }));
+  const res = await run(bookingsHandler, makeReq({ method: "POST", cookie: "mhjr_admin_at=at-good", query: { view: "schedule" } }));
   assert.strictEqual(res.statusCode, 405);
 });
 
@@ -445,17 +458,17 @@ test("GET schedule: a legacy booking with no service_city snapshot falls back to
 });
 
 // =======================================================================
-// 6. Requests badge count — GET /api/admin/new-count
+// 6. Requests badge count — GET /api/admin/bookings?countsOnly=1
 // =======================================================================
-test("GET new-count: no cookies -> 401", async () => {
+test("GET bookings?countsOnly=1: no cookies -> 401", async () => {
   currentFakeAnon = createFakeAnonClient();
   const db = freshDb([booking({ id: "1", status: null })]);
-  const res = await getNewCount(db, "");
+  const res = await getCountsOnly(db, "");
   assert.strictEqual(res.statusCode, 401);
-  assert.strictEqual(res.body.new, undefined);
+  assert.strictEqual(res.body.summary, undefined);
 });
 
-test("GET new-count: counts only NULL-status ('new') bookings, matching bookings.js's own definition", async () => {
+test("GET bookings?countsOnly=1: counts only NULL-status ('new') bookings, matching the normal summary's own definition", async () => {
   adminAuthed();
   const db = freshDb([
     booking({ id: "1", status: null }),
@@ -464,24 +477,38 @@ test("GET new-count: counts only NULL-status ('new') bookings, matching bookings
     booking({ id: "4", status: "completed" }),
     booking({ id: "5", status: "lost" }),
   ]);
-  const res = await getNewCount(db, "mhjr_admin_at=at-good");
+  const res = await getCountsOnly(db, "mhjr_admin_at=at-good");
   assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(res.body.new, 2);
+  assert.strictEqual(res.body.summary.new, 2);
 });
 
-test("GET new-count: zero new bookings returns { new: 0 } — the client hides the badge on this exact value (verified by code review of admin/nav-badge.js; no DOM simulation in this offline harness, same limitation noted in tests/phase3a-admin-status-write.test.js for its double-tap guard)", async () => {
+test("GET bookings?countsOnly=1: zero new bookings returns summary.new === 0 — the client hides the badge on this exact value (verified by code review of admin/nav-badge.js; no DOM simulation in this offline harness, same limitation noted in tests/phase3a-admin-status-write.test.js for its double-tap guard)", async () => {
   adminAuthed();
   const db = freshDb([booking({ id: "1", status: "booked" }), booking({ id: "2", status: "completed" })]);
-  const res = await getNewCount(db, "mhjr_admin_at=at-good");
-  assert.strictEqual(res.body.new, 0);
+  const res = await getCountsOnly(db, "mhjr_admin_at=at-good");
+  assert.strictEqual(res.body.summary.new, 0);
 });
 
-test("GET new-count: response contains only { ok, new } — never any booking/customer row", async () => {
+test("GET bookings?countsOnly=1: response contains only { ok, summary } — never any booking/customer row (no `bookings` array, unlike the normal list response)", async () => {
   adminAuthed();
   const db = freshDb([booking({ id: "1", status: null })]);
-  const res = await getNewCount(db, "mhjr_admin_at=at-good");
+  const res = await getCountsOnly(db, "mhjr_admin_at=at-good");
   const keys = Object.keys(res.body).sort();
-  assert.deepStrictEqual(keys, ["new", "ok"]);
+  assert.deepStrictEqual(keys, ["ok", "summary"]);
+});
+
+test("GET bookings?countsOnly=1: matches the summary the normal (non-countsOnly) call computes for the same data", async () => {
+  adminAuthed();
+  const db = freshDb([
+    booking({ id: "1", status: null }),
+    booking({ id: "2", status: "contacted" }),
+    booking({ id: "3", status: "booked" }),
+    booking({ id: "4", status: "completed" }),
+  ]);
+  const countsRes = await getCountsOnly(db, "mhjr_admin_at=at-good");
+  currentFakeService = createFakeServiceClient(db);
+  const fullRes = await run(bookingsHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: {} }));
+  assert.deepStrictEqual(countsRes.body.summary, fullRes.body.summary);
 });
 
 // =======================================================================
@@ -567,6 +594,39 @@ test("write-audit: Stage 1 introduces no new .update(/.insert(/.upsert(/.delete(
     }
   });
   assert.deepStrictEqual(found, ["api/admin/booking-status.js: .update("], "found: " + JSON.stringify(found));
+});
+
+// =======================================================================
+// 11. Vercel Hobby-plan Serverless Function count — regression guard
+// =======================================================================
+test("deployment: total function-producing files under api/ stay within the Vercel Hobby plan's 12-function-per-deployment limit", () => {
+  // Every .js file directly under api/ or any of its subdirectories, EXCEPT
+  // api/_lib/ (confirmed empirically via `vercel build`'s .vercel/output
+  // manifest: files under _lib do not produce their own .func output,
+  // since they never export a (req, res) handler — only real endpoint
+  // files do), becomes its own Serverless Function. This project hit the
+  // real Hobby-plan ceiling once already during Phase 3C Stage 1 Preview
+  // verification (confirmed via `vercel deploy`: "No more than 12
+  // Serverless Functions can be added to a Deployment on the Hobby plan"),
+  // which is why the Requests badge count lives in api/admin/bookings.js's
+  // ?countsOnly=1 mode instead of its own file. This test exists so the
+  // NEXT new admin endpoint added in a future Phase 3C stage fails loudly
+  // here instead of failing silently at deploy time again.
+  function countApiFunctionFiles(dir) {
+    let count = 0;
+    fs.readdirSync(dir, { withFileTypes: true }).forEach((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (path.relative(path.join(__dirname, "..", "api"), full) === "_lib") return;
+        count += countApiFunctionFiles(full);
+      } else if (entry.name.endsWith(".js")) {
+        count += 1;
+      }
+    });
+    return count;
+  }
+  const total = countApiFunctionFiles(path.join(__dirname, "..", "api"));
+  assert.ok(total <= 12, "api/ has " + total + " function-producing .js files, exceeding the Vercel Hobby plan's 12-function limit — consolidate a new endpoint into an existing file (see api/admin/bookings.js's countsOnly mode for the pattern) or upgrade the Vercel plan before deploying");
 });
 
 // ---------------------------------------------------------------------

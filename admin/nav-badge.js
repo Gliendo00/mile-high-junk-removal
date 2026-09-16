@@ -3,6 +3,14 @@
 // a small restrained count of "new" bookings shown on the Requests nav tab,
 // regardless of which admin page the owner is currently on.
 //
+// Uses /api/admin/bookings?countsOnly=1 rather than a dedicated endpoint —
+// see the countsOnly comment in api/admin/bookings.js for why: this project
+// is on the Vercel Hobby plan's 12-Serverless-Function-per-deployment limit,
+// which a separate new-count.js function would have exceeded. bookings.js
+// already computes this exact summary on every call it serves; countsOnly=1
+// just skips the (more expensive) booking-row/customer/photo-count work and
+// returns only that summary.
+//
 // Deliberately minimal and fail-safe: if the count can't be loaded for any
 // reason (network error, non-200, session expired), the badge simply stays
 // hidden rather than showing a stale/wrong number or redirecting the page —
@@ -14,13 +22,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var badge = document.getElementById('nav-badge-requests');
   if (!badge) return;
 
-  fetch('/api/admin/new-count')
+  fetch('/api/admin/bookings?countsOnly=1')
     .then(function (res) {
       if (!res.ok) return null;
       return res.json().catch(function () { return null; });
     })
     .then(function (body) {
-      var count = body && typeof body.new === 'number' ? body.new : 0;
+      var count = body && body.summary && typeof body.summary.new === 'number' ? body.summary.new : 0;
       if (count > 0) {
         badge.textContent = count > 99 ? '99+' : String(count);
         badge.hidden = false;

@@ -15,14 +15,27 @@ static-file restructuring.
 | Chronological ordering | Same-day jobs sort by time-window start hour (not insertion order); an unrecognized time_window sorts last, never dropped; earlier dates sort before later dates regardless of window | 3/3 pass |
 | Status/date inclusion architecture | Only `booked`/`completed` bookings ever appear; `new` (NULL)/`contacted`/`quoted`/`lost` never do, even on a matching date — confirms no second operational-status system was introduced | 1/1 pass |
 | Response shape | Each job carries time/client/service/address/price/status/phone; legacy bookings with no `service_city` snapshot fall back to the customer's current city | 2/2 pass |
-| Requests badge count | `GET new-count:` auth gate; counts only NULL-status rows, matching `bookings.js`'s own "new" definition; response shape is exactly `{ok, new}` | 4/4 pass |
-| Badge hidden at zero | Endpoint returns `{new: 0}` correctly (verified); the DOM-level hide-on-zero behavior in `admin/nav-badge.js` is verified by code review, not by this offline harness — there is no DOM/click simulation available in this project's test setup, the same disclosed limitation `tests/phase3a-admin-status-write.test.js` already notes for its own client-side double-tap guard | 1 endpoint test + manual/code-review verification of the client behavior |
+| Requests badge count | `GET bookings?countsOnly=1:` auth gate; counts only NULL-status rows, matching the normal summary's own "new" definition; response shape is exactly `{ok, summary}` (no `bookings` array); matches the normal (non-countsOnly) call's summary for identical data | 5/5 pass |
+| Badge hidden at zero | Endpoint returns `summary.new === 0` correctly (verified); the DOM-level hide-on-zero behavior in `admin/nav-badge.js` is verified by code review, not by this offline harness — there is no DOM/click simulation available in this project's test setup, the same disclosed limitation `tests/phase3a-admin-status-write.test.js` already notes for its own client-side double-tap guard | 1 endpoint test + manual/code-review verification of the client behavior |
 | Moved Requests page | `admin/requests/index.html` exists and still loads the unmodified `dashboard.js`; `admin/index.html` now loads `schedule.js` and no longer loads `dashboard.js`; the booking-detail back-link now points at `/admin/requests/` | 3/3 pass |
 | Navigation | All three tabs (Schedule/Requests/Clients) present on every non-login admin page; login page unchanged (no nav); badge markup present and starts `hidden` everywhere | 3/3 pass |
 | XSS/rendering discipline | `admin/schedule.js` and `admin/nav-badge.js` added to the existing innerHTML/insertAdjacentHTML/document.write grep guard | 1/1 pass |
-| No unexpected new admin write paths | Write-audit grep extended to include `api/admin/schedule.js`, `api/admin/new-count.js`, and `api/_lib/time-windows.js` — asserts the found write-call list is **unchanged**: still exactly `api/admin/booking-status.js: .update(` | 1/1 pass |
+| No unexpected new admin write paths | Write-audit grep extended to include `api/admin/schedule.js` and `api/_lib/time-windows.js` — asserts the found write-call list is **unchanged**: still exactly `api/admin/booking-status.js: .update(` | 1/1 pass |
+| Vercel Hobby-plan function-count limit | New regression guard: counts function-producing files under `api/` (excluding `api/_lib/`) and fails if the total exceeds 12 — see [vercel-function-limit.md](./vercel-function-limit.md) for the real deployment failure this test is meant to catch earlier next time | 1/1 pass |
 
-**Phase 3C Stage 1 total: 28/28 passing.**
+**Phase 3C Stage 1 total: 29/29 passing** (28 initial + 1 added after the Preview deployment failure — see below).
+
+## Preview deployment finding (fixed on the feature branch)
+
+The first Preview deployment for this stage (commit `457c54f`) **failed** —
+not a test gap, a real `vercel deploy` failure: this project's Vercel Hobby
+plan caps a deployment at 12 Serverless Functions, and adding both
+`api/admin/schedule.js` and a separate `api/admin/new-count.js` pushed the
+project from exactly 12 to 14. Fixed by folding the badge-count logic into
+`api/admin/bookings.js` as a `?countsOnly=1` mode instead of a separate
+file, restoring the count to 12, plus the new regression-guard test above so
+a future stage's new endpoint fails a local test instead of only failing at
+deploy time again. Full details: [vercel-function-limit.md](./vercel-function-limit.md).
 
 ## Full-suite regression run (all phases)
 
@@ -34,9 +47,9 @@ static-file restructuring.
 | `tests/phase3b-clients.test.js` | 28/28 pass |
 | `tests/phase3b-step4a2-customer-identity.test.js` | 13/13 pass |
 | `tests/phase3b-step4a3-repeat-client-reuse.test.js` | 14/14 pass |
-| `tests/phase3c-schedule.test.js` (new) | 28/28 pass |
+| `tests/phase3c-schedule.test.js` (new) | 29/29 pass |
 
-**Grand total: 167/167 passing, 0 failed.**
+**Grand total: 168/168 passing, 0 failed.**
 
 ## What could not be tested in this offline harness
 
