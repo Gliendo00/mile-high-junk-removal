@@ -15,7 +15,10 @@
 <body class="admin-body">
 
 <div class="admin-topbar">
-  <span class="admin-brand">Mile High Admin</span>
+  <span class="admin-brand">
+    <img class="admin-brand-logo" src="../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </span>
   <div class="admin-topbar-actions">
     <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
   </div>
@@ -24,27 +27,31 @@
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-  <div id="summary" class="admin-summary-grid" style="display:none">
-    <div class="admin-stat">
-      <div class="admin-stat-value" id="stat-new">—</div>
-      <div class="admin-stat-label">New Requests</div>
-    </div>
-    <div class="admin-stat">
-      <div class="admin-stat-value" id="stat-booked">—</div>
-      <div class="admin-stat-label">Booked</div>
-    </div>
-    <div class="admin-stat">
-      <div class="admin-stat-value" id="stat-completed">—</div>
-      <div class="admin-stat-label">Completed</div>
-    </div>
-    <div class="admin-stat">
-      <div class="admin-stat-value" id="stat-total">—</div>
-      <div class="admin-stat-label">Total Requests</div>
-    </div>
+  <div id="filter-bar" class="admin-filter-bar" style="display:none" role="tablist" aria-label="Filter requests by status">
+    <button type="button" class="admin-filter-pill is-active" data-status="" role="tab" aria-selected="true">
+      <span class="admin-filter-pill-label">All</span>
+      <span class="admin-filter-pill-value" id="count-all">—</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="new" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">New</span>
+      <span class="admin-filter-pill-value" id="count-new">—</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="booked" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">Booked</span>
+      <span class="admin-filter-pill-value" id="count-booked">—</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="completed" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">Completed</span>
+      <span class="admin-filter-pill-value" id="count-completed">—</span>
+    </button>
+    <button type="button" class="admin-filter-pill admin-filter-more" id="filter-more-btn">
+      <span class="admin-filter-more-label">More</span>
+      <span class="admin-filter-more-dot" id="more-dot" hidden></span>
+    </button>
   </div>
 
   <div class="admin-list-heading">
-    <h1>Requests</h1>
+    <h1 id="list-heading">Requests</h1>
   </div>
 
   <div id="loading" class="admin-loading">Loading requests…</div>
@@ -56,6 +63,7 @@
   </div>
 </main>
 
+<script src="status-ui.js"></script>
 <script src="dashboard.js"></script>
 </body>
 </html>

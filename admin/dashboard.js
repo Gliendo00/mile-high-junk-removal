@@ -1,4 +1,4 @@
-// /admin — read-only dashboard: summary counts + booking list.
+// /admin — read-only dashboard: filter/summary bar + booking list.
 //
 // Every dynamic value below is written with textContent (never
 // innerHTML/insertAdjacentHTML with a concatenated string), so a
@@ -6,9 +6,12 @@
 // other markup is rendered as inert text, never parsed as HTML.
 document.addEventListener('DOMContentLoaded', function () {
   var PAGE_SIZE = 50;
+  var MORE_STATUSES = ['contacted', 'quoted', 'lost'];
 
   var errorBanner = document.getElementById('error-banner');
-  var summaryEl = document.getElementById('summary');
+  var filterBar = document.getElementById('filter-bar');
+  var moreBtn = document.getElementById('filter-more-btn');
+  var moreDot = document.getElementById('more-dot');
   var loadingEl = document.getElementById('loading');
   var emptyEl = document.getElementById('empty');
   var listEl = document.getElementById('booking-list');
@@ -18,6 +21,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var offset = 0;
   var loadedAny = false;
+  var currentFilter = ''; // '' = All. Otherwise one of the six status keys.
+  var requestSeq = 0; // guards against an in-flight request resolving after a newer filter change
 
   var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
 
@@ -25,26 +30,42 @@ document.addEventListener('DOMContentLoaded', function () {
     errorBanner.textContent = msg;
     errorBanner.style.display = 'block';
   }
+  function clearError() {
+    errorBanner.style.display = 'none';
+    errorBanner.textContent = '';
+  }
 
   function formatDate(iso) {
     if (!iso) return '—';
     try {
       var d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T00:00:00' : iso);
       if (isNaN(d.getTime())) return iso;
-      return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     } catch (e) {
       return iso;
     }
   }
 
-  function formatDateTime(iso) {
+  // "12 MIN AGO" / "3 HR AGO" / "5 DAYS AGO" style relative label. Falls
+  // back to a short absolute date once something is more than a week old,
+  // since "312 HR AGO" stops being useful information at a glance.
+  function timeAgo(iso) {
     if (!iso) return '—';
+    var then = new Date(iso).getTime();
+    if (isNaN(then)) return '—';
+    var diffMs = Date.now() - then;
+    if (diffMs < 0) diffMs = 0;
+    var mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'JUST NOW';
+    if (mins < 60) return mins + ' MIN AGO';
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + ' HR AGO';
+    var days = Math.floor(hrs / 24);
+    if (days < 7) return days + (days === 1 ? ' DAY AGO' : ' DAYS AGO');
     try {
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
-      return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
     } catch (e) {
-      return iso;
+      return '';
     }
   }
 
@@ -62,45 +83,96 @@ document.addEventListener('DOMContentLoaded', function () {
     return node;
   }
 
+  function cameraIcon() {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.6');
+    path.setAttribute('stroke-linejoin', 'round');
+    var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12');
+    circle.setAttribute('cy', '13.5');
+    circle.setAttribute('r', '3');
+    circle.setAttribute('stroke', 'currentColor');
+    circle.setAttribute('stroke-width', '1.6');
+    svg.appendChild(path);
+    svg.appendChild(circle);
+    return svg;
+  }
+
   function renderBookingCard(b) {
     var li = document.createElement('li');
     var a = document.createElement('a');
-    a.className = 'admin-booking-card';
+    var statusKey = STATUS_CLASSES.indexOf(b.status) !== -1 ? b.status : 'new';
+    a.className = 'admin-booking-card admin-card-accent-' + statusKey;
     a.href = '/admin/booking/?id=' + encodeURIComponent(b.id);
 
     var top = el('div', 'admin-card-top');
-    var name = b.customer ? [b.customer.firstName, b.customer.lastName].filter(Boolean).join(' ') : '';
-    top.appendChild(el('div', 'admin-card-name', name || 'Unknown client'));
-
-    var statusKey = STATUS_CLASSES.indexOf(b.status) !== -1 ? b.status : 'new';
-    top.appendChild(el('span', 'admin-status-badge admin-status-' + statusKey, b.statusLabel || 'New'));
+    var topLeft = el('div', 'admin-card-top-left');
+    topLeft.appendChild(el('span', 'admin-status-badge admin-status-' + statusKey, b.statusLabel || 'New'));
+    topLeft.appendChild(el('span', 'admin-card-timeago', timeAgo(b.createdAt)));
+    top.appendChild(topLeft);
     a.appendChild(top);
 
-    a.appendChild(el('div', 'admin-card-service', b.serviceLabel || b.serviceType || '—'));
+    a.appendChild(el('div', 'admin-card-name', (b.customer ? [b.customer.firstName, b.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
 
-    var meta = el('div', 'admin-card-meta');
-    meta.appendChild(el('span', null, formatDate(b.appointmentDate)));
-    if (b.timeWindowLabel) meta.appendChild(el('span', null, b.timeWindowLabel));
-    if (b.customer && b.customer.city) meta.appendChild(el('span', null, b.customer.city));
-    a.appendChild(meta);
+    var serviceCityParts = [b.serviceLabel || b.serviceType || '—'];
+    if (b.customer && b.customer.city) serviceCityParts.push(b.customer.city);
+    a.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
+
+    var whenParts = [formatDate(b.appointmentDate)];
+    if (b.timeWindowLabel) whenParts.push(b.timeWindowLabel);
+    a.appendChild(el('div', 'admin-card-when', whenParts.join(' · ')));
 
     var footer = el('div', 'admin-card-footer');
-    var footerLeft = el('span', null, formatDateTime(b.createdAt));
+    var photos = el('span', 'admin-card-photos');
+    photos.appendChild(cameraIcon());
+    var photoText = (b.photoCount || 0) + (b.photoCount === 1 ? ' photo' : ' photos');
     var priceText = formatPrice(b.estimatedPrice);
-    var footerRightParts = [];
-    if (priceText) footerRightParts.push(priceText);
-    footerRightParts.push((b.photoCount || 0) + (b.photoCount === 1 ? ' photo' : ' photos'));
-    var footerRight = el('span', null, footerRightParts.join(' · '));
-    footer.appendChild(footerLeft);
-    footer.appendChild(footerRight);
+    photos.appendChild(document.createTextNode((priceText ? priceText + ' · ' : '') + photoText));
+    footer.appendChild(photos);
+    footer.appendChild(el('span', 'admin-card-view', 'View Request →'));
     a.appendChild(footer);
 
     li.appendChild(a);
     return li;
   }
 
+  function setActivePill(status) {
+    var pills = filterBar.querySelectorAll('.admin-filter-pill[data-status]');
+    for (var i = 0; i < pills.length; i++) {
+      var isActive = pills[i].getAttribute('data-status') === status;
+      pills[i].classList.toggle('is-active', isActive);
+      pills[i].setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
+    moreBtn.classList.toggle('is-active', MORE_STATUSES.indexOf(status) !== -1);
+  }
+
+  function resetAndLoad(status) {
+    currentFilter = status;
+    offset = 0;
+    loadedAny = false;
+    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+    listEl.style.display = 'none';
+    emptyEl.style.display = 'none';
+    loadMoreWrap.style.display = 'none';
+    loadingEl.style.display = 'block';
+    setActivePill(status);
+    loadPage();
+  }
+
   function loadPage() {
-    return fetch('/api/admin/bookings?limit=' + PAGE_SIZE + '&offset=' + offset)
+    var seq = ++requestSeq;
+    var url = '/api/admin/bookings?limit=' + PAGE_SIZE + '&offset=' + offset;
+    if (currentFilter) url += '&status=' + encodeURIComponent(currentFilter);
+
+    return fetch(url)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';
@@ -117,16 +189,16 @@ document.addEventListener('DOMContentLoaded', function () {
           });
       })
       .then(function (body) {
-        if (!body) return; // redirected to login
+        if (!body || seq !== requestSeq) return; // redirected to login, or superseded by a newer filter change
         loadingEl.style.display = 'none';
+        clearError();
 
-        if (!loadedAny) {
-          summaryEl.style.display = 'grid';
-          document.getElementById('stat-new').textContent = body.summary.new;
-          document.getElementById('stat-booked').textContent = body.summary.booked;
-          document.getElementById('stat-completed').textContent = body.summary.completed;
-          document.getElementById('stat-total').textContent = body.summary.total;
-        }
+        filterBar.style.display = 'flex';
+        document.getElementById('count-all').textContent = body.summary.total;
+        document.getElementById('count-new').textContent = body.summary.new;
+        document.getElementById('count-booked').textContent = body.summary.booked;
+        document.getElementById('count-completed').textContent = body.summary.completed;
+        moreDot.hidden = (body.summary.contacted + body.summary.quoted + body.summary.lost) === 0;
 
         loadedAny = true;
 
@@ -144,10 +216,30 @@ document.addEventListener('DOMContentLoaded', function () {
         loadMoreWrap.style.display = body.hasMore ? 'flex' : 'none';
       })
       .catch(function (err) {
+        if (seq !== requestSeq) return;
         loadingEl.style.display = 'none';
         showError(err && err.message ? err.message : 'Could not load requests.');
       });
   }
+
+  filterBar.addEventListener('click', function (e) {
+    var pill = e.target.closest('.admin-filter-pill[data-status]');
+    if (pill) {
+      var status = pill.getAttribute('data-status');
+      if (status !== currentFilter) resetAndLoad(status);
+    }
+  });
+
+  moreBtn.addEventListener('click', function () {
+    window.AdminStatusUI.open({
+      title: 'More statuses',
+      values: MORE_STATUSES,
+      selected: MORE_STATUSES.indexOf(currentFilter) !== -1 ? currentFilter : null,
+      onSelect: function (status) {
+        resetAndLoad(status);
+      },
+    });
+  });
 
   loadMoreBtn.addEventListener('click', function () {
     loadMoreBtn.disabled = true;
@@ -165,6 +257,14 @@ document.addEventListener('DOMContentLoaded', function () {
       .then(function () {
         window.location.href = '/admin/login/';
       });
+  });
+
+  // A back-navigation restored from bfcache can show a stale list (e.g.
+  // after changing a booking's status on the detail page and tapping
+  // "back"). Force a clean reload in that case so the dashboard always
+  // reflects the database, not a cached snapshot of the previous visit.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) window.location.reload();
   });
 
   loadPage();

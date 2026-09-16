@@ -8,7 +8,7 @@
 // endpoint, ever.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
-const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus } = require("../_lib/booking-format");
+const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus, STATUS_LABELS } = require("../_lib/booking-format");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -36,6 +36,14 @@ module.exports = async (req, res) => {
   let offset = parseInt(req.query.offset, 10);
   if (!Number.isFinite(offset) || offset < 0) offset = 0;
 
+  // Optional read-only filter for the dashboard's status pills/menu. Any
+  // value outside the known set is silently ignored (treated as "no
+  // filter") rather than erroring — this is a display convenience, not a
+  // security boundary, so an unrecognized value just falls back to the
+  // unfiltered list rather than adding a new failure mode to this endpoint.
+  const requestedStatus = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
+  const statusFilter = Object.prototype.hasOwnProperty.call(STATUS_LABELS, requestedStatus) ? requestedStatus : "";
+
   try {
     // Six well-understood .eq()/count-only queries rather than a single
     // .or("status.is.null,status.eq.") filter — this avoids depending on
@@ -52,11 +60,23 @@ module.exports = async (req, res) => {
       supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "booked"),
       supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed"),
       supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "lost"),
-      supabase
-        .from("bookings")
-        .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, created_at")
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1),
+      (function () {
+        // "new" isn't a stored value (see docs/phase-1/crm-status-plan.md) —
+        // every booking created so far has left status NULL, and nothing in
+        // this codebase has ever written the literal string "new". Filtering
+        // by NULL therefore matches every row the rest of this endpoint
+        // already counts as "new". The other five values are stored
+        // verbatim by api/admin/booking-status.js, so a plain .eq() is
+        // sufficient for them.
+        let q = supabase
+          .from("bookings")
+          .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, created_at")
+          .order("created_at", { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (statusFilter === "new") q = q.is("status", null);
+        else if (statusFilter) q = q.eq("status", statusFilter);
+        return q;
+      })(),
     ]);
 
     for (const r of [totalRes, contactedRes, quotedRes, bookedRes, completedRes, lostRes, pageRes]) {
@@ -105,12 +125,21 @@ module.exports = async (req, res) => {
 
     const total = totalRes.count || 0;
     const knownNonNew = (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
+    const newCount = Math.max(0, total - knownNonNew);
+
+    // Pagination ("hasMore") must be judged against the count of whatever
+    // set is actually being paged through — the global total when no
+    // filter is applied, or the matching status's own count when one is.
+    // Every value here was already computed above for the summary, so this
+    // needs no extra query.
+    const countsByStatus = { new: newCount, contacted: contactedRes.count || 0, quoted: quotedRes.count || 0, booked: bookedRes.count || 0, completed: completedRes.count || 0, lost: lostRes.count || 0 };
+    const filteredTotal = statusFilter ? countsByStatus[statusFilter] : total;
 
     res.status(200).json({
       ok: true,
       summary: {
         total: total,
-        new: Math.max(0, total - knownNonNew),
+        new: newCount,
         contacted: contactedRes.count || 0,
         quoted: quotedRes.count || 0,
         booked: bookedRes.count || 0,
@@ -120,7 +149,7 @@ module.exports = async (req, res) => {
       bookings: items,
       limit: limit,
       offset: offset,
-      hasMore: offset + items.length < total,
+      hasMore: offset + items.length < filteredTotal,
     });
   } catch (err) {
     console.error("Admin bookings list failed:", err && err.stack ? err.stack : err);
