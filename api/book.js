@@ -24,6 +24,19 @@
 // keep showing the address where each job actually occurred, independent of
 // any future change to that client's profile.
 //
+// Phase 3B Step 4a.3 — conservative repeat-client reuse: this endpoint
+// reuses an existing customers.id for the new booking ONLY when the
+// submitted normalized phone AND normalized email both exactly match the
+// same single existing customer row (see the lookup right before the
+// customer insert below, and api/_lib/customer-identity.js for the shared
+// normalization rules). Every other case — no email, zero matches,
+// multiple matches, a phone/email disagreement, or any lookup failure —
+// creates a new customer exactly as before Step 4a.3. Reuse never updates
+// the matched customer's own profile fields; it only attaches the new
+// booking to their existing id. Which branch was taken is never exposed
+// in the response — see the response construction at the bottom of this
+// handler.
+//
 // On success this endpoint never returns the raw booking UUID. Instead it returns a
 // short-lived, HMAC-signed "uploadToken" scoped to exactly this booking, which the
 // browser presents to POST /api/upload-photo to attach photos. See verifyUploadToken
@@ -180,40 +193,83 @@ module.exports = async (req, res) => {
       auth: { persistSession: false },
     });
 
-    let customerId;
-    try {
-      const { data: customerRow, error } = await supabase
-        .from("customers")
-        .insert({
-          first_name: data.customer.firstName,
-          last_name: data.customer.lastName || null,
-          phone: data.customer.phone,
-          email: data.customer.email || null,
-          address: data.customer.streetAddress,
-          city: data.customer.city,
-          state: data.customer.state,
-          zip: data.customer.zip,
-          // Phase 3B Step 4a.2: written on every new customer for future
-          // repeat-client matching (see api/_lib/customer-identity.js).
-          // No lookup happens here — this endpoint still unconditionally
-          // creates a new customer row every time, exactly as before.
-          phone_normalized: normalizePhone(data.customer.phone),
-          email_normalized: normalizeEmail(data.customer.email),
-        })
-        .select("id")
-        .single();
+    const phoneNorm = normalizePhone(data.customer.phone);
+    const emailNorm = normalizeEmail(data.customer.email);
 
-      if (error || !customerRow) {
-        console.error("Booking submission failed creating customer:", error);
+    // Repeat-client reuse lookup — see the Step 4a.3 note in the header
+    // comment above for the full rule. Only ever runs when an email was
+    // submitted; only ever reuses when exactly one row matches both
+    // fields at once. Any failure here (thrown error, Supabase error)
+    // falls open to customerId staying null, i.e. a new customer is
+    // created below exactly as if no match existed — this lookup can
+    // never turn into a 500 and can never block a booking.
+    let customerId = null;
+    if (emailNorm) {
+      try {
+        const { data: matches, error } = await supabase
+          .from("customers")
+          .select("id")
+          .eq("phone_normalized", phoneNorm)
+          .eq("email_normalized", emailNorm);
+
+        if (!error && Array.isArray(matches) && matches.length === 1) {
+          customerId = matches[0].id;
+        }
+      } catch (err) {
+        console.error("Repeat-client lookup failed, creating a new customer instead:", err);
+      }
+    }
+
+    // True only once THIS request has created a new customer row (set
+    // right after the insert below succeeds). Every rollback deletion of
+    // a customer further down in this handler is guarded by this flag —
+    // a customer reused via the lookup above must never be deleted just
+    // because a later step in this same request fails: bookings.customer_id
+    // -> customers.id is ON DELETE CASCADE, so deleting a reused customer
+    // would silently wipe out their entire pre-existing booking history.
+    let customerWasCreated = false;
+
+    if (customerId === null) {
+      try {
+        const { data: customerRow, error } = await supabase
+          .from("customers")
+          .insert({
+            first_name: data.customer.firstName,
+            last_name: data.customer.lastName || null,
+            phone: data.customer.phone,
+            email: data.customer.email || null,
+            address: data.customer.streetAddress,
+            city: data.customer.city,
+            state: data.customer.state,
+            zip: data.customer.zip,
+            // Phase 3B Step 4a.2: written on every new customer for
+            // future repeat-client matching (see
+            // api/_lib/customer-identity.js). Reuses the same normalized
+            // values already computed above for the lookup.
+            phone_normalized: phoneNorm,
+            email_normalized: emailNorm,
+          })
+          .select("id")
+          .single();
+
+        if (error || !customerRow) {
+          console.error("Booking submission failed creating customer:", error);
+          res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+          return;
+        }
+        customerId = customerRow.id;
+        customerWasCreated = true;
+      } catch (err) {
+        console.error("Booking submission failed creating customer:", err);
         res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
         return;
       }
-      customerId = customerRow.id;
-    } catch (err) {
-      console.error("Booking submission failed creating customer:", err);
-      res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
-      return;
     }
+    // On reuse (customerId set above, customerWasCreated left false): the
+    // matched customer's own row (name/phone/email/address/normalized
+    // fields) is never written to here — only their id is used, below, to
+    // attach the new booking. Profile reconciliation is a separate,
+    // future feature.
 
     let bookingId;
     try {
@@ -226,8 +282,10 @@ module.exports = async (req, res) => {
           time_window: data.schedule.timeWindow,
           description: data.description,
           // Historical job-location snapshot — see the schema comment above.
-          // Sourced from the same already-validated address fields just
-          // written to `customers`, never a separate input.
+          // Sourced from the same already-validated submitted address
+          // fields used for the customer insert or lookup above, never a
+          // separate input — this holds whether this booking got a brand
+          // new customer or reused an existing one via Step 4a.3.
           service_address: data.customer.streetAddress,
           service_city: data.customer.city,
           service_state: data.customer.state,
@@ -238,14 +296,21 @@ module.exports = async (req, res) => {
 
       if (error || !bookingRow) {
         console.error("Booking submission failed creating booking:", error);
-        await safeDelete(supabase, "customers", customerId);
+        // Only delete a customer THIS request created — see the
+        // customerWasCreated comment above. A reused customer's id must
+        // never reach safeDelete().
+        if (customerWasCreated) {
+          await safeDelete(supabase, "customers", customerId);
+        }
         res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
         return;
       }
       bookingId = bookingRow.id;
     } catch (err) {
       console.error("Booking submission failed creating booking:", err);
-      await safeDelete(supabase, "customers", customerId);
+      if (customerWasCreated) {
+        await safeDelete(supabase, "customers", customerId);
+      }
       res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
       return;
     }
@@ -263,14 +328,18 @@ module.exports = async (req, res) => {
         if (error) {
           console.error("Booking submission failed creating dumpster_rentals row:", error);
           await safeDelete(supabase, "bookings", bookingId);
-          await safeDelete(supabase, "customers", customerId);
+          if (customerWasCreated) {
+            await safeDelete(supabase, "customers", customerId);
+          }
           res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
           return;
         }
       } catch (err) {
         console.error("Booking submission failed creating dumpster_rentals row:", err);
         await safeDelete(supabase, "bookings", bookingId);
-        await safeDelete(supabase, "customers", customerId);
+        if (customerWasCreated) {
+          await safeDelete(supabase, "customers", customerId);
+        }
         res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
         return;
       }
