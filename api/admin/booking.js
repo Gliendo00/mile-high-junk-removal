@@ -49,7 +49,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, internal_notes, created_at, customer_id"
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, internal_notes, created_at, customer_id, service_address, service_city, service_state, service_zip"
       )
       .eq("id", id)
       .maybeSingle();
@@ -116,18 +116,27 @@ module.exports = async (req, res) => {
         statusLabel: statusLabel(booking.status),
         createdAt: booking.created_at,
       },
+      // Client identity/contact only — never the address. Job location is
+      // reported separately below as `serviceAddress`, sourced from the
+      // booking's own historical snapshot, not this (mutable) customer row.
       customer: customer
         ? {
             firstName: customer.first_name,
             lastName: customer.last_name,
             phone: customer.phone,
             email: customer.email,
-            address: customer.address,
-            city: customer.city,
-            state: customer.state,
-            zip: customer.zip,
           }
         : null,
+      // The booking's own snapshot is primary; a legacy booking created
+      // before this snapshot existed (service_address is NULL) falls back to
+      // the customer's current address so the page still shows something
+      // useful rather than a blank field.
+      serviceAddress: {
+        address: booking.service_address || (customer && customer.address) || null,
+        city: booking.service_city || (customer && customer.city) || null,
+        state: booking.service_state || (customer && customer.state) || null,
+        zip: booking.service_zip || (customer && customer.zip) || null,
+      },
       dumpster: dumpster
         ? {
             deliveryDate: dumpster.delivery_date,

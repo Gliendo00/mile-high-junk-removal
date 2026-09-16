@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
         // sufficient for them.
         let q = supabase
           .from("bookings")
-          .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, created_at")
+          .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, service_city, created_at")
           .order("created_at", { ascending: false })
           .range(offset, offset + limit - 1);
         if (statusFilter === "new") q = q.is("status", null);
@@ -87,6 +87,10 @@ module.exports = async (req, res) => {
     const customerIds = Array.from(new Set(bookings.map((b) => b.customer_id).filter(Boolean)));
     const bookingIds = bookings.map((b) => b.id);
 
+    // "city" is selected here only as a compatibility fallback for a legacy
+    // booking with no service_city snapshot of its own (see the mapping
+    // below) — the customer's current city is never the primary source once
+    // a booking has its own snapshot.
     const customersById = {};
     if (customerIds.length) {
       const custRes = await supabase.from("customers").select("id, first_name, last_name, city").in("id", customerIds);
@@ -119,7 +123,11 @@ module.exports = async (req, res) => {
         estimatedPrice: b.estimated_price,
         createdAt: b.created_at,
         photoCount: photoCountByBooking[b.id] || 0,
-        customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, city: customer.city } : null,
+        // Job location: the booking's own snapshot is primary; a legacy
+        // booking created before this snapshot existed (service_city is
+        // NULL) falls back to the customer's current city.
+        serviceCity: b.service_city || (customer && customer.city) || null,
+        customer: customer ? { firstName: customer.first_name, lastName: customer.last_name } : null,
       };
     });
 

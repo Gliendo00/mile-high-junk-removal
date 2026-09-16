@@ -148,6 +148,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function render(data) {
     var booking = data.booking;
     var customer = data.customer;
+    var serviceAddress = data.serviceAddress || null;
     bookingId = booking.id;
 
     var name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') : '';
@@ -160,7 +161,7 @@ document.addEventListener('DOMContentLoaded', function () {
     set('d-when', whenParts.join(' · '));
 
     var serviceCityParts = [booking.serviceLabel || booking.serviceType || ''];
-    if (customer && customer.city) serviceCityParts.push(customer.city);
+    if (serviceAddress && serviceAddress.city) serviceCityParts.push(serviceAddress.city);
     set('d-subtitle', serviceCityParts.filter(Boolean).join(' · '));
     set('d-created', 'Submitted ' + timeAgo(booking.createdAt));
 
@@ -199,23 +200,31 @@ document.addEventListener('DOMContentLoaded', function () {
       } else {
         disableAction(emailBtn);
       }
+    } else {
+      disableAction(callBtn);
+      disableAction(textBtn);
+      disableAction(emailBtn);
+    }
 
-      var addressLines = [customer.address, [customer.city, customer.state, customer.zip].filter(Boolean).join(', ')]
+    // Job location comes from the booking's own service-address snapshot
+    // (api/admin/booking.js), never the client's current contact record —
+    // this is independent of whether a customer record exists at all, so a
+    // booking retains its historical job address even if the client's
+    // profile is later missing or changed.
+    if (serviceAddress && (serviceAddress.address || serviceAddress.city)) {
+      var addressLines = [serviceAddress.address, [serviceAddress.city, serviceAddress.state, serviceAddress.zip].filter(Boolean).join(', ')]
         .filter(Boolean)
         .join('\n');
       set('d-address', addressLines);
 
-      var mapsQuery = [customer.address, customer.city, customer.state, customer.zip].filter(Boolean).join(', ');
+      var mapsQuery = [serviceAddress.address, serviceAddress.city, serviceAddress.state, serviceAddress.zip].filter(Boolean).join(', ');
       if (mapsQuery) {
         directionsBtn.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQuery);
       } else {
         disableAction(directionsBtn);
       }
     } else {
-      set('d-address', 'No client record found.');
-      disableAction(callBtn);
-      disableAction(textBtn);
-      disableAction(emailBtn);
+      set('d-address', 'No service address on file.');
       disableAction(directionsBtn);
     }
 

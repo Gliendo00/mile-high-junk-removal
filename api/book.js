@@ -9,10 +9,19 @@
 // Column names below match the live schema exactly:
 //   customers(id, first_name, last_name, phone, email, address, city, state, zip, created_at)
 //   bookings(id, customer_id, service_type, appointment_date, time_window, status,
-//            description, estimated_price, final_price, internal_notes, created_at, updated_at)
+//            description, estimated_price, final_price, internal_notes, created_at, updated_at,
+//            service_address, service_city, service_state, service_zip)
 //   dumpster_rentals(id, booking_id UNIQUE, delivery_date, pickup_date, material_type,
 //                     placement_notes, created_at)
 //   booking_photos(id, booking_id, storage_path, created_at) — written by api/upload-photo.js.
+//
+// bookings.service_address/service_city/service_state/service_zip are a
+// point-in-time snapshot of where this specific job happens, copied from the
+// customer's submitted address at the moment this booking is created. They
+// are deliberately separate from customers.address (the client's contact
+// address on file, which can change later) so a repeat client's past jobs
+// keep showing the address where each job actually occurred, independent of
+// any future change to that client's profile.
 //
 // On success this endpoint never returns the raw booking UUID. Instead it returns a
 // short-lived, HMAC-signed "uploadToken" scoped to exactly this booking, which the
@@ -208,6 +217,13 @@ module.exports = async (req, res) => {
           appointment_date: data.appointmentDate,
           time_window: data.schedule.timeWindow,
           description: data.description,
+          // Historical job-location snapshot — see the schema comment above.
+          // Sourced from the same already-validated address fields just
+          // written to `customers`, never a separate input.
+          service_address: data.customer.streetAddress,
+          service_city: data.customer.city,
+          service_state: data.customer.state,
+          service_zip: data.customer.zip,
         })
         .select("id")
         .single();

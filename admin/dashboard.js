@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-card-name', (b.customer ? [b.customer.firstName, b.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
 
     var serviceCityParts = [b.serviceLabel || b.serviceType || '—'];
-    if (b.customer && b.customer.city) serviceCityParts.push(b.customer.city);
+    if (b.serviceCity) serviceCityParts.push(b.serviceCity);
     a.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
 
     var whenParts = [formatDate(b.appointmentDate)];

@@ -285,6 +285,40 @@ async function main() {
     assert.strictEqual(inserts[1].payload.service_type, "junk_removal");
   });
 
+  // 1b. Phase 3B Step 2 — every new booking snapshots the already-validated
+  // submitted address onto the booking row itself (service_address/_city/
+  // _state/_zip), sourced only from data.customer, never a separate input.
+  test("book: junk removal booking snapshots the submitted address onto the booking row", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const payload = validJunkRemovalPayload({
+      customer: Object.assign(validCustomer(), {
+        streetAddress: "789 Snapshot Ave",
+        city: "Lakewood",
+        state: "CO",
+        zip: "80226",
+      }),
+    });
+    const res = await run(bookHandler, makeReq(payload, null, "198.51.100.20"));
+    assert.strictEqual(res.statusCode, 200);
+    const bookingInsert = currentFakeSupabase.calls.find(function (c) { return c.table === "bookings"; });
+    assert.strictEqual(bookingInsert.payload.service_address, "789 Snapshot Ave");
+    assert.strictEqual(bookingInsert.payload.service_city, "Lakewood");
+    assert.strictEqual(bookingInsert.payload.service_state, "CO");
+    assert.strictEqual(bookingInsert.payload.service_zip, "80226");
+  });
+
+  test("book: dumpster rental booking also snapshots the submitted address onto the booking row", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const res = await run(bookHandler, makeReq(validDumpsterPayload(), null, "198.51.100.21"));
+    assert.strictEqual(res.statusCode, 200);
+    const bookingInsert = currentFakeSupabase.calls.find(function (c) { return c.table === "bookings"; });
+    const expected = validCustomer();
+    assert.strictEqual(bookingInsert.payload.service_address, expected.streetAddress);
+    assert.strictEqual(bookingInsert.payload.service_city, expected.city);
+    assert.strictEqual(bookingInsert.payload.service_state, expected.state);
+    assert.strictEqual(bookingInsert.payload.service_zip, expected.zip);
+  });
+
   // 2. Light demo booking — happy path
   test("book: light demo booking succeeds", async function () {
     currentFakeSupabase = createFakeSupabase();

@@ -240,6 +240,14 @@ function freshDb() {
         final_price: null,
         internal_notes: null,
         created_at: "2026-01-01T12:00:00Z",
+        // Phase 3B Step 2 — has its own service-address snapshot, deliberately
+        // different from the customer's on-file address (Denver/123 Main St)
+        // below, so tests can prove the booking's own snapshot is used and
+        // never overridden by the customer's (possibly since-changed) address.
+        service_address: "999 Job Site Rd",
+        service_city: "Golden",
+        service_state: "CO",
+        service_zip: "80401",
       },
       {
         id: "22222222-2222-2222-2222-222222222222",
@@ -253,6 +261,8 @@ function freshDb() {
         final_price: 450,
         internal_notes: "Gate code 1234",
         created_at: "2026-01-02T09:30:00Z",
+        // No service_* snapshot — simulates a legacy booking created before
+        // Phase 3B Step 2, which must fall back to the customer's address.
       },
     ],
     customers: [
@@ -533,6 +543,48 @@ test("booking detail: signed URLs are only generated after authentication succee
   const authed = await run(bookingHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: { id: "11111111-1111-1111-1111-111111111111" } }));
   assert.strictEqual(authed.statusCode, 200);
   assert.strictEqual(svc.storage.signCalls.length, 1, "exactly one signed URL should now have been generated");
+});
+
+// 5b. Phase 3B Step 2 — booking-level service-address snapshot: the
+// booking's own snapshot is primary, the customer's current address is only
+// a fallback for a legacy row with no snapshot.
+test("bookings list: card location comes from the booking's own service_city, not the customer's city", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(bookingsHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: {} }));
+  const booking1 = res.body.bookings.find((b) => b.id === "11111111-1111-1111-1111-111111111111");
+  assert.strictEqual(booking1.serviceCity, "Golden", "must use the booking's own service_city snapshot");
+  assert.strictEqual(booking1.customer.city, undefined, "customer object must no longer carry a city field");
+});
+
+test("bookings list: a legacy booking with no service_city snapshot falls back to the customer's city", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(bookingsHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: {} }));
+  const booking2 = res.body.bookings.find((b) => b.id === "22222222-2222-2222-2222-222222222222");
+  assert.strictEqual(booking2.serviceCity, "Aurora", "a NULL snapshot must fall back to the customer's current city");
+});
+
+test("booking detail: address/directions data comes from the booking's own service_* snapshot, not the customer row", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(bookingHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: { id: "11111111-1111-1111-1111-111111111111" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.serviceAddress, { address: "999 Job Site Rd", city: "Golden", state: "CO", zip: "80401" });
+  // Identity/contact still comes from customer, which must no longer carry
+  // any address field now that location is reported separately.
+  assert.strictEqual(res.body.customer.firstName, "Jamie");
+  assert.strictEqual(res.body.customer.phone, "303-555-0100");
+  assert.strictEqual(res.body.customer.address, undefined, "customer must no longer carry an address field");
+  assert.strictEqual(res.body.customer.city, undefined, "customer must no longer carry a city field");
+});
+
+test("booking detail: a legacy booking with no service_* snapshot falls back to the customer's address", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(bookingHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: { id: "22222222-2222-2222-2222-222222222222" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.serviceAddress, { address: "456 Oak Ave", city: "Aurora", state: "CO", zip: "80010" });
 });
 
 // 6. Missing / malformed / nonexistent booking id
