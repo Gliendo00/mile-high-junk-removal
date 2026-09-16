@@ -7,8 +7,17 @@
    operations tool, not a marketing page, so body copy (Figtree) carries
    most of the information hierarchy here. */
 
+:root {
+  /* A very light tint of the brand green (#69c22a) — used as the admin
+     portal's page/surface background so it visibly reads as "Mile High"
+     without competing with white content cards or hurting contrast.
+     Deliberately scoped to this file only; the public site's neutral
+     beige background (--color-neutral-100 in ../styles.css) is untouched. */
+  --admin-tint: color-mix(in srgb, #69c22a 7%, #ffffff);
+}
+
 .admin-body {
-  background: var(--color-neutral-100, #f9f4ed);
+  background: var(--admin-tint);
   min-height: 100vh;
 }
 
@@ -261,13 +270,13 @@
   display: block;
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
-  border-left: 4px solid var(--color-neutral-300, #dcd3c4);
+  border-left: 5px solid var(--color-neutral-300, #dcd3c4);
   border-radius: 12px;
   padding: 12px 14px;
   text-decoration: none;
   color: inherit;
 }
-.admin-booking-card:active { background: var(--color-neutral-100, #f9f4ed); }
+.admin-booking-card:active { background: var(--admin-tint); }
 .admin-card-top {
   display: flex;
   align-items: center;
@@ -336,26 +345,36 @@
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.admin-status-new { background: #e6f0fb; color: #1c4f8a; }
-.admin-status-contacted { background: #fdf2d8; color: #8a5a00; }
-.admin-status-quoted { background: #f1e6fb; color: #5a2d8a; }
-.admin-status-booked { background: #e2f5d8; color: #2f6f13; }
-.admin-status-completed { background: #d9efe3; color: #1c6b45; }
-.admin-status-lost { background: #fdecea; color: #7a1f18; }
+/* Solid, filled badges rather than pale tint-on-dark-text — status needs
+   to be readable as a color at a glance across a whole list, not just on
+   close reading. New is deliberately the Mile High brand green
+   (--color-accent-700) so the most actionable state is also the most
+   prominent one; the other five are spaced around distinct hues (amber /
+   violet / blue / slate / red) so no two are confusable by color alone.
+   Completed intentionally breaks from color into a neutral slate — "done,
+   no longer needs attention" reads differently from the active states.
+   All six pass WCAG AA contrast (>=4.5:1) against the white text used
+   here. */
+.admin-status-new { background: #2f6f13; color: #fff; }
+.admin-status-contacted { background: #b45309; color: #fff; }
+.admin-status-quoted { background: #6d28d9; color: #fff; }
+.admin-status-booked { background: #1d4ed8; color: #fff; }
+.admin-status-completed { background: #374151; color: #fff; }
+.admin-status-lost { background: #b91c1c; color: #fff; }
 
-.admin-card-accent-new { border-left-color: #1c4f8a; }
-.admin-card-accent-contacted { border-left-color: #8a5a00; }
-.admin-card-accent-quoted { border-left-color: #5a2d8a; }
-.admin-card-accent-booked { border-left-color: #2f6f13; }
-.admin-card-accent-completed { border-left-color: #1c6b45; }
-.admin-card-accent-lost { border-left-color: #7a1f18; }
+.admin-card-accent-new { border-left-color: #2f6f13; }
+.admin-card-accent-contacted { border-left-color: #b45309; }
+.admin-card-accent-quoted { border-left-color: #6d28d9; }
+.admin-card-accent-booked { border-left-color: #1d4ed8; }
+.admin-card-accent-completed { border-left-color: #374151; }
+.admin-card-accent-lost { border-left-color: #b91c1c; }
 
-.admin-status-dot-new { background: #1c4f8a; }
-.admin-status-dot-contacted { background: #8a5a00; }
-.admin-status-dot-quoted { background: #5a2d8a; }
-.admin-status-dot-booked { background: #2f6f13; }
-.admin-status-dot-completed { background: #1c6b45; }
-.admin-status-dot-lost { background: #7a1f18; }
+.admin-status-dot-new { background: #2f6f13; }
+.admin-status-dot-contacted { background: #b45309; }
+.admin-status-dot-quoted { background: #6d28d9; }
+.admin-status-dot-booked { background: #1d4ed8; }
+.admin-status-dot-completed { background: #374151; }
+.admin-status-dot-lost { background: #b91c1c; }
 
 .admin-empty, .admin-loading, .admin-error-banner {
   background: #fff;
@@ -429,8 +448,8 @@
   text-align: left;
   cursor: pointer;
 }
-.admin-sheet-option:active { background: var(--color-neutral-100, #f9f4ed); }
-.admin-sheet-option.is-selected { background: var(--color-neutral-100, #f9f4ed); }
+.admin-sheet-option:active { background: var(--admin-tint); }
+.admin-sheet-option.is-selected { background: var(--admin-tint); }
 .admin-sheet-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .admin-sheet-option-label { flex: 1; }
 .admin-sheet-check { color: var(--color-accent-700, #2f6f13); font-weight: 900; }
@@ -439,7 +458,7 @@
   min-height: 48px;
   margin-top: 6px;
   border: 0;
-  background: var(--color-neutral-100, #f9f4ed);
+  background: var(--admin-tint);
   border-radius: 10px;
   font-family: var(--font-body);
   font-weight: 700;
@@ -543,7 +562,7 @@
   position: sticky;
   top: 52px;
   z-index: 9;
-  background: var(--color-neutral-100, #f9f4ed);
+  background: var(--admin-tint);
   padding: 6px 0;
 }
 .admin-quick-btn {
@@ -575,7 +594,7 @@
   padding: 16px;
   margin-bottom: 12px;
 }
-.admin-section-muted { background: var(--color-neutral-100, #f9f4ed); border-style: dashed; }
+.admin-section-muted { background: var(--admin-tint); border-style: dashed; }
 .admin-section h2 {
   font-size: 12px;
   font-weight: 800;
@@ -637,7 +656,7 @@
   height: 100%;
   font-size: 12px;
   color: var(--color-neutral-600, #82796a);
-  background: var(--color-neutral-100, #f9f4ed);
+  background: var(--admin-tint);
 }
 
 /* ------------------------------------------------------------------ */
