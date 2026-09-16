@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Log In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-login-wrap">
+  <div class="admin-login-card">
+    <div class="admin-login-brand">
+      <img src="../../images/mile-high-junk-removal-logo.webp" alt="">
+      <span>Mile High Admin</span>
+    </div>
+
+    <div id="login-error" class="admin-alert admin-alert-error" role="alert"></div>
+
+    <form id="login-form" novalidate>
+      <div class="admin-field">
+        <label for="login-email">Email</label>
+        <input id="login-email" name="email" type="email" autocomplete="username" required>
+      </div>
+      <div class="admin-field">
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" id="login-submit" class="admin-btn admin-btn-primary admin-login-submit">Log In</button>
+    </form>
+  </div>
+</div>
+
+<script src="../login.js"></script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Request Detail</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <span class="admin-brand">Mile High Admin</span>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<main class="admin-main">
+  <a href="/admin/" class="admin-back-link">&larr; All requests</a>
+
+  <div id="error-banner" class="admin-error-banner" style="display:none"></div>
+  <div id="loading" class="admin-loading">Loading request…</div>
+
+  <div id="detail" style="display:none">
+    <div class="admin-detail-header">
+      <h1 id="d-name">—</h1>
+      <span id="d-status-badge" class="admin-status-badge admin-status-new">New</span>
+    </div>
+    <div class="admin-detail-sub" id="d-subtitle">—</div>
+
+    <section class="admin-section">
+      <h2>Client</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Phone</div>
+        <div class="admin-row-value"><a id="d-phone-link" class="admin-tap-link" href="tel:">—</a></div>
+      </div>
+      <div class="admin-row" id="d-email-row" style="display:none">
+        <div class="admin-row-label">Email</div>
+        <div class="admin-row-value"><a id="d-email-link" class="admin-tap-link" href="mailto:">—</a></div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Service Address</div>
+        <div class="admin-row-value" id="d-address">—</div>
+        <a id="d-maps-link" class="admin-tap-link" href="#" target="_blank" rel="noopener">Get directions</a>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <h2>Request</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Service Type</div>
+        <div class="admin-row-value" id="d-service">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Requested Date</div>
+        <div class="admin-row-value" id="d-date">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Time Window</div>
+        <div class="admin-row-value" id="d-window">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Job Details</div>
+        <div class="admin-row-value" id="d-description">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Submitted</div>
+        <div class="admin-row-value" id="d-created">—</div>
+      </div>
+    </section>
+
+    <section class="admin-section" id="d-dumpster-section" style="display:none">
+      <h2>Dumpster Rental</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Delivery Date</div>
+        <div class="admin-row-value" id="d-delivery-date">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Pickup Date</div>
+        <div class="admin-row-value" id="d-pickup-date">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Material Type</div>
+        <div class="admin-row-value" id="d-material">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Placement Notes</div>
+        <div class="admin-row-value" id="d-placement">—</div>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <h2>Pricing</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Estimated Price</div>
+        <div class="admin-row-value" id="d-estimated-price">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Final Price</div>
+        <div class="admin-row-value" id="d-final-price">—</div>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <h2>Status</h2>
+      <div class="admin-row">
+        <div class="admin-row-value" id="d-status-text">New</div>
+      </div>
+    </section>
+
+    <section class="admin-section" id="d-notes-section">
+      <h2>Internal Notes</h2>
+      <div class="admin-row-value" id="d-notes">—</div>
+    </section>
+
+    <section class="admin-section" id="d-photos-section" style="display:none">
+      <h2>Photos</h2>
+      <div class="admin-photo-grid" id="d-photo-grid"></div>
+    </section>
+  </div>
+</main>
+
+<script src="../booking-detail.js"></script>
+</body>
+</html>
