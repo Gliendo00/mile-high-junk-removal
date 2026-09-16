@@ -25,12 +25,13 @@
 </div>
 
 <nav class="admin-nav-tabs" aria-label="Admin sections">
-  <a href="/admin/" class="admin-nav-tab is-active" aria-current="page">Requests</a>
+  <a href="/admin/" class="admin-nav-tab">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
   <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
 </nav>
 
 <main class="admin-main">
-  <a href="/admin/" class="admin-back-link">&larr; All requests</a>
+  <a href="/admin/requests/" class="admin-back-link">&larr; All requests</a>
 
   <div id="error-banner" class="admin-error-banner" style="display:none"></div>
   <div id="loading" class="admin-loading">Loading request…</div>
@@ -164,6 +165,7 @@
 <div id="admin-toast" class="admin-toast" role="status" aria-live="polite"></div>
 
 <script src="../status-ui.js"></script>
+<script src="../nav-badge.js"></script>
 <script src="../booking-detail.js"></script>
 </body>
 </html>

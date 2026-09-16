@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Mile High Admin — Dashboard</title>
+<title>Mile High Admin — Schedule</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
@@ -25,50 +25,30 @@
 </div>
 
 <nav class="admin-nav-tabs" aria-label="Admin sections">
-  <a href="/admin/" class="admin-nav-tab is-active" aria-current="page">Requests</a>
+  <a href="/admin/" class="admin-nav-tab is-active" aria-current="page">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
   <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
 </nav>
 
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-  <div id="filter-bar" class="admin-filter-bar" style="display:none" role="tablist" aria-label="Filter requests by status">
-    <button type="button" class="admin-filter-pill is-active" data-status="" role="tab" aria-selected="true">
-      <span class="admin-filter-pill-label">All</span>
-      <span class="admin-filter-pill-value" id="count-all">—</span>
-    </button>
-    <button type="button" class="admin-filter-pill" data-status="new" role="tab" aria-selected="false">
-      <span class="admin-filter-pill-label">New</span>
-      <span class="admin-filter-pill-value" id="count-new">—</span>
-    </button>
-    <button type="button" class="admin-filter-pill" data-status="booked" role="tab" aria-selected="false">
-      <span class="admin-filter-pill-label">Booked</span>
-      <span class="admin-filter-pill-value" id="count-booked">—</span>
-    </button>
-    <button type="button" class="admin-filter-pill" data-status="completed" role="tab" aria-selected="false">
-      <span class="admin-filter-pill-label">Completed</span>
-      <span class="admin-filter-pill-value" id="count-completed">—</span>
-    </button>
-    <button type="button" class="admin-filter-pill admin-filter-more" id="filter-more-btn">
-      <span class="admin-filter-more-label">More</span>
-      <span class="admin-filter-more-dot" id="more-dot" hidden></span>
-    </button>
-  </div>
-
   <div class="admin-list-heading">
-    <h1 id="list-heading">Requests</h1>
+    <h1>Schedule</h1>
   </div>
 
-  <div id="loading" class="admin-loading">Loading requests…</div>
-  <div id="empty" class="admin-empty" style="display:none">No booking requests yet.</div>
-  <ul id="booking-list" class="admin-booking-list" style="display:none"></ul>
-
-  <div id="load-more-wrap" class="admin-load-more" style="display:none">
-    <button type="button" id="load-more-btn" class="admin-btn admin-btn-outline">Load more</button>
+  <div class="admin-range-tabs" role="tablist" aria-label="Schedule range">
+    <button type="button" class="admin-range-tab is-active" data-range="today" role="tab" aria-selected="true">Today</button>
+    <button type="button" class="admin-range-tab" data-range="tomorrow" role="tab" aria-selected="false">Tomorrow</button>
+    <button type="button" class="admin-range-tab" data-range="week" role="tab" aria-selected="false">Week</button>
   </div>
+
+  <div id="loading" class="admin-loading">Loading schedule…</div>
+  <div id="empty" class="admin-empty" style="display:none"></div>
+  <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
 </main>
 
-<script src="status-ui.js"></script>
-<script src="dashboard.js"></script>
+<script src="nav-badge.js"></script>
+<script src="schedule.js"></script>
 </body>
 </html>

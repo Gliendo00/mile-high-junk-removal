@@ -1,15 +1,23 @@
 // Shared display-formatting helpers for /api/admin/* routes.
 //
-// These values are deliberately duplicated from api/book.js rather than
-// imported from it or refactored into a module api/book.js also uses.
-// api/book.js is the live customer-facing booking endpoint and this phase
-// must not restructure or risk regressing it — see
+// service/status labels below are deliberately duplicated from api/book.js
+// rather than imported from it or refactored into a module api/book.js also
+// uses. api/book.js is the live customer-facing booking endpoint and this
+// phase must not restructure or risk regressing it — see
 // docs/phase-1/time-windows.md's "Note for Phase 2: duplicated
 // definitions", which anticipated exactly this and already recommended a
 // shared constants module *for new admin code*, not a retrofit of the
-// existing booking flow. If a future phase is willing to touch api/book.js
-// and book/book.js together, that would be the time to collapse all three
-// copies into one.
+// existing booking flow.
+//
+// Time-window labels are the one exception: as of Phase 3C Stage 1 they are
+// derived from api/_lib/time-windows.js (which also carries each window's
+// start hour, needed to sort the admin Schedule chronologically) instead of
+// being a second hardcoded copy here. That module's own header explains why
+// api/book.js's copy is still left alone. If a future phase is willing to
+// touch api/book.js and book/book.js together, that would be the time to
+// collapse every remaining copy (service labels, status labels) into one.
+
+const { TIME_WINDOW_DEFS } = require("./time-windows");
 
 const SERVICE_LABELS = {
   junk_removal: "Junk Removal",
@@ -17,24 +25,13 @@ const SERVICE_LABELS = {
   light_demo: "Light Demo",
 };
 
-// Legacy broad windows (pre-2-hour-window UI) + current 2-hour windows.
-// Source: docs/phase-1/time-windows.md, itself confirmed from
-// TIME_WINDOW_DEFS/TIME_WINDOW_LABELS in api/book.js.
-const TIME_WINDOW_LABELS = {
-  morning: "Morning (8am–11am)",
-  midday: "Midday (11am–2pm)",
-  afternoon: "Afternoon (2pm–5pm)",
-  evening: "Evening (5pm–7pm)",
-  w_0400_0600: "4:00 AM – 6:00 AM",
-  w_0600_0800: "6:00 AM – 8:00 AM",
-  w_0800_1000: "8:00 AM – 10:00 AM",
-  w_1000_1200: "10:00 AM – 12:00 PM",
-  w_1200_1400: "12:00 PM – 2:00 PM",
-  w_1400_1600: "2:00 PM – 4:00 PM",
-  w_1600_1800: "4:00 PM – 6:00 PM",
-  w_1800_2000: "6:00 PM – 8:00 PM",
-  w_2000_2200: "8:00 PM – 10:00 PM",
-};
+// Derived from TIME_WINDOW_DEFS (api/_lib/time-windows.js) rather than
+// hardcoded here a second time — same label values as before this change,
+// just no longer a second source of truth for them.
+const TIME_WINDOW_LABELS = Object.keys(TIME_WINDOW_DEFS).reduce(function (acc, id) {
+  acc[id] = TIME_WINDOW_DEFS[id].label;
+  return acc;
+}, {});
 
 // The six proposed statuses from docs/phase-1/crm-status-plan.md. Nothing
 // in this phase writes any of these back to the database — this is a

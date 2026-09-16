@@ -104,6 +104,106 @@
   .admin-nav-tab { flex: none; padding: 0 22px; }
 }
 
+/* Requests nav badge — a small restrained count, not an alert. Deliberately
+   no red, no animation/pulse: it's meant to be noticeable at a glance, not
+   urgent-looking, since "new" is a routine, expected state for this
+   business, not an error condition. Hidden entirely (via the `hidden`
+   attribute, not a zero) when the count is zero, matching the existing
+   admin-filter-more-dot convention elsewhere in this file. */
+.admin-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--color-accent-700, #2f6f13);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 2px;
+}
+.admin-nav-badge[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ */
+/* Schedule: Today / Tomorrow / Week range control. A plain single-row  */
+/* segmented toggle (unlike .admin-filter-pill's label+count layout,    */
+/* which is built for status counts, not a 3-way range choice).         */
+/* ------------------------------------------------------------------ */
+.admin-range-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.admin-range-tab {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 0;
+  min-height: 42px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-range-tab.is-active {
+  background: var(--color-dark, #14150f);
+  border-color: var(--color-dark, #14150f);
+  color: #fff;
+}
+
+.admin-schedule-day-heading {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-600, #82796a);
+  margin: 18px 2px 8px;
+}
+.admin-schedule-day-heading:first-child { margin-top: 2px; }
+
+/* Schedule job card: same visual language as .admin-booking-card (white
+   surface, left status-accent stripe, reuses .admin-card-accent-*/
+   .admin-status-badge/.admin-card-name/.admin-card-service/.admin-card-when
+   as-is) but with inline Call/Text/Directions actions, which the Requests
+   card doesn't need. The clickable "open detail" area and the action
+   buttons are siblings, never nested <a> tags, so each stays independently
+   tappable and the markup stays valid. */
+.admin-schedule-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-left: 5px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.admin-schedule-card-main {
+  display: block;
+  padding: 12px 14px 10px;
+  text-decoration: none;
+  color: inherit;
+}
+.admin-schedule-card-main:active { background: var(--admin-tint); }
+.admin-schedule-card-price {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
+  margin-top: 2px;
+}
+.admin-schedule-card-actions.admin-contact-actions {
+  margin-top: 0;
+  padding: 0 14px 12px;
+}
+
 /* Tap targets everywhere in /admin meet the ~44px minimum recommended for
    comfortable one-handed phone use. */
 .admin-btn {

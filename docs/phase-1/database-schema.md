@@ -55,7 +55,7 @@ Source: `api/book.js` (comment header + `.insert({...})` call).
 | Column | Confirmed from code | Notes |
 |---|---|---|
 | `id` | Yes. **Confirmed to be treated as sensitive/opaque**: a code comment explicitly states "this endpoint never returns the raw booking UUID," and the type is called out as UUID in that same comment. | Type: UUID (stated in code comment, not independently re-verified against the DB). |
-| `customer_id` | Yes — foreign key value written on every insert (the just-created customer's id). | Actual FK constraint existence/behavior (e.g. `ON DELETE`): NEEDS VERIFICATION. |
+| `customer_id` | Yes — foreign key value written on every insert (the just-created customer's id). | **Confirmed directly against production Supabase, 2026-09-16 (Phase 3C): `ON DELETE CASCADE`.** Deleting a `customers` row deletes every `bookings` row referencing it, with no admin-code opportunity to intervene once that DELETE is issued. See [../phase-3/database-schema-updates.md](../phase-3/database-schema-updates.md) for the full finding and its implications for a future delete/archive feature. |
 | `service_type` | Yes — one of `junk_removal`, `dumpster_rental`, `light_demo` (enforced at the app level by `SERVICE_TYPES`). | Whether the DB itself enforces this as an enum/check constraint or just a free-text column: NEEDS VERIFICATION. |
 | `appointment_date` | Yes — an ISO `YYYY-MM-DD` string. For `dumpster_rental` this is the delivery date, not a generic "preferred date" (see code comment in `validateBooking`). | Column type presumably `date`: NEEDS VERIFICATION. |
 | `time_window` | Yes — one of the values documented in [time-windows.md](./time-windows.md). | Presumably `text`: NEEDS VERIFICATION. |
@@ -85,7 +85,7 @@ when `serviceType === "dumpster_rental"`).
 | Column | Confirmed from code | Notes |
 |---|---|---|
 | `id` | Yes (implied — every table in this app has one; never read back). | Type NEEDS VERIFICATION. |
-| `booking_id` | Yes — the just-created booking's id. **Confirmed UNIQUE from an explicit code comment**: `dumpster_rentals(id, booking_id UNIQUE, ...)`. | So today's data model is one dumpster_rentals row per booking, never more — confirmed by the app's own logic (it inserts exactly once per booking) and reinforced by that comment, though the UNIQUE constraint itself was not independently re-verified against the DB in this pass. |
+| `booking_id` | Yes — the just-created booking's id. **Confirmed UNIQUE from an explicit code comment**: `dumpster_rentals(id, booking_id UNIQUE, ...)`. | So today's data model is one dumpster_rentals row per booking, never more — confirmed by the app's own logic (it inserts exactly once per booking) and reinforced by that comment, though the UNIQUE constraint itself was not independently re-verified against the DB in this pass. **`ON DELETE` behavior confirmed directly against production Supabase, 2026-09-16 (Phase 3C): `CASCADE`.** Deleting a `bookings` row deletes its `dumpster_rentals` row automatically. See [../phase-3/database-schema-updates.md](../phase-3/database-schema-updates.md). |
 | `delivery_date` | Yes — ISO date string. | |
 | `pickup_date` | Yes — ISO date string, validated to be on/after `delivery_date`. | |
 | `material_type` | Yes — free text, max 200 chars enforced by the app (`MAX.short`). | |
@@ -101,7 +101,7 @@ Source: `api/upload-photo.js` (comment header + `.insert({...})` call).
 | Column | Confirmed from code | Notes |
 |---|---|---|
 | `id` | Yes (implied, never read back). | Type NEEDS VERIFICATION. |
-| `booking_id` | Yes — derived **only** from the verified, signed upload token, never from any client-supplied field (this is called out explicitly in the file's header comment as an intentional IDOR defense). | No UNIQUE constraint implied — a booking can have multiple photo rows (up to `MAX_PHOTOS_PER_BOOKING = 6`, enforced at the application level via a `count` query before insert, not by a DB constraint). |
+| `booking_id` | Yes — derived **only** from the verified, signed upload token, never from any client-supplied field (this is called out explicitly in the file's header comment as an intentional IDOR defense). | No UNIQUE constraint implied — a booking can have multiple photo rows (up to `MAX_PHOTOS_PER_BOOKING = 6`, enforced at the application level via a `count` query before insert, not by a DB constraint). **`ON DELETE` behavior confirmed directly against production Supabase, 2026-09-16 (Phase 3C): `CASCADE`.** Deleting a `bookings` row deletes its `booking_photos` rows automatically — but this only ever removes database rows, never the underlying files in the `booking-photos` Storage bucket (a DB cascade cannot reach Supabase Storage). See [../phase-3/database-schema-updates.md](../phase-3/database-schema-updates.md). |
 | `storage_path` | Yes — format `bookings/<bookingId>/<uuid>.<ext>`, written after a successful upload to Supabase Storage. | |
 | `created_at` | Named in the comment header, never set explicitly. | NEEDS VERIFICATION. |
 
@@ -135,7 +135,7 @@ should assume from it:
 
 - Exact column data types (`uuid` vs `text`, `timestamptz` vs `timestamp`, `numeric` vs `integer` for prices, etc.)
 - Any index definitions
-- Any CHECK/FK/UNIQUE constraint beyond the one `dumpster_rentals.booking_id UNIQUE` case explicitly called out in a code comment
+- Any CHECK/UNIQUE constraint beyond the one `dumpster_rentals.booking_id UNIQUE` case explicitly called out in a code comment (the three `ON DELETE CASCADE` foreign keys noted above were confirmed directly against Supabase in Phase 3C — see [../phase-3/database-schema-updates.md](../phase-3/database-schema-updates.md) — and are the one exception to this document's original code-only-confirmation scope)
 - Any column defaults beyond "must exist because the app never sets it and doesn't error"
 - Any Row Level Security (RLS) policies on any of these tables
 - Whether RLS is even enabled on these tables
