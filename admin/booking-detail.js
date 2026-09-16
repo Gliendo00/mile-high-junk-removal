@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', function () {
   var toastEl = document.getElementById('admin-toast');
   var statusTrigger = document.getElementById('d-status-trigger');
   var statusLabelEl = document.getElementById('d-status-badge-label');
+  var statusManageTrigger = document.getElementById('d-status-manage-trigger');
+  var statusManageBadge = document.getElementById('d-status-manage-badge');
+  var statusManageLabel = document.getElementById('d-status-manage-label');
 
   var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
   var STATUS_TEXT = window.AdminStatusUI.STATUS_TEXT;
@@ -94,6 +97,13 @@ document.addEventListener('DOMContentLoaded', function () {
     return digits.length === 10 ? 'tel:+1' + digits : 'tel:+' + digits;
   }
 
+  // Same digit-only normalization as buildTelHref, for the sms: launcher.
+  function buildSmsHref(phone) {
+    var digits = String(phone || '').replace(/\D/g, '');
+    if (!digits) return null;
+    return digits.length === 10 ? 'sms:+1' + digits : 'sms:+' + digits;
+  }
+
   function getBookingId() {
     var params = new URLSearchParams(window.location.search);
     return (params.get('id') || '').trim();
@@ -128,8 +138,11 @@ document.addEventListener('DOMContentLoaded', function () {
   function applyStatusDisplay(statusKey) {
     var key = STATUS_CLASSES.indexOf(statusKey) !== -1 ? statusKey : 'new';
     currentStatus = key;
+    var label = STATUS_TEXT[key] || key;
     statusTrigger.className = 'admin-status-badge admin-status-' + key + ' admin-status-trigger';
-    statusLabelEl.textContent = STATUS_TEXT[key] || key;
+    statusLabelEl.textContent = label;
+    statusManageBadge.className = 'admin-status-badge admin-status-' + key;
+    statusManageLabel.textContent = label;
   }
 
   function render(data) {
@@ -145,23 +158,36 @@ document.addEventListener('DOMContentLoaded', function () {
     var whenParts = [formatDate(booking.appointmentDate)];
     if (booking.timeWindowLabel) whenParts.push(booking.timeWindowLabel);
     set('d-when', whenParts.join(' · '));
-    set('d-subtitle', (booking.serviceLabel || booking.serviceType || '') + ' · Submitted ' + timeAgo(booking.createdAt));
+
+    var serviceCityParts = [booking.serviceLabel || booking.serviceType || ''];
+    if (customer && customer.city) serviceCityParts.push(customer.city);
+    set('d-subtitle', serviceCityParts.filter(Boolean).join(' · '));
+    set('d-created', 'Submitted ' + timeAgo(booking.createdAt));
 
     var callBtn = document.getElementById('d-call-btn');
+    var textBtn = document.getElementById('d-text-btn');
+    var emailBtn = document.getElementById('d-email-btn');
     var directionsBtn = document.getElementById('d-directions-btn');
+
+    function disableAction(btn) {
+      btn.setAttribute('aria-disabled', 'true');
+      btn.removeAttribute('href');
+    }
 
     if (customer) {
       var phoneLink = document.getElementById('d-phone-link');
       var telHref = buildTelHref(customer.phone);
+      var smsHref = buildSmsHref(customer.phone);
       if (telHref) {
         phoneLink.href = telHref;
         phoneLink.textContent = customer.phone;
         callBtn.href = telHref;
+        textBtn.href = smsHref;
       } else {
         phoneLink.removeAttribute('href');
         phoneLink.textContent = customer.phone || '—';
-        callBtn.setAttribute('aria-disabled', 'true');
-        callBtn.removeAttribute('href');
+        disableAction(callBtn);
+        disableAction(textBtn);
       }
 
       if (customer.email) {
@@ -169,6 +195,9 @@ document.addEventListener('DOMContentLoaded', function () {
         var emailLink = document.getElementById('d-email-link');
         emailLink.href = 'mailto:' + customer.email;
         emailLink.textContent = customer.email;
+        emailBtn.href = 'mailto:' + customer.email;
+      } else {
+        disableAction(emailBtn);
       }
 
       var addressLines = [customer.address, [customer.city, customer.state, customer.zip].filter(Boolean).join(', ')]
@@ -180,15 +209,14 @@ document.addEventListener('DOMContentLoaded', function () {
       if (mapsQuery) {
         directionsBtn.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQuery);
       } else {
-        directionsBtn.setAttribute('aria-disabled', 'true');
-        directionsBtn.removeAttribute('href');
+        disableAction(directionsBtn);
       }
     } else {
       set('d-address', 'No client record found.');
-      callBtn.setAttribute('aria-disabled', 'true');
-      callBtn.removeAttribute('href');
-      directionsBtn.setAttribute('aria-disabled', 'true');
-      directionsBtn.removeAttribute('href');
+      disableAction(callBtn);
+      disableAction(textBtn);
+      disableAction(emailBtn);
+      disableAction(directionsBtn);
     }
 
     set('d-service', booking.serviceLabel);
@@ -223,6 +251,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusTrigger.disabled = true;
     statusTrigger.classList.add('is-saving');
     statusLabelEl.textContent = 'Saving to ' + targetLabel + '…';
+    statusManageTrigger.disabled = true;
 
     fetch('/api/admin/booking-status', {
       method: 'PATCH',
@@ -262,17 +291,21 @@ document.addEventListener('DOMContentLoaded', function () {
         savingInFlight = false;
         statusTrigger.disabled = false;
         statusTrigger.classList.remove('is-saving');
+        statusManageTrigger.disabled = false;
       });
   }
 
-  statusTrigger.addEventListener('click', function () {
+  function openStatusSheet() {
     if (savingInFlight) return;
     window.AdminStatusUI.open({
       title: 'Change status',
       selected: currentStatus,
       onSelect: saveStatus,
     });
-  });
+  }
+
+  statusTrigger.addEventListener('click', openStatusSheet);
+  statusManageTrigger.addEventListener('click', openStatusSheet);
 
   var id = getBookingId();
   if (!id) {

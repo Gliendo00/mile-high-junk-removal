@@ -526,9 +526,23 @@
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
-  font-size: 22px;
+  /* Fluid instead of fixed so an unusually long name (e.g. a
+     hyphenated double surname) gets more characters per line on narrow
+     phones before it needs to wrap, rather than the same fixed size
+     forcing an oversized 3-line block. Ordinary short names are
+     unaffected either way — at 22px they already fit on one line. */
+  font-size: clamp(18px, 5.4vw, 22px);
+  line-height: 1.15;
   margin: 0;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  -webkit-hyphens: auto;
+  -ms-hyphens: auto;
+  hyphens: auto;
+  /* Balances line lengths when wrapping does happen (e.g. "Priya
+     Chandrasekaran-/Whitfield" reads better than one long line and one
+     short trailing word) — a no-op progressive enhancement in browsers
+     that don't support it yet, never truncates or hides any text. */
+  text-wrap: balance;
 }
 .admin-status-trigger {
   -webkit-appearance: none;
@@ -555,18 +569,23 @@
   color: var(--color-neutral-700, #645c50);
 }
 
-.admin-quick-actions {
-  display: flex;
+/* Contact & communication actions (Call / Text / Email / Directions).
+   Call and Text are the two most time-critical actions on mobile, so they
+   get the visually "primary" (solid green) treatment and sit first in
+   DOM/grid order; Email and Directions are equally functional but
+   secondary (outline) so the two most-used actions read as most
+   prominent without the row looking like four equal, undifferentiated
+   buttons. */
+.admin-contact-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-bottom: 14px;
-  position: sticky;
-  top: 52px;
-  z-index: 9;
-  background: var(--admin-tint);
-  padding: 6px 0;
+  margin-top: 14px;
+}
+@media (min-width: 520px) {
+  .admin-contact-actions { grid-template-columns: repeat(4, 1fr); }
 }
 .admin-quick-btn {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -579,13 +598,26 @@
   text-decoration: none;
   border: 1px solid transparent;
 }
-.admin-quick-call { background: var(--color-accent-700, #2f6f13); color: #fff; }
-.admin-quick-directions {
+.admin-quick-primary { background: var(--color-accent-700, #2f6f13); color: #fff; }
+.admin-quick-secondary {
   background: #fff;
   border-color: var(--color-neutral-300, #dcd3c4);
   color: var(--color-text, #201e1d);
 }
 .admin-quick-btn[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+
+.admin-status-manage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.admin-status-manage-meta {
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+  margin-top: 10px;
+}
 
 .admin-section {
   background: #fff;
@@ -667,5 +699,4 @@
   .admin-filter-bar { max-width: 620px; }
   .admin-card-top { align-items: center; }
   .admin-card-when { font-size: 15.5px; }
-  .admin-quick-actions { max-width: 420px; top: 20px; }
 }
