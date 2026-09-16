@@ -4,6 +4,16 @@ document.addEventListener('DOMContentLoaded', function () {
   var TOTAL_STEPS = 6;
   var GENERIC_ERROR = 'Something went wrong submitting that — please call or text 303-990-1812.';
   var currentStep = 1;
+  // performance.now() is a monotonic clock local to this page load, immune
+  // to the system clock being changed — unlike Date.now(), it can't be
+  // thrown off by client clock drift, which matters here because we send
+  // the browser's own measured duration (not a timestamp) to the server;
+  // see the fill-time-elapsed comment on the payload below and
+  // isSubmittedTooFast in api/_lib/spam-protection.js.
+  function nowMs() {
+    return window.performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+  }
+  var formLoadedAt = nowMs();
   var state = {
     serviceType: null,
     photos: [], // File objects kept in memory until submit; uploaded only after the booking is confirmed.
@@ -801,6 +811,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var timeWindow = state.serviceType === 'dumpster_rental' ? val('dr-window') : val('pref-window');
     var payload = {
       serviceType: state.serviceType,
+      hp: val('referral-source'),
+      // Elapsed milliseconds since this script loaded, not a timestamp —
+      // see the nowMs() comment above.
+      elapsedMs: Math.round(nowMs() - formLoadedAt),
       jobDetails: jobDetails,
       schedule: { date: val('pref-date'), timeWindow: timeWindow },
       customer: {

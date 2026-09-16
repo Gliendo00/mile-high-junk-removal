@@ -279,6 +279,13 @@
         <h3 style="margin-bottom:12px">Tell us what needs to go</h3>
         <p class="text-muted" style="margin-bottom:20px">Prefer not to fill this out? Text a photo of your junk to <a href="sms:3039901812">303-990-1812</a> for a fast quote, or email us directly at <a href="mailto:contact@milehighjunkremoval.net">contact@milehighjunkremoval.net</a>.</p>
         <form id="contact-form" style="display:flex;flex-direction:column;gap:18px">
+          <!-- Spam honeypot: invisible to real visitors, left for automated form
+               fillers. Positioned off-screen rather than display:none so it still
+               "exists" to a bot that skips display:none/visibility:hidden fields. -->
+          <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+            <label for="cf-referral-source">Leave this field blank</label>
+            <input type="text" id="cf-referral-source" name="referral-source" tabindex="-1" autocomplete="off">
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px" class="hero-grid">
             <div class="field">
               <label for="cf-name">Name</label>
@@ -329,6 +336,15 @@
     var submitBtn = document.getElementById('cf-submit');
     var successBox = document.getElementById('cf-success');
     var MAX_BYTES = 4 * 1024 * 1024;
+    // performance.now() is a monotonic clock local to this page load, immune
+    // to the system clock being changed — unlike Date.now(), it can't be
+    // thrown off by client clock drift, which matters here because we send
+    // the browser's own measured duration (not a timestamp) to the server;
+    // see isSubmittedTooFast in api/_lib/spam-protection.js.
+    function nowMs() {
+      return window.performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+    }
+    var formLoadedAt = nowMs();
 
     // GA4: fire once, on the first real interaction with any form field —
     // never on page load, never more than once per page view.
@@ -406,6 +422,10 @@
             email: document.getElementById('cf-email').value,
             message: fullMessage,
             photos: photos,
+            hp: document.getElementById('cf-referral-source').value,
+            // Elapsed milliseconds since this script loaded, not a
+            // timestamp — see the nowMs() comment above.
+            elapsedMs: Math.round(nowMs() - formLoadedAt),
           }),
         });
       }).then(function (res) {

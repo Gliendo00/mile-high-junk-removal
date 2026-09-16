@@ -203,6 +203,14 @@
 
     <div class="wizard-error" id="wizard-error" role="alert"></div>
 
+    <!-- Spam honeypot: invisible to real visitors, left for automated form
+         fillers. Positioned off-screen rather than display:none so it still
+         "exists" to a bot that skips display:none/visibility:hidden fields. -->
+    <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+      <label for="referral-source">Leave this field blank</label>
+      <input type="text" id="referral-source" name="referral-source" tabindex="-1" autocomplete="off">
+    </div>
+
     <!-- STEP 1 — CHOOSE SERVICE -->
     <section class="wizard-step" data-step="1">
       <h2 style="font-size:20px">How can we best serve you?</h2>

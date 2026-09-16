@@ -23,8 +23,18 @@
 
 const { createClient } = require("@supabase/supabase-js");
 const crypto = require("crypto");
+const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Generous on purpose — this only needs to stop scripted abuse, not slow
+// down a real customer who might legitimately submit more than once (e.g.
+// booking two separate jobs, or retrying after a typo).
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX = 8;
+// A human filling out this multi-step wizard cannot realistically finish in
+// under this long; a script that fills and submits it can.
+const MIN_FILL_TIME_MS = 3000;
 
 const SERVICE_TYPES = ["junk_removal", "dumpster_rental", "light_demo"];
 const SERVICE_LABELS = { junk_removal: "Junk Removal", dumpster_rental: "15-Yard Dumpster Rental", light_demo: "Light Demo" };
@@ -129,6 +139,22 @@ module.exports = async (req, res) => {
     const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : null;
     if (!body) {
       res.status(400).json({ error: "Invalid request body." });
+      return;
+    }
+
+    const clientIp = getClientIp(req);
+    if (isRateLimited("book:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+      res.status(429).json({ error: "Too many requests. Please wait a bit and try again, or call or text 303-990-1812." });
+      return;
+    }
+
+    // Bot signals: a filled honeypot field or an implausibly fast submission.
+    // Both are handled identically — respond as if the booking succeeded
+    // (without ever touching Supabase or sending a notification email) so an
+    // automated sender gets no feedback that would help it adapt.
+    if (isHoneypotTripped(body.hp) || isSubmittedTooFast(body.elapsedMs, MIN_FILL_TIME_MS)) {
+      console.error("Booking submission rejected as likely spam (ip=" + clientIp + ")");
+      res.status(200).json({ ok: true });
       return;
     }
 

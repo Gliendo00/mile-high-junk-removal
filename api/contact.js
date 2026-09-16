@@ -4,6 +4,23 @@
 // Optional: RESEND_FROM_EMAIL (defaults to an address on the now-verified
 // milehighjunkremoval.net domain) and CONTACT_TO_EMAIL (defaults to
 // contact@milehighjunkremoval.net).
+const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
+
+// Generous on purpose — this only needs to stop scripted abuse, not slow
+// down a real customer who might legitimately submit more than once.
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX = 8;
+// Unlike /api/book (a multi-step wizard where finishing in under 3s is
+// essentially impossible for a human), this form has only three required
+// fields (name, phone, email) and browser autofill can plausibly fill and
+// submit it in under 3 real seconds for a genuine visitor. So here this is
+// a soft spam SIGNAL, not a reason to discard the submission by itself —
+// see the isSuspiciouslyFast handling below, which flags and logs but still
+// sends the email normally. (This is different from /api/book, where the
+// wizard shape makes a false positive implausible and a hard discard is
+// safe — see docs/phase-1/fill-time-safety-review.md.)
+const MIN_FILL_TIME_MS = 3000;
+
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -16,7 +33,35 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { name, phone, email, message, photos } = req.body || {};
+  const clientIp = getClientIp(req);
+  if (isRateLimited("contact:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+    res.status(429).json({ error: "Too many requests. Please wait a bit and try again, or call or text 303-990-1812." });
+    return;
+  }
+
+  const { name, phone, email, message, photos, hp, elapsedMs } = req.body || {};
+
+  // Honeypot only: a filled honeypot field is a near-zero-false-positive
+  // signal (a real visitor never sees or can focus that field), so it's
+  // still treated as a hard rejection — respond as if the message sent
+  // (without ever calling Resend) so an automated sender gets no feedback
+  // that would help it adapt. The fill-time check is handled separately
+  // below as a soft signal instead of being folded in here — see
+  // MIN_FILL_TIME_MS above for why.
+  if (isHoneypotTripped(hp)) {
+    console.error("Contact submission rejected as likely spam (honeypot, ip=" + clientIp + ")");
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  // Soft signal only: flag and log a suspiciously fast submission, but
+  // still send it through normally below. A hard discard here risks
+  // silently dropping a real lead who autofilled the form — see
+  // MIN_FILL_TIME_MS above and docs/phase-1/fill-time-safety-review.md.
+  const isSuspiciouslyFast = isSubmittedTooFast(elapsedMs, MIN_FILL_TIME_MS);
+  if (isSuspiciouslyFast) {
+    console.warn("Contact submission flagged as suspiciously fast (ip=" + clientIp + ", elapsedMs=" + elapsedMs + ") — sending normally.");
+  }
 
   if (!name || !email) {
     res.status(400).json({ error: "Name and email are required." });
@@ -56,6 +101,14 @@ module.exports = async (req, res) => {
     (pattern) => pattern.test(message || "") || pattern.test(name || "")
   );
 
+  // Same flag-don't-block pattern as the solicitation check above, just
+  // for the fill-time signal: prefix the subject so it's easy to spot and
+  // review in the inbox, but never withhold the email itself.
+  const subjectFlags = [];
+  if (isSuspiciouslyFast) subjectFlags.push("[Fast Submission]");
+  if (isLikelySolicitation) subjectFlags.push("[Possible Solicitation]");
+  const subjectPrefix = subjectFlags.length ? subjectFlags.join(" ") + " " : "";
+
   const attachments = Array.isArray(photos)
     ? photos.slice(0, 6).map((p) => ({
         filename: (p && p.filename) || "photo.jpg",
@@ -86,7 +139,7 @@ module.exports = async (req, res) => {
         from: fromEmail,
         to: [toEmail],
         reply_to: email,
-        subject: (isLikelySolicitation ? "[Possible Solicitation] " : "") + "New quote request from " + name,
+        subject: subjectPrefix + "New quote request from " + name,
         html,
         attachments,
       }),
