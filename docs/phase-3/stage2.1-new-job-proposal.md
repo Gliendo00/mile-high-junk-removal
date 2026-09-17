@@ -1,9 +1,16 @@
 # Phase 3C Stage 2.1 — `+ New Job` + Inline Create Client (Proposal)
 
-Status: **proposal only. Not implemented.** Written for review/approval
-before any code is written, per the Stage 2 decisions in
-[stage2-decisions.md](./stage2-decisions.md). Does not depend on the
-outcome of [stage2-preflight.md](./stage2-preflight.md) — see §9.
+Status: **implemented as proposed, 2026-09-17, on feature branch
+`phase-3c/stage2.1-new-job` (commit `c65aa80`). Not merged to `main`, not
+deployed.** The plan below matches what was actually built — see the
+branch's own commit messages and
+[tests/phase3c-stage2-new-job.test.js](../../tests/phase3c-stage2-new-job.test.js)
+(48 tests, offline/stubbed Supabase) for the verified behavior. One
+deliberate deviation from the original draft: only `firstName` is required
+for Create Client (phone is optional), per the phone-optional amendment in
+[stage2-decisions.md §3](./stage2-decisions.md#amendment-2026-09-17--phone-is-optional-for-an-admin-created-client) —
+already reflected in §3 below. Does not depend on the outcome of
+[stage2-preflight.md](./stage2-preflight.md) — see §9.
 
 ## 1. Scope
 

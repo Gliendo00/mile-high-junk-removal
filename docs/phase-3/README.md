@@ -21,19 +21,21 @@ implemented incrementally, one reviewed stage at a time.
 - [stage2-plus-architecture-audit.md](./stage2-plus-architecture-audit.md) — how those requirements land on the current codebase: conflicts with existing behavior (the rolling-7-day "week," `booking-status.js`'s deliberately narrow write scope), the schema changes they imply, a concrete plan for fitting the new write surface inside the Vercel Hobby function limit, security implications, a technically-ordered staged sequence, and the decisions that needed Rocky's/the owner's input before Stage 2 starts (now resolved — see below).
 - [stage2-decisions.md](./stage2-decisions.md) — the owner's answers to the architecture audit's open questions: stay on Vercel Hobby and consolidate; retire `booking-status.js` later as its own reviewed change, not bundled into New Job; the locked admin duplicate-client policy (block on exact phone+email match, warn-only on a partial match, never auto-merge); the Past Job duplicate policy (never re-enter a job that already exists in the CRM); and the revised Stage 2 sequence (Month/Year moved up ahead of financial reporting).
 - [stage2-preflight.md](./stage2-preflight.md) — the read-only schema check requested before Stage 2 money/time-window work: confirming `bookings.estimated_price`/`final_price`/`time_window`'s live type, precision, and nullability. Blocked on dashboard access this environment doesn't have; the exact query/steps are recorded so anyone can run it and report back.
-- [stage2.1-new-job-proposal.md](./stage2.1-new-job-proposal.md) — the concrete implementation boundary proposed for `+ New Job` + inline Create Client: exact files, API contracts for the new `POST /api/admin/booking` and `POST /api/admin/client`, the duplicate-check flow, function-count impact (stays at 12/12, zero new files), tests to add, and a Preview testing plan that never mutates production Supabase. Proposal only — awaiting approval before implementation.
+- [stage2.1-new-job-proposal.md](./stage2.1-new-job-proposal.md) — the implementation boundary for `+ New Job` + inline Create Client: exact files, API contracts for `POST /api/admin/booking` and `POST /api/admin/client`, the duplicate-check flow, function-count impact (stays at 12/12, zero new files), tests, and the Preview testing plan that never mutates production Supabase. **Implemented** on branch `phase-3c/stage2.1-new-job` (commit `c65aa80`) — not merged, not deployed.
 
 ## Status
 
 **Stage 1 (Schedule homepage) is complete and LIVE in production, at
-`81a40af`.** 169/169 local tests passing at that baseline. Stage 2+
-requirements are locked, the owner's decisions on the open architecture
-questions are recorded, and a concrete Stage 2.1 (`+ New Job`) proposal is
-awaiting approval (see the documents above) — but **nothing is
-implemented yet**: no schema change, no new endpoint, no UI change has
-been made for anything in Stage 2. Each Stage 2 stage will be implemented
-and reviewed individually, in the order in
-[stage2-decisions.md](./stage2-decisions.md), not all at once.
+`81a40af`** on `main`. **Stage 2.1 (`+ New Job` + inline Create Client) is
+implemented on feature branch `phase-3c/stage2.1-new-job`** (commit
+`c65aa80`), 217/217 tests passing (169 pre-existing + 48 new), function
+count still exactly 12/12 — but **not merged to `main` and not deployed**.
+Stage 2+ requirements are locked and the owner's decisions on the open
+architecture questions are recorded (see the documents above). Every
+later Stage 2 stage (Past Job, booking editing, Month/Year, money fields,
+revenue, archive/delete, expenses, route map, SMS) remains unimplemented,
+to be built and reviewed individually, in the order in
+[stage2-decisions.md](./stage2-decisions.md).
 
 ## What Phase 3C Stage 1 does NOT include
 
