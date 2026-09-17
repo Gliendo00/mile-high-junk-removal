@@ -845,6 +845,28 @@
   text-decoration: none;
 }
 
+/* Booking detail hero: "View Client Profile" and "Edit Job" sit in the same
+   row when both are present — Phase 3C "Existing Job Editing". */
+.admin-detail-hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* Save Changes / Cancel row — Edit Job. Equal-width, side by side, matching
+   the two-button pattern Past Job's success panel already established
+   (View Job / Add Another Past Job), under a more general name since this
+   is now used by more than one feature. */
+.admin-form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.admin-form-actions .admin-btn { flex: 1; }
+
 .admin-photo-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

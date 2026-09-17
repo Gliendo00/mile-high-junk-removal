@@ -951,6 +951,99 @@ test("admin/booking.js write-audit stays exact: this stage adds exactly one new 
   assert.strictEqual(updateCalls, 1, "booking.js must have exactly one .update( call (Edit Job's PATCH) — anything else needs deliberate review");
 });
 
+test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/booking-status.js"), "utf8");
+  assert.ok(/the ONE intentional write capability/.test(src), "must still be the same file — not consolidated or retired");
+  assert.ok(/const ALLOWED_STATUSES = \["new", "contacted", "quoted", "booked", "completed", "lost"\];/.test(src));
+});
+
+// =======================================================================
+// 11. Edit Job UI: read from the real static files (no DOM harness in this
+//     project — see docs/phase-3/test-matrix.md — so client-side behavior
+//     is verified the same static-analysis way every prior UI test in this
+//     suite already does).
+// =======================================================================
+function readNormalized(rel) {
+  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
+}
+
+test("admin/booking-edit.js, admin/booking-detail.js never use innerHTML/insertAdjacentHTML/document.write", () => {
+  ["admin/booking-edit.js", "admin/booking-detail.js"].forEach((rel) => {
+    const src = readNormalized(rel);
+    assert.ok(!/\.innerHTML\s*=/.test(src), rel + " must not assign innerHTML");
+    assert.ok(!/\.insertAdjacentHTML\s*\(/.test(src), rel + " must not call insertAdjacentHTML(...)");
+    assert.ok(!/document\.write\s*\(/.test(src), rel + " must not call document.write(...)");
+  });
+});
+
+test("admin/booking-edit.js: Cancel makes zero requests — it only ever navigates back to booking detail", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const startIdx = src.indexOf("cancelBtn.addEventListener");
+  const cancelHandler = src.slice(startIdx, src.indexOf("});", startIdx) + 3);
+  assert.ok(!/fetch\(/.test(cancelHandler), "the Cancel click handler must never call fetch(...)");
+  assert.ok(/window\.location\.href = bookingId \? '\/admin\/booking\/\?id=/.test(cancelHandler), "Cancel must navigate back to the booking's detail page");
+});
+
+test("admin/booking-edit.js: Save is guarded against duplicate submission", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const submitHandler = src.slice(src.indexOf("form.addEventListener('submit'"));
+  assert.ok(/if \(savingInFlight\) return;/.test(submitHandler), "must bail out early if a save is already in flight");
+  assert.ok(/savingInFlight = true;/.test(submitHandler), "must set the in-flight flag before the fetch call");
+  assert.ok(/saveBtn\.disabled = true;/.test(submitHandler), "must visibly disable Save while saving");
+});
+
+test("admin/booking-edit.js: Save shows a visible saving state and resets it in .finally()", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const submitHandler = src.slice(src.indexOf("form.addEventListener('submit'"));
+  assert.ok(/saveBtn\.textContent = 'Saving…';/.test(submitHandler));
+  assert.ok(/\.finally\(function \(\) \{[\s\S]*?savingInFlight = false;/.test(submitHandler), "must reset the in-flight flag in a .finally(), so a failed save doesn't lock the button forever");
+});
+
+test("admin/booking-edit.js: only the submit handler ever calls fetch(...) with method PATCH — no autosave from input/change events", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  // Collect every addEventListener("input"/"change"/'input'/'change' block
+  // for every field-like element and confirm none of them ever call fetch.
+  const listenerRe = /(?:addEventListener\(\s*['"](?:input|change)['"]\s*,\s*function[\s\S]*?\{[\s\S]*?\n\s*\}\)\s*;)/g;
+  const matches = src.match(listenerRe) || [];
+  matches.forEach((block) => {
+    assert.ok(!/fetch\(/.test(block), "an input/change listener must never call fetch(...) — no autosave: " + block.slice(0, 80));
+  });
+  // And confirm the PATCH call itself only appears inside the submit handler.
+  const patchCallCount = (src.match(/method: 'PATCH'/g) || []).length;
+  assert.strictEqual(patchCallCount, 1, "exactly one PATCH call site, inside the submit handler");
+  const submitHandler = src.slice(src.indexOf("form.addEventListener('submit'"));
+  assert.ok(/method: 'PATCH'/.test(submitHandler), "the one PATCH call must live inside the submit handler");
+});
+
+test("admin/booking-edit.js: save only happens after the form's submit event (an explicit owner action), never before", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const beforeSubmitHandler = src.slice(0, src.indexOf("form.addEventListener('submit'"));
+  assert.ok(!/method: 'PATCH'/.test(beforeSubmitHandler), "no PATCH call may exist before the submit handler is even wired");
+});
+
+test("admin/booking-edit.js: the client on a job is never sent as an editable field — no customerId in the PATCH body", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const submitHandler = src.slice(src.indexOf("form.addEventListener('submit'"), src.indexOf("fetch('/api/admin/booking'"));
+  assert.ok(!/customerId/.test(submitHandler), "the edit form must never construct a customerId field to send");
+});
+
+test("admin/booking-edit/index.html: no client picker is mounted — the attached client cannot be changed from this page", () => {
+  const html = readNormalized("admin/booking-edit/index.html");
+  assert.ok(!/client-picker-mount|client-picker\.js/.test(html), "Edit Job must not load or mount the client picker");
+  assert.ok(/can't be changed here/.test(html), "must tell the owner plainly that the client is fixed");
+});
+
+test("admin/booking/index.html: Edit Job link is present in the hero", () => {
+  const html = readNormalized("admin/booking/index.html");
+  assert.ok(/id="d-edit-job-link"/.test(html));
+  assert.ok(/Edit Job/.test(html));
+});
+
+test("admin/booking-detail.js: wires the Edit Job link to /admin/booking-edit/?id=<this booking's id>", () => {
+  const src = readNormalized("admin/booking-detail.js");
+  assert.ok(/d-edit-job-link['"]\)\.href = '\/admin\/booking-edit\/\?id=' \+ encodeURIComponent\(booking\.id\)/.test(src));
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

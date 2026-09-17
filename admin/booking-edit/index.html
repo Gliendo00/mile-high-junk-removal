@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Edit Job</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <a class="admin-brand" href="/admin/">
+    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </a>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<nav class="admin-nav-tabs" aria-label="Admin sections">
+  <a href="/admin/" class="admin-nav-tab">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
+  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
+</nav>
+
+<main class="admin-main">
+  <a id="back-link" href="/admin/" class="admin-back-link">&larr; Back to Job</a>
+
+  <div class="admin-list-heading">
+    <h1>Edit Job</h1>
+    <span id="status-badge" class="admin-status-badge admin-status-new">New</span>
+  </div>
+
+  <div id="error-banner" class="admin-error-banner" style="display:none"></div>
+  <div id="loading" class="admin-loading">Loading job…</div>
+
+  <form id="edit-job-form" novalidate style="display:none">
+
+    <div class="admin-form-section">
+      <div class="admin-form-section-label">Client</div>
+      <div class="admin-client-summary">
+        <div>
+          <div class="admin-client-summary-name" id="client-name">—</div>
+          <div class="admin-client-summary-meta" id="client-meta">—</div>
+        </div>
+      </div>
+      <span class="admin-field-hint">The client on a job can't be changed here.</span>
+    </div>
+
+    <div class="admin-form-section">
+      <div class="admin-form-section-label">Job Info</div>
+
+      <div class="admin-field">
+        <label for="appointment-date" id="appointment-date-label">Appointment Date</label>
+        <input type="date" id="appointment-date">
+        <span class="admin-field-hint" id="date-hint"></span>
+      </div>
+
+      <div class="admin-field">
+        <label for="time-window" id="time-window-label">Time Window</label>
+        <select id="time-window"></select>
+      </div>
+
+      <div class="admin-field">
+        <label for="service-type">Service Type</label>
+        <select id="service-type">
+          <option value="junk_removal">Junk Removal</option>
+          <option value="dumpster_rental">15-Yard Dumpster Rental</option>
+          <option value="light_demo">Light Demo</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="admin-form-section">
+      <div class="admin-form-section-label">Service Address</div>
+      <div class="admin-field">
+        <label for="service-address">Street Address</label>
+        <input type="text" id="service-address" autocomplete="off">
+      </div>
+      <div class="admin-field-row">
+        <div class="admin-field">
+          <label for="service-city">City</label>
+          <input type="text" id="service-city" autocomplete="off">
+        </div>
+        <div class="admin-field">
+          <label for="service-state">State</label>
+          <input type="text" id="service-state" maxlength="2" autocomplete="off">
+        </div>
+        <div class="admin-field">
+          <label for="service-zip">ZIP</label>
+          <input type="text" id="service-zip" inputmode="numeric" autocomplete="off">
+        </div>
+      </div>
+    </div>
+
+    <div class="admin-form-section">
+      <div class="admin-form-section-label">Pricing</div>
+
+      <div class="admin-field" id="pricing-estimated" style="display:none">
+        <label for="estimated-price">Estimated Price (optional)</label>
+        <input type="number" id="estimated-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+      </div>
+
+      <div class="admin-field-row" id="pricing-completed" style="display:none">
+        <div class="admin-field">
+          <label for="actual-price">Actual Job Amount (optional)</label>
+          <input type="number" id="actual-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+        </div>
+        <div class="admin-field">
+          <label for="tip-amount">Tip Amount (optional)</label>
+          <input type="number" id="tip-amount" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 20">
+        </div>
+      </div>
+
+      <div class="admin-field">
+        <label for="description">Description / Details (optional)</label>
+        <textarea id="description" rows="2" placeholder="What's being removed, access notes, etc."></textarea>
+      </div>
+
+      <div class="admin-field">
+        <label for="internal-notes">Private Notes (optional)</label>
+        <textarea id="internal-notes" rows="2" placeholder="Gate code, only visible to you"></textarea>
+      </div>
+    </div>
+
+    <div class="admin-form-actions">
+      <button type="submit" id="save-btn" class="admin-btn admin-btn-primary">Save Changes</button>
+      <button type="button" id="cancel-btn" class="admin-btn admin-btn-outline">Cancel</button>
+    </div>
+  </form>
+</main>
+
+<div id="admin-toast" class="admin-toast" role="status" aria-live="polite"></div>
+
+<script src="../nav-badge.js"></script>
+<script src="../booking-edit.js"></script>
+</body>
+</html>

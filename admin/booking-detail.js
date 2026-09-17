@@ -162,6 +162,8 @@ document.addEventListener('DOMContentLoaded', function () {
       viewClientLink.style.display = 'none';
     }
 
+    document.getElementById('d-edit-job-link').href = '/admin/booking-edit/?id=' + encodeURIComponent(booking.id);
+
     applyStatusDisplay(booking.status);
 
     var whenParts = [formatDate(booking.appointmentDate)];
@@ -243,6 +245,14 @@ document.addEventListener('DOMContentLoaded', function () {
     var final = formatPrice(booking.finalPrice);
     set('d-estimated-price', estimated || 'Not set yet');
     set('d-final-price', final || 'Not set yet');
+
+    var tip = formatPrice(booking.tipAmount);
+    if (tip) {
+      document.getElementById('d-tip-row').style.display = 'block';
+      set('d-tip-amount', tip);
+    } else {
+      document.getElementById('d-tip-row').style.display = 'none';
+    }
 
     set('d-notes', booking.internalNotes || 'No internal notes yet.');
 
