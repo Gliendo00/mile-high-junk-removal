@@ -65,6 +65,7 @@ window.AdminCalendarViews = (function () {
     return node;
   }
   function formatPrice(value) {
+    if (value === null || value === undefined || value === '') return null;
     var n = Number(value);
     if (!Number.isFinite(n)) return null;
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });

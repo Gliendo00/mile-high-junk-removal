@@ -86,6 +86,11 @@ test("renderDayPanel() is shared: both Month's selectMonthDate() and Week's sele
 //    secondary line, no separate Call/Text/Directions row, entire card is
 //    a single link to the existing booking detail page.
 // =======================================================================
+test("formatPrice(): null/undefined/empty-string are treated as 'no price' (omitted), never coerced to $0 — found live on Production (a real job with no estimatedPrice rendered '$0' before this guard was restored)", () => {
+  const body = functionBody("formatPrice");
+  assert.ok(/if \(value === null \|\| value === undefined \|\| value === ''\) return null;/.test(body), "must reject null/undefined/'' BEFORE Number(value) — Number(null) and Number('') are both 0, a finite number, so without this guard a missing price silently renders as $0");
+});
+
 test("renderDailyJobCard(): the whole card is a single <a> to the existing booking detail page — never a small nested link", () => {
   const body = functionBody("renderDailyJobCard");
   assert.ok(/var a = document\.createElement\('a'\)/.test(body));
