@@ -16,6 +16,7 @@ up Phase 2, without needing this conversation's context.
 - [admin-security-requirements.md](./admin-security-requirements.md) — the security bar the future `/admin` portal and its APIs must clear before they can go live. Requirements only — nothing here is implemented yet.
 - [fill-time-safety-review.md](./fill-time-safety-review.md) — a focused review of the 3-second minimum-fill-time bot check, including one real bug it found (client/server clock-skew, fixed) and a second finding (a real false-positive risk on `/contact`) that led to a post-approval change request: `/contact` now flags a fast submission instead of discarding it, while `/book` is unchanged.
 - [test-matrix.md](./test-matrix.md) — what was tested for the Phase 1 spam-protection change, how (mocked/local, via [tests/phase1-api.test.js](../../tests/phase1-api.test.js)), and what could not be safely tested without touching production, with reasons.
+- [known-issue-book-js-state-validation.md](./known-issue-book-js-state-validation.md) — a latent bug found in Phase 3C Stage 2.1 (not fixed there, deliberately out of scope): `api/book.js` truncates a submitted state to 2 characters *before* validating its shape, so a full state name is silently accepted as a bogus-but-syntactically-valid 2-letter code instead of being rejected. Only reachable via a direct API call, not the live form (which caps the field at `maxlength="2"`). Documented, not fixed.
 
 ## Source of truth
 
