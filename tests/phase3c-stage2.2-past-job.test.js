@@ -778,13 +778,43 @@ test("admin/booking-past.js's 'Add Another Past Job' resets via a full page navi
   assert.ok(/window\.location\.href\s*=\s*['"]\/admin\/booking-past\/['"]/.test(addAnotherBlock), "Add Another Past Job must navigate to a fresh copy of the page, which clears every job-specific field (tip amount included) — never a targeted reset of only some fields");
 });
 
-test("admin/booking-past/index.html places Tip Amount directly alongside Actual Job Amount, and the layout is otherwise unchanged", () => {
+test("admin/booking-past/index.html: Actual Job Amount and Tip Amount share one row; Time is a separate full-width row, not a third column", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "admin/booking-past/index.html"), "utf8");
   const actualIdx = src.indexOf('id="actual-price"');
   const tipIdx = src.indexOf('id="tip-amount"');
   const timeIdx = src.indexOf('id="time-window"');
   assert.ok(actualIdx !== -1 && tipIdx !== -1 && timeIdx !== -1, "all three fields must be present");
-  assert.ok(actualIdx < tipIdx && tipIdx < timeIdx, "Tip Amount must sit between Actual Job Amount and Time, inside the same existing field row — no reordering of the rest of the form");
+  assert.ok(actualIdx < tipIdx && tipIdx < timeIdx, "order must be Actual Job Amount, then Tip Amount, then Time");
+
+  // Balanced-tag scan: find the admin-field-row that wraps Actual Job
+  // Amount, then find where THAT row actually closes. Time (optional)
+  // must appear only after that row has fully closed — i.e. it is not a
+  // third column squeezed into the same row as the two money fields.
+  const rowOpenIdx = src.lastIndexOf('<div class="admin-field-row">', actualIdx);
+  assert.ok(rowOpenIdx !== -1, "Actual Job Amount must be inside an admin-field-row");
+
+  let depth = 0;
+  let pos = rowOpenIdx;
+  let rowCloseIdx = -1;
+  while (pos < src.length) {
+    const nextOpen = src.indexOf("<div", pos);
+    const nextClose = src.indexOf("</div>", pos);
+    if (nextClose === -1) break;
+    if (nextOpen !== -1 && nextOpen < nextClose) {
+      depth++;
+      pos = nextOpen + 4;
+    } else {
+      depth--;
+      pos = nextClose + 6;
+      if (depth === 0) {
+        rowCloseIdx = nextClose;
+        break;
+      }
+    }
+  }
+  assert.ok(rowCloseIdx !== -1, "the admin-field-row wrapping Actual Job Amount must have a matching close tag");
+  assert.ok(tipIdx < rowCloseIdx, "Tip Amount must be inside the same row as Actual Job Amount");
+  assert.ok(rowCloseIdx < timeIdx, "Time (optional) must come after that row closes — it must be its own full-width field, not a third column alongside Actual Job Amount / Tip Amount");
 });
 
 // ---------------------------------------------------------------------
