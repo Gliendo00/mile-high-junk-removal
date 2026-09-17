@@ -355,6 +355,14 @@ test("POST booking: missing/invalid timeWindow -> 400, no row created (New Job a
   assert.strictEqual(db.bookings.length, 0);
 });
 
+test("POST booking: empty-string timeWindow -> 400, no row created (the New Job form's unselected 'Select time' placeholder value)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validJobBody({ timeWindow: "" }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+});
+
 test("POST booking: malformed appointmentDate -> 400, no row created", async () => {
   adminAuthed();
   const db = freshDb();

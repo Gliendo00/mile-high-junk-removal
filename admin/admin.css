@@ -294,7 +294,7 @@
   color: var(--color-text, #201e1d);
 }
 .admin-field textarea {
-  min-height: 84px;
+  min-height: 56px; /* ~2 rows — compact for a quick mobile booking flow; grows via resize/rows as needed */
   padding: 12px 14px;
   resize: vertical;
 }

@@ -38,8 +38,9 @@
   </div>
 
   <div id="error-banner" class="admin-error-banner" style="display:none"></div>
+  <div id="loading" class="admin-loading">Loading…</div>
 
-  <form id="new-job-form" novalidate>
+  <form id="new-job-form" novalidate style="display:none">
 
     <div class="admin-form-section">
       <div class="admin-form-section-label">Client</div>
@@ -59,15 +60,6 @@
     <div class="admin-form-section">
       <div class="admin-form-section-label">Job Info</div>
 
-      <div class="admin-field">
-        <label for="service-type">Service Type</label>
-        <select id="service-type">
-          <option value="junk_removal">Junk Removal</option>
-          <option value="dumpster_rental">15-Yard Dumpster Rental</option>
-          <option value="light_demo">Light Demo</option>
-        </select>
-      </div>
-
       <div class="admin-field-row">
         <div class="admin-field">
           <label for="appointment-date">Appointment Date</label>
@@ -75,23 +67,19 @@
         </div>
         <div class="admin-field">
           <label for="time-window">Time Window</label>
-          <select id="time-window"></select>
+          <select id="time-window">
+            <option value="" selected disabled>Select time</option>
+          </select>
         </div>
       </div>
 
       <div class="admin-field">
-        <label for="estimated-price">Estimated Price (optional)</label>
-        <input type="number" id="estimated-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
-      </div>
-
-      <div class="admin-field">
-        <label for="description">Description / Details (optional)</label>
-        <textarea id="description" placeholder="What's being removed, access notes, etc."></textarea>
-      </div>
-
-      <div class="admin-field">
-        <label for="internal-notes">Private Notes (optional)</label>
-        <textarea id="internal-notes" placeholder="Gate code, only visible to you"></textarea>
+        <label for="service-type">Service Type</label>
+        <select id="service-type">
+          <option value="junk_removal">Junk Removal</option>
+          <option value="dumpster_rental">15-Yard Dumpster Rental</option>
+          <option value="light_demo">Light Demo</option>
+        </select>
       </div>
     </div>
 
@@ -114,12 +102,29 @@
         </div>
         <div class="admin-field">
           <label for="service-state">State</label>
-          <input type="text" id="service-state" maxlength="2" autocomplete="off">
+          <input type="text" id="service-state" maxlength="2" value="CO" autocomplete="off">
         </div>
         <div class="admin-field">
           <label for="service-zip">ZIP</label>
           <input type="text" id="service-zip" inputmode="numeric" autocomplete="off">
         </div>
+      </div>
+    </div>
+
+    <div class="admin-form-section">
+      <div class="admin-field">
+        <label for="estimated-price">Estimated Price (optional)</label>
+        <input type="number" id="estimated-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+      </div>
+
+      <div class="admin-field">
+        <label for="description">Description / Details (optional)</label>
+        <textarea id="description" rows="2" placeholder="What's being removed, access notes, etc."></textarea>
+      </div>
+
+      <div class="admin-field">
+        <label for="internal-notes">Private Notes (optional)</label>
+        <textarea id="internal-notes" rows="2" placeholder="Gate code, only visible to you"></textarea>
       </div>
     </div>
 

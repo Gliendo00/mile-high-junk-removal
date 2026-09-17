@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function () {
   ];
 
   var errorBanner = document.getElementById('error-banner');
+  var loadingEl = document.getElementById('loading');
   var toastEl = document.getElementById('admin-toast');
   var logoutBtn = document.getElementById('logout-btn');
   var form = document.getElementById('new-job-form');
@@ -139,6 +140,11 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
 
+    if (!timeWindowSelect.value) {
+      showError('Please select a time window.');
+      return;
+    }
+
     var body = {
       customerId: selectedClient.id,
       serviceType: document.getElementById('service-type').value,
@@ -199,4 +205,28 @@ document.addEventListener('DOMContentLoaded', function () {
         window.location.href = '/admin/login/';
       });
   });
+
+  // Session check on load — this page has no protected data to fetch of its
+  // own (it's a blank create form), so unlike every other admin page it has
+  // no natural "primary fetch" whose 401 already triggers a redirect. The
+  // form stays hidden (see the inline style in booking-new/index.html) until
+  // this check confirms a live session, so an expired/absent session is
+  // caught here instead of only surfacing later when the picker or Save is
+  // used. Reuses the existing countsOnly summary endpoint purely to verify
+  // auth — it returns aggregate counts only, never client/booking records,
+  // and needs no new endpoint (see the Vercel function-count constraint).
+  fetch('/api/admin/bookings?countsOnly=1')
+    .then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/admin/login/';
+        return;
+      }
+      if (!res.ok) throw new Error('Could not verify your session.');
+      loadingEl.style.display = 'none';
+      form.style.display = 'block';
+    })
+    .catch(function () {
+      loadingEl.style.display = 'none';
+      showError('Could not verify your session. Please refresh the page.');
+    });
 });
