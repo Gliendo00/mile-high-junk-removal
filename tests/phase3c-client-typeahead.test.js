@@ -17,8 +17,13 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
+// Normalized to LF regardless of the file's on-disk line endings: git's
+// core.autocrlf can check these files out as CRLF (this is a Windows repo),
+// and several assertions below slice source text on "\n"-based patterns —
+// they must not be sensitive to which line-ending style happens to be on
+// disk at test time. Test-harness fix only; production behavior unchanged.
 function read(rel) {
-  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+  return fs.readFileSync(path.join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
 }
 
 const registered = [];
