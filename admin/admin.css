@@ -883,9 +883,14 @@
 
 /* ------------------------------------------------------------------ */
 /* + New Job (admin/booking-new.js) and the shared client-picker sheet */
-/* (admin/client-picker.js) — Phase 3C Stage 2.1.                      */
+/* (admin/client-picker.js) — Phase 3C Stage 2.1. + Past Job            */
+/* (admin/booking-past.js) — Phase 3C Stage 2.2.                        */
 /* ------------------------------------------------------------------ */
-.admin-list-heading-actions { margin-left: auto; }
+.admin-list-heading-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
 
 .admin-form-section {
   margin-bottom: 22px;
@@ -1019,4 +1024,20 @@
   border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 12px;
+}
+
+/* Post-save confirmation panel — admin/booking-past.js ("+ Past Job"),
+   Phase 3C Stage 2.2. Shown in place of the form after a successful save,
+   offering "View Job" or a fast reset via "Add Another Past Job". */
+.admin-success-title {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 17px;
+  margin-bottom: 6px;
+}
+.admin-success-meta {
+  font-size: 14px;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 16px;
 }

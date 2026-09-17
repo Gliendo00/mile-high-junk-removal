@@ -473,7 +473,12 @@ test("POST booking: extra unexpected fields in the body are ignored — only the
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   const row = db.bookings[0];
   assert.strictEqual(row.customer_id, EXISTING_CUSTOMER_ID, "customer_id must come only from the validated customerId field");
-  assert.strictEqual(row.final_price, undefined, "final_price must never be settable from this endpoint");
+  // As of Phase 3C Stage 2.2, final_price is a real column on every insert
+  // from this endpoint (null for New Job, the validated actual amount for
+  // Past Job) rather than simply absent — but the attacker-supplied
+  // snake_case "final_price": 999999 above must still never reach it: New
+  // Job never reads body.finalPrice at all, so it's hardcoded null here.
+  assert.strictEqual(row.final_price, null, "final_price must never be settable from this endpoint");
   assert.notStrictEqual(row.id, "attacker-chosen-id", "the row id must never be caller-supplied");
 });
 

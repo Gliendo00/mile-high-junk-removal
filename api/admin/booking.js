@@ -14,6 +14,7 @@ const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus, SERVICE_LABELS } = require("../_lib/booking-format");
 const { TIME_WINDOW_DEFS } = require("../_lib/time-windows");
+const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -163,21 +164,28 @@ module.exports = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------
-// Create a job (Phase 3C Stage 2.1) — POST /api/admin/booking. Creates one
-// bookings row for an already-identified client (see api/admin/client.js
-// for finding/creating that client — this endpoint never does that
-// itself). Covers "+ New Job" only. "+ Past Job" (a later stage) is a
-// different mode with different defaults — status=completed, an optional
-// time window, past dates allowed — and is NOT implemented here.
-//
-// `status` is hardcoded to "booked" below and is never read from the
-// request body at all: there is no field named "status" anywhere in the
-// validation below, so there is no value a caller could send that would
-// change it. Every other field is read individually as a named primitive
-// and validated/sanitized before being placed into the insert payload —
-// the request body is never spread into it, mirroring the discipline
-// api/admin/booking-status.js already established for the one write path
-// that existed before this stage.
+// Create a job — POST /api/admin/booking. Creates one bookings row for an
+// already-identified client (see api/admin/client.js for finding/creating
+// that client — this endpoint never does that itself). Covers two explicit,
+// allowlisted modes:
+//   - "new" (default, Phase 3C Stage 2.1) — "+ New Job": status="booked",
+//     appointment date must be today or later (America/Denver), time window
+//     required, price is a pre-job estimate written to estimated_price.
+//   - "past" (Phase 3C Stage 2.2) — "+ Past Job": status="completed",
+//     appointment date must be on/after the historical migration floor
+//     (api/_lib/historical-floor.js) and no later than today, time window
+//     optional (a real NULL when unknown, never an invented placeholder),
+//     price is the actual job amount written to final_price.
+// `mode` is read once, validated against an explicit allowlist, and never
+// inferred from any other field — so the two very different rule sets below
+// can never be crossed by a crafted request. `status` itself is never read
+// from the request body at all in either mode: there is no field named
+// "status" anywhere in the validation below, so there is no value a caller
+// could send that would change it. Every other field is read individually
+// as a named primitive and validated/sanitized before being placed into the
+// insert payload — the request body is never spread into it, mirroring the
+// discipline api/admin/booking-status.js already established for the one
+// write path that existed before Stage 2.1.
 async function handleCreate(req, res) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -187,6 +195,17 @@ async function handleCreate(req, res) {
   }
 
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  let mode = "new";
+  if (body.mode !== undefined) {
+    const modeRaw = typeof body.mode === "string" ? body.mode.trim() : "";
+    if (modeRaw !== "new" && modeRaw !== "past") {
+      res.status(400).json({ error: "Invalid job mode." });
+      return;
+    }
+    mode = modeRaw;
+  }
+  const isPast = mode === "past";
 
   const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
   if (!customerId) {
@@ -211,18 +230,50 @@ async function handleCreate(req, res) {
     res.status(400).json({ error: "A valid appointment date is required." });
     return;
   }
-  // New Job is for a job being booked now or in the future — a date before
-  // today (America/Denver) has no meaning for a status="booked" row.
-  // "+ Past Job" (a later stage) is the intended path for a historical date.
-  if (appointmentDate < denverTodayIso()) {
-    res.status(400).json({ error: "Appointment date cannot be in the past. Use Past Job for historical jobs." });
-    return;
+  const todayIso = denverTodayIso();
+  if (isPast) {
+    // Past Job is bounded to the exact window the owner is manually
+    // migrating: the historical floor (see api/_lib/historical-floor.js)
+    // through today (America/Denver) — never earlier than the migration's
+    // start, never a job that hasn't happened yet.
+    if (appointmentDate < HISTORICAL_FLOOR_ISO) {
+      res.status(400).json({ error: "Past Job dates cannot be before January 1, 2026." });
+      return;
+    }
+    if (appointmentDate > todayIso) {
+      res.status(400).json({ error: "Past Job dates cannot be in the future. Use New Job for upcoming jobs." });
+      return;
+    }
+  } else {
+    // New Job is for a job being booked now or in the future — a date
+    // before today (America/Denver) has no meaning for a status="booked"
+    // row. "+ Past Job" is the intended path for a historical date.
+    if (appointmentDate < todayIso) {
+      res.status(400).json({ error: "Appointment date cannot be in the past. Use Past Job for historical jobs." });
+      return;
+    }
   }
 
-  const timeWindow = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
-  if (!VALID_TIME_WINDOWS.includes(timeWindow)) {
-    res.status(400).json({ error: "A valid appointment time is required." });
-    return;
+  const timeWindowRaw = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
+  let timeWindow = null;
+  if (isPast) {
+    // Past Job's time is optional — a real NULL, never an invented
+    // placeholder, when the owner doesn't remember it (confirmed nullable
+    // at the database level; see docs/phase-3/stage2-preflight.md). Only
+    // validated against the allowlist when a value was actually submitted.
+    if (timeWindowRaw) {
+      if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
+        res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
+        return;
+      }
+      timeWindow = timeWindowRaw;
+    }
+  } else {
+    if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
+      res.status(400).json({ error: "A valid appointment time is required." });
+      return;
+    }
+    timeWindow = timeWindowRaw;
   }
 
   const addrIn = body.serviceAddress && typeof body.serviceAddress === "object" && !Array.isArray(body.serviceAddress) ? body.serviceAddress : {};
@@ -251,16 +302,34 @@ async function handleCreate(req, res) {
   const internalNotes = sanitizeText(body.internalNotes, MAX.long) || null;
 
   let estimatedPrice = null;
-  if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
-    const n = Number(body.estimatedPrice);
-    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-      res.status(400).json({ error: "Please enter a valid estimated price." });
-      return;
+  let finalPrice = null;
+  if (isPast) {
+    // Historical actual amount — written to final_price, never
+    // estimated_price (that column represents a pre-job quote, which a
+    // backfilled historical job never had in this flow). Optional: some old
+    // records have no recoverable pricing.
+    if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
+      const n = Number(body.finalPrice);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid actual job amount." });
+        return;
+      }
+      // Matches the confirmed live column type, numeric(10,2) — see
+      // docs/phase-3/stage2-preflight.md.
+      finalPrice = Math.round(n * 100) / 100;
     }
-    // Matches the confirmed live column type, numeric(10,2) — see
-    // docs/phase-3/stage2-preflight.md.
-    estimatedPrice = Math.round(n * 100) / 100;
+  } else {
+    if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
+      const n = Number(body.estimatedPrice);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid estimated price." });
+        return;
+      }
+      estimatedPrice = Math.round(n * 100) / 100;
+    }
   }
+
+  const status = isPast ? "completed" : "booked";
 
   try {
     const customerRes = await supabase.from("customers").select("id").eq("id", customerId).maybeSingle();
@@ -277,9 +346,10 @@ async function handleCreate(req, res) {
         service_type: serviceType,
         appointment_date: appointmentDate,
         time_window: timeWindow,
-        status: "booked",
+        status: status,
         description: description,
         estimated_price: estimatedPrice,
+        final_price: finalPrice,
         internal_notes: internalNotes,
         // Frozen job-location snapshot — written once, here, and never
         // re-derived from the customer's profile address later, matching
@@ -290,7 +360,7 @@ async function handleCreate(req, res) {
         service_zip: serviceZip,
       })
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
       )
       .single();
 
@@ -308,6 +378,7 @@ async function handleCreate(req, res) {
         timeWindowLabel: timeWindowLabel(created.time_window),
         description: created.description,
         estimatedPrice: created.estimated_price,
+        finalPrice: created.final_price,
         internalNotes: created.internal_notes,
         status: normalizedStatus(created.status),
         statusLabel: statusLabel(created.status),
