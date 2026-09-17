@@ -23,24 +23,25 @@ implemented incrementally, one reviewed stage at a time.
 - [stage2-preflight.md](./stage2-preflight.md) — the read-only schema check requested before Stage 2 money/time-window work: confirming `bookings.estimated_price`/`final_price`/`time_window`'s live type, precision, and nullability. Blocked on dashboard access this environment doesn't have; the exact query/steps are recorded so anyone can run it and report back.
 - [stage2.1-new-job-proposal.md](./stage2.1-new-job-proposal.md) — the implementation boundary for `+ New Job` + inline Create Client: exact files, API contracts for `POST /api/admin/booking` and `POST /api/admin/client`, the duplicate-check flow, function-count impact (stays at 12/12, zero new files), tests, and the Preview testing plan that never mutates production Supabase. **Implemented** on branch `phase-3c/stage2.1-new-job` (commit `c65aa80`) — not merged, not deployed.
 - [stage2.4-calendar-address-proposal.md](./stage2.4-calendar-address-proposal.md) — Month/Year/navigable-Week calendar navigation, date-aware `+ New Job`/`+ Past Job` entry, the shared Google Address Autocomplete component (modern Places API (New), manual fallback mandatory), and the Daily Quick Expense Tracking addendum. **Implemented** on branch `phase-3c/stage2.4-calendar-address` — not merged, not deployed.
-- [stage2.4-expenses-migration.md](./stage2.4-expenses-migration.md) — the `expenses` table migration the Quick Expense Tracking addendum depends on: exact `CREATE TABLE` SQL, **not executed**, and why the code is safe to ship ahead of it.
+- [stage2.4-expenses-migration.md](./stage2.4-expenses-migration.md) — the `expenses` table migration the Quick Expense Tracking addendum depends on: exact `CREATE TABLE` SQL. **Executed by the owner** (with an added `CHECK (amount > 0)` constraint), confirmed live.
+- [stage2.4.1-schedule-ux-proposal.md](./stage2.4.1-schedule-ux-proposal.md) — Selected-day/Daily layout reorder (date → Quick Expense icons → Jobs), the new compact tappable job card, Week redesigned into a 7-day overview, plus two investigations (completed-job date editing — no bug found; Google autocomplete — absent config, not a bug) and a public-site isolation audit. **Implemented** on branch `phase-3c/stage2.4.1-schedule-ux-fixes` — not merged, not deployed.
 
 ## Status
 
-**Production `main` is at `409ae89`** as of this writing — Stage 1, Stage
+**Production `main` is at `afddeb0`** as of this writing — Stage 1, Stage
 2.1, Stage 2.2 (+ Past Job, + Tip Amount), Stage 2.3 (Existing Job Editing,
-Client Typeahead) are all live. **Stage 2.4 (Calendar/Month/Year, date-aware
-entry, Google Address Autocomplete, Daily Quick Expense Tracking) is
-implemented on feature branch `phase-3c/stage2.4-calendar-address`**, 441/441
-tests passing (361 pre-existing + 80 new), function count still exactly
-12/12 — but **not merged to `main` and not deployed**. See
-[stage2.4-calendar-address-proposal.md](./stage2.4-calendar-address-proposal.md)
+Client Typeahead), and Stage 2.4 (Calendar/Month/Year, date-aware entry,
+Google Address Autocomplete, Daily Quick Expense Tracking) are all live —
+including the `expenses` table, created by the owner in production Supabase.
+**Stage 2.4.1 (Schedule UX polish + two investigations) is implemented on
+feature branch `phase-3c/stage2.4.1-schedule-ux-fixes`**, 464/464 tests
+passing (441 pre-existing + 23 new), function count still exactly 12/12 —
+but **not merged to `main` and not deployed**. See
+[stage2.4.1-schedule-ux-proposal.md](./stage2.4.1-schedule-ux-proposal.md)
 for the full writeup. Money-field revenue summaries, archive/restore/delete,
 expense reporting, route map, and SMS remain unimplemented, to be built and
 reviewed individually per [stage2-decisions.md](./stage2-decisions.md)'s
-sequence (superseded in order only by Stage 2.4 landing ahead of its
-originally-listed position, at the owner's direction, since it shares the
-Calendar's UI surface).
+sequence.
 
 ## What Phase 3C Stage 1 does NOT include
 

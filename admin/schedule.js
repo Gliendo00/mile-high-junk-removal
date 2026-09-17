@@ -1,5 +1,7 @@
-// /admin — Schedule homepage (Phase 3C Stage 1): Today/Tomorrow/Week views
-// of booked/completed jobs, ordered chronologically.
+// /admin — Schedule homepage: Today/Tomorrow (Phase 3C Stage 1) plus the
+// range-tab orchestrator for all five ranges. Week/Month/Year each live in
+// their own view container, rendered by admin/calendar-views.js (Week
+// redesigned into a compact 7-day overview in Stage 2.4.1 — see that file).
 //
 // Every dynamic value below is written with textContent (never
 // innerHTML/insertAdjacentHTML with a concatenated string), so a
@@ -14,29 +16,17 @@ document.addEventListener('DOMContentLoaded', function () {
   var rangeTabs = document.querySelectorAll('.admin-range-tab');
   var logoutBtn = document.getElementById('logout-btn');
 
-  // Phase 3C Stage 2.4: Month/Year live in their own view containers,
-  // rendered by admin/calendar-views.js — this file stays the tab-switching
-  // orchestrator for all five ranges and the Today/Tomorrow/Week renderer
-  // it already was.
-  var todayTomorrowWeekView = document.getElementById('today-tomorrow-week-view');
+  var todayTomorrowView = document.getElementById('today-tomorrow-view');
+  var weekView = document.getElementById('week-view');
   var monthView = document.getElementById('month-view');
   var yearView = document.getElementById('year-view');
 
-  var weekNav = document.getElementById('week-nav');
-  var weekRangeLabel = document.getElementById('week-range-label');
-  var weekPrevBtn = document.getElementById('week-prev');
-  var weekNextBtn = document.getElementById('week-next');
-  var weekCurrentWrap = document.getElementById('week-current-wrap');
-  var weekCurrentBtn = document.getElementById('week-current-btn');
-
   var currentRange = 'today';
-  var currentWeekStart = null; // ISO Sunday, only meaningful while currentRange === 'week'
   var requestSeq = 0; // guards against an in-flight request resolving after a newer range change
 
   var EMPTY_MESSAGES = {
     today: 'No jobs scheduled for today.',
     tomorrow: 'No jobs scheduled for tomorrow.',
-    week: 'No jobs scheduled for the next 7 days.',
   };
 
   function showError(msg) {
@@ -46,17 +36,6 @@ document.addEventListener('DOMContentLoaded', function () {
   function clearError() {
     errorBanner.style.display = 'none';
     errorBanner.textContent = '';
-  }
-
-  function formatDayHeading(iso) {
-    if (!iso) return '';
-    try {
-      var d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T00:00:00' : iso);
-      if (isNaN(d.getTime())) return iso;
-      return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    } catch (e) {
-      return iso;
-    }
   }
 
   function formatPrice(value) {
@@ -195,19 +174,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     emptyEl.style.display = 'none';
     listEl.style.display = 'flex';
-
-    // Week view groups cards under a day heading (the date isn't otherwise
-    // shown on a Today/Tomorrow view, where it's implied by the selected
-    // tab). Jobs already arrive sorted chronologically from the API.
-    var lastDate = null;
     jobs.forEach(function (job) {
-      if (currentRange === 'week' && job.appointmentDate !== lastDate) {
-        lastDate = job.appointmentDate;
-        var headingLi = document.createElement('li');
-        headingLi.className = 'admin-schedule-day-heading';
-        headingLi.textContent = formatDayHeading(job.appointmentDate);
-        listEl.appendChild(headingLi);
-      }
       listEl.appendChild(renderJobCard(job));
     });
   }
@@ -220,31 +187,13 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  function updateWeekNav(body) {
-    if (currentRange !== 'week') {
-      weekNav.hidden = true;
-      weekCurrentWrap.style.display = 'none';
-      return;
-    }
-    weekNav.hidden = false;
-    currentWeekStart = body.weekStart || currentWeekStart;
-    var startLabel = formatDayHeading(body.weekStart);
-    var endLabel = formatDayHeading(body.weekEnd);
-    weekRangeLabel.textContent = startLabel && endLabel ? startLabel + ' – ' + endLabel : '';
-    // Server is the sole authority on the floor — canGoPrevious comes
-    // straight from its response rather than a duplicated client-side
-    // floor comparison.
-    weekPrevBtn.disabled = body.canGoPrevious === false;
-    weekCurrentWrap.style.display = body.isCurrentWeek ? 'none' : 'block';
-  }
-
-  // range: 'today' | 'tomorrow' | 'week'. weekStartOverride: an explicit
-  // Sunday ISO date to navigate to (week only) — omitted, the server
-  // defaults to the current Denver week.
-  function load(range, weekStartOverride) {
+  // range: 'today' | 'tomorrow' only — Week/Month/Year are all handled by
+  // admin/calendar-views.js.
+  function load(range) {
     currentRange = range;
     setActiveTab(range);
-    todayTomorrowWeekView.hidden = false;
+    todayTomorrowView.hidden = false;
+    weekView.hidden = true;
     monthView.hidden = true;
     yearView.hidden = true;
 
@@ -252,20 +201,13 @@ document.addEventListener('DOMContentLoaded', function () {
     listEl.style.display = 'none';
     emptyEl.style.display = 'none';
     loadingEl.style.display = 'block';
-    weekNav.hidden = range !== 'week';
-    weekCurrentWrap.style.display = 'none';
     clearError();
-
-    var url = '/api/admin/bookings?view=schedule&range=' + encodeURIComponent(range);
-    if (range === 'week' && weekStartOverride) {
-      url += '&weekStart=' + encodeURIComponent(weekStartOverride);
-    }
 
     // Served by api/admin/bookings.js's ?view=schedule mode rather than a
     // dedicated api/admin/schedule.js file — see the countsOnly/scheduleView
     // comment in that file (Vercel Hobby plan's 12-Serverless-Function
     // limit; docs/phase-3/vercel-function-limit.md).
-    fetch(url)
+    fetch('/api/admin/bookings?view=schedule&range=' + encodeURIComponent(range))
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';
@@ -284,7 +226,6 @@ document.addEventListener('DOMContentLoaded', function () {
       .then(function (body) {
         if (!body || seq !== requestSeq) return; // redirected to login, or superseded by a newer range change
         loadingEl.style.display = 'none';
-        updateWeekNav(body);
         render(body.jobs || []);
       })
       .catch(function (err) {
@@ -294,38 +235,21 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   }
 
-  weekPrevBtn.addEventListener('click', function () {
-    if (weekPrevBtn.disabled || !currentWeekStart) return;
-    load('week', addDaysIso(currentWeekStart, -7));
-  });
-  weekNextBtn.addEventListener('click', function () {
-    if (!currentWeekStart) return;
-    load('week', addDaysIso(currentWeekStart, 7));
-  });
-  weekCurrentBtn.addEventListener('click', function () {
-    load('week');
-  });
-
-  // Same UTC-noon-anchored calendar-day-math trick as every other date
-  // helper in this codebase (see api/admin/bookings.js's addDaysIso) — a
-  // pure calendar calculator, never a real instant.
-  function addDaysIso(iso, days) {
-    var parts = iso.split('-').map(Number);
-    var dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
-    dt.setUTCDate(dt.getUTCDate() + days);
-    return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
-  }
-
-  // Month/Year are rendered entirely by admin/calendar-views.js, which
+  // Week/Month/Year are rendered entirely by admin/calendar-views.js, which
   // manages its own view-container visibility and active-tab state (see
   // that file's hideAllViews()/setActiveRangeTab()) — this file only needs
-  // to hand off to it and remember that Today/Tomorrow/Week is no longer
-  // the active range, so a later Today/Tomorrow/Week tap is recognized as
-  // an actual change.
+  // to hand off to it and remember that Today/Tomorrow is no longer the
+  // active range, so a later Today/Tomorrow tap is recognized as an actual
+  // change.
   rangeTabs.forEach(function (btn) {
     btn.addEventListener('click', function () {
       var range = btn.getAttribute('data-range');
       if (range === currentRange) return;
+      if (range === 'week') {
+        currentRange = 'week';
+        window.AdminCalendarViews.showWeek();
+        return;
+      }
       if (range === 'month') {
         currentRange = 'month';
         window.AdminCalendarViews.showMonth();
@@ -356,9 +280,12 @@ document.addEventListener('DOMContentLoaded', function () {
     if (e.persisted) window.location.reload();
   });
 
-  // Exposed for admin/calendar-views.js (Phase 3C Stage 2.4) to reuse the
-  // exact same job-card rendering the Month view's selected-day panel needs
-  // — never a second, drifting copy of this markup/logic.
+  // Exposed for admin/calendar-views.js to reuse the exact same job-card
+  // rendering Today/Tomorrow use — never a second, drifting copy of this
+  // markup/logic. (Week's compact overview and the shared selected-day
+  // panel use their own simpler card — see calendar-views.js's
+  // renderDailyJobCard() — deliberately different from this fuller
+  // Call/Text/Directions card, which stays exactly as-is for Today/Tomorrow.)
   window.AdminSchedule = { renderJobCard: renderJobCard };
 
   load('today');

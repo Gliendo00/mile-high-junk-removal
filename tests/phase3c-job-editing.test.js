@@ -596,6 +596,78 @@ test("PATCH booking: a booked job whose stored date has already slipped into the
   assert.strictEqual(db.bookings[0].internal_notes, "Called to confirm");
 });
 
+test("PATCH booking: a booked job whose date has already slipped into the past still CANNOT be moved to a DIFFERENT past date (not marked completed)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  // This is the intentional, by-design counterpart to the completed-job
+  // tests below — see Stage 2.4.1's investigation notes in
+  // docs/phase-3/stage2.4.1-schedule-ux-proposal.md: a job that LOOKS done
+  // to the owner but hasn't actually been marked "completed" yet still
+  // follows the non-completed rule (new date must be >= today). This is
+  // almost certainly the real failure the owner hit — not a bug in the
+  // completed-job path (proven not to exist by the tests below), but this
+  // job simply wasn't marked completed yet when they tried.
+  const booking = seedBookedBooking(db, { appointment_date: YESTERDAY_ISO });
+  const differentPastDate = addDaysIso(YESTERDAY_ISO, -5);
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: differentPastDate }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings[0].appointment_date, YESTERDAY_ISO);
+});
+
+// =======================================================================
+// 5b. Stage 2.4.1 — explicit regression coverage for the owner's reported
+// "completed job can't be moved to another past date" issue. Investigation
+// (see docs/phase-3/stage2.4.1-schedule-ux-proposal.md) found no bug in
+// this exact path — these tests pin the already-correct behavior down so
+// it can never silently regress, and directly reproduce the owner's own
+// example dates.
+// =======================================================================
+test("PATCH booking (Stage 2.4.1): a completed job can move from one past date to a different, non-floor past date — owner's exact example (Sep 15 -> Aug 20)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { appointment_date: "2026-09-15" });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: "2026-08-20" }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].appointment_date, "2026-08-20");
+});
+
+test("PATCH booking (Stage 2.4.1): a completed job can move from one past date to another arbitrary past date (Mar 12)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { appointment_date: "2026-09-15" });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: "2026-03-12" }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].appointment_date, "2026-03-12");
+});
+
+test("PATCH booking (Stage 2.4.1): a completed job dated today can be moved to a valid past date", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { appointment_date: TODAY_ISO });
+  const pastDate = addDaysIso(HISTORICAL_FLOOR_ISO, 3);
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: pastDate }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].appointment_date, pastDate);
+});
+
+test("PATCH booking (Stage 2.4.1): a completed job still cannot move before the historical floor", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { appointment_date: "2026-09-15" });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: DAY_BEFORE_FLOOR_ISO }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings[0].appointment_date, "2026-09-15");
+});
+
+test("PATCH booking (Stage 2.4.1): a completed job still cannot move into the future", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { appointment_date: "2026-09-15" });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { appointmentDate: addDaysIso(TODAY_ISO, 1) }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings[0].appointment_date, "2026-09-15");
+});
+
 // =======================================================================
 // 6. Time-window contract
 // =======================================================================

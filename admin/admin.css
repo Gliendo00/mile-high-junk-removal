@@ -299,7 +299,10 @@
 }
 .admin-month-grid-cell.is-selected .admin-month-grid-count { background: rgba(255, 255, 255, 0.25); }
 
-/* Selected-day panel below the Month grid — job list + Quick Expense.    */
+/* Selected-day panel — shared by Month's day panel and Week's per-day
+   selection (admin/calendar-views.js's renderDayPanel()). Stage 2.4.1
+   hierarchy, in this exact order: Selected date -> Quick Expense icons
+   (daily actions, so they visually belong to the date) -> Jobs. */
 .admin-day-panel {
   margin-top: 18px;
   padding-top: 14px;
@@ -312,13 +315,124 @@
   font-size: 16px;
   margin-bottom: 10px;
 }
-.admin-day-panel-action { margin-bottom: 12px; }
-.admin-day-panel-jobs { margin-bottom: 8px; }
 .admin-day-panel-expenses {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--color-neutral-200, #eee7db);
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed var(--color-neutral-200, #eee7db);
 }
+.admin-day-panel-action { margin-bottom: 12px; }
+
+/* Compact, fully-tappable job cards inside the selected-day panel —
+   Time + Client name first, a single secondary meta line, no separate
+   Call/Text/Directions row (those stay one tap away on the booking detail
+   page this card opens) so the whole card itself is the obvious target. */
+.admin-daily-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.admin-daily-job-card {
+  display: block;
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 12px;
+  padding: 12px 14px;
+  text-decoration: none;
+  color: inherit;
+}
+.admin-daily-job-card:active { background: var(--admin-tint); }
+.admin-daily-job-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.admin-daily-job-card-time {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--color-text, #201e1d);
+}
+.admin-daily-job-card-name {
+  font-weight: 800;
+  font-size: 15.5px;
+  margin-bottom: 2px;
+}
+.admin-daily-job-card-meta {
+  font-size: 13px;
+  color: var(--color-neutral-700, #645c50);
+}
+
+/* ------------------------------------------------------------------ */
+/* Week — compact 7-day overview (Stage 2.4.1). Every day always shows;   */
+/* a day with jobs shows up to a few compact "time · client" lines plus   */
+/* a "+N more" indicator rather than growing unbounded. The whole row is  */
+/* one tap target that opens the shared selected-day panel below.        */
+/* ------------------------------------------------------------------ */
+.admin-week-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.admin-week-day-row {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-left: 4px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-week-day-row.is-today { border-left-color: var(--color-accent-700, #2f6f13); }
+.admin-week-day-row.is-selected {
+  background: var(--color-dark, #14150f);
+  border-left-color: var(--color-dark, #14150f);
+  border-color: var(--color-dark, #14150f);
+}
+.admin-week-day-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.admin-week-day-row-weekday {
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-weekday { color: rgba(255, 255, 255, 0.7); }
+.admin-week-day-row-date {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: var(--color-text, #201e1d);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-date { color: #fff; }
+.admin-week-day-row-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-count { color: #9fe37a; }
+.admin-week-day-row-jobs { margin-top: 6px; }
+.admin-week-day-row-job {
+  font-size: 13px;
+  color: var(--color-neutral-700, #645c50);
+  line-height: 1.5;
+}
+.admin-week-day-row.is-selected .admin-week-day-row-job { color: rgba(255, 255, 255, 0.85); }
+.admin-week-day-row-more {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-more { color: rgba(255, 255, 255, 0.6); }
 
 /* ------------------------------------------------------------------ */
 /* Year grid — Phase 3C Stage 2.4. Navigation only: job counts, never     */

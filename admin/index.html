@@ -49,10 +49,18 @@
     <button type="button" class="admin-range-tab" data-range="year" role="tab" aria-selected="false">Year</button>
   </div>
 
-  <!-- Today / Tomorrow / Week — Phase 3C Stage 1, Week made navigable in
-       Stage 2.4 (week-nav shown only for range=week). -->
-  <div id="today-tomorrow-week-view">
-    <div id="week-nav" class="admin-calendar-nav" hidden>
+  <!-- Today / Tomorrow — Phase 3C Stage 1. Week moved out to its own
+       compact 7-day overview (#week-view) in Stage 2.4.1. -->
+  <div id="today-tomorrow-view">
+    <div id="loading" class="admin-loading">Loading schedule…</div>
+    <div id="empty" class="admin-empty" style="display:none"></div>
+    <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
+  </div>
+
+  <!-- Week — Phase 3C Stage 2.4 (navigable), redesigned Stage 2.4.1 into a
+       compact 7-day overview + the same selected-day panel Month uses. -->
+  <div id="week-view" hidden>
+    <div class="admin-calendar-nav">
       <button type="button" id="week-prev" class="admin-calendar-nav-btn" aria-label="Previous week">&larr;</button>
       <span id="week-range-label" class="admin-calendar-nav-label">—</span>
       <button type="button" id="week-next" class="admin-calendar-nav-btn" aria-label="Next week">&rarr;</button>
@@ -60,9 +68,10 @@
     <div id="week-current-wrap" style="display:none">
       <button type="button" id="week-current-btn" class="admin-calendar-jump-btn">Jump to this week</button>
     </div>
-    <div id="loading" class="admin-loading">Loading schedule…</div>
-    <div id="empty" class="admin-empty" style="display:none"></div>
-    <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
+    <div id="week-loading" class="admin-loading">Loading week…</div>
+    <div id="week-error" class="admin-error-banner" style="display:none"></div>
+    <div id="week-overview" class="admin-week-overview" style="display:none"></div>
+    <div id="week-day-panel" class="admin-day-panel" hidden></div>
   </div>
 
   <!-- Month — Phase 3C Stage 2.4 -->
