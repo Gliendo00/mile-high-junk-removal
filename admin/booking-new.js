@@ -30,12 +30,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var form = document.getElementById('new-job-form');
   var saveBtn = document.getElementById('save-btn');
 
-  var clientSummaryEmpty = document.getElementById('client-summary-empty');
-  var clientSummaryFilled = document.getElementById('client-summary-filled');
-  var clientSummaryName = document.getElementById('client-summary-name');
-  var clientSummaryMeta = document.getElementById('client-summary-meta');
-  var selectClientBtn = document.getElementById('select-client-btn');
-  var changeClientBtn = document.getElementById('change-client-btn');
+  var clientPickerMount = document.getElementById('client-picker-mount');
 
   var sameAsClientRow = document.getElementById('same-as-client-address');
   var serviceAddressInput = document.getElementById('service-address');
@@ -82,44 +77,27 @@ document.addEventListener('DOMContentLoaded', function () {
   appointmentDateInput.value = todayIso;
   appointmentDateInput.min = todayIso;
 
-  function applyClientSelection(client) {
-    selectedClient = client;
-    var name = [client.firstName, client.lastName].filter(Boolean).join(' ') || 'Unnamed client';
-    clientSummaryName.textContent = name;
-    var metaParts = [];
-    if (client.phone) metaParts.push(client.phone);
-    if (client.email) metaParts.push(client.email);
-    clientSummaryMeta.textContent = metaParts.length ? metaParts.join(' · ') : 'No contact info on file';
-    clientSummaryEmpty.style.display = 'none';
-    clientSummaryFilled.style.display = 'flex';
-
-    // Only offer "same as client's address" when a full street address is
-    // actually known for this client (true right after inline-creating one
-    // — that response includes it; a client picked from search only ever
-    // carries name/phone/email/city, never the full address, so there is
-    // nothing honest to prefill from in that case).
-    if (client.address) {
-      sameAsClientRow.disabled = false;
-      sameAsClientRow.checked = false;
-    } else {
-      sameAsClientRow.disabled = true;
-      sameAsClientRow.checked = false;
-    }
-  }
-
-  function openPicker() {
-    window.AdminClientPicker.open({
-      onSelect: function (client, warnings) {
-        applyClientSelection(client);
-        if (warnings && warnings.length) {
-          showToast('Note: this client shares contact info with an existing client.', 'error');
-        }
-      },
-    });
-  }
-
-  selectClientBtn.addEventListener('click', openPicker);
-  changeClientBtn.addEventListener('click', openPicker);
+  // Only offer "same as client's address" when a full street address is
+  // actually known for this client (true right after inline-creating one
+  // — that response includes it; a client picked from search only ever
+  // carries name/phone/email/city, never the full address, so there is
+  // nothing honest to prefill from in that case). Also resets whenever the
+  // selection is cleared (client === null, via "Change").
+  window.AdminClientPicker.mount(clientPickerMount, {
+    onSelect: function (client, warnings) {
+      selectedClient = client;
+      if (client && warnings && warnings.length) {
+        showToast('Note: this client shares contact info with an existing client.', 'error');
+      }
+      if (client && client.address) {
+        sameAsClientRow.disabled = false;
+        sameAsClientRow.checked = false;
+      } else {
+        sameAsClientRow.disabled = true;
+        sameAsClientRow.checked = false;
+      }
+    },
+  });
 
   sameAsClientRow.addEventListener('change', function () {
     if (sameAsClientRow.checked && selectedClient && selectedClient.address) {

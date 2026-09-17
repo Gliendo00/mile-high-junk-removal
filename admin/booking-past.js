@@ -48,12 +48,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var form = document.getElementById('past-job-form');
   var saveBtn = document.getElementById('save-btn');
 
-  var clientSummaryEmpty = document.getElementById('client-summary-empty');
-  var clientSummaryFilled = document.getElementById('client-summary-filled');
-  var clientSummaryName = document.getElementById('client-summary-name');
-  var clientSummaryMeta = document.getElementById('client-summary-meta');
-  var selectClientBtn = document.getElementById('select-client-btn');
-  var changeClientBtn = document.getElementById('change-client-btn');
+  var clientPickerMount = document.getElementById('client-picker-mount');
 
   var serviceAddressInput = document.getElementById('service-address');
   var serviceCityInput = document.getElementById('service-city');
@@ -115,31 +110,14 @@ document.addEventListener('DOMContentLoaded', function () {
   appointmentDateInput.max = todayIso;
   appointmentDateInput.value = todayIso;
 
-  function applyClientSelection(client) {
-    selectedClient = client;
-    var name = [client.firstName, client.lastName].filter(Boolean).join(' ') || 'Unnamed client';
-    clientSummaryName.textContent = name;
-    var metaParts = [];
-    if (client.phone) metaParts.push(client.phone);
-    if (client.email) metaParts.push(client.email);
-    clientSummaryMeta.textContent = metaParts.length ? metaParts.join(' · ') : 'No contact info on file';
-    clientSummaryEmpty.style.display = 'none';
-    clientSummaryFilled.style.display = 'flex';
-  }
-
-  function openPicker() {
-    window.AdminClientPicker.open({
-      onSelect: function (client, warnings) {
-        applyClientSelection(client);
-        if (warnings && warnings.length) {
-          showToast('Note: this client shares contact info with an existing client.', 'error');
-        }
-      },
-    });
-  }
-
-  selectClientBtn.addEventListener('click', openPicker);
-  changeClientBtn.addEventListener('click', openPicker);
+  window.AdminClientPicker.mount(clientPickerMount, {
+    onSelect: function (client, warnings) {
+      selectedClient = client;
+      if (client && warnings && warnings.length) {
+        showToast('Note: this client shares contact info with an existing client.', 'error');
+      }
+    },
+  });
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();

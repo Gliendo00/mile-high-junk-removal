@@ -935,17 +935,42 @@
   background: #fff;
   margin-bottom: 16px;
 }
+.admin-client-summary[hidden] { display: none; }
 .admin-client-summary-name { font-weight: 700; }
 .admin-client-summary-meta {
   font-size: 13px;
   color: var(--color-neutral-600, #82796a);
 }
-.admin-client-summary-placeholder {
-  color: var(--color-neutral-600, #82796a);
-  font-size: 14px;
+
+/* Inline client typeahead (Client Typeahead UX) — the Client field's search
+   step lives directly on the page now, no modal. Only Create Client /
+   duplicate-handling still use the .admin-sheet-overlay/.admin-sheet
+   bottom-sheet chrome defined below. */
+.admin-client-typeahead { margin-bottom: 16px; }
+.admin-typeahead-panel {
+  margin-top: 8px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+.admin-typeahead-panel[hidden] { display: none; }
+.admin-typeahead-panel .admin-picker-results {
+  max-height: 260px;
+  margin-bottom: 0;
+}
+.admin-typeahead-panel .admin-picker-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-typeahead-panel .admin-picker-item:last-child { border-bottom: 0; }
+.admin-picker-item.is-highlighted { background: var(--admin-tint); }
+.admin-typeahead-panel .admin-picker-create-toggle {
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  padding: 12px 14px;
 }
 
-/* Client-picker sheet: search results + inline create form, built on the
+/* Client-picker sheet: Create Client / duplicate-handling, built on the
    same .admin-sheet-overlay/.admin-sheet chrome as admin/status-ui.js. */
 .admin-picker-results {
   display: flex;
