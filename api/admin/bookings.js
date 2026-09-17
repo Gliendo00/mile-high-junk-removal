@@ -66,6 +66,24 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Phase 3C Stage 2.4.1: ?view=google-config returns the restricted
+  // Google Maps browser key for the admin address-autocomplete forms to
+  // fetch on demand. Dispatched here, before any Supabase client is even
+  // created — this mode never touches Supabase at all. Admin-auth-gated
+  // like every other mode in this file (requireAdmin() already ran above,
+  // unconditionally, before this line is ever reached) — not because the
+  // key itself is secret (a Maps JavaScript API key is designed to be
+  // visible in the browser once loaded; Google's own HTTP-referrer/API
+  // restrictions protect it, not secrecy — see
+  // admin/address-autocomplete.js's header), but specifically so an
+  // unauthenticated caller can never even learn whether a key is
+  // configured: requireAdmin() already sent an identical 401 and returned
+  // before this code path exists for that caller, regardless of whether
+  // ADMIN_GOOGLE_MAPS_API_KEY happens to be set.
+  if (req.query.view === "google-config") {
+    return handleGoogleConfig(req, res);
+  }
+
   const supabase = getServiceClient();
   if (!supabase) {
     console.error("Admin bookings list failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
@@ -268,6 +286,21 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: "Could not load bookings." });
   }
 };
+
+// ---------------------------------------------------------------------
+// Google Maps browser-key config — Phase 3C Stage 2.4.1. requireAdmin()
+// has already run before this is ever reached (see module.exports above).
+// Pure env-var read, no I/O, no Supabase — deliberately never logs the key
+// (not even on failure; there is no failure path here beyond "unset,"
+// which returns an empty string like every other unconfigured value in
+// this codebase). ADMIN_GOOGLE_MAPS_API_KEY lives only in Vercel's
+// environment configuration — never committed to this repository.
+// ---------------------------------------------------------------------
+function handleGoogleConfig(req, res) {
+  const raw = process.env.ADMIN_GOOGLE_MAPS_API_KEY;
+  const key = typeof raw === "string" ? raw.trim() : "";
+  res.status(200).json({ ok: true, googleMapsApiKey: key });
+}
 
 // ---------------------------------------------------------------------
 // Admin Schedule (?view=schedule&range=today|tomorrow|week|month|year) —

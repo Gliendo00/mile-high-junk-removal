@@ -34,8 +34,9 @@ Client Typeahead), and Stage 2.4 (Calendar/Month/Year, date-aware entry,
 Google Address Autocomplete, Daily Quick Expense Tracking) are all live —
 including the `expenses` table, created by the owner in production Supabase.
 **Stage 2.4.1 (Schedule UX polish + two investigations) is implemented on
-feature branch `phase-3c/stage2.4.1-schedule-ux-fixes`**, 464/464 tests
-passing (441 pre-existing + 23 new), function count still exactly 12/12 —
+feature branch `phase-3c/stage2.4.1-schedule-ux-fixes`** (now including the
+Google Maps key-delivery implementation, §5a), 480/480 tests
+passing, function count still exactly 12/12 —
 but **not merged to `main` and not deployed**. See
 [stage2.4.1-schedule-ux-proposal.md](./stage2.4.1-schedule-ux-proposal.md)
 for the full writeup. Money-field revenue summaries, archive/restore/delete,

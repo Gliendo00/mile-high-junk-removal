@@ -19,11 +19,18 @@
 //   - On selection, reads STRUCTURED address components (addressComponents)
 //     and maps them into the four existing fields — never parses a
 //     formattedAddress string.
-//   - Every failure mode (no key configured, script fails to load, network
-//     error, an unexpected response shape) is caught and treated as
-//     "Google unavailable for this session" — the manual fields are never
-//     disabled, never required, and never blocked from saving. This file
-//     cannot regress a save even if every Google call inside it throws.
+//   - Every failure mode (key fetch fails/401s, no key configured, script
+//     fails to load, network error, an unexpected response shape) is
+//     caught and treated as "Google unavailable for this session" — the
+//     manual fields are never disabled, never required, and never blocked
+//     from saving. This file cannot regress a save even if every Google
+//     call inside it throws.
+//   - Phase 3C Stage 2.4.1: the browser key is no longer a static,
+//     committed placeholder (admin/google-maps-config.js, removed this
+//     stage). It's fetched lazily from the existing authenticated
+//     api/admin/bookings.js?view=google-config endpoint, which reads
+//     ADMIN_GOOGLE_MAPS_API_KEY from Vercel's environment configuration —
+//     never committed to this repository, never logged by this file.
 //
 // Every dynamic value is written with textContent (never innerHTML/
 // insertAdjacentHTML with a concatenated string), matching every other
@@ -39,9 +46,35 @@ window.AdminAddressAutocomplete = (function () {
   var DENVER_BIAS_RADIUS_METERS = 80000;
 
   var placesLibraryPromise = null;
+  var apiKeyPromise = null;
 
-  function hasConfiguredKey() {
-    return typeof window.ADMIN_GOOGLE_MAPS_API_KEY === "string" && window.ADMIN_GOOGLE_MAPS_API_KEY.trim().length > 0;
+  // Fetches the restricted Google Maps browser key from the existing
+  // authenticated endpoint, exactly once per page load however many
+  // fields end up calling attach()/focus. The key is never logged, never
+  // stored anywhere beyond this in-memory promise, and never touches
+  // anything but the Google script URL built in loadPlacesLibrary() below.
+  //
+  // Deliberately does NOT redirect to /admin/login/ on a 401 the way this
+  // page's own primary-data fetches (e.g. the countsOnly session check on
+  // load) already do: this is a background enhancement fetch triggered by
+  // focusing an address field, not core page content, so a session that
+  // happens to expire mid-form-fill must never yank the owner away from
+  // what they were typing — the form's own Save handler already re-checks
+  // auth (and redirects) the moment they actually submit. A missing/failed
+  // key here just means the dropdown never appears; nothing else changes.
+  function fetchApiKey() {
+    if (apiKeyPromise) return apiKeyPromise;
+    apiKeyPromise = fetch("/api/admin/bookings?view=google-config")
+      .then(function (res) {
+        if (!res.ok) throw new Error("Could not load Google Maps configuration");
+        return res.json();
+      })
+      .then(function (body) {
+        var key = body && typeof body.googleMapsApiKey === "string" ? body.googleMapsApiKey.trim() : "";
+        if (!key) throw new Error("Google Maps API key not configured");
+        return key;
+      });
+    return apiKeyPromise;
   }
 
   // Lazily loads the Google Maps JS bootstrap script + the "places" library
@@ -51,37 +84,34 @@ window.AdminAddressAutocomplete = (function () {
   function loadPlacesLibrary() {
     if (placesLibraryPromise) return placesLibraryPromise;
 
-    if (!hasConfiguredKey()) {
-      placesLibraryPromise = Promise.reject(new Error("Google Maps API key not configured"));
-      return placesLibraryPromise;
-    }
-
-    placesLibraryPromise = new Promise(function (resolve, reject) {
-      try {
-        if (window.google && window.google.maps && window.google.maps.places) {
-          resolve(window.google.maps.places);
-          return;
-        }
-        var script = document.createElement("script");
-        script.async = true;
-        script.src =
-          "https://maps.googleapis.com/maps/api/js?key=" +
-          encodeURIComponent(window.ADMIN_GOOGLE_MAPS_API_KEY) +
-          "&libraries=places&loading=async&v=weekly";
-        script.onerror = function () {
-          reject(new Error("Failed to load the Google Maps script"));
-        };
-        script.onload = function () {
+    placesLibraryPromise = fetchApiKey().then(function (key) {
+      return new Promise(function (resolve, reject) {
+        try {
           if (window.google && window.google.maps && window.google.maps.places) {
             resolve(window.google.maps.places);
-          } else {
-            reject(new Error("Google Maps script loaded but google.maps.places is unavailable"));
+            return;
           }
-        };
-        document.head.appendChild(script);
-      } catch (err) {
-        reject(err);
-      }
+          var script = document.createElement("script");
+          script.async = true;
+          script.src =
+            "https://maps.googleapis.com/maps/api/js?key=" +
+            encodeURIComponent(key) +
+            "&libraries=places&loading=async&v=weekly";
+          script.onerror = function () {
+            reject(new Error("Failed to load the Google Maps script"));
+          };
+          script.onload = function () {
+            if (window.google && window.google.maps && window.google.maps.places) {
+              resolve(window.google.maps.places);
+            } else {
+              reject(new Error("Google Maps script loaded but google.maps.places is unavailable"));
+            }
+          };
+          document.head.appendChild(script);
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
 
     return placesLibraryPromise;
@@ -283,5 +313,5 @@ window.AdminAddressAutocomplete = (function () {
     );
   }
 
-  return { attach: attach, isConfigured: hasConfiguredKey };
+  return { attach: attach };
 })();

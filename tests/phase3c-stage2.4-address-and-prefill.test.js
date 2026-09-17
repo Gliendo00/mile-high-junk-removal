@@ -85,10 +85,24 @@ test("calendar-views.js: a historical date links to Past Job, today/future links
 // =======================================================================
 // Google Address Autocomplete — shared component
 // =======================================================================
-test("address-autocomplete.js: checks the configured key BEFORE ever touching the network — no key means no Google call at all", () => {
+test("address-autocomplete.js: fetches the browser key lazily from the authenticated server endpoint — never a client-side static/committed key", () => {
   const src = read("admin/address-autocomplete.js");
-  assert.ok(/hasConfiguredKey/.test(src));
-  assert.ok(/if \(!hasConfiguredKey\(\)\) \{/.test(src));
+  assert.ok(/fetch\("\/api\/admin\/bookings\?view=google-config"\)/.test(src));
+  assert.ok(!/window\.ADMIN_GOOGLE_MAPS_API_KEY/.test(src), "must not read a client-side global for the key (Stage 2.4.1 removed admin/google-maps-config.js)");
+});
+
+test("address-autocomplete.js: an empty/missing key from the server (or the fetch itself failing) rejects, never throws synchronously — every caller already treats a rejection as 'Google unavailable'", () => {
+  const src = read("admin/address-autocomplete.js");
+  assert.ok(/if \(!key\) throw new Error\("Google Maps API key not configured"\);/.test(src));
+  assert.ok(/if \(!res\.ok\) throw new Error\("Could not load Google Maps configuration"\);/.test(src));
+});
+
+test("address-autocomplete.js: the key fetch deliberately does NOT redirect to /admin/login/ on 401 — a background enhancement fetch must never yank the owner off an in-progress form", () => {
+  const src = read("admin/address-autocomplete.js");
+  const start = src.indexOf("function fetchApiKey()");
+  const end = src.indexOf("\n  function loadPlacesLibrary()");
+  const body = src.slice(start, end);
+  assert.ok(!/admin\/login/.test(body), "fetchApiKey() must not contain a login-redirect — that behavior belongs only to primary-content fetches elsewhere in this codebase");
 });
 
 test("address-autocomplete.js: uses the modern Places API (New) data classes, not the legacy Autocomplete widget", () => {
@@ -125,18 +139,20 @@ test("address-autocomplete.js: every Google call is wrapped so a failure degrade
   assert.ok(/\.catch\(function \(\) \{\s*\/\//.test(src) || /catch\(function \(\) \{\}\)/.test(src) || /\.catch\(function/.test(src), "Google load/search failures must be caught, not left to throw");
 });
 
-test("address-autocomplete.js and google-maps-config.js never use innerHTML/insertAdjacentHTML/document.write", () => {
-  ["admin/address-autocomplete.js", "admin/google-maps-config.js"].forEach((rel) => {
-    const src = read(rel);
-    assert.ok(!/\.innerHTML\s*=/.test(src), rel + " must not assign innerHTML");
-    assert.ok(!/\.insertAdjacentHTML\s*\(/.test(src), rel + " must not call insertAdjacentHTML(...)");
-    assert.ok(!/document\.write\s*\(/.test(src), rel + " must not call document.write(...)");
-  });
+test("address-autocomplete.js never uses innerHTML/insertAdjacentHTML/document.write", () => {
+  const src = read("admin/address-autocomplete.js");
+  assert.ok(!/\.innerHTML\s*=/.test(src), "must not assign innerHTML");
+  assert.ok(!/\.insertAdjacentHTML\s*\(/.test(src), "must not call insertAdjacentHTML(...)");
+  assert.ok(!/document\.write\s*\(/.test(src), "must not call document.write(...)");
 });
 
-test("google-maps-config.js: ships with an EMPTY key — no credential is committed by this stage", () => {
-  const src = read("admin/google-maps-config.js");
-  assert.ok(/window\.ADMIN_GOOGLE_MAPS_API_KEY\s*=\s*""/.test(src), "the shipped key must be an empty string until the owner configures a real one");
+test("regression (Stage 2.4.1): admin/google-maps-config.js no longer exists — the browser key is never committed to this repository", () => {
+  assert.ok(!fs.existsSync(path.join(__dirname, "..", "admin", "google-maps-config.js")), "the obsolete static placeholder file must be removed, not just emptied");
+});
+
+test("regression (Stage 2.4.1): the key never appears as a literal string anywhere in the client bundle — only fetched at runtime", () => {
+  const src = read("admin/address-autocomplete.js");
+  assert.ok(!/AIza[0-9A-Za-z_-]{10,}/.test(src), "no Google API key pattern should ever be hardcoded in committed source");
 });
 
 // =======================================================================
@@ -149,15 +165,14 @@ test("google-maps-config.js: ships with an EMPTY key — no credential is commit
   { page: "admin/booking-past/index.html", js: "admin/booking-past.js" },
   { page: "admin/booking-edit/index.html", js: "admin/booking-edit.js" },
 ].forEach(({ page, js }) => {
-  test(page + ": loads google-maps-config.js and address-autocomplete.js before its own page script", () => {
+  test(page + ": loads address-autocomplete.js before its own page script (Stage 2.4.1: no separate config-file script tag anymore)", () => {
     const src = read(page);
-    const configIdx = src.indexOf("google-maps-config.js");
     const helperIdx = src.indexOf("address-autocomplete.js");
     const pageScriptName = js.split("/").pop();
     const pageIdx = src.indexOf(pageScriptName);
-    assert.ok(configIdx !== -1, "must load admin/google-maps-config.js");
+    assert.ok(!/google-maps-config\.js/.test(src), page + " must no longer reference the removed admin/google-maps-config.js");
     assert.ok(helperIdx !== -1, "must load admin/address-autocomplete.js");
-    assert.ok(configIdx < pageIdx && helperIdx < pageIdx, "shared scripts must load before the page's own script that calls attach()");
+    assert.ok(helperIdx < pageIdx, "the shared script must load before the page's own script that calls attach()");
   });
 
   test(js + ": calls window.AdminAddressAutocomplete.attach() with the four existing address field elements, guarded by a feature check", () => {

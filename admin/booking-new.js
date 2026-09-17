@@ -114,11 +114,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // carries name/phone/email/city, never the full address, so there is
   // nothing honest to prefill from in that case). Also resets whenever the
   // selection is cleared (client === null, via "Change").
-  // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
-  // additive: if window.ADMIN_GOOGLE_MAPS_API_KEY (admin/google-maps-
-  // config.js) is empty/unconfigured, or the Google script fails to load,
-  // this call is a safe no-op and every field below stays a fully manual,
-  // fully required-nothing text input exactly as before this feature.
+  // Google Places address autocomplete — Phase 3C Stage 2.4, key fetched
+  // lazily from the server since Stage 2.4.1 (see admin/address-
+  // autocomplete.js's header). Purely additive: if the key isn't
+  // configured server-side, the fetch fails, or the Google script fails
+  // to load, this call is a safe no-op and every field below stays a
+  // fully manual, fully required-nothing text input exactly as before
+  // this feature.
   if (window.AdminAddressAutocomplete) {
     window.AdminAddressAutocomplete.attach({
       address: serviceAddressInput,

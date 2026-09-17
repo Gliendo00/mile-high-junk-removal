@@ -176,6 +176,57 @@ here for convenience):
 Manual address entry continues to work with zero configuration — verified
 again this stage (see §7).
 
+### 5a. Addendum — Google Cloud setup completed; key delivery implemented
+
+The owner completed Google Cloud setup (a dedicated key, restricted to
+`https://www.milehighjunkremoval.net/*`, Maps JavaScript API, and Places
+API (New)) and configured it directly in Vercel's environment variables —
+**never provided to this agent, never committed to this repository.**
+
+**Delivery mechanism** (implemented per the safest-approach report given
+before any code was touched): since this is a build-step-less static site,
+a Vercel environment variable can only be read from inside a serverless
+function, never injected into a static asset. So:
+
+- **New Vercel environment variable**: `ADMIN_GOOGLE_MAPS_API_KEY` —
+  deliberately a different name from the pre-existing `GOOGLE_PLACES_API_KEY`
+  (`api/reviews.js`'s own, unrelated, server-side Places Details key — a
+  different credential with a different restriction model; the two must
+  never be conflated or cross-used, and a dedicated test asserts
+  `bookings.js` reads only the former).
+- **`api/admin/bookings.js` extended** with one more `GET ?view=google-config`
+  mode — dispatched immediately after `requireAdmin()` (so an
+  unauthenticated request never even reaches this code; it gets the exact
+  same `401 {"error":"Not authenticated."}` every other unauthenticated
+  admin request gets, structurally indistinguishable regardless of whether
+  a key happens to be configured) and before any Supabase client is
+  created (this mode never touches Supabase). Returns
+  `{ok: true, googleMapsApiKey: "<key or empty string>"}`. **Zero new
+  serverless functions** — still 12/12.
+- **`admin/google-maps-config.js` removed** (the static, committed empty
+  placeholder is obsolete) along with its `<script>` tag on all three
+  forms.
+- **`admin/address-autocomplete.js`** now fetches the key lazily from that
+  endpoint (`fetchApiKey()`), cached for the page's lifetime, the first
+  time an address field is focused — same lazy-load trigger as before,
+  just one more network hop before the Google script itself loads.
+  Deliberately does **not** redirect to `/admin/login/` on a `401`: unlike
+  this page's own primary-data fetches, this is a background enhancement
+  triggered by focusing a field, not core content — a session expiring
+  mid-form-fill must never yank the owner away from what they were typing;
+  the form's own Save handler still re-checks auth when they actually
+  submit. Any failure at any step (401, network error, empty key, script
+  load failure) rejects identically, and every caller already treats a
+  rejection as "Google unavailable — manual entry only," unchanged from
+  Stage 2.4.
+
+**Security discipline**: `handleGoogleConfig()` never logs anything (a
+dedicated test asserts no `console.*` call anywhere in its body); the key
+is never written to any test file, snapshot, or this report; `Cache-Control:
+no-store` is inherited automatically (set unconditionally by `requireAdmin()`
+before this or any other mode runs, so no extra code was needed to
+preserve it).
+
 ## 6. Public-site / performance isolation audit
 
 Confirmed by direct source inspection (`grep` across every `.html` file):
@@ -198,14 +249,16 @@ Confirmed by direct source inspection (`grep` across every `.html` file):
 
 ## 7. Tests
 
-**464 tests total** (441 pre-existing baseline + 6 date-editing regressions
-+ 17 new Schedule-UX regressions), 0 failed:
+**480 tests total** (441 pre-existing baseline + 24 Stage 2.4.1 core +
+1 found-on-Preview price-formatting fix's regression + 12 Google-config
+addendum + updates to the pre-existing address/prefill suite for the new
+key-delivery mechanism), 0 failed:
 
 - `tests/phase3c-job-editing.test.js` (+6) — the Stage 2.4.1 date-editing
   regressions described in §4: the owner's exact Aug 20/Mar 12 examples,
   today→past for a completed job, floor/future still rejected, and the
   intentional non-completed-job counterpart.
-- `tests/phase3c-stage2.4.1-schedule-ux.test.js` (new, 17) — source-pattern
+- `tests/phase3c-stage2.4.1-schedule-ux.test.js` (18) — source-pattern
   checks (this project's established approach for client-only rendering
   behavior, see that file's header) confirming: the day-panel's exact
   append order (date → expenses → action → jobs), the shared `renderDayPanel()`
@@ -215,14 +268,36 @@ Confirmed by direct source inspection (`grep` across every `.html` file):
   `WEEK_ROW_MAX_JOB_LINES` cap with "+N more", the per-row click handler
   reading the date from `event.currentTarget` (not a closed-over loop
   variable), Prev/Next/Jump-to-this-week preserved and still server-driven,
-  no new API endpoint, today auto-selection, and the "no innerHTML"
-  discipline.
+  no new API endpoint, today auto-selection, the "no innerHTML" discipline,
+  and (added after being caught live on Preview) `formatPrice()`'s
+  null/undefined/empty-string guard.
+- `tests/phase3c-stage2.4.1-google-config.test.js` (new, 12) — the §5a
+  addendum's server endpoint: auth required (401, byte-identical response
+  whether or not a key is configured — no side channel), `Cache-Control:
+  no-store` preserved on every path, authenticated + configured → the key
+  returned, authenticated + unset/whitespace-only env var → an empty
+  string (never a crash), the endpoint never touches Supabase, POST/DELETE
+  still rejected, zero new functions, no `console.*` call anywhere in the
+  handler, and reads `ADMIN_GOOGLE_MAPS_API_KEY` only — never the
+  unrelated `GOOGLE_PLACES_API_KEY`. Every test uses a plainly fake
+  placeholder value (`"fake-test-key-not-real"`) — the real key was never
+  provided to this agent and appears nowhere in this suite's source or
+  output.
+- `tests/phase3c-stage2.4-address-and-prefill.test.js` — updated for the
+  new lazy-fetch key delivery: confirms the client fetches from
+  `?view=google-config` rather than reading a static global, that an
+  empty/failed fetch rejects (never throws synchronously), that the key
+  fetch deliberately does **not** redirect to `/admin/login/` on 401 (a
+  background enhancement fetch must never interrupt an in-progress form),
+  that `admin/google-maps-config.js` no longer exists, and that no
+  Google-API-key-shaped literal ever appears in committed source.
 - Interactive behavior (all 7 days rendering including empty ones, the
   compact-lines cap and "+1 more" indicator, tapping a week day switching
-  the selected-day panel, the reordered Month/Week day-panel hierarchy)
-  additionally verified directly in a local browser session with the fetch
-  API mocked to the real endpoint's response shape, at a 375px mobile
-  viewport.
+  the selected-day panel, the reordered Month/Week day-panel hierarchy, the
+  manual-fallback path with the config fetch failing/404ing) additionally
+  verified directly in local and Preview browser sessions — see the stage
+  report for the Preview pass specifically confirming the authenticated
+  success path without ever printing the key.
 
 ## 8. Function count
 
