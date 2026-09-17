@@ -667,7 +667,17 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
   found.sort(); // directory-listing order isn't a contract; sort before comparing
   assert.deepStrictEqual(
     found,
-    ["api/admin/booking-status.js: .update(", "api/admin/booking.js: .insert(", "api/admin/client.js: .insert("],
+    [
+      "api/admin/booking-status.js: .update(",
+      "api/admin/booking.js: .insert(",
+      // Phase 3C "Existing Job Editing" added exactly one new write call —
+      // PATCH's handleUpdate() — deliberately, not a side effect. See
+      // api/admin/booking.js's handleUpdate() header comment for why this
+      // stays a controlled, allowlisted update rather than a new "write
+      // anything" endpoint.
+      "api/admin/booking.js: .update(",
+      "api/admin/client.js: .insert(",
+    ],
     "found: " + JSON.stringify(found)
   );
 });

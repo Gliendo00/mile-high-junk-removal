@@ -25,6 +25,7 @@ module.exports = async (req, res) => {
   if (!session) return;
 
   if (req.method === "POST") return handleCreate(req, res);
+  if (req.method === "PATCH") return handleUpdate(req, res);
 
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -55,7 +56,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, created_at, customer_id, service_address, service_city, service_state, service_zip"
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip"
       )
       .eq("id", id)
       .maybeSingle();
@@ -126,6 +127,11 @@ module.exports = async (req, res) => {
         status: normalizedStatus(booking.status),
         statusLabel: statusLabel(booking.status),
         createdAt: booking.created_at,
+        // Exposed only as an opaque optimistic-concurrency token for
+        // PATCH /api/admin/booking (Edit Job) — see handleUpdate() below.
+        // Never interpreted or displayed as a meaningful date/time by this
+        // route itself.
+        updatedAt: booking.updated_at,
       },
       // Client identity/contact only — never the address. Job location is
       // reported separately below as `serviceAddress`, sourced from the
@@ -416,6 +422,315 @@ async function handleCreate(req, res) {
   } catch (err) {
     console.error("Admin job create failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not create job." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Edit an existing job — PATCH /api/admin/booking (Phase 3C, "Edit Job").
+// requireAdmin() has already run (see module.exports above) before this
+// function is ever reached — authentication happens before any booking
+// lookup or body processing.
+//
+// Explicit editable-field allowlist. The request body is never spread into
+// the Supabase update payload anywhere below: every field is read
+// individually as a named primitive, validated, and only then placed into a
+// literal update object built from scratch. This means:
+//   - customer_id can never be changed (there is no code path that reads a
+//     customerId from the body here at all — the attached client is fixed
+//     for this stage).
+//   - id can never be changed (the id in the body is only ever used in
+//     .eq("id", id) to select which row to update, never written to any
+//     column).
+//   - created_at can never be changed (there is no code path that reads or
+//     writes it).
+//   - status can never be changed (mirrors booking.js's create-time
+//     guarantee: there is no field named "status" read anywhere below, so
+//     no value a caller sends can change it — status stays the exclusive
+//     responsibility of api/admin/booking-status.js, untouched by this
+//     stage).
+//   - an arbitrary/unrecognized field in the body simply has no code path
+//     that ever reads it, so it can never become writable no matter what
+//     the request body contains.
+//
+// Pricing mode (which of estimated_price vs final_price+tip_amount is
+// editable) is decided by the CURRENT row's status, read fresh from the
+// database in this same request — never by anything the client claims.
+// This is what makes it structurally impossible for editing one pricing
+// mode to write into the other column: the code path for a given mode
+// simply never reads or writes the other mode's field(s).
+//
+// Date-editing contract (see docs/phase-3/job-editing-proposal.md for the
+// full writeup): reusing New Job's/Past Job's create-time date rules
+// verbatim would make some legitimate existing rows impossible to save
+// (e.g. a legacy row already dated before the historical floor, or a
+// "booked" row whose date has quietly slipped into the past because no one
+// has marked it completed yet) merely because of fields the owner isn't
+// even touching. So the rule here is keyed off whether the date is actually
+// changing:
+//   - Submitting the SAME appointment_date the row already has is always
+//     accepted, whatever that value is — editing an unrelated field (say,
+//     the description) can never be blocked by the row's pre-existing date.
+//   - A CHANGED date must be on/after the historical floor (never move a
+//     job earlier than the CRM's historical period).
+//   - A CHANGED date on a "completed" job must also be on/after the floor
+//     and on/before today (America/Denver) — corrected within the
+//     historical period, never into the future.
+//   - A CHANGED date on any other (non-completed) job must be on/after
+//     today (America/Denver) — an upcoming/booked job can move to another
+//     valid current/future date, matching New Job's own rule.
+// Changing the date never changes status.
+//
+// Time-window contract mirrors booking.js's create-time rules exactly,
+// keyed off the same current-status read: optional (a real NULL, never an
+// invented placeholder) for a completed job, required and validated against
+// the full VALID_TIME_WINDOWS allowlist otherwise. No exception was needed
+// here beyond that — every existing booking's time_window is either NULL or
+// already one of the allowlisted ids (this project's public booking flow
+// and admin create flow have only ever written one of those), so there is
+// no equivalent "legacy value now out of range" case the way dates have.
+//
+// Concurrency: optimistic, via bookings.updated_at. The client must send
+// back the exact `updatedAt` value it read when Edit Job loaded. The update
+// itself is conditioned on that value still matching what's in the database
+// (.eq("updated_at", ...) / .is("updated_at", null)) so the check and the
+// write are atomic — no separate read-then-write race window. Zero matched
+// rows after that point (for a booking already confirmed to exist earlier
+// in this same request) means someone else changed it in the meantime; the
+// caller gets back a 409 and is told to reload rather than the request
+// silently overwriting those newer changes. This endpoint always sets a
+// fresh updated_at itself (never relies on an assumed database trigger), so
+// the next Edit Job load has a reliable token to check against.
+async function handleUpdate(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin job update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Booking id is required." });
+    return;
+  }
+  if (!UUID_RE.test(id)) {
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+
+  // The concurrency token. Required on every request (never silently
+  // skippable) — undefined (the field simply absent, or of the wrong type)
+  // is rejected outright rather than treated as "skip the check."
+  let submittedUpdatedAt;
+  if (body.updatedAt === null) {
+    submittedUpdatedAt = null;
+  } else if (typeof body.updatedAt === "string" && body.updatedAt) {
+    submittedUpdatedAt = body.updatedAt;
+  } else {
+    res.status(400).json({ error: "Missing or invalid concurrency token." });
+    return;
+  }
+
+  const serviceType = typeof body.serviceType === "string" ? body.serviceType.trim() : "";
+  if (!SERVICE_TYPES.includes(serviceType)) {
+    res.status(400).json({ error: "Please choose a valid service type." });
+    return;
+  }
+
+  const appointmentDate = typeof body.appointmentDate === "string" ? body.appointmentDate.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) || Number.isNaN(new Date(appointmentDate + "T00:00:00").getTime())) {
+    res.status(400).json({ error: "A valid appointment date is required." });
+    return;
+  }
+
+  const addrIn = body.serviceAddress && typeof body.serviceAddress === "object" && !Array.isArray(body.serviceAddress) ? body.serviceAddress : {};
+  const serviceAddress = sanitizeText(addrIn.address, MAX.address);
+  const serviceCity = sanitizeText(addrIn.city, MAX.city);
+  const serviceStateRaw = sanitizeText(addrIn.state, 40).toUpperCase();
+  const serviceZip = sanitizeText(addrIn.zip, MAX.zip);
+  if (!serviceAddress || !serviceCity) {
+    res.status(400).json({ error: "A complete service address is required." });
+    return;
+  }
+  if (!/^[A-Z]{2}$/.test(serviceStateRaw)) {
+    res.status(400).json({ error: "Please enter a valid 2-letter state." });
+    return;
+  }
+  const serviceState = serviceStateRaw;
+  if (!/^\d{5}(-\d{4})?$/.test(serviceZip)) {
+    res.status(400).json({ error: "Please enter a valid ZIP code." });
+    return;
+  }
+
+  const description = sanitizeText(body.description, MAX.long) || null;
+  const internalNotes = sanitizeText(body.internalNotes, MAX.long) || null;
+
+  const timeWindowRaw = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
+
+  try {
+    const currentRes = await supabase
+      .from("bookings")
+      .select("id, status, appointment_date")
+      .eq("id", id)
+      .maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    const isCompleted = current.status === "completed";
+    const todayIso = denverTodayIso();
+
+    // Date rules — see this function's header comment for the full
+    // reasoning. Only enforced when the date is actually being changed.
+    if (appointmentDate !== current.appointment_date) {
+      if (appointmentDate < HISTORICAL_FLOOR_ISO) {
+        res.status(400).json({ error: "Appointment date cannot be before January 1, 2026." });
+        return;
+      }
+      if (isCompleted) {
+        if (appointmentDate > todayIso) {
+          res.status(400).json({ error: "A completed job's date cannot be moved into the future." });
+          return;
+        }
+      } else if (appointmentDate < todayIso) {
+        res.status(400).json({ error: "Appointment date cannot be in the past. Use Past Job for historical jobs, or leave this job's date unchanged." });
+        return;
+      }
+    }
+
+    // Time-window rules — mirrors create-time rules exactly (see header).
+    let timeWindow = null;
+    if (isCompleted) {
+      if (timeWindowRaw) {
+        if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
+          res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
+          return;
+        }
+        timeWindow = timeWindowRaw;
+      }
+    } else {
+      if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
+        res.status(400).json({ error: "A valid appointment time is required." });
+        return;
+      }
+      timeWindow = timeWindowRaw;
+    }
+
+    // Pricing — decided by the CURRENT (just-read, server-side) status, not
+    // anything the client sent. Only one mode's field(s) are ever placed
+    // into the update payload below; the other mode's column is never even
+    // named in this request, so it can never be touched by it.
+    const pricingUpdate = {};
+    if (isCompleted) {
+      if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
+        const n = Number(body.finalPrice);
+        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+          res.status(400).json({ error: "Please enter a valid actual job amount." });
+          return;
+        }
+        pricingUpdate.final_price = Math.round(n * 100) / 100;
+      } else {
+        pricingUpdate.final_price = null;
+      }
+      if (body.tipAmount !== undefined && body.tipAmount !== null && body.tipAmount !== "") {
+        const n = Number(body.tipAmount);
+        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+          res.status(400).json({ error: "Please enter a valid tip amount." });
+          return;
+        }
+        pricingUpdate.tip_amount = Math.round(n * 100) / 100;
+      } else {
+        pricingUpdate.tip_amount = null;
+      }
+    } else {
+      if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
+        const n = Number(body.estimatedPrice);
+        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+          res.status(400).json({ error: "Please enter a valid estimated price." });
+          return;
+        }
+        pricingUpdate.estimated_price = Math.round(n * 100) / 100;
+      } else {
+        pricingUpdate.estimated_price = null;
+      }
+    }
+
+    const updatePayload = Object.assign(
+      {
+        service_type: serviceType,
+        appointment_date: appointmentDate,
+        time_window: timeWindow,
+        description: description,
+        internal_notes: internalNotes,
+        service_address: serviceAddress,
+        service_city: serviceCity,
+        service_state: serviceState,
+        service_zip: serviceZip,
+        // Self-maintained rather than assumed to come from a database
+        // trigger — see this function's header comment. This is also what
+        // gives the *next* edit a reliable concurrency token to check.
+        updated_at: new Date().toISOString(),
+      },
+      pricingUpdate
+    );
+
+    let updateQuery = supabase.from("bookings").update(updatePayload).eq("id", id);
+    updateQuery = submittedUpdatedAt === null ? updateQuery.is("updated_at", null) : updateQuery.eq("updated_at", submittedUpdatedAt);
+
+    const { data: updated, error } = await updateQuery
+      .select(
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at, updated_at"
+      )
+      .maybeSingle();
+    if (error) throw error;
+
+    if (!updated) {
+      // The booking was confirmed to exist just above in this same request,
+      // so reaching here means the .eq("updated_at", ...) / .is(...) guard
+      // didn't match — someone else changed this booking since Edit Job
+      // loaded. Nothing was written.
+      res.status(409).json({
+        error: "This job was changed since you opened it. Please reload and try again.",
+        code: "stale_update",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      booking: {
+        id: updated.id,
+        customerId: updated.customer_id,
+        serviceType: updated.service_type,
+        serviceLabel: serviceLabel(updated.service_type),
+        appointmentDate: updated.appointment_date,
+        timeWindow: updated.time_window,
+        timeWindowLabel: timeWindowLabel(updated.time_window),
+        description: updated.description,
+        estimatedPrice: updated.estimated_price,
+        finalPrice: updated.final_price,
+        tipAmount: updated.tip_amount,
+        internalNotes: updated.internal_notes,
+        status: normalizedStatus(updated.status),
+        statusLabel: statusLabel(updated.status),
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at,
+      },
+      serviceAddress: {
+        address: updated.service_address,
+        city: updated.service_city,
+        state: updated.service_state,
+        zip: updated.service_zip,
+      },
+    });
+  } catch (err) {
+    console.error("Admin job update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save changes." });
   }
 }
 
