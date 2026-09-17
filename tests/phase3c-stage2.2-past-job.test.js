@@ -487,6 +487,140 @@ test("POST past job: absurdly large finalPrice -> 400, no row created", async ()
 });
 
 // =======================================================================
+// 6b. Tip amount -> tip_amount, always its own column — Stage 2.2 addendum
+// (owner-requested addition before ship, added after the Preview review).
+// Not yet deployed anywhere: bookings.tip_amount does not exist in
+// production Supabase yet (see docs/phase-3/stage2.2-tip-amount-migration.md),
+// so this is exercised only against the offline fake Supabase below.
+// =======================================================================
+test("POST past job: omitted tipAmount -> saved as a real NULL", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const body = validPastBody();
+  delete body.tipAmount;
+  const res = await postBooking(db, AUTH_COOKIE, body);
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.tipAmount, null);
+  assert.strictEqual(db.bookings[0].tip_amount, null);
+});
+
+test("POST past job: a valid tipAmount is written to tip_amount", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: 40 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.tipAmount, 40);
+  assert.strictEqual(db.bookings[0].tip_amount, 40);
+});
+
+test("POST past job: tipAmount of exactly 0 is accepted and stored as a real 0, not treated as absent", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: 0 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.tipAmount, 0);
+  assert.strictEqual(db.bookings[0].tip_amount, 0);
+});
+
+test("POST past job: a decimal tipAmount is stored at cent precision", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: 12.5 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.tipAmount, 12.5);
+  assert.strictEqual(db.bookings[0].tip_amount, 12.5);
+});
+
+test("POST past job: negative tipAmount -> 400, no row created", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: -5 }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+});
+
+test("POST past job: malformed (non-numeric string) tipAmount -> 400, no row created", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: "a lot" }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+});
+
+test("POST past job: NaN/Infinity tipAmount -> 400, no row created", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const nanRes = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: NaN }));
+  assert.strictEqual(nanRes.statusCode, 400);
+  const infRes = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: Infinity }));
+  assert.strictEqual(infRes.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+});
+
+test("POST past job: absurdly large (out-of-range) tipAmount -> 400, no row created", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: 50000000 }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+});
+
+test("POST past job: tipAmount and finalPrice are independent — a tip never leaks into final_price and vice versa", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, validPastBody({ finalPrice: 300, tipAmount: 60 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.finalPrice, 300);
+  assert.strictEqual(res.body.booking.tipAmount, 60);
+  assert.strictEqual(db.bookings[0].final_price, 300);
+  assert.strictEqual(db.bookings[0].tip_amount, 60);
+  assert.notStrictEqual(db.bookings[0].final_price, db.bookings[0].final_price + db.bookings[0].tip_amount, "sanity: the two values were never summed/combined into one column");
+});
+
+test("POST past job: a tip can be entered with no finalPrice at all (amount unknown, tip remembered)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const body = validPastBody({ tipAmount: 15 });
+  delete body.finalPrice;
+  const res = await postBooking(db, AUTH_COOKIE, body);
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.finalPrice, null);
+  assert.strictEqual(res.body.booking.tipAmount, 15);
+});
+
+test("POST booking: a tipAmount sent alongside New Job (mode omitted) is never read — New Job has no tip support yet", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, {
+    customerId: EXISTING_CUSTOMER_ID,
+    serviceType: "junk_removal",
+    appointmentDate: TODAY_ISO,
+    timeWindow: "w_0800_1000",
+    serviceAddress: { address: "1 Main St", city: "Denver", state: "CO", zip: "80202" },
+    tipAmount: 999,
+  });
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.booking.status, "booked");
+  assert.strictEqual(db.bookings[0].tip_amount, null, "an attacker-supplied tipAmount must never reach tip_amount on a New Job request");
+});
+
+test('POST booking: mode:"new" explicitly with a tipAmount is still ignored (mode itself, not just its absence, gates tip support)', async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await postBooking(db, AUTH_COOKIE, {
+    mode: "new",
+    customerId: EXISTING_CUSTOMER_ID,
+    serviceType: "junk_removal",
+    appointmentDate: TODAY_ISO,
+    timeWindow: "w_0800_1000",
+    serviceAddress: { address: "1 Main St", city: "Denver", state: "CO", zip: "80202" },
+    tipAmount: 500,
+  });
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].tip_amount, null);
+});
+
+// =======================================================================
 // 7. Client / address validation — same rules as New Job, reused as-is
 // =======================================================================
 test("POST past job: missing customerId -> 400, no row created", async () => {
@@ -541,6 +675,7 @@ test("POST past job: extra unexpected fields in the body are ignored — only th
       id: "attacker-chosen-id",
       phone_normalized: "0000000000",
       created_at: "2000-01-01T00:00:00Z",
+      tip_amount: 999999,
     })
   );
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
@@ -548,6 +683,7 @@ test("POST past job: extra unexpected fields in the body are ignored — only th
   assert.strictEqual(row.customer_id, EXISTING_CUSTOMER_ID, "customer_id must come only from the validated customerId field");
   assert.notStrictEqual(row.id, "attacker-chosen-id", "the row id must never be caller-supplied");
   assert.notStrictEqual(row.created_at, "2000-01-01T00:00:00Z", "created_at must never be caller-supplied");
+  assert.strictEqual(row.tip_amount, null, "a snake_case tip_amount in the body must never leak in — only the validated camelCase tipAmount is ever read");
 });
 
 // =======================================================================
@@ -575,7 +711,7 @@ test("POST past job: response never leaks the service-role or anon key", async (
 test("End-to-end: a past job created via POST is what a subsequent GET (booking detail) returns", async () => {
   adminAuthed();
   const db = freshDb();
-  const createRes = await postBooking(db, AUTH_COOKIE, validPastBody());
+  const createRes = await postBooking(db, AUTH_COOKIE, validPastBody({ tipAmount: 45 }));
   assert.strictEqual(createRes.statusCode, 200, JSON.stringify(createRes.body));
   const newId = createRes.body.booking.id;
 
@@ -584,6 +720,7 @@ test("End-to-end: a past job created via POST is what a subsequent GET (booking 
   assert.strictEqual(getRes.statusCode, 200, JSON.stringify(getRes.body));
   assert.strictEqual(getRes.body.booking.status, "completed");
   assert.strictEqual(getRes.body.booking.finalPrice, 250);
+  assert.strictEqual(getRes.body.booking.tipAmount, 45, "GET must round-trip the tip amount, same as every other stored field");
   assert.strictEqual(getRes.body.booking.customerId, EXISTING_CUSTOMER_ID);
 });
 
@@ -618,6 +755,36 @@ test("api/_lib/historical-floor.js is a pure constant module — no Supabase wri
   const src = fs.readFileSync(path.join(__dirname, "..", "api/_lib/historical-floor.js"), "utf8");
   assert.ok(!/\.(insert|update|upsert|delete)\s*\(/.test(src));
   assert.ok(!fs.existsSync(path.join(__dirname, "..", "api", "historical-floor.js")), "must live only under api/_lib/, never directly under api/");
+});
+
+// =======================================================================
+// 14. Tip Amount UI wiring — Stage 2.2 addendum static checks. The actual
+// "Add Another Past Job -> tip field cleared" behavior is a full-page
+// navigation (see admin/booking-past.js), which this offline Node harness
+// has no DOM/browser to exercise directly — asserted here at the source
+// level instead: the reset path must stay a plain navigation (which clears
+// every field, tip included, as a consequence of a fresh page load) rather
+// than a partial in-place field reset that could selectively miss one.
+// =======================================================================
+test("admin/booking-past.js wires a tip-amount input and reads it into the save request", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin/booking-past.js"), "utf8");
+  assert.ok(/tip-amount/.test(src), "must reference the tip-amount input");
+  assert.ok(/body\.tipAmount/.test(src), "must send tipAmount in the POST body");
+});
+
+test("admin/booking-past.js's 'Add Another Past Job' resets via a full page navigation, not a partial field reset", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin/booking-past.js"), "utf8");
+  const addAnotherBlock = src.slice(src.indexOf("addAnotherBtn.addEventListener"));
+  assert.ok(/window\.location\.href\s*=\s*['"]\/admin\/booking-past\/['"]/.test(addAnotherBlock), "Add Another Past Job must navigate to a fresh copy of the page, which clears every job-specific field (tip amount included) — never a targeted reset of only some fields");
+});
+
+test("admin/booking-past/index.html places Tip Amount directly alongside Actual Job Amount, and the layout is otherwise unchanged", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin/booking-past/index.html"), "utf8");
+  const actualIdx = src.indexOf('id="actual-price"');
+  const tipIdx = src.indexOf('id="tip-amount"');
+  const timeIdx = src.indexOf('id="time-window"');
+  assert.ok(actualIdx !== -1 && tipIdx !== -1 && timeIdx !== -1, "all three fields must be present");
+  assert.ok(actualIdx < tipIdx && tipIdx < timeIdx, "Tip Amount must sit between Actual Job Amount and Time, inside the same existing field row — no reordering of the rest of the form");
 });
 
 // ---------------------------------------------------------------------

@@ -55,7 +55,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, internal_notes, created_at, customer_id, service_address, service_city, service_state, service_zip"
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, created_at, customer_id, service_address, service_city, service_state, service_zip"
       )
       .eq("id", id)
       .maybeSingle();
@@ -121,6 +121,7 @@ module.exports = async (req, res) => {
         description: booking.description,
         estimatedPrice: booking.estimated_price,
         finalPrice: booking.final_price,
+        tipAmount: booking.tip_amount,
         internalNotes: booking.internal_notes,
         status: normalizedStatus(booking.status),
         statusLabel: statusLabel(booking.status),
@@ -175,7 +176,10 @@ module.exports = async (req, res) => {
 //     appointment date must be on/after the historical migration floor
 //     (api/_lib/historical-floor.js) and no later than today, time window
 //     optional (a real NULL when unknown, never an invented placeholder),
-//     price is the actual job amount written to final_price.
+//     price is the actual job amount written to final_price, and an
+//     optional tip is written to its own tip_amount column — never merged
+//     into final_price. tipAmount is only ever read in this mode; New Job
+//     has no tip field in its request shape at all.
 // `mode` is read once, validated against an explicit allowlist, and never
 // inferred from any other field — so the two very different rule sets below
 // can never be crossed by a crafted request. `status` itself is never read
@@ -303,6 +307,7 @@ async function handleCreate(req, res) {
 
   let estimatedPrice = null;
   let finalPrice = null;
+  let tipAmount = null;
   if (isPast) {
     // Historical actual amount — written to final_price, never
     // estimated_price (that column represents a pre-job quote, which a
@@ -317,6 +322,21 @@ async function handleCreate(req, res) {
       // Matches the confirmed live column type, numeric(10,2) — see
       // docs/phase-3/stage2-preflight.md.
       finalPrice = Math.round(n * 100) / 100;
+    }
+    // Tip is its own value, always separate from final_price — never
+    // combined into the job amount. Only ever read/validated in Past Job
+    // mode: New Job has no tip field in its request shape at all, so a
+    // tipAmount sent alongside mode:"new" (or an omitted mode) is simply
+    // never looked at here, the same way finalPrice is invisible to New Job
+    // above. Zero is a valid tip ("!== undefined/null/\"\"" lets 0 through)
+    // and is stored as a real 0, not treated as absent.
+    if (body.tipAmount !== undefined && body.tipAmount !== null && body.tipAmount !== "") {
+      const n = Number(body.tipAmount);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid tip amount." });
+        return;
+      }
+      tipAmount = Math.round(n * 100) / 100;
     }
   } else {
     if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
@@ -350,6 +370,7 @@ async function handleCreate(req, res) {
         description: description,
         estimated_price: estimatedPrice,
         final_price: finalPrice,
+        tip_amount: tipAmount,
         internal_notes: internalNotes,
         // Frozen job-location snapshot — written once, here, and never
         // re-derived from the customer's profile address later, matching
@@ -360,7 +381,7 @@ async function handleCreate(req, res) {
         service_zip: serviceZip,
       })
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
       )
       .single();
 
@@ -379,6 +400,7 @@ async function handleCreate(req, res) {
         description: created.description,
         estimatedPrice: created.estimated_price,
         finalPrice: created.final_price,
+        tipAmount: created.tip_amount,
         internalNotes: created.internal_notes,
         status: normalizedStatus(created.status),
         statusLabel: statusLabel(created.status),

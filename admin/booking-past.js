@@ -63,6 +63,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var timeWindowSelect = document.getElementById('time-window');
   var appointmentDateInput = document.getElementById('appointment-date');
   var actualPriceInput = document.getElementById('actual-price');
+  var tipAmountInput = document.getElementById('tip-amount');
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
 
@@ -167,6 +168,8 @@ document.addEventListener('DOMContentLoaded', function () {
     };
     var priceRaw = actualPriceInput.value.trim();
     if (priceRaw) body.finalPrice = Number(priceRaw);
+    var tipRaw = tipAmountInput.value.trim();
+    if (tipRaw) body.tipAmount = Number(tipRaw);
 
     savingInFlight = true;
     saveBtn.disabled = true;
@@ -209,6 +212,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var metaParts = [name, booking.appointmentDate];
     var priceText = formatPrice(booking.finalPrice);
     if (priceText) metaParts.push(priceText);
+    var tipText = formatPrice(booking.tipAmount);
+    if (tipText) metaParts.push('Tip ' + tipText);
     successMeta.textContent = metaParts.join(' · ');
     successPanel.style.display = 'block';
     viewJobBtn.onclick = function () {
