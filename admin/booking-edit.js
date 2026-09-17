@@ -84,6 +84,18 @@ document.addEventListener('DOMContentLoaded', function () {
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
 
+  // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
+  // additive; see admin/booking-new.js's identical comment for the full
+  // fallback contract when Google isn't configured or fails to load.
+  if (window.AdminAddressAutocomplete) {
+    window.AdminAddressAutocomplete.attach({
+      address: serviceAddressInput,
+      city: serviceCityInput,
+      state: serviceStateInput,
+      zip: serviceZipInput,
+    });
+  }
+
   var bookingId = null;
   var isCompleted = false;
   var loadedUpdatedAt = undefined; // the concurrency token captured on load

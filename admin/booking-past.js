@@ -110,6 +110,41 @@ document.addEventListener('DOMContentLoaded', function () {
   appointmentDateInput.max = todayIso;
   appointmentDateInput.value = todayIso;
 
+  // Date-aware entry (Phase 3C Stage 2.4): a Month/Year calendar day's
+  // "+ Past Job" link may carry ?date=YYYY-MM-DD so the form opens with
+  // that historical date already selected. Never trusted blindly — an
+  // arbitrary URL value is validated against exactly the same bounds the
+  // server itself enforces (a real calendar date, on/after the historical
+  // floor and on/before today); anything outside that — including a
+  // future date, which Past Job can never accept — is silently ignored and
+  // the field keeps its ordinary today default. The server independently
+  // re-validates the submitted date regardless of what prefilled this
+  // field.
+  (function applyDatePrefill() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = (params.get('date') || '').trim();
+    if (!requested) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) return;
+    var d = new Date(requested + 'T00:00:00Z');
+    if (isNaN(d.getTime())) return;
+    var parts = requested.split('-').map(Number);
+    if (d.getUTCFullYear() !== parts[0] || d.getUTCMonth() + 1 !== parts[1] || d.getUTCDate() !== parts[2]) return;
+    if (requested < HISTORICAL_FLOOR_ISO || requested > todayIso) return;
+    appointmentDateInput.value = requested;
+  })();
+
+  // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
+  // additive; see admin/booking-new.js's identical comment for the full
+  // fallback contract when Google isn't configured or fails to load.
+  if (window.AdminAddressAutocomplete) {
+    window.AdminAddressAutocomplete.attach({
+      address: serviceAddressInput,
+      city: serviceCityInput,
+      state: serviceStateInput,
+      zip: serviceZipInput,
+    });
+  }
+
   window.AdminClientPicker.mount(clientPickerMount, {
     onSelect: function (client, warnings) {
       selectedClient = client;

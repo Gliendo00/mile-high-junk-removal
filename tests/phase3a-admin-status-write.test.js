@@ -676,6 +676,12 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // stays a controlled, allowlisted update rather than a new "write
       // anything" endpoint.
       "api/admin/booking.js: .update(",
+      // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
+      // exactly one new write call — handleCreateExpense()'s insert into
+      // the (not-yet-migrated) expenses table — gated behind an explicit
+      // resource:"expense" discriminator so it can never be reached by any
+      // booking-shaped request. See tests/phase3c-stage2.4-expenses.test.js.
+      "api/admin/bookings.js: .insert(",
       "api/admin/client.js: .insert(",
     ],
     "found: " + JSON.stringify(found)

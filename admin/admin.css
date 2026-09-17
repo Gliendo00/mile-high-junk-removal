@@ -134,25 +134,36 @@
 /* segmented toggle (unlike .admin-filter-pill's label+count layout,    */
 /* which is built for status counts, not a 3-way range choice).         */
 /* ------------------------------------------------------------------ */
+/* Five ranges as of Phase 3C Stage 2.4 (Today/Tomorrow/Week/Month/Year).
+   A horizontally-scrolling single row of content-sized pills — never five
+   equal-flex giant buttons — keeps this compact at any phone width: on
+   most phones all five already fit with no scrolling at all; a narrower
+   device scrolls the row itself (a well-understood mobile pattern) rather
+   than wrapping to a second line or shrinking text unreadably. */
 .admin-range-tabs {
   display: flex;
   gap: 6px;
   margin-bottom: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.admin-range-tabs::-webkit-scrollbar { display: none; }
 .admin-range-tab {
   -webkit-appearance: none;
   appearance: none;
-  flex: 1 1 0;
-  min-height: 42px;
-  padding: 0 8px;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 14px;
   border-radius: 10px;
   border: 1px solid var(--color-neutral-200, #eee7db);
   background: #fff;
   font-family: var(--font-body);
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13.5px;
   color: var(--color-neutral-700, #645c50);
   cursor: pointer;
+  white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
 .admin-range-tab.is-active {
@@ -160,6 +171,250 @@
   border-color: var(--color-dark, #14150f);
   color: #fff;
 }
+
+/* ------------------------------------------------------------------ */
+/* Week/Month/Year navigation row — Phase 3C Stage 2.4. Shared shape for  */
+/* all three: a centered label flanked by Prev/Next, sized as a normal    */
+/* tap target without dominating the header the way five giant buttons    */
+/* would.                                                                 */
+/* ------------------------------------------------------------------ */
+.admin-calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.admin-calendar-nav-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text, #201e1d);
+  cursor: pointer;
+}
+.admin-calendar-nav-btn:disabled { opacity: 0.4; cursor: default; }
+.admin-calendar-nav-label {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 16px;
+  color: var(--color-text, #201e1d);
+}
+.admin-calendar-jump-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--color-neutral-300, #dcd3c4);
+  background: var(--admin-tint);
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-accent-700, #2f6f13);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ */
+/* Month calendar grid — Phase 3C Stage 2.4. Compact 7-column grid;      */
+/* each date cell is a real tap target (>=44px tall) without cramming     */
+/* full booking cards into it — a subtle job-count badge only, matching   */
+/* the stage's explicit "do not cram full booking cards into every        */
+/* calendar cell" instruction. Outside-month padding cells and a          */
+/* muted/disabled state share the same restrained, unobtrusive treatment. */
+/* ------------------------------------------------------------------ */
+.admin-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  margin-bottom: 4px;
+}
+.admin-month-grid-weekday {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-neutral-600, #82796a);
+  padding-bottom: 4px;
+}
+.admin-month-grid-cell {
+  -webkit-appearance: none;
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  aspect-ratio: 1 / 1;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: #fff;
+  font-family: var(--font-body);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-month-grid-cell.is-outside { background: transparent; border: none; cursor: default; }
+.admin-month-grid-daynum { font-size: 13.5px; font-weight: 700; color: var(--color-text, #201e1d); }
+.admin-month-grid-cell.is-today .admin-month-grid-daynum { color: var(--color-accent-700, #2f6f13); }
+.admin-month-grid-cell.is-today {
+  border-color: var(--color-accent-700, #2f6f13);
+}
+.admin-month-grid-cell.is-selected {
+  background: var(--color-dark, #14150f);
+  border-color: var(--color-dark, #14150f);
+}
+.admin-month-grid-cell.is-selected .admin-month-grid-daynum,
+.admin-month-grid-cell.is-selected .admin-month-grid-count { color: #fff; }
+.admin-month-grid-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-accent-700, #2f6f13);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.admin-month-grid-cell.is-selected .admin-month-grid-count { background: rgba(255, 255, 255, 0.25); }
+
+/* Selected-day panel below the Month grid — job list + Quick Expense.    */
+.admin-day-panel {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-day-panel-heading {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+.admin-day-panel-action { margin-bottom: 12px; }
+.admin-day-panel-jobs { margin-bottom: 8px; }
+.admin-day-panel-expenses {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--color-neutral-200, #eee7db);
+}
+
+/* ------------------------------------------------------------------ */
+/* Year grid — Phase 3C Stage 2.4. Navigation only: job counts, never     */
+/* revenue/profit/expenses (see api/admin/bookings.js's handleYear()).    */
+/* ------------------------------------------------------------------ */
+.admin-year-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+@media (min-width: 420px) {
+  .admin-year-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.admin-year-grid-tile {
+  -webkit-appearance: none;
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 68px;
+  border-radius: 12px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+.admin-year-grid-tile.is-disabled { opacity: 0.35; cursor: default; }
+.admin-year-grid-month { font-size: 14px; font-weight: 800; color: var(--color-text, #201e1d); }
+.admin-year-grid-count { font-size: 11.5px; font-weight: 700; color: var(--color-neutral-600, #82796a); }
+
+/* ------------------------------------------------------------------ */
+/* Daily Quick Expense Tracking — Phase 3C Stage 2.4 addendum            */
+/* (admin/quick-expense.js). Compact, mobile-first: three one-tap icon    */
+/* buttons + "+ More", a single summary line, and a plain list — this     */
+/* deliberately never grows into an accounting screen.                   */
+/* ------------------------------------------------------------------ */
+.admin-quick-expense-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.admin-quick-expense-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  border-radius: 10px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  cursor: pointer;
+}
+.admin-quick-expense-btn-icon { font-size: 18px; line-height: 1; }
+.admin-quick-expense-btn-label { font-size: 11px; font-weight: 700; color: var(--color-neutral-700, #645c50); }
+.admin-quick-expense-summary {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--color-text, #201e1d);
+  margin-bottom: 6px;
+}
+.admin-quick-expense-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.admin-quick-expense-item {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.admin-quick-expense-item-category { font-weight: 700; color: var(--color-text, #201e1d); }
+.admin-quick-expense-item-amount { font-weight: 700; color: var(--color-accent-700, #2f6f13); }
+.admin-quick-expense-item-note {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-quick-expense-readonly {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 10px;
+  background: var(--admin-tint);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text, #201e1d);
+}
+.admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
 .admin-schedule-day-heading {
   font-family: var(--font-body);
@@ -1088,3 +1343,45 @@
   color: var(--color-neutral-600, #82796a);
   margin-bottom: 16px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Google Places address-autocomplete dropdown — Phase 3C Stage 2.4     */
+/* (admin/address-autocomplete.js). Anchored to the Street Address       */
+/* field's own wrapper (position:relative set via JS), never wider than  */
+/* that wrapper — can't overflow the viewport even at 375px. Manual      */
+/* typing in the field itself is completely unaffected by this panel's   */
+/* presence or absence.                                                  */
+/* ------------------------------------------------------------------ */
+.admin-address-autocomplete-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 30;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.admin-address-autocomplete-panel[hidden] { display: none; }
+.admin-address-autocomplete-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
+  padding: 10px 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.admin-address-autocomplete-item:last-child { border-bottom: 0; }
+.admin-address-autocomplete-item:active,
+.admin-address-autocomplete-item:hover { background: var(--admin-tint); }
+.admin-address-autocomplete-item-main { font-weight: 700; font-size: 14px; color: var(--color-text, #201e1d); }
+.admin-address-autocomplete-item-secondary { font-size: 12.5px; color: var(--color-neutral-600, #82796a); }

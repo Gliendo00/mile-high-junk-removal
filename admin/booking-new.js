@@ -72,10 +72,41 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Default appointment date to today (client-side convenience only — the
   // server independently enforces "today or later" in America/Denver).
-  var today = new Date();
-  var todayIso = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  // Denver-local, not the browser's own local time — the owner's phone may
+  // not be set to America/Denver, matching admin/booking-past.js's own
+  // reasoning for using this same explicit-timezone approach rather than
+  // plain `new Date()` getters.
+  function denverTodayIso() {
+    var fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' });
+    var parts = {};
+    fmt.formatToParts(new Date()).forEach(function (p) { parts[p.type] = p.value; });
+    return parts.year + '-' + parts.month + '-' + parts.day;
+  }
+  var todayIso = denverTodayIso();
   appointmentDateInput.value = todayIso;
   appointmentDateInput.min = todayIso;
+
+  // Date-aware entry (Phase 3C Stage 2.4): a Month/Year calendar day's
+  // "+ New Job" link may carry ?date=YYYY-MM-DD so the form opens with that
+  // date already selected. Never trusted blindly — an arbitrary URL value
+  // is validated against exactly the same rule the server itself enforces
+  // (a real calendar date, today or later); anything else is silently
+  // ignored and the field keeps its ordinary today default, never a broken
+  // or out-of-range prefill. This is a convenience only: the server
+  // independently re-validates the submitted date regardless of what
+  // prefilled this field.
+  (function applyDatePrefill() {
+    var params = new URLSearchParams(window.location.search);
+    var requested = (params.get('date') || '').trim();
+    if (!requested) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) return;
+    var d = new Date(requested + 'T00:00:00Z');
+    if (isNaN(d.getTime())) return;
+    var parts = requested.split('-').map(Number);
+    if (d.getUTCFullYear() !== parts[0] || d.getUTCMonth() + 1 !== parts[1] || d.getUTCDate() !== parts[2]) return; // rejects an impossible date like 2026-02-30
+    if (requested < todayIso) return; // New Job only ever accepts today-or-later; an earlier date is silently ignored, not "corrected" to today's own different meaning
+    appointmentDateInput.value = requested;
+  })();
 
   // Only offer "same as client's address" when a full street address is
   // actually known for this client (true right after inline-creating one
@@ -83,6 +114,20 @@ document.addEventListener('DOMContentLoaded', function () {
   // carries name/phone/email/city, never the full address, so there is
   // nothing honest to prefill from in that case). Also resets whenever the
   // selection is cleared (client === null, via "Change").
+  // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
+  // additive: if window.ADMIN_GOOGLE_MAPS_API_KEY (admin/google-maps-
+  // config.js) is empty/unconfigured, or the Google script fails to load,
+  // this call is a safe no-op and every field below stays a fully manual,
+  // fully required-nothing text input exactly as before this feature.
+  if (window.AdminAddressAutocomplete) {
+    window.AdminAddressAutocomplete.attach({
+      address: serviceAddressInput,
+      city: serviceCityInput,
+      state: serviceStateInput,
+      zip: serviceZipInput,
+    });
+  }
+
   window.AdminClientPicker.mount(clientPickerMount, {
     onSelect: function (client, warnings) {
       selectedClient = client;

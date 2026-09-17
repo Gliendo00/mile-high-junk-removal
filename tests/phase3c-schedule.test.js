@@ -238,6 +238,20 @@ const IN_6_DAYS = addDaysIso(TODAY, 6);
 const IN_7_DAYS = addDaysIso(TODAY, 7); // outside the 7-day (today..+6) week window
 const YESTERDAY = addDaysIso(TODAY, -1);
 
+// Phase 3C Stage 2.4: "week" became a navigable Sunday-aligned calendar
+// week instead of a rolling today..+6 window — independent copy of the
+// implementation's own day-of-week math, same "never imported from the
+// handler under test" reasoning as denverTodayIso()/addDaysIso() above.
+function dayOfWeekIso(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay();
+}
+function startOfWeekSundayIso(iso) {
+  return addDaysIso(iso, -dayOfWeekIso(iso));
+}
+const WEEK_START = startOfWeekSundayIso(TODAY);
+const WEEK_END = addDaysIso(WEEK_START, 6);
+
 function booking(overrides) {
   return Object.assign(
     {
@@ -323,12 +337,28 @@ test("GET schedule: response is always Cache-Control: no-store", async () => {
   assert.strictEqual(res.getHeader("Cache-Control"), "no-store");
 });
 
-test("GET schedule: POST is rejected with 405 (method-scoped)", async () => {
+// Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) gave POST a
+// real meaning on this file for the first time (expense creation — see
+// tests/phase3c-stage2.4-expenses.test.js for its full coverage), so a bare
+// POST no longer 405s outright; it's read far enough to see there's no
+// valid `resource` in the body and rejected with 400, never silently
+// treated as a booking write. DELETE/PUT remain genuinely unsupported.
+test("bookings.js: POST with no/invalid resource is rejected (400), never silently accepted", async () => {
   adminAuthed();
   const db = freshDb([]);
   currentFakeService = createFakeServiceClient(db);
   const res = await run(bookingsHandler, makeReq({ method: "POST", cookie: "mhjr_admin_at=at-good", query: { view: "schedule" } }));
-  assert.strictEqual(res.statusCode, 405);
+  assert.strictEqual(res.statusCode, 400);
+});
+
+test("GET schedule: DELETE/PUT are rejected with 405 (method-scoped)", async () => {
+  adminAuthed();
+  const db = freshDb([]);
+  currentFakeService = createFakeServiceClient(db);
+  const resDelete = await run(bookingsHandler, makeReq({ method: "DELETE", cookie: "mhjr_admin_at=at-good", query: { view: "schedule" } }));
+  assert.strictEqual(resDelete.statusCode, 405);
+  const resPut = await run(bookingsHandler, makeReq({ method: "PUT", cookie: "mhjr_admin_at=at-good", query: { view: "schedule" } }));
+  assert.strictEqual(resPut.statusCode, 405);
 });
 
 test("GET schedule: never leaks the service-role key or anon key", async () => {
@@ -385,18 +415,20 @@ test("GET schedule: range=tomorrow returns only tomorrow's job", async () => {
   assert.deepStrictEqual(res.body.jobs.map((j) => j.id), ["2"]);
 });
 
-test("GET schedule: range=week includes today through +6 days but excludes +7 days and yesterday", async () => {
+test("GET schedule: range=week (no weekStart) defaults to the Sunday-aligned week containing today, excluding the days just outside it", async () => {
   adminAuthed();
   const db = freshDb([
-    booking({ id: "yesterday", appointment_date: YESTERDAY }),
+    booking({ id: "before-week", appointment_date: addDaysIso(WEEK_START, -1) }),
+    booking({ id: "week-start", appointment_date: WEEK_START }),
     booking({ id: "today", appointment_date: TODAY }),
-    booking({ id: "plus3", appointment_date: IN_3_DAYS }),
-    booking({ id: "plus6", appointment_date: IN_6_DAYS }),
-    booking({ id: "plus7", appointment_date: IN_7_DAYS }),
+    booking({ id: "week-end", appointment_date: WEEK_END }),
+    booking({ id: "after-week", appointment_date: addDaysIso(WEEK_END, 1) }),
   ]);
   const res = await getSchedule(db, "mhjr_admin_at=at-good", { range: "week" });
   const ids = res.body.jobs.map((j) => j.id);
-  assert.deepStrictEqual(ids.sort(), ["plus3", "plus6", "today"]);
+  assert.deepStrictEqual(ids.sort(), ["today", "week-end", "week-start"].sort());
+  assert.strictEqual(res.body.weekStart, WEEK_START);
+  assert.strictEqual(res.body.weekEnd, WEEK_END);
 });
 
 // =======================================================================
@@ -425,11 +457,15 @@ test("GET schedule: an unrecognized time_window sorts after every recognized win
 
 test("GET schedule: earlier dates sort before later dates regardless of time window", async () => {
   adminAuthed();
+  // Pinned to an explicit weekStart (rather than relying on TODAY/IN_3_DAYS
+  // falling in the default current week) so this assertion can't go flaky
+  // depending on which day of the Sunday-aligned week the suite happens to
+  // run on.
   const db = freshDb([
-    booking({ id: "later-day-early-window", appointment_date: IN_3_DAYS, time_window: "w_0400_0600" }),
-    booking({ id: "earlier-day-late-window", appointment_date: TODAY, time_window: "w_2000_2200" }),
+    booking({ id: "later-day-early-window", appointment_date: addDaysIso(WEEK_START, 3), time_window: "w_0400_0600" }),
+    booking({ id: "earlier-day-late-window", appointment_date: WEEK_START, time_window: "w_2000_2200" }),
   ]);
-  const res = await getSchedule(db, "mhjr_admin_at=at-good", { range: "week" });
+  const res = await getSchedule(db, "mhjr_admin_at=at-good", { range: "week", weekStart: WEEK_START });
   assert.deepStrictEqual(res.body.jobs.map((j) => j.id), ["earlier-day-late-window", "later-day-early-window"]);
 });
 
@@ -606,6 +642,13 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",
+      // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
+      // exactly one new write call — handleCreateExpense()'s insert into
+      // the (not-yet-migrated) expenses table — deliberately, gated behind
+      // an explicit resource:"expense" discriminator so it can never be
+      // reached by any booking-shaped request. See
+      // tests/phase3c-stage2.4-expenses.test.js for its full coverage.
+      "api/admin/bookings.js: .insert(",
       "api/admin/client.js: .insert(",
     ],
     "found: " + JSON.stringify(found)

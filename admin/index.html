@@ -45,14 +45,55 @@
     <button type="button" class="admin-range-tab is-active" data-range="today" role="tab" aria-selected="true">Today</button>
     <button type="button" class="admin-range-tab" data-range="tomorrow" role="tab" aria-selected="false">Tomorrow</button>
     <button type="button" class="admin-range-tab" data-range="week" role="tab" aria-selected="false">Week</button>
+    <button type="button" class="admin-range-tab" data-range="month" role="tab" aria-selected="false">Month</button>
+    <button type="button" class="admin-range-tab" data-range="year" role="tab" aria-selected="false">Year</button>
   </div>
 
-  <div id="loading" class="admin-loading">Loading schedule…</div>
-  <div id="empty" class="admin-empty" style="display:none"></div>
-  <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
+  <!-- Today / Tomorrow / Week — Phase 3C Stage 1, Week made navigable in
+       Stage 2.4 (week-nav shown only for range=week). -->
+  <div id="today-tomorrow-week-view">
+    <div id="week-nav" class="admin-calendar-nav" hidden>
+      <button type="button" id="week-prev" class="admin-calendar-nav-btn" aria-label="Previous week">&larr;</button>
+      <span id="week-range-label" class="admin-calendar-nav-label">—</span>
+      <button type="button" id="week-next" class="admin-calendar-nav-btn" aria-label="Next week">&rarr;</button>
+    </div>
+    <div id="week-current-wrap" style="display:none">
+      <button type="button" id="week-current-btn" class="admin-calendar-jump-btn">Jump to this week</button>
+    </div>
+    <div id="loading" class="admin-loading">Loading schedule…</div>
+    <div id="empty" class="admin-empty" style="display:none"></div>
+    <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
+  </div>
+
+  <!-- Month — Phase 3C Stage 2.4 -->
+  <div id="month-view" hidden>
+    <div class="admin-calendar-nav">
+      <button type="button" id="month-prev" class="admin-calendar-nav-btn" aria-label="Previous month">&larr;</button>
+      <span id="month-label" class="admin-calendar-nav-label">—</span>
+      <button type="button" id="month-next" class="admin-calendar-nav-btn" aria-label="Next month">&rarr;</button>
+    </div>
+    <div id="month-loading" class="admin-loading">Loading month…</div>
+    <div id="month-error" class="admin-error-banner" style="display:none"></div>
+    <div id="month-grid" class="admin-month-grid" style="display:none"></div>
+    <div id="month-day-panel" class="admin-day-panel" hidden></div>
+  </div>
+
+  <!-- Year — Phase 3C Stage 2.4 -->
+  <div id="year-view" hidden>
+    <div class="admin-calendar-nav">
+      <button type="button" id="year-prev" class="admin-calendar-nav-btn" aria-label="Previous year">&larr;</button>
+      <span id="year-label" class="admin-calendar-nav-label">—</span>
+      <button type="button" id="year-next" class="admin-calendar-nav-btn" aria-label="Next year">&rarr;</button>
+    </div>
+    <div id="year-loading" class="admin-loading">Loading year…</div>
+    <div id="year-error" class="admin-error-banner" style="display:none"></div>
+    <div id="year-grid" class="admin-year-grid" style="display:none"></div>
+  </div>
 </main>
 
 <script src="nav-badge.js"></script>
 <script src="schedule.js"></script>
+<script src="quick-expense.js"></script>
+<script src="calendar-views.js"></script>
 </body>
 </html>

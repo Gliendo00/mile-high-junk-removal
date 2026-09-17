@@ -10,6 +10,8 @@ const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus, STATUS_LABELS } = require("../_lib/booking-format");
 const { timeWindowStartHour } = require("../_lib/time-windows");
+const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
+const { EXPENSE_CATEGORIES } = require("../_lib/expense-categories");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -23,14 +25,41 @@ const MAX_LIMIT = 200;
 // through, so neither belongs on an operational schedule. No second
 // operational-status field is introduced for this.
 const SCHEDULABLE_STATUSES = ["booked", "completed"];
-const VALID_RANGES = ["today", "tomorrow", "week"];
-// "week" is a rolling 7-day window starting today (today + the next 6 days),
-// not a Sunday-Saturday calendar week — see docs/phase-3/schedule-architecture.md.
+// Phase 3C Stage 2.4: "week" became a navigable calendar week (see
+// handleSchedule below) rather than the Stage 1 rolling 7-day window: the
+// week starts on Sunday and moves with an explicit ?weekStart= param, but
+// still spans exactly WEEK_SPAN_DAYS days either way — see
+// docs/phase-3/stage2.4-calendar-address-proposal.md "Week start day" for
+// why Sunday was chosen. "month" and "year" are new bounded calendar
+// navigation modes added the same stage.
+const VALID_RANGES = ["today", "tomorrow", "week", "month", "year"];
 const WEEK_SPAN_DAYS = 7;
+
+// The earliest Sunday-aligned week that calendar navigation will ever show
+// — the Sunday on/before the historical floor (see handleSchedule's "Week
+// start day" comment for the full reasoning). Computed once from
+// HISTORICAL_FLOOR_ISO, never re-typed as a separate literal.
+const FLOOR_WEEK_START_ISO = startOfWeekSundayIso(HISTORICAL_FLOOR_ISO);
+
+// Phase 3C Stage 2.4 addendum: Daily Quick Expense Tracking. Bounded date
+// range allowed per GET ?view=expenses request — generous enough for a
+// Month view's worth of expenses in one call (never "one request per day"),
+// nowhere near an unbounded "every expense ever" query.
+const EXPENSES_MAX_RANGE_DAYS = 366;
+const EXPENSE_MAX_AMOUNT = 999999;
+const EXPENSE_NOTE_MAX = 500;
 
 module.exports = async (req, res) => {
   const session = await requireAdmin(req, res);
   if (!session) return;
+
+  // Phase 3C Stage 2.4 addendum: POST creates one expense row (Daily Quick
+  // Expense Tracking). Dispatched before the GET-only check below — mirrors
+  // api/admin/booking.js's own method-branching pattern (requireAdmin()
+  // first, then branch on req.method, each branch reading only the fields
+  // it explicitly names from the body). See handleCreateExpense() for the
+  // full validation/write contract.
+  if (req.method === "POST") return handleCreateExpense(req, res);
 
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -77,6 +106,14 @@ module.exports = async (req, res) => {
 
   if (scheduleView) {
     return handleSchedule(req, res, supabase);
+  }
+
+  // Phase 3C Stage 2.4 addendum: ?view=expenses lists Daily Quick Expense
+  // rows for a bounded date range — same "extend this file, not a new
+  // function" reasoning as scheduleView/countsOnly above.
+  const expensesView = req.query.view === "expenses";
+  if (expensesView) {
+    return handleExpensesList(req, res, supabase);
   }
 
   const COUNT_QUERIES = [
@@ -233,20 +270,33 @@ module.exports = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------
-// Admin Schedule (?view=schedule&range=today|tomorrow|week) — Phase 3C
-// Stage 1. Kept as a clearly separated block below the main handler (rather
-// than interleaved with the Requests-list logic above) so the two remain
-// easy to read independently despite sharing one file/function purely for
-// the Vercel Hobby-plan function-count reason explained above requireAdmin's
-// call site. Read-only, same requireAdmin()/service-role/no-store posture —
-// requireAdmin() and the method check already ran before this is reached.
+// Admin Schedule (?view=schedule&range=today|tomorrow|week|month|year) —
+// Phase 3C Stage 1 (today/tomorrow/week), extended Stage 2.4 (navigable
+// week, month, year). Kept as a clearly separated block below the main
+// handler (rather than interleaved with the Requests-list logic above) so
+// the two remain easy to read independently despite sharing one file/
+// function purely for the Vercel Hobby-plan function-count reason explained
+// above requireAdmin's call site. Read-only, same requireAdmin()/
+// service-role/no-store posture — requireAdmin() and the method check
+// already ran before this is reached.
+//
+// Week start day: Sunday. Chosen (Phase 3C Stage 2.4) to match the default
+// week view of both Google Calendar and Apple Calendar for a US locale —
+// the convention a Denver-based owner's phone almost certainly already
+// shows — over an ISO-8601 Monday start. Documented once, here, as the
+// single source of truth; admin/schedule.js's client-side copy of this same
+// convention points back to this comment.
 // ---------------------------------------------------------------------
 async function handleSchedule(req, res, supabase) {
   const requestedRange = typeof req.query.range === "string" ? req.query.range.trim().toLowerCase() : "";
   const range = VALID_RANGES.indexOf(requestedRange) !== -1 ? requestedRange : "today";
 
   const todayIso = denverTodayIso();
-  let startDate, endDate;
+
+  if (range === "month") return handleMonth(req, res, supabase, todayIso);
+  if (range === "year") return handleYear(req, res, supabase, todayIso);
+
+  let startDate, endDate, weekStart, weekEnd;
   if (range === "today") {
     startDate = todayIso;
     endDate = todayIso;
@@ -254,84 +304,424 @@ async function handleSchedule(req, res, supabase) {
     startDate = addDaysIso(todayIso, 1);
     endDate = startDate;
   } else {
-    startDate = todayIso;
-    endDate = addDaysIso(todayIso, WEEK_SPAN_DAYS - 1);
+    // Navigable calendar week (Phase 3C Stage 2.4) — replaces the Stage 1
+    // "today + next 6 days" rolling window. An explicit ?weekStart= must be
+    // the Sunday of the week the caller wants; omitted, it defaults to the
+    // Sunday of the current Denver week (so a bare ?range=week keeps
+    // working exactly like every existing caller expects). Every rule here
+    // is enforced server-side — the client only ever sends a value it
+    // itself already computed the same way, per admin/schedule.js's header.
+    const requestedWeekStart = typeof req.query.weekStart === "string" ? req.query.weekStart.trim() : "";
+    if (requestedWeekStart) {
+      if (!isValidIsoDate(requestedWeekStart)) {
+        res.status(400).json({ error: "Invalid week start date." });
+        return;
+      }
+      if (dayOfWeekIso(requestedWeekStart) !== 0) {
+        res.status(400).json({ error: "Week start date must be a Sunday." });
+        return;
+      }
+      if (requestedWeekStart < FLOOR_WEEK_START_ISO) {
+        res.status(400).json({ error: "Cannot navigate to a week before the historical floor (January 2026)." });
+        return;
+      }
+      weekStart = requestedWeekStart;
+    } else {
+      weekStart = startOfWeekSundayIso(todayIso);
+    }
+    weekEnd = addDaysIso(weekStart, WEEK_SPAN_DAYS - 1);
+    startDate = weekStart;
+    endDate = weekEnd;
   }
+
+  try {
+    const jobs = await fetchScheduleJobs(supabase, startDate, endDate);
+    const body = { ok: true, range: range, startDate: startDate, endDate: endDate, jobs: jobs, today: todayIso };
+    if (range === "week") {
+      body.weekStart = weekStart;
+      body.weekEnd = weekEnd;
+      body.isCurrentWeek = weekStart === startOfWeekSundayIso(todayIso);
+      body.canGoPrevious = weekStart > FLOOR_WEEK_START_ISO;
+    }
+    res.status(200).json(body);
+  } catch (err) {
+    console.error("Admin schedule failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load the schedule." });
+  }
+}
+
+// Shared by today/tomorrow/week (handleSchedule) and Month (handleMonth) —
+// both need the exact same "full job card" shape for a bounded date range,
+// just with the range itself computed differently. Never called with an
+// unbounded range: every caller already validated/derived a specific
+// start/end pair before reaching here.
+async function fetchScheduleJobs(supabase, startDate, endDate) {
+  const bookingsRes = await supabase
+    .from("bookings")
+    .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, service_address, service_city, service_state, service_zip")
+    .in("status", SCHEDULABLE_STATUSES)
+    .gte("appointment_date", startDate)
+    .lte("appointment_date", endDate);
+  if (bookingsRes.error) throw bookingsRes.error;
+
+  const bookings = bookingsRes.data || [];
+  const customerIds = Array.from(new Set(bookings.map((b) => b.customer_id).filter(Boolean)));
+
+  // Phone is included here — unlike the default (non-schedule) response
+  // above, which deliberately omits it — because the Schedule's
+  // Call/Text actions are a core requirement of this view (jobs are run
+  // from a phone) and must work directly from the card, not only after
+  // drilling into the detail page. Not a new exposure category: the same
+  // admin session is already shown this exact phone number on the
+  // booking detail page (api/admin/booking.js) and the client profile
+  // (api/admin/client.js); requireAdmin() is still the only gate.
+  const customersById = {};
+  if (customerIds.length) {
+    const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, city").in("id", customerIds);
+    if (custRes.error) throw custRes.error;
+    (custRes.data || []).forEach((c) => {
+      customersById[c.id] = c;
+    });
+  }
+
+  const jobs = bookings.map((b) => {
+    const customer = customersById[b.customer_id] || null;
+    return {
+      id: b.id,
+      serviceType: b.service_type,
+      serviceLabel: serviceLabel(b.service_type),
+      appointmentDate: b.appointment_date,
+      timeWindow: b.time_window,
+      timeWindowLabel: timeWindowLabel(b.time_window),
+      status: normalizedStatus(b.status),
+      statusLabel: statusLabel(b.status),
+      estimatedPrice: b.estimated_price,
+      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
+      serviceAddress: {
+        address: b.service_address || null,
+        city: b.service_city || (customer && customer.city) || null,
+        state: b.service_state || null,
+        zip: b.service_zip || null,
+      },
+    };
+  });
+
+  // Chronological order: appointment date first, then time-of-day within
+  // that date via the shared start-hour lookup (api/_lib/time-windows.js)
+  // — never a second, duplicated windows-to-hour map. An unrecognized
+  // time_window (timeWindowStartHour returns null) sorts after every
+  // recognized window on the same date rather than throwing or being
+  // dropped.
+  jobs.sort(function (a, b) {
+    if (a.appointmentDate !== b.appointmentDate) {
+      return a.appointmentDate < b.appointmentDate ? -1 : 1;
+    }
+    const aHour = timeWindowStartHour(a.timeWindow);
+    const bHour = timeWindowStartHour(b.timeWindow);
+    if (aHour === null && bHour === null) return 0;
+    if (aHour === null) return 1;
+    if (bHour === null) return -1;
+    return aHour - bHour;
+  });
+
+  return jobs;
+}
+
+// ---------------------------------------------------------------------
+// Month view (?view=schedule&range=month&year=YYYY&month=1-12) — Phase 3C
+// Stage 2.4. One bounded query for the whole calendar month (never one
+// request per day). Returns full job cards (same shape as week/today) PLUS
+// a jobCountsByDate map, so both the compact per-day indicator in the
+// calendar grid and the selected-day job list below it come from this same
+// single response — selecting a different day within the loaded month
+// never triggers another request.
+// ---------------------------------------------------------------------
+async function handleMonth(req, res, supabase, todayIso) {
+  const todayParts = todayIso.split("-").map(Number);
+  const currentYear = todayParts[0];
+  const maxYear = currentYear + MAX_FUTURE_YEARS;
+
+  let year = currentYear;
+  if (req.query.year !== undefined) {
+    const raw = String(req.query.year).trim();
+    if (!/^\d{4}$/.test(raw)) {
+      res.status(400).json({ error: "Invalid year." });
+      return;
+    }
+    year = parseInt(raw, 10);
+  }
+
+  let month = todayParts[1];
+  if (req.query.month !== undefined) {
+    const raw = String(req.query.month).trim();
+    if (!/^\d{1,2}$/.test(raw) || Number(raw) < 1 || Number(raw) > 12) {
+      res.status(400).json({ error: "Invalid month." });
+      return;
+    }
+    month = parseInt(raw, 10);
+  }
+
+  if (year < HISTORICAL_FLOOR_YEAR || (year === HISTORICAL_FLOOR_YEAR && month < HISTORICAL_FLOOR_MONTH)) {
+    res.status(400).json({ error: "Cannot navigate before the historical floor (January 2026)." });
+    return;
+  }
+  if (year > maxYear) {
+    res.status(400).json({ error: "That year is too far in the future." });
+    return;
+  }
+
+  const startDate = ymdIso(year, month, 1);
+  const endDate = ymdIso(year, month, daysInMonth(year, month));
+
+  try {
+    const jobs = await fetchScheduleJobs(supabase, startDate, endDate);
+    const jobCountsByDate = {};
+    jobs.forEach(function (j) {
+      jobCountsByDate[j.appointmentDate] = (jobCountsByDate[j.appointmentDate] || 0) + 1;
+    });
+    res.status(200).json({
+      ok: true,
+      range: "month",
+      year: year,
+      month: month,
+      startDate: startDate,
+      endDate: endDate,
+      jobs: jobs,
+      jobCountsByDate: jobCountsByDate,
+      today: todayIso,
+    });
+  } catch (err) {
+    console.error("Admin month schedule failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load the month." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Year view (?view=schedule&range=year&year=YYYY) — Phase 3C Stage 2.4.
+// Navigation only, per the stage's explicit "no revenue/profit/expenses in
+// Year view" boundary — so this returns per-month JOB COUNTS only (never
+// full booking rows, never a dollar figure), computed from one bounded
+// query for the whole year (id + appointment_date only, the minimum needed
+// to count). Never 12 or 365 separate requests.
+// ---------------------------------------------------------------------
+async function handleYear(req, res, supabase, todayIso) {
+  const currentYear = Number(todayIso.slice(0, 4));
+  const maxYear = currentYear + MAX_FUTURE_YEARS;
+
+  let year = currentYear;
+  if (req.query.year !== undefined) {
+    const raw = String(req.query.year).trim();
+    if (!/^\d{4}$/.test(raw)) {
+      res.status(400).json({ error: "Invalid year." });
+      return;
+    }
+    year = parseInt(raw, 10);
+  }
+
+  if (year < HISTORICAL_FLOOR_YEAR) {
+    res.status(400).json({ error: "Cannot navigate before the historical floor (2026)." });
+    return;
+  }
+  if (year > maxYear) {
+    res.status(400).json({ error: "That year is too far in the future." });
+    return;
+  }
+
+  const startDate = ymdIso(year, 1, 1);
+  const endDate = ymdIso(year, 12, 31);
 
   try {
     const bookingsRes = await supabase
       .from("bookings")
-      .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, service_address, service_city, service_state, service_zip")
+      .select("id, appointment_date")
       .in("status", SCHEDULABLE_STATUSES)
       .gte("appointment_date", startDate)
       .lte("appointment_date", endDate);
     if (bookingsRes.error) throw bookingsRes.error;
 
-    const bookings = bookingsRes.data || [];
-    const customerIds = Array.from(new Set(bookings.map((b) => b.customer_id).filter(Boolean)));
+    const countsByMonth = new Array(12).fill(0);
+    (bookingsRes.data || []).forEach(function (b) {
+      const m = Number(String(b.appointment_date).slice(5, 7));
+      if (m >= 1 && m <= 12) countsByMonth[m - 1] += 1;
+    });
+    const monthCounts = countsByMonth.map(function (count, idx) {
+      return { month: idx + 1, count: count };
+    });
 
-    // Phone is included here — unlike the default (non-schedule) response
-    // above, which deliberately omits it — because the Schedule's
-    // Call/Text actions are a core requirement of this view (jobs are run
-    // from a phone) and must work directly from the card, not only after
-    // drilling into the detail page. Not a new exposure category: the same
-    // admin session is already shown this exact phone number on the
-    // booking detail page (api/admin/booking.js) and the client profile
-    // (api/admin/client.js); requireAdmin() is still the only gate.
-    const customersById = {};
-    if (customerIds.length) {
-      const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, city").in("id", customerIds);
-      if (custRes.error) throw custRes.error;
-      (custRes.data || []).forEach((c) => {
-        customersById[c.id] = c;
-      });
-    }
+    res.status(200).json({ ok: true, range: "year", year: year, startDate: startDate, endDate: endDate, monthCounts: monthCounts, today: todayIso });
+  } catch (err) {
+    console.error("Admin year schedule failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load the year." });
+  }
+}
 
-    const jobs = bookings.map((b) => {
-      const customer = customersById[b.customer_id] || null;
+// ---------------------------------------------------------------------
+// Daily Quick Expense Tracking — Phase 3C Stage 2.4 addendum. Tracking
+// only: no totals beyond the raw rows are computed anywhere in this file
+// (the client sums a single day's rows for the "Tracked expenses: $X"
+// line — see admin/schedule.js — deliberately never labeled Profit/Net
+// Profit). Depends on a production `expenses` table that does NOT exist
+// yet as of this stage — see docs/phase-3/stage2.4-expenses-migration.md.
+// Both handlers below fail safely (a clean 500, logged server-side) if the
+// table is missing; nothing else in this file is affected either way.
+// ---------------------------------------------------------------------
+
+// GET ?view=expenses&startDate=...&endDate=... — a bounded date range
+// (normally a single day from the Schedule's selected-day panel, but wide
+// enough — capped at EXPENSES_MAX_RANGE_DAYS — that a future Month/Year
+// expense summary could reuse this exact query shape without a new
+// endpoint). requireAdmin() has already run before this is reached.
+async function handleExpensesList(req, res, supabase) {
+  const startDateRaw = typeof req.query.startDate === "string" ? req.query.startDate.trim() : "";
+  const endDateRaw = typeof req.query.endDate === "string" ? req.query.endDate.trim() : "";
+  if (!isValidIsoDate(startDateRaw) || !isValidIsoDate(endDateRaw)) {
+    res.status(400).json({ error: "A valid startDate and endDate are required." });
+    return;
+  }
+  if (endDateRaw < startDateRaw) {
+    res.status(400).json({ error: "endDate cannot be before startDate." });
+    return;
+  }
+  const spanDays = Math.round((parseIsoAsUtcMs(endDateRaw) - parseIsoAsUtcMs(startDateRaw)) / 86400000) + 1;
+  if (spanDays > EXPENSES_MAX_RANGE_DAYS) {
+    res.status(400).json({ error: "Date range is too wide." });
+    return;
+  }
+
+  try {
+    const expensesRes = await supabase
+      .from("expenses")
+      .select("id, expense_date, category, amount, note, created_at, updated_at")
+      .gte("expense_date", startDateRaw)
+      .lte("expense_date", endDateRaw)
+      .order("expense_date", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (expensesRes.error) throw expensesRes.error;
+
+    const expenses = (expensesRes.data || []).map(function (e) {
       return {
-        id: b.id,
-        serviceType: b.service_type,
-        serviceLabel: serviceLabel(b.service_type),
-        appointmentDate: b.appointment_date,
-        timeWindow: b.time_window,
-        timeWindowLabel: timeWindowLabel(b.time_window),
-        status: normalizedStatus(b.status),
-        statusLabel: statusLabel(b.status),
-        estimatedPrice: b.estimated_price,
-        customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
-        serviceAddress: {
-          address: b.service_address || null,
-          city: b.service_city || (customer && customer.city) || null,
-          state: b.service_state || null,
-          zip: b.service_zip || null,
-        },
+        id: e.id,
+        expenseDate: e.expense_date,
+        category: e.category,
+        categoryLabel: EXPENSE_CATEGORIES[e.category] || e.category,
+        amount: e.amount,
+        note: e.note,
+        createdAt: e.created_at,
+        updatedAt: e.updated_at,
       };
     });
 
-    // Chronological order: appointment date first, then time-of-day within
-    // that date via the shared start-hour lookup (api/_lib/time-windows.js)
-    // — never a second, duplicated windows-to-hour map. An unrecognized
-    // time_window (timeWindowStartHour returns null) sorts after every
-    // recognized window on the same date rather than throwing or being
-    // dropped.
-    jobs.sort(function (a, b) {
-      if (a.appointmentDate !== b.appointmentDate) {
-        return a.appointmentDate < b.appointmentDate ? -1 : 1;
-      }
-      const aHour = timeWindowStartHour(a.timeWindow);
-      const bHour = timeWindowStartHour(b.timeWindow);
-      if (aHour === null && bHour === null) return 0;
-      if (aHour === null) return 1;
-      if (bHour === null) return -1;
-      return aHour - bHour;
-    });
-
-    res.status(200).json({ ok: true, range: range, startDate: startDate, endDate: endDate, jobs: jobs });
+    res.status(200).json({ ok: true, startDate: startDateRaw, endDate: endDateRaw, expenses: expenses });
   } catch (err) {
-    console.error("Admin schedule failed:", err && err.stack ? err.stack : err);
-    res.status(500).json({ error: "Could not load the schedule." });
+    console.error("Admin expenses list failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load expenses." });
   }
+}
+
+// POST /api/admin/bookings { resource: "expense", ... } — create one
+// expense row. `resource` is an explicit, allowlisted discriminator (never
+// inferred) distinguishing this from any other future POST-able resource
+// this file might grow, mirroring api/admin/booking.js's own `mode`
+// discriminator. Every field is read individually as a named primitive and
+// validated before being placed into the insert payload — the request body
+// is never spread into it. Never trusts category/date/amount merely because
+// the client supplied them, per the stage's explicit instruction.
+async function handleCreateExpense(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin expense create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const resource = typeof body.resource === "string" ? body.resource.trim() : "";
+  if (resource !== "expense") {
+    res.status(400).json({ error: "Invalid or missing resource." });
+    return;
+  }
+
+  const expenseDate = typeof body.expenseDate === "string" ? body.expenseDate.trim() : "";
+  if (!isValidIsoDate(expenseDate)) {
+    res.status(400).json({ error: "A valid expense date is required." });
+    return;
+  }
+  if (expenseDate < HISTORICAL_FLOOR_ISO) {
+    res.status(400).json({ error: "Expense date cannot be before January 1, 2026." });
+    return;
+  }
+  const todayIso = denverTodayIso();
+  if (expenseDate > todayIso) {
+    res.status(400).json({ error: "Expense date cannot be in the future." });
+    return;
+  }
+
+  const category = typeof body.category === "string" ? body.category.trim() : "";
+  if (!Object.prototype.hasOwnProperty.call(EXPENSE_CATEGORIES, category)) {
+    res.status(400).json({ error: "Please choose a valid expense category." });
+    return;
+  }
+
+  if (body.amount === undefined || body.amount === null || body.amount === "") {
+    res.status(400).json({ error: "An amount is required." });
+    return;
+  }
+  const amountNum = Number(body.amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > EXPENSE_MAX_AMOUNT) {
+    res.status(400).json({ error: "Please enter a valid amount." });
+    return;
+  }
+  const amount = Math.round(amountNum * 100) / 100;
+
+  const note = sanitizeExpenseText(body.note, EXPENSE_NOTE_MAX) || null;
+
+  try {
+    const { data: created, error } = await supabase
+      .from("expenses")
+      .insert({
+        expense_date: expenseDate,
+        category: category,
+        amount: amount,
+        note: note,
+      })
+      .select("id, expense_date, category, amount, note, created_at, updated_at")
+      .single();
+
+    if (error || !created) throw error || new Error("Insert returned no row.");
+
+    res.status(200).json({
+      ok: true,
+      expense: {
+        id: created.id,
+        expenseDate: created.expense_date,
+        category: created.category,
+        categoryLabel: EXPENSE_CATEGORIES[created.category] || created.category,
+        amount: created.amount,
+        note: created.note,
+        createdAt: created.created_at,
+        updatedAt: created.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error("Admin expense create failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this expense." });
+  }
+}
+
+// Strip control characters and any "<...>"-shaped text, trim, bound length
+// — same discipline as api/admin/booking.js's own sanitizeText(), kept as
+// its own small copy here rather than a shared import (this project's
+// established convention — see denverTodayIso's own comment just below).
+function sanitizeExpenseText(value, maxLen) {
+  if (typeof value !== "string") return "";
+  var stripped = "";
+  for (var i = 0; i < value.length; i++) {
+    var code = value.charCodeAt(i);
+    var isControl = code <= 31 && code !== 9 && code !== 10 && code !== 13;
+    if (!isControl) stripped += value[i];
+  }
+  return stripped.replace(/<[^>]*>/g, "").trim().slice(0, maxLen);
 }
 
 // Current date in America/Denver as a YYYY-MM-DD string — deliberately never
@@ -366,4 +756,67 @@ function addDaysIso(iso, days) {
   const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(dt.getUTCDate()).padStart(2, "0");
   return yy + "-" + mm + "-" + dd;
+}
+
+// How many years past the current Denver year Month/Year navigation (and
+// the expense floor's upper bound) will accept — generous enough for
+// ordinary future business planning, bounded enough that a crafted
+// ?year=9999 can't force an absurd query. Not a hard product limit (the
+// business will keep operating past this window; the constant just moves
+// forward every year on its own since it's always current-year-relative).
+const MAX_FUTURE_YEARS = 3;
+
+// ---------------------------------------------------------------------
+// Small pure calendar-math helpers — Phase 3C Stage 2.4 (Month/Year/
+// navigable-week calendar navigation). Every one of these is a calendar
+// calculator only, never a real moment in time: each anchors at UTC noon
+// (addDaysIso above already established this pattern) specifically so nothing
+// here can be shifted onto the wrong calendar day by a DST transition.
+// ---------------------------------------------------------------------
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// True only for a real calendar date in YYYY-MM-DD form — rejects both a
+// malformed string and a syntactically-shaped but impossible date (e.g.
+// "2026-02-30"), by round-tripping the parsed value back through Date and
+// comparing every part rather than trusting that new Date(...) itself
+// would reject an out-of-range day (it silently rolls over instead).
+function isValidIsoDate(s) {
+  if (typeof s !== "string" || !ISO_DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() + 1 === m && dt.getUTCDate() === d;
+}
+
+// Milliseconds since epoch for a YYYY-MM-DD string's UTC-noon anchor —
+// purely for measuring the number of calendar days between two ISO dates
+// (see handleExpensesList's span-days bound); never used as a real instant.
+function parseIsoAsUtcMs(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return Date.UTC(y, m - 1, d, 12, 0, 0);
+}
+
+// Day of week for a YYYY-MM-DD string: 0=Sunday .. 6=Saturday.
+function dayOfWeekIso(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay();
+}
+
+// The Sunday on/before `iso` — see handleSchedule's "Week start day"
+// comment for why Sunday. Used both to default an omitted ?weekStart= to
+// the current Denver week, and to compute FLOOR_WEEK_START_ISO once at
+// module load from HISTORICAL_FLOOR_ISO.
+function startOfWeekSundayIso(iso) {
+  return addDaysIso(iso, -dayOfWeekIso(iso));
+}
+
+// The last calendar day of `month` (1-12) in `year`, as an integer 28-31 —
+// day 0 of the following month is the standard trick for "last day of this
+// month" with JS's Date.
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0, 12, 0, 0)).getUTCDate();
+}
+
+function ymdIso(year, month, day) {
+  return year + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0");
 }
