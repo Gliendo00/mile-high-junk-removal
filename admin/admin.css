@@ -185,6 +185,12 @@
   gap: 10px;
   margin-bottom: 12px;
 }
+/* Without this, the `hidden` attribute on #week-nav (Today/Tomorrow/Month/
+   Year, where the Week nav row must not show) loses the cascade to this
+   class's own `display: flex` — same equal-specificity conflict this file
+   already guards against for .admin-sheet-overlay[hidden] and
+   .admin-typeahead-panel[hidden] below. */
+.admin-calendar-nav[hidden] { display: none; }
 .admin-calendar-nav-btn {
   -webkit-appearance: none;
   appearance: none;
