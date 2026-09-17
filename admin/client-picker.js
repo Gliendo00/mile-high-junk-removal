@@ -15,7 +15,7 @@
 // insertAdjacentHTML with a concatenated string), matching the discipline
 // already established by admin/status-ui.js and every other admin script.
 window.AdminClientPicker = (function () {
-  var SEARCH_DEBOUNCE_MS = 300;
+  var SEARCH_DEBOUNCE_MS = 150;
   var SEARCH_LIMIT = 8;
 
   function el(tag, className, text) {
@@ -295,11 +295,21 @@ window.AdminClientPicker = (function () {
     typeahead.appendChild(panel);
     root.appendChild(typeahead);
 
-    var searchSeq = 0;
     var debounceTimer = null;
     var focusables = []; // current result buttons + createToggle, in order
     var highlightedIndex = -1;
     var panelOpen = false;
+    var currentAbortController = null; // the one in-flight GET /api/admin/clients, if any
+
+    // Cancels whatever search is currently in flight so its response can
+    // never land after (and overwrite) a newer one — the abort rejects that
+    // fetch with an AbortError, which runSearch's catch below ignores.
+    function abortInFlightSearch() {
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+    }
 
     function setHighlight(idx) {
       focusables.forEach(function (b) { b.classList.remove("is-highlighted"); });
@@ -353,9 +363,21 @@ window.AdminClientPicker = (function () {
     }
 
     function selectExisting(client) {
+      abortInFlightSearch(); // the search itself is moot once a result is chosen
       closePanel();
       showFilled(client);
       onSelect(client, []);
+    }
+
+    // Immediate feedback shown the instant the owner types — before the
+    // debounce/network round trip even starts — so the field never reads as
+    // unresponsive while waiting on SEARCH_DEBOUNCE_MS + the request itself.
+    function renderLoading() {
+      resultsBoxClear();
+      resultsBox.appendChild(el("div", "admin-picker-empty", "Searching…"));
+      focusables = [createToggle];
+      setHighlight(-1);
+      openPanel();
     }
 
     function renderResults(clients) {
@@ -385,9 +407,14 @@ window.AdminClientPicker = (function () {
     }
 
     function runSearch(term) {
-      var seq = ++searchSeq;
+      // Cancel whatever search is still in flight — its result is obsolete
+      // the moment a newer one starts, and an aborted fetch rejects rather
+      // than resolving, so it can never render over these fresher results.
+      abortInFlightSearch();
+      var controller = new AbortController();
+      currentAbortController = controller;
       var url = "/api/admin/clients?limit=" + SEARCH_LIMIT + "&search=" + encodeURIComponent(term);
-      fetch(url)
+      fetch(url, { signal: controller.signal })
         .then(function (res) {
           if (res.status === 401) {
             window.location.href = "/admin/login/";
@@ -397,11 +424,11 @@ window.AdminClientPicker = (function () {
           return res.json().catch(function () { return null; });
         })
         .then(function (body) {
-          if (!body || seq !== searchSeq) return;
+          if (!body) return;
           renderResults(body.clients || []);
         })
-        .catch(function () {
-          if (seq !== searchSeq) return;
+        .catch(function (err) {
+          if (err && err.name === "AbortError") return; // superseded by a newer search — not a real failure
           resultsBoxClear();
           resultsBox.appendChild(el("div", "admin-picker-empty", "Could not load clients right now."));
           focusables = [createToggle];
@@ -410,19 +437,22 @@ window.AdminClientPicker = (function () {
         });
     }
 
-    // Debounced so we don't fire a request on every raw keystroke; a
-    // cleared/whitespace-only input never searches — it just closes the
-    // dropdown, matching "Start typing a client name..." as the resting
-    // state rather than an always-open recent-clients list.
+    // Debounced (at SEARCH_DEBOUNCE_MS) so we don't fire a request on every
+    // raw keystroke; a cleared/whitespace-only input never searches — it
+    // just closes the dropdown, matching "Start typing a client name..." as
+    // the resting state rather than an always-open recent-clients list. The
+    // "Searching..." feedback below fires immediately, independent of the
+    // debounce delay, so the field never reads as unresponsive while typing.
     input.addEventListener("input", function () {
       clearTimeout(debounceTimer);
       var value = input.value.trim();
       if (!value) {
-        searchSeq++; // invalidate any in-flight search response
+        abortInFlightSearch();
         closePanel();
         resultsBoxClear();
         return;
       }
+      renderLoading();
       debounceTimer = setTimeout(function () {
         runSearch(value);
       }, SEARCH_DEBOUNCE_MS);
@@ -460,6 +490,7 @@ window.AdminClientPicker = (function () {
 
     createToggle.addEventListener("click", function () {
       var typedName = input.value.trim();
+      abortInFlightSearch(); // moving to Create Client makes any pending search moot
       closePanel();
       openCreateSheet(typedName, function (client, warnings) {
         showFilled(client);

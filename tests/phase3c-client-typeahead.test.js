@@ -80,6 +80,59 @@ test("admin/client-picker.js: search input is debounced before querying the clie
   assert.ok(/setTimeout\(\s*function\s*\(\)\s*\{\s*runSearch\(value\);\s*\},\s*SEARCH_DEBOUNCE_MS\)/.test(inputHandler), "the search call itself must be wrapped in a SEARCH_DEBOUNCE_MS setTimeout, not fired synchronously per keystroke");
 });
 
+// =======================================================================
+// Responsiveness polish: ~150ms debounce (down from 300ms), immediate
+// loading feedback, and AbortController-based stale-response protection.
+// =======================================================================
+test("admin/client-picker.js: debounce is ~150ms, not the original 300ms", () => {
+  const src = read("admin/client-picker.js");
+  const match = src.match(/var SEARCH_DEBOUNCE_MS\s*=\s*(\d+)\s*;/);
+  assert.ok(match, "must define SEARCH_DEBOUNCE_MS as a numeric literal");
+  const ms = Number(match[1]);
+  assert.ok(ms >= 100 && ms <= 200, "debounce should be roughly 150ms (found " + ms + "ms) — the owner found 300ms felt slow");
+  assert.notStrictEqual(ms, 300, "must actually be reduced from the original 300ms");
+});
+
+test("admin/client-picker.js: typing shows immediate 'Searching...' feedback, independent of the debounce delay", () => {
+  const src = read("admin/client-picker.js");
+  assert.ok(/function renderLoading\s*\(\)/.test(src), "must define a loading-state renderer");
+  assert.ok(/Searching/.test(src), "must show a 'Searching...' style loading message");
+  const inputHandler = src.slice(src.indexOf('input.addEventListener("input"'), src.indexOf('input.addEventListener("keydown"'));
+  // renderLoading() must be called synchronously in the input handler,
+  // BEFORE the debounced setTimeout — not inside it — so feedback appears
+  // the instant the owner types rather than after SEARCH_DEBOUNCE_MS.
+  const loadingCallIdx = inputHandler.indexOf("renderLoading();");
+  const timeoutIdx = inputHandler.indexOf("setTimeout(");
+  assert.ok(loadingCallIdx !== -1, "must call renderLoading() from the input handler");
+  assert.ok(timeoutIdx !== -1, "must still schedule the debounced search");
+  assert.ok(loadingCallIdx < timeoutIdx, "renderLoading() must run before the debounced setTimeout is scheduled, not inside its callback");
+});
+
+test("admin/client-picker.js: an obsolete in-flight search is cancelled via AbortController, not left to race a newer one", () => {
+  const src = read("admin/client-picker.js");
+  const runSearchBody = src.slice(src.indexOf("function runSearch"), src.indexOf("function runSearch") + src.slice(src.indexOf("function runSearch")).indexOf("\n    }\n") + 8);
+  assert.ok(/new AbortController\(\)/.test(runSearchBody), "must create an AbortController per search");
+  assert.ok(/abortInFlightSearch\(\)/.test(runSearchBody), "must cancel any previous in-flight search before starting a new one");
+  assert.ok(/signal:\s*controller\.signal/.test(runSearchBody), "must actually wire the controller's signal into the fetch call");
+});
+
+test("admin/client-picker.js: a cancelled (AbortError) search is silently ignored, never shown as a failure", () => {
+  const src = read("admin/client-picker.js");
+  const runSearchBody = src.slice(src.indexOf("function runSearch"));
+  const catchBlock = runSearchBody.slice(runSearchBody.indexOf(".catch(function (err)"));
+  assert.ok(/err\s*&&\s*err\.name\s*===\s*["']AbortError["']/.test(catchBlock), "must detect an AbortError specifically");
+  const abortCheckIdx = catchBlock.search(/err\.name\s*===\s*["']AbortError["']/);
+  const errorMessageIdx = catchBlock.indexOf("Could not load clients right now.");
+  assert.ok(abortCheckIdx !== -1 && errorMessageIdx !== -1 && abortCheckIdx < errorMessageIdx, "the AbortError check must come before (and bail out ahead of) rendering the 'could not load' error state");
+});
+
+test("admin/client-picker.js: clearing the input to empty also cancels any in-flight search, not just future ones", () => {
+  const src = read("admin/client-picker.js");
+  const inputHandler = src.slice(src.indexOf('input.addEventListener("input"'), src.indexOf('input.addEventListener("keydown"'));
+  const emptyGuard = inputHandler.slice(inputHandler.indexOf("if (!value) {"), inputHandler.indexOf("return;", inputHandler.indexOf("if (!value) {")) + "return;".length);
+  assert.ok(/abortInFlightSearch\(\)/.test(emptyGuard), "the empty-input guard must abort any pending request, not just skip scheduling a new one");
+});
+
 test("admin/client-picker.js: never queries the search API for empty/whitespace-only input", () => {
   const src = read("admin/client-picker.js");
   const inputHandler = src.slice(src.indexOf('input.addEventListener("input"'), src.indexOf('input.addEventListener("keydown"'));
