@@ -631,8 +631,13 @@ test("admin client JS (incl. new status-ui.js) never uses innerHTML/insertAdjace
 });
 
 // Write-audit guard: fails loudly (rather than requiring someone to remember
-// to grep) if any admin backend file ever gains a second write call beyond
-// the one intentional .update() in booking-status.js.
+// to grep) if any admin backend file ever gains a write call beyond the
+// ones this project's write surface is deliberately known to have.
+//
+// As of Phase 3C Stage 2.1 that surface is three calls: the original
+// booking-status.js status write, plus the new booking.js "+ New Job" and
+// client.js Create Client inserts — each one reviewed individually in
+// docs/phase-3/stage2.1-new-job-proposal.md, not an incidental side effect.
 //
 // Scoped to api/admin/*.js plus exactly the three api/_lib files admin
 // routes actually require (confirmed by grepping every require("../_lib/...")
@@ -642,7 +647,7 @@ test("admin client JS (incl. new status-ui.js) never uses innerHTML/insertAdjace
 // That file's `buckets.delete(k)` is a plain in-memory JS Map cleanup, not
 // a Supabase call, and isn't reachable from any admin route at all; a
 // directory-wide scan flags it as a false positive.
-test("write-audit: exactly one .update( / .insert( / .upsert( / .delete( across the admin API's actual code (api/admin/* + the _lib files it requires)", async () => {
+test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( calls across the admin API's actual code (api/admin/* + the _lib files it requires)", async () => {
   const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js"];
   const files = fs
     .readdirSync(path.join(__dirname, "..", "api/admin"))
@@ -659,7 +664,12 @@ test("write-audit: exactly one .update( / .insert( / .upsert( / .delete( across 
       found.push(rel + ": " + m[0]);
     }
   });
-  assert.deepStrictEqual(found, ["api/admin/booking-status.js: .update("], "found: " + JSON.stringify(found));
+  found.sort(); // directory-listing order isn't a contract; sort before comparing
+  assert.deepStrictEqual(
+    found,
+    ["api/admin/booking-status.js: .update(", "api/admin/booking.js: .insert(", "api/admin/client.js: .insert("],
+    "found: " + JSON.stringify(found)
+  );
 });
 
 // ---------------------------------------------------------------------

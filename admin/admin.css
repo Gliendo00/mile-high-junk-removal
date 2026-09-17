@@ -279,7 +279,9 @@
   margin-bottom: 6px;
   color: var(--color-neutral-800, #474238);
 }
-.admin-field input {
+.admin-field input,
+.admin-field select,
+.admin-field textarea {
   width: 100%;
   min-height: 46px;
   padding: 0 14px;
@@ -288,10 +290,26 @@
   font-size: 16px; /* 16px avoids iOS auto-zoom on focus */
   font-family: var(--font-body);
   box-sizing: border-box;
+  background: #fff;
+  color: var(--color-text, #201e1d);
 }
-.admin-field input:focus {
+.admin-field textarea {
+  min-height: 84px;
+  padding: 12px 14px;
+  resize: vertical;
+}
+.admin-field input:focus,
+.admin-field select:focus,
+.admin-field textarea:focus {
   outline: 2px solid var(--color-accent-700, #2f6f13);
   outline-offset: 1px;
+}
+.admin-field-hint {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-neutral-600, #82796a);
+  margin-top: 4px;
 }
 .admin-login-submit { width: 100%; margin-top: 4px; }
 
@@ -861,4 +879,144 @@
   .admin-filter-bar { max-width: 620px; }
   .admin-card-top { align-items: center; }
   .admin-card-when { font-size: 15.5px; }
+}
+
+/* ------------------------------------------------------------------ */
+/* + New Job (admin/booking-new.js) and the shared client-picker sheet */
+/* (admin/client-picker.js) — Phase 3C Stage 2.1.                      */
+/* ------------------------------------------------------------------ */
+.admin-list-heading-actions { margin-left: auto; }
+
+.admin-form-section {
+  margin-bottom: 22px;
+}
+.admin-form-section-label {
+  font-size: 12.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 10px;
+}
+.admin-field-row {
+  display: flex;
+  gap: 10px;
+}
+.admin-field-row .admin-field { flex: 1; min-width: 0; }
+
+.admin-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.admin-checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+/* Selected-client summary card shown on the New Job form once a client has
+   been chosen or created via the picker. */
+.admin-client-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 16px;
+}
+.admin-client-summary-name { font-weight: 700; }
+.admin-client-summary-meta {
+  font-size: 13px;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-client-summary-placeholder {
+  color: var(--color-neutral-600, #82796a);
+  font-size: 14px;
+}
+
+/* Client-picker sheet: search results + inline create form, built on the
+   same .admin-sheet-overlay/.admin-sheet chrome as admin/status-ui.js. */
+.admin-picker-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+.admin-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
+  padding: 12px 6px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.admin-picker-item:active { background: var(--admin-tint); }
+.admin-picker-item-name { font-weight: 700; font-size: 15px; }
+.admin-picker-item-meta { font-size: 13px; color: var(--color-neutral-600, #82796a); }
+.admin-picker-empty {
+  padding: 14px 6px;
+  font-size: 14px;
+  color: var(--color-neutral-600, #82796a);
+}
+
+.admin-picker-divider {
+  border: none;
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  margin: 10px 0;
+}
+
+.admin-picker-create-toggle {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 12px 6px;
+  font-family: inherit;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
+  cursor: pointer;
+}
+
+/* A found exact-match, shown instead of a plain create form: prominent,
+   not styled as an error — this is expected, useful information, not a
+   failure state. */
+.admin-duplicate-card {
+  border: 1px solid var(--color-accent-700, #2f6f13);
+  background: var(--admin-tint);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.admin-duplicate-card-title {
+  font-size: 12.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-accent-700, #2f6f13);
+  margin-bottom: 6px;
+}
+.admin-duplicate-card-name { font-weight: 700; }
+.admin-duplicate-card-meta { font-size: 13px; color: var(--color-neutral-600, #82796a); margin-bottom: 10px; }
+.admin-duplicate-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.admin-inline-warning {
+  font-size: 13px;
+  color: #7a4a08;
+  background: #fdf3e2;
+  border: 1px solid #f0d9a8;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
 }

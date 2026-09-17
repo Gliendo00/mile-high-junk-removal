@@ -574,9 +574,13 @@ test("new admin client JS (schedule.js, nav-badge.js) never uses innerHTML/inser
 });
 
 // =======================================================================
-// 10. Write-scope regression guard — Stage 1 must add ZERO new write paths
+// 10. Write-scope regression guard — Stage 1 added ZERO new write paths.
+// Updated in Phase 3C Stage 2.1, which deliberately DOES add two new
+// .insert( calls (booking.js "+ New Job", client.js Create Client) — see
+// docs/phase-3/stage2.1-new-job-proposal.md. This guard now asserts the
+// write surface is exactly those three known calls, not that it never grew.
 // =======================================================================
-test("write-audit: Stage 1 introduces no new .update(/.insert(/.upsert(/.delete( — still exactly the one pre-existing booking-status.js write", () => {
+test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls — the pre-existing booking-status.js write plus Stage 2.1's two new inserts", () => {
   const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js", "time-windows.js"];
   const files = fs
     .readdirSync(path.join(__dirname, "..", "api/admin"))
@@ -593,7 +597,12 @@ test("write-audit: Stage 1 introduces no new .update(/.insert(/.upsert(/.delete(
       found.push(rel + ": " + m[0]);
     }
   });
-  assert.deepStrictEqual(found, ["api/admin/booking-status.js: .update("], "found: " + JSON.stringify(found));
+  found.sort(); // directory-listing order isn't a contract; sort before comparing
+  assert.deepStrictEqual(
+    found,
+    ["api/admin/booking-status.js: .update(", "api/admin/booking.js: .insert(", "api/admin/client.js: .insert("],
+    "found: " + JSON.stringify(found)
+  );
 });
 
 // =======================================================================
