@@ -39,6 +39,38 @@
 -- ---------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------
+-- 0. PREFLIGHT — run this FIRST, by itself, before statement 1. Read-only:
+--    does not modify, cancel, merge, or touch any existing row. Finds any
+--    existing 'booked' dumpster_rental rows that already share the same
+--    (appointment_date, time_window) — these would make statement 1's
+--    CREATE UNIQUE INDEX fail outright (Postgres refuses to build a unique
+--    index over data that already violates it). An empty result means the
+--    index will build cleanly; a non-empty result means those specific
+--    booking_ids need a manual decision (reschedule one, mark one
+--    cancelled/lost, etc. — a business call, not something this script
+--    makes for you) before statement 1 can succeed.
+--
+--    Predicate explanation — why only status = 'booked' participates in
+--    the unique index (statement 1) and this preflight query mirrors it
+--    exactly: 'booked' is the only status representing a currently
+--    active, on-the-schedule reservation. 'completed' rows are historical
+--    — the same Tuesday 8-10am window will legitimately have many
+--    'completed' dumpster rentals across different weeks/months, and none
+--    of that should ever block a new booking. 'new'/'contacted'/'quoted'
+--    have no confirmed appointment at all (they're pre-booking lead
+--    states), and 'lost' represents a booking that fell through — neither
+--    represents a real claim on the slot. Only 'booked' — "on the
+--    schedule right now" — is what a second booking must never collide
+--    with.
+-- ---------------------------------------------------------------------
+-- SELECT appointment_date, time_window, COUNT(*) AS conflicting_count, array_agg(id) AS booking_ids
+-- FROM bookings
+-- WHERE service_type = 'dumpster_rental' AND status = 'booked'
+-- GROUP BY appointment_date, time_window
+-- HAVING COUNT(*) > 1
+-- ORDER BY appointment_date, time_window;
+
+-- ---------------------------------------------------------------------
 -- 1. Availability: one delivery per (date, time window). Run alone.
 -- ---------------------------------------------------------------------
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_bookings_dumpster_delivery_slot
@@ -56,13 +88,36 @@ CREATE TABLE IF NOT EXISTS rental_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   booking_id uuid NOT NULL UNIQUE REFERENCES bookings(id) ON DELETE CASCADE,
   idempotency_key text NOT NULL UNIQUE,
+  -- 'error_pending_review' (added post-audit, 2026-09-18): the Braintree
+  -- transaction.sale() call itself failed/timed out with NO definitive
+  -- response — outcome unknown, may have actually charged the customer.
+  -- Never auto-resolved and never auto-retried; api/book.js preserves this
+  -- row and every row around it (never rolls back) specifically so an
+  -- admin can check the Braintree dashboard for a matching transaction
+  -- before anyone takes further action. See
+  -- docs/phase-3/stage2.5-rental-payments-v2-hardening-audit.md §6.
   payment_status text NOT NULL DEFAULT 'processing'
-    CHECK (payment_status IN ('processing', 'paid', 'failed', 'voided', 'refunded')),
+    CHECK (payment_status IN ('processing', 'paid', 'failed', 'voided', 'refunded', 'error_pending_review')),
   amount_charged numeric(10,2),
+  -- Rate-schedule snapshot, frozen at the moment THIS booking was paid —
+  -- never re-derived from api/_lib/rental-pricing.js's current constants
+  -- later. A future pricing change must never retroactively alter what an
+  -- already-booked rental's overage charges are computed from; see
+  -- api/admin/booking.js's handleProposeCharge(), which reads these columns
+  -- in preference to the current global rate.
+  base_rate numeric(10,2),
+  included_days integer,
+  included_tons numeric(10,2),
+  overage_ton_rate numeric(10,2),
+  overage_day_rate numeric(10,2),
   braintree_transaction_id text,
   braintree_customer_id text,
   braintree_payment_method_token text,
   payment_method_summary text,
+  -- Set on a clean decline (payment_status: 'failed') or an ambiguous
+  -- Braintree-call failure (payment_status: 'error_pending_review') — a
+  -- human-readable reason for admin review. NULL for 'processing'/'paid'.
+  failure_reason text,
   -- Informational only, set by api/braintree-webhook.js on a
   -- dispute_opened/dispute_lost/dispute_won/dispute_accepted event for the
   -- matching transaction. No automated action is ever taken from this value
@@ -92,8 +147,15 @@ CREATE TABLE IF NOT EXISTS rental_additional_charges (
   rate numeric(10,2),
   amount numeric(10,2) NOT NULL CHECK (amount > 0),
   description text,
+  -- 'error_pending_review' (added post-audit): same meaning as
+  -- rental_payments' own value — the Braintree call for this approved
+  -- charge failed/timed out with no definitive response. Deliberately NOT
+  -- reachable again from api/admin/booking.js's approve action (only
+  -- 'proposed' and 'failed' are retryable) — an ambiguous outcome requires
+  -- a human to check Braintree directly, never an automatic retry that
+  -- could double-charge.
   status text NOT NULL DEFAULT 'proposed'
-    CHECK (status IN ('proposed', 'approved', 'processing', 'paid', 'failed', 'voided')),
+    CHECK (status IN ('proposed', 'approved', 'processing', 'paid', 'failed', 'voided', 'error_pending_review')),
   proposed_by text NOT NULL,
   proposed_at timestamptz NOT NULL DEFAULT now(),
   approved_by text,

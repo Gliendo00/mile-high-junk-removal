@@ -641,20 +641,24 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/booking.js: .insert(",
       // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
       // one new insert (handleProposeCharge — moves no money, see that
-      // function's header) and four new updates, all inside
-      // handleApproveCharge/markChargeFailed: the proposed->approved
-      // transition, the approved->processing transition, the
-      // processing->paid transition, and markChargeFailed's single
-      // ->failed transition (one function body, called from three
-      // call sites — the source text contains it once). See
-      // tests/phase3c-stage2.5v2-rental-payments.test.js for full coverage
-      // of this write surface, including that a proposal alone never
-      // reaches Braintree. (Sorted alphabetically below along with every
-      // other entry here — see the sort() call above this array — so every
-      // ".insert(" for a given file groups before that file's ".update(".)
+      // function's header) and, as of the 2026-09-18 pre-deployment
+      // hardening audit, five updates, all inside handleApproveCharge/
+      // markChargeFailed/markChargeErrorPendingReview: the
+      // proposed-or-failed->approved transition, the approved->processing
+      // transition, the processing->paid transition, markChargeFailed's
+      // ->failed transition, and markChargeErrorPendingReview's
+      // ->error_pending_review transition (the audit's fix for an
+      // ambiguous Braintree outcome — never treated as a retryable
+      // failure). See tests/phase3c-stage2.5v2-rental-payments.test.js for
+      // full coverage of this write surface, including that a proposal
+      // alone never reaches Braintree. (Sorted alphabetically below along
+      // with every other entry here — see the sort() call above this
+      // array — so every ".insert(" for a given file groups before that
+      // file's ".update(".)
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",

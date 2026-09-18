@@ -552,6 +552,16 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       res.status(200).json(withUploadToken(existingPayment.booking_id, { ok: true, booked: true }));
       return;
     }
+    if (existingPayment.payment_status === "error_pending_review") {
+      // A previous attempt with this exact idempotency key had an
+      // ambiguous Braintree outcome (see the sale() catch block below) —
+      // never silently retried. The customer must call in so a human can
+      // confirm what actually happened before anything moves forward.
+      res.status(409).json({
+        error: "There was a problem confirming a previous attempt for this exact request. Please call or text 303-990-1812 so we can sort it out before trying again — this avoids any risk of being charged twice.",
+      });
+      return;
+    }
     // "processing" (a genuine concurrent duplicate racing the first
     // request) — any other lingering status shouldn't exist given the
     // rollback discipline below, but is treated identically, defensively.
@@ -678,6 +688,16 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       idempotency_key: idempotencyKey,
       payment_status: "processing",
       amount_charged: amount,
+      // Rate-schedule snapshot (2026-09-18 hardening audit, §11) — frozen
+      // at the moment of booking, never re-derived from possibly-changed
+      // global config later. api/admin/booking.js's handleProposeCharge()
+      // reads these back for THIS booking's overage charges in preference
+      // to the current global rate.
+      base_rate: rentalPricing.BASE_RATE,
+      included_days: rentalPricing.INCLUDED_DAYS,
+      included_tons: rentalPricing.INCLUDED_TONS,
+      overage_ton_rate: rentalPricing.OVERAGE_TON_RATE,
+      overage_day_rate: rentalPricing.OVERAGE_DAY_RATE,
       agreement_version: rentalPricing.RENTAL_AGREEMENT_VERSION,
       agreement_accepted_at: new Date().toISOString(),
     });
@@ -705,6 +725,25 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     return;
   }
 
+  // 2026-09-18 hardening audit, §6 — the distinction below is deliberate
+  // and load-bearing, not stylistic:
+  //   - The catch block below means the transaction.sale() CALL ITSELF
+  //     failed (network error, timeout, gateway 5xx) — Braintree may or
+  //     may not have actually processed the charge; we have NO definitive
+  //     answer and, critically, no transaction id to look up or void. This
+  //     is AMBIGUOUS, not a decline. Rolling everything back here would be
+  //     actively dangerous: if the charge in fact succeeded on Braintree's
+  //     side, deleting rental_payments (freeing the idempotency key and the
+  //     delivery slot) would both lose our only record that a real charge
+  //     may have happened AND let the slot be re-sold/re-charged to someone
+  //     else. So this path preserves every row exactly as-is and marks the
+  //     payment "error_pending_review" for a human to reconcile against the
+  //     Braintree dashboard — never an automatic retry, never a silent
+  //     rollback.
+  //   - The `!saleResult.success` branch further below is a DEFINITIVE
+  //     answer from Braintree (a clean decline or a request-validation
+  //     failure) — Braintree is explicitly telling us no money moved, so
+  //     rolling back and freeing the slot immediately is correct and safe.
   let saleResult;
   try {
     saleResult = await gateway.transaction.sale({
@@ -713,13 +752,27 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       options: { submitForSettlement: true, storeInVaultOnSuccess: true },
     });
   } catch (err) {
-    console.error("Dumpster rental booking: Braintree call threw:", err && err.stack ? err.stack : err);
-    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
-    res.status(502).json({ error: "We couldn't reach the payment processor. Please try again in a moment, or call or text 303-990-1812." });
+    console.error(
+      "AMBIGUOUS PAYMENT OUTCOME — Braintree call threw, actual result unknown. Check the Braintree dashboard for a transaction matching bookingId=" +
+        bookingId +
+        " idempotencyKey=" +
+        idempotencyKey +
+        " amount=" +
+        amount.toFixed(2) +
+        " before any manual action:",
+      err && err.stack ? err.stack : err
+    );
+    await markPaymentErrorPendingReview(supabase, bookingId, "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action.");
+    res.status(502).json({
+      error: "We couldn't confirm your payment went through. Please do not submit again — call or text 303-990-1812 so we can confirm your charge before booking to avoid being charged twice.",
+    });
     return;
   }
 
   if (!saleResult || !saleResult.success) {
+    // A definitive decline/validation failure — Braintree confirms no
+    // money moved, so this is the one branch where a full rollback
+    // (freeing the slot immediately) is genuinely safe.
     console.error("Dumpster rental booking: payment declined —", describeDeclineForLogs(saleResult));
     await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
     res.status(402).json({ error: extractDeclineMessage(saleResult) });
@@ -762,15 +815,36 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
 // Deletes every row a dumpster-rental booking attempt may have created, in
 // FK-safe order, freeing the delivery slot (and the idempotency key)
 // immediately. Safe to call even when some of these rows were never
-// created (each delete is a harmless no-op if nothing matches) — used both
-// for a failed insert partway through and for a Braintree decline/error
-// after every row already exists.
+// created (each delete is a harmless no-op if nothing matches). Used for a
+// failed insert partway through, and for a Braintree DECLINE (a definitive
+// "no money moved" answer) — never for an ambiguous Braintree call
+// failure, where markPaymentErrorPendingReview() below is used instead
+// specifically because deleting these rows in that case could destroy the
+// only record of a possibly-successful charge.
 async function rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated) {
   await safeDeleteByColumn(supabase, "rental_payments", "booking_id", bookingId);
   await safeDeleteByColumn(supabase, "dumpster_rentals", "booking_id", bookingId);
   await safeDelete(supabase, "bookings", bookingId);
   if (customerWasCreated) {
     await safeDelete(supabase, "customers", customerId);
+  }
+}
+
+// 2026-09-18 hardening audit, §6 — called only when gateway.transaction.sale()
+// itself threw (no definitive response from Braintree). Never deletes
+// anything: the booking, dumpster_rentals, and this rental_payments row all
+// stay exactly as they are (the slot stays claimed, the idempotency key
+// stays claimed), so neither a possibly-successful charge nor the evidence
+// of it is ever destroyed. A human must resolve this by checking the
+// Braintree dashboard directly — this function only records why.
+async function markPaymentErrorPendingReview(supabase, bookingId, reason) {
+  try {
+    await supabase
+      .from("rental_payments")
+      .update({ payment_status: "error_pending_review", failure_reason: reason, updated_at: new Date().toISOString() })
+      .eq("booking_id", bookingId);
+  } catch (err) {
+    console.error("CRITICAL: could not even record error_pending_review for bookingId=" + bookingId + " — reconcile manually via the Braintree dashboard:", err);
   }
 }
 

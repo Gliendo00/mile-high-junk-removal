@@ -102,7 +102,7 @@ module.exports = async (req, res) => {
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
       supabase
         .from("rental_payments")
-        .select("payment_status, amount_charged, payment_method_summary, braintree_transaction_id, agreement_version, agreement_accepted_at, dispute_status")
+        .select("payment_status, amount_charged, payment_method_summary, braintree_transaction_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason")
         .eq("booking_id", id)
         .maybeSingle(),
     ]);
@@ -211,6 +211,7 @@ module.exports = async (req, res) => {
             agreementVersion: payment.agreement_version,
             agreementAcceptedAt: payment.agreement_accepted_at,
             disputeStatus: payment.dispute_status,
+            failureReason: payment.failure_reason,
           }
         : null,
       photos: photos,
@@ -1024,31 +1025,6 @@ async function handleProposeCharge(req, res, session) {
 
   const description = sanitizeText(body.description, MAX.long) || null;
 
-  let quantity = null;
-  let rate = null;
-  let amount;
-  if (chargeType === "other") {
-    const n = Number(body.amount);
-    if (!Number.isFinite(n) || n <= 0 || n > MAX_PRICE) {
-      res.status(400).json({ error: "Please enter a valid amount." });
-      return;
-    }
-    amount = rentalPricing.round2(n);
-    if (!description) {
-      res.status(400).json({ error: "Please describe this charge." });
-      return;
-    }
-  } else {
-    const q = Number(body.quantity);
-    if (!Number.isFinite(q) || q <= 0 || q > MAX_QUANTITY) {
-      res.status(400).json({ error: "Please enter a valid quantity." });
-      return;
-    }
-    quantity = rentalPricing.round2(q);
-    rate = rentalPricing.overageRate(chargeType);
-    amount = rentalPricing.round2(quantity * rate);
-  }
-
   try {
     const bookingRes = await supabase.from("bookings").select("id, service_type").eq("id", bookingId).maybeSingle();
     if (bookingRes.error) throw bookingRes.error;
@@ -1059,6 +1035,51 @@ async function handleProposeCharge(req, res, session) {
     if (bookingRes.data.service_type !== "dumpster_rental") {
       res.status(400).json({ error: "Additional charges are only available for dumpster rentals." });
       return;
+    }
+
+    // 2026-09-18 hardening audit, §11 — the rate applied is THIS booking's
+    // own locked-in schedule (frozen at booking time on rental_payments),
+    // never the current global api/_lib/rental-pricing.js constants. A
+    // pricing change made after this booking was paid for must never
+    // retroactively change what an overage on it costs. Falls back to the
+    // current global rate only when this booking has no rental_payments
+    // row of its own to read from (e.g. an admin-created dumpster rental
+    // that was never paid online, which locked in no rate schedule) —
+    // there is nothing else to fall back to in that case.
+    let bookingRate = null;
+    const bookingPricingRes = await supabase
+      .from("rental_payments")
+      .select("overage_ton_rate, overage_day_rate")
+      .eq("booking_id", bookingId)
+      .maybeSingle();
+    if (bookingPricingRes.error) throw bookingPricingRes.error;
+    if (bookingPricingRes.data) {
+      bookingRate = { overweight_tonnage: bookingPricingRes.data.overage_ton_rate, additional_days: bookingPricingRes.data.overage_day_rate };
+    }
+
+    let quantity = null;
+    let rate = null;
+    let amount;
+    if (chargeType === "other") {
+      const n = Number(body.amount);
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid amount." });
+        return;
+      }
+      amount = rentalPricing.round2(n);
+      if (!description) {
+        res.status(400).json({ error: "Please describe this charge." });
+        return;
+      }
+    } else {
+      const q = Number(body.quantity);
+      if (!Number.isFinite(q) || q <= 0 || q > MAX_QUANTITY) {
+        res.status(400).json({ error: "Please enter a valid quantity." });
+        return;
+      }
+      quantity = rentalPricing.round2(q);
+      rate = (bookingRate && bookingRate[chargeType] != null ? Number(bookingRate[chargeType]) : null) || rentalPricing.overageRate(chargeType);
+      amount = rentalPricing.round2(quantity * rate);
     }
 
     const { data: created, error } = await supabase
@@ -1086,13 +1107,23 @@ async function handleProposeCharge(req, res, session) {
 
 // PATCH ?resource=charges { id, action: "approve" } — approve AND process
 // an additional charge in one atomic admin action. The UPDATE that
-// transitions "proposed" -> "approved" is conditioned on the row's CURRENT
-// status still being "proposed" (`.eq("status", "proposed")`, the same
+// transitions to "approved" is conditioned on the row's CURRENT status
+// still being "proposed" OR "failed" (`.in("status", [...])`, the same
 // optimistic-concurrency-style guard handleUpdate() above uses for
 // `updated_at`) — a second concurrent "Approve" click on the same charge
 // matches zero rows here and gets a clean "already processed" response,
 // never a second Braintree submission. Only a row THIS request just
 // approved is ever charged.
+//
+// "failed" is deliberately retryable (2026-09-18 hardening audit, §8) — a
+// clean decline (insufficient funds, expired card, etc.) is exactly the
+// kind of thing an admin should be able to try again after talking to the
+// client. "error_pending_review" is deliberately NOT in this list: that
+// status means a PRIOR Braintree call for this charge had an ambiguous
+// outcome (see markChargeErrorPendingReview below) — retrying it here
+// could double-charge if the ambiguous attempt actually succeeded, so it
+// can only be resolved by a human checking the Braintree dashboard
+// directly, never by clicking Approve again.
 async function handleApproveCharge(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -1116,14 +1147,20 @@ async function handleApproveCharge(req, res, session) {
   try {
     const { data: approvedRow, error: approveErr } = await supabase
       .from("rental_additional_charges")
-      .update({ status: "approved", approved_by: session.email, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({
+        status: "approved",
+        approved_by: session.email,
+        approved_at: new Date().toISOString(),
+        failure_reason: null,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", id)
-      .eq("status", "proposed")
+      .in("status", ["proposed", "failed"])
       .select("id, booking_id, amount")
       .maybeSingle();
     if (approveErr) throw approveErr;
     if (!approvedRow) {
-      res.status(409).json({ error: "This charge was already processed, or no longer exists." });
+      res.status(409).json({ error: "This charge was already processed, is pending manual review, or no longer exists." });
       return;
     }
 
@@ -1151,6 +1188,15 @@ async function handleApproveCharge(req, res, session) {
 
     await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
 
+    // 2026-09-18 hardening audit, §6/§8 — same load-bearing distinction as
+    // api/book.js's own sale() call: a THROWN error here means Braintree
+    // gave no definitive answer (network/timeout/gateway error) — the
+    // charge may have actually gone through. That is never treated as
+    // "failed" (which this endpoint's own Approve button would let an
+    // admin retry) — it's marked "error_pending_review" instead, which is
+    // deliberately excluded from the retry-eligible statuses above, so a
+    // human must check the Braintree dashboard before anything happens to
+    // this charge again.
     let saleResult;
     try {
       saleResult = await gateway.transaction.sale({
@@ -1159,13 +1205,28 @@ async function handleApproveCharge(req, res, session) {
         options: { submitForSettlement: true },
       });
     } catch (err) {
-      console.error("Admin approve charge: Braintree call threw:", err && err.stack ? err.stack : err);
-      const failed = await markChargeFailed(supabase, id, "Could not reach the payment processor.");
-      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+      console.error(
+        "AMBIGUOUS CHARGE OUTCOME — Braintree call threw, actual result unknown. Check the Braintree dashboard for a transaction matching chargeId=" +
+          id +
+          " bookingId=" +
+          approvedRow.booking_id +
+          " amount=" +
+          approvedRow.amount.toFixed(2) +
+          " before any manual action:",
+        err && err.stack ? err.stack : err
+      );
+      const pending = await markChargeErrorPendingReview(
+        supabase,
+        id,
+        "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action."
+      );
+      res.status(200).json({ ok: true, charge: serializeCharge(pending) });
       return;
     }
 
     if (!saleResult || !saleResult.success) {
+      // A definitive decline — Braintree confirms no money moved, so
+      // "failed" (safely retryable via Approve again) is correct here.
       const reason = (saleResult && saleResult.transaction && saleResult.transaction.processorResponseText) || (saleResult && saleResult.message) || "Payment declined.";
       const failed = await markChargeFailed(supabase, id, reason);
       res.status(200).json({ ok: true, charge: serializeCharge(failed) });
@@ -1178,7 +1239,28 @@ async function handleApproveCharge(req, res, session) {
       .eq("id", id)
       .select("*")
       .maybeSingle();
-    if (paidErr) throw paidErr;
+    if (paidErr) {
+      // The charge already SUCCEEDED on Braintree's side at this point —
+      // this is a reconciliation problem, never a reason to tell the
+      // admin the charge failed (it didn't; money moved). Logged loudly
+      // with the transaction id so it can be reconciled manually; the
+      // response still reports success since that's the truth of what
+      // happened to the customer's card.
+      console.error(
+        "CRITICAL: Braintree charge succeeded but rental_additional_charges could not be marked paid. chargeId=" +
+          id +
+          " braintreeTransactionId=" +
+          saleResult.transaction.id +
+          ":",
+        paidErr
+      );
+      res.status(200).json({
+        ok: true,
+        charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", braintreeTransactionId: saleResult.transaction.id }),
+        warning: "Charged successfully, but this page couldn't confirm the record was saved — refresh to verify.",
+      });
+      return;
+    }
     res.status(200).json({ ok: true, charge: serializeCharge(paidRow) });
   } catch (err) {
     console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
@@ -1188,11 +1270,27 @@ async function handleApproveCharge(req, res, session) {
 
 // Shared failure path for handleApproveCharge — always re-reads the full
 // row back (via .select().maybeSingle()) so the response reflects exactly
-// what's now in the database, never an assembled-in-memory guess.
+// what's now in the database, never an assembled-in-memory guess. Only
+// ever used for a DEFINITIVE decline — see markChargeErrorPendingReview
+// below for the ambiguous case.
 async function markChargeFailed(supabase, id, reason) {
   const { data } = await supabase
     .from("rental_additional_charges")
     .update({ status: "failed", failure_reason: reason, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  return data;
+}
+
+// 2026-09-18 hardening audit, §6/§8 — called only when the Braintree call
+// itself threw. Never reachable again via this endpoint's Approve action
+// (excluded from the retry-eligible status list above) — a human must
+// resolve it by checking the Braintree dashboard directly.
+async function markChargeErrorPendingReview(supabase, id, reason) {
+  const { data } = await supabase
+    .from("rental_additional_charges")
+    .update({ status: "error_pending_review", failure_reason: reason, updated_at: new Date().toISOString() })
     .eq("id", id)
     .select("*")
     .maybeSingle();

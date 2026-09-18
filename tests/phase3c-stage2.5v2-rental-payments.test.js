@@ -69,6 +69,11 @@ class FakeQueryBuilder {
     this.filters.push({ col: col, val: val });
     return this;
   }
+  in(col, values) {
+    const set = new Set(values);
+    this.filters.push({ col: col, in: set });
+    return this;
+  }
   gte(col, val) {
     this.rangeFilters.push({ col: col, val: val, op: "gte" });
     return this;
@@ -116,7 +121,7 @@ class FakeQueryBuilder {
     }
 
     let matched = rows.filter(
-      (r) => this.filters.every((f) => r[f.col] === f.val) && this.rangeFilters.every((f) => (f.op === "gte" ? r[f.col] >= f.val : r[f.col] <= f.val))
+      (r) => this.filters.every((f) => (f.in ? f.in.has(r[f.col]) : r[f.col] === f.val)) && this.rangeFilters.every((f) => (f.op === "gte" ? r[f.col] >= f.val : r[f.col] <= f.val))
     );
 
     if (this._updatePayload) {
@@ -196,6 +201,13 @@ let webhookParseImpl = async () => {
 };
 let webhookVerifyImpl = async (challenge) => "verified-" + challenge;
 
+// Deliberately "submitted_for_settlement", never "settled" — a real
+// synchronous transaction.sale() response never reports "settled" (that
+// only happens hours later in a nightly batch). Per current Braintree
+// documentation, a transaction in submitted_for_settlement/settling/
+// settled is considered successful; api/book.js/handleApproveCharge()
+// correctly mark payment_status "paid" straight from this response and
+// never wait for anything more "final" than this.
 function defaultSaleSuccess(overrides) {
   return Object.assign(
     {
@@ -583,7 +595,14 @@ test("POST dumpster_rental: a declined payment rolls back every row and frees th
   assert.strictEqual(db.rental_payments.length, 0);
   assert.strictEqual(db.customers.length, 0, "the customer created for this failed attempt must also be rolled back");
 });
-test("POST dumpster_rental: a Braintree network error also rolls back and returns a retry-safe message, never a raw stack trace", async () => {
+// 2026-09-18 hardening audit, §6: a THROWN Braintree call (network error/
+// timeout) is an AMBIGUOUS outcome — Braintree may have actually charged
+// the customer, and there's no transaction id to check or void. Rolling
+// back here (as an earlier version of this code did) would be dangerous:
+// it would delete the only record of a possibly-successful charge AND
+// free the slot for someone else. The correct behavior is the opposite of
+// the old test's assertion — preserve everything, mark it for review.
+test("POST dumpster_rental: an ambiguous Braintree failure (thrown error) preserves every row instead of rolling back, and never claims a raw stack trace to the customer", async () => {
   const db = freshDb();
   resetBraintree();
   saleImpl = async () => {
@@ -592,7 +611,65 @@ test("POST dumpster_rental: a Braintree network error also rolls back and return
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(res.statusCode, 502);
   assert.ok(!/ECONNRESET/.test(res.body.error));
-  assert.strictEqual(db.bookings.length, 0);
+  assert.ok(/call or text/i.test(res.body.error), "must direct the customer to call rather than silently retry");
+  assert.strictEqual(db.bookings.length, 1, "the booking must NOT be rolled back — it may have actually been paid for");
+  assert.strictEqual(db.bookings[0].status, "booked");
+  assert.strictEqual(db.customers.length, 1, "the customer record must also be preserved");
+  assert.strictEqual(db.rental_payments.length, 1);
+  assert.strictEqual(db.rental_payments[0].payment_status, "error_pending_review");
+  assert.ok(/outcome unknown/i.test(db.rental_payments[0].failure_reason));
+});
+test("POST dumpster_rental: resubmitting the same idempotency key after an ambiguous failure is blocked (never silently retried, never a second Braintree call)", async () => {
+  const db = freshDb();
+  resetBraintree();
+  saleImpl = async () => {
+    throw new Error("ECONNRESET");
+  };
+  const payload = validDumpsterPayload();
+  const first = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(first.statusCode, 502);
+  assert.strictEqual(saleCallLog.length, 1);
+
+  const second = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(second.statusCode, 409);
+  assert.ok(/call or text/i.test(second.body.error));
+  assert.strictEqual(saleCallLog.length, 1, "must never call Braintree again for a key stuck in error_pending_review");
+  assert.strictEqual(db.bookings.length, 1, "must not create a second booking either");
+});
+test("POST dumpster_rental: rate-schedule snapshot (base rate, included days/tons, overage rates) is durably stored on rental_payments at booking time", async () => {
+  const db = freshDb();
+  resetBraintree();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  assert.strictEqual(res.statusCode, 200);
+  const rp = db.rental_payments[0];
+  assert.strictEqual(rp.base_rate, rentalPricing.BASE_RATE);
+  assert.strictEqual(rp.included_days, rentalPricing.INCLUDED_DAYS);
+  assert.strictEqual(rp.included_tons, rentalPricing.INCLUDED_TONS);
+  assert.strictEqual(rp.overage_ton_rate, rentalPricing.OVERAGE_TON_RATE);
+  assert.strictEqual(rp.overage_day_rate, rentalPricing.OVERAGE_DAY_RATE);
+});
+test("POST dumpster_rental: if the post-charge 'mark paid' DB update fails, the customer still gets a booked response — the charge already succeeded, so this must never be reported as a failure", async () => {
+  const db = freshDb();
+  resetBraintree();
+  currentFakeService = {
+    from: function (table) {
+      const builder = new FakeQueryBuilder(table, db);
+      if (table === "rental_payments") {
+        const originalResolve = builder._resolve.bind(builder);
+        builder._resolve = async function () {
+          if (this._updatePayload && this._updatePayload.payment_status === "paid") {
+            return { data: null, error: { message: "mock update failure" } };
+          }
+          return originalResolve();
+        };
+      }
+      return builder;
+    },
+  };
+  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.booked, true);
+  assert.strictEqual(saleCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
 });
 test("POST dumpster_rental: after a decline, the SAME delivery slot can be booked again by a new attempt", async () => {
   const db = freshDb();
@@ -672,6 +749,63 @@ test("POST dumpster_rental: server-side availability enforcement is independent 
 });
 
 // =======================================================================
+// 7b. 2026-09-18 hardening audit §4/§5 — TRUE CONCURRENCY, not sequential
+// duplicate POSTs. Both requests in each test below are fired together via
+// Promise.all so their internal awaits genuinely interleave (Node's
+// single-threaded microtask queue processes each call's pending step in
+// turn, exactly the way two separate serverless invocations hitting the
+// same real Postgres database would race at the DB level) — this is not
+// simulating "request A fully finishes, then request B starts."
+// =======================================================================
+test("CONCURRENCY: two simultaneous requests with the SAME idempotency key never both call Braintree — exactly one sale(), no double charge", async () => {
+  const db = freshDb();
+  resetBraintree();
+  const payload = validDumpsterPayload(); // same idempotency key AND same slot for both
+
+  const [resA, resB] = await Promise.all([run(bookHandler, makeReq({ method: "POST", body: payload })), run(bookHandler, makeReq({ method: "POST", body: payload }))]);
+
+  const statuses = [resA.statusCode, resB.statusCode].sort();
+  assert.deepStrictEqual(statuses, [200, 409], "exactly one of the two concurrent identical requests must succeed");
+  assert.strictEqual(saleCallLog.length, 1, "transaction.sale() must be invoked exactly once — this is the actual proof, not just the HTTP status codes");
+  assert.strictEqual(db.bookings.length, 1);
+  assert.strictEqual(db.rental_payments.length, 1);
+  assert.strictEqual(db.rental_payments[0].payment_status, "paid");
+});
+test("CONCURRENCY: two simultaneous requests for the SAME delivery slot (different idempotency keys) — exactly one booking confirmed, the loser retains no charge at all", async () => {
+  const db = freshDb();
+  resetBraintree();
+  const payloadA = validDumpsterPayload();
+  const payloadB = validDumpsterPayload(); // fresh idempotency key, same default slot as A
+
+  const [resA, resB] = await Promise.all([run(bookHandler, makeReq({ method: "POST", body: payloadA })), run(bookHandler, makeReq({ method: "POST", body: payloadB }))]);
+
+  const statuses = [resA.statusCode, resB.statusCode].sort();
+  assert.deepStrictEqual(statuses, [200, 409]);
+  assert.strictEqual(saleCallLog.length, 1, "the losing request must be blocked at the DB slot-claim step and never reach Braintree at all — proves Client A and Client B can never BOTH be charged for the last remaining slot");
+  assert.strictEqual(db.bookings.length, 1, "exactly one booking exists — no duplicate active slot");
+  assert.strictEqual(db.rental_payments.length, 1, "exactly one payment record — the loser has no retained charge of any kind, not even a stray row");
+  assert.strictEqual(db.rental_payments[0].payment_status, "paid");
+});
+test("CONCURRENCY: two simultaneous admin Approve requests for the SAME charge never both call Braintree", async () => {
+  const db = freshDb();
+  resetBraintree();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
+
+  const [resA, resB] = await Promise.all([
+    run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } })),
+    run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } })),
+  ]);
+
+  const statuses = [resA.statusCode, resB.statusCode].sort();
+  assert.deepStrictEqual(statuses, [200, 409]);
+  assert.strictEqual(saleCallLog.length, 1, "transaction.sale() must be invoked exactly once for two concurrent Approve clicks on the same charge");
+  assert.strictEqual(db.rental_additional_charges[0].status, "paid");
+});
+
+// =======================================================================
 // 8. POST /api/book (dumpster_rental) — insert-step failures
 // =======================================================================
 test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booking and customer, never calls Braintree", async () => {
@@ -700,6 +834,15 @@ test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booki
 
 // =======================================================================
 // 9. Braintree webhook
+//
+// 2026-09-18 hardening audit correction: transaction_settled/
+// transaction_settlement_declined are ACH/SEPA-only per current Braintree
+// docs, not fired for the card/Venmo transactions this app actually
+// creates — see api/braintree-webhook.js's header. The two tests below
+// covering those kinds exist only to prove the (currently dead, harmless,
+// future-proofing) handler code is itself correct, not because real
+// traffic exercises it. Dispute tests are the ones that matter for actual
+// card/Venmo traffic.
 // =======================================================================
 test("webhook GET ?bt_challenge=: answers with webhookNotification.verify()'s output", async () => {
   resetBraintree();
@@ -878,6 +1021,109 @@ test("admin charges: a declined approved charge is recorded as failed with a rea
   assert.strictEqual(res.body.charge.status, "failed");
   assert.ok(/Insufficient Funds/.test(res.body.charge.failureReason));
 });
+test("admin charges: a 'failed' (cleanly declined) charge IS safely retryable — a second Approve after the decline succeeds and charges exactly once more", async () => {
+  const db = freshDb();
+  resetBraintree();
+  saleImpl = async () => declineSaleResult("Insufficient Funds");
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
+
+  const first = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(first.body.charge.status, "failed");
+  assert.strictEqual(saleCallLog.length, 1);
+
+  // Customer presumably fixed their card — admin clicks Approve again.
+  saleImpl = async () => defaultSaleSuccess();
+  const second = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(second.statusCode, 200);
+  assert.strictEqual(second.body.charge.status, "paid");
+  assert.strictEqual(saleCallLog.length, 2, "exactly one more call for the retry — not a duplicate of the first, not blocked");
+  assert.strictEqual(db.rental_additional_charges[0].failure_reason, null, "the stale decline reason must be cleared once the retry succeeds");
+});
+test("admin charges: an ambiguous Braintree failure (thrown error) during approval is marked error_pending_review and is NOT retryable via Approve again", async () => {
+  const db = freshDb();
+  resetBraintree();
+  saleImpl = async () => {
+    throw new Error("ECONNRESET");
+  };
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
+
+  const first = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(first.statusCode, 200);
+  assert.strictEqual(first.body.charge.status, "error_pending_review");
+  assert.ok(/outcome unknown/i.test(first.body.charge.failureReason));
+  assert.strictEqual(saleCallLog.length, 1);
+
+  // Admin (or a naive double-click) tries Approve again — must be refused,
+  // never silently retried, since the first attempt's outcome is unknown.
+  saleImpl = async () => defaultSaleSuccess();
+  const second = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(second.statusCode, 409);
+  assert.strictEqual(saleCallLog.length, 1, "must never call Braintree again for a charge stuck in error_pending_review");
+});
+test("admin charges: if the post-charge 'mark paid' DB update fails, the response still reports success — the charge already succeeded, so this must never be reported as a failure", async () => {
+  const db = freshDb();
+  resetBraintree();
+  currentFakeService = {
+    from: function (table) {
+      const builder = new FakeQueryBuilder(table, db);
+      if (table === "rental_additional_charges") {
+        const originalResolve = builder._resolve.bind(builder);
+        builder._resolve = async function () {
+          if (this._updatePayload && this._updatePayload.status === "paid") {
+            return { data: null, error: { message: "mock update failure" } };
+          }
+          return originalResolve();
+        };
+      }
+      return builder;
+    },
+  };
+  configureAdminAuth();
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
+
+  const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.status, "paid");
+  assert.ok(res.body.warning, "should note the record couldn't be confirmed even though the charge succeeded");
+  assert.strictEqual(saleCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
+});
+test("admin charges: proposing overweight_tonnage uses THIS booking's own locked-in rate, not the current global rate, when they differ", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  // Simulates a booking paid under an OLD rate schedule, before a global
+  // pricing change to $120/ton (rentalPricing.OVERAGE_TON_RATE is still
+  // $90 in the current global config — this row's own $75 must win).
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, overage_ton_rate: 75, overage_day_rate: 10 });
+
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", quantity: 2 } })
+  );
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.rate, 75, "must use this booking's own locked-in rate, not the current global $90 rate");
+  assert.strictEqual(res.body.charge.amount, 150);
+});
+test("admin charges: proposing on a booking with no rental_payments row of its own falls back to the current global rate", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", quantity: 1 } })
+  );
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.rate, rentalPricing.OVERAGE_TON_RATE);
+});
 test("admin charges: approving a booking with no payment method on file fails cleanly without calling Braintree", async () => {
   const db = freshDb();
   resetBraintree();
@@ -933,6 +1179,24 @@ test("admin booking detail (GET): payment is null for a booking with no rental_p
   const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.payment, null);
+});
+test("admin booking detail (GET): exposes failureReason for a payment stuck in error_pending_review, so the admin sees why without opening Braintree first", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, customer_id: "cust-1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
+  db.customers.push({ id: "cust-1", first_name: "Jamie", last_name: "Rivera", phone: "303-555-0100", email: "jamie@example.com" });
+  db.rental_payments.push({
+    id: "rp1",
+    booking_id: BOOKING_ID,
+    payment_status: "error_pending_review",
+    amount_charged: 349,
+    failure_reason: "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action.",
+  });
+  const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.payment.status, "error_pending_review");
+  assert.ok(/outcome unknown/i.test(res.body.payment.failureReason));
 });
 
 // =======================================================================

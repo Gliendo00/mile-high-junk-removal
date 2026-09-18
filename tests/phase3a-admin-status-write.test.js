@@ -671,11 +671,14 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/booking-status.js: .update(",
       "api/admin/booking.js: .insert(",
       // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
-      // one new insert (handleProposeCharge — moves no money) and four new
-      // updates (handleApproveCharge's proposed->approved,
+      // one new insert (handleProposeCharge — moves no money) and, as of
+      // the 2026-09-18 pre-deployment hardening audit, five updates
+      // (handleApproveCharge's proposed-or-failed->approved,
       // approved->processing, processing->paid transitions, plus
-      // markChargeFailed's single ->failed transition, called from three
-      // sites but written once in source). See
+      // markChargeFailed's ->failed transition and
+      // markChargeErrorPendingReview's ->error_pending_review transition —
+      // the audit's fix distinguishing an ambiguous Braintree outcome from
+      // a safely-retryable decline). See
       // tests/phase3c-stage2.5v2-rental-payments.test.js for full coverage.
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
@@ -683,6 +686,7 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // api/admin/booking.js's handleUpdate() header comment for why this
       // stays a controlled, allowlisted update rather than a new "write
       // anything" endpoint.
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
