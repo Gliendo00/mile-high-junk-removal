@@ -169,6 +169,49 @@ test("address-autocomplete.js: waits (polls) for google.maps.importLibrary to ac
   );
 });
 
+test("address-autocomplete.js: select suggestion -> fields populate -> synthetic notification does not trigger another search -> panel stays closed -> later real typing searches normally — found live on Preview: applySelection()'s own synthetic \"input\" dispatch (fired so external listeners see the populated value) was read by this component's OWN input listener as a new user keystroke, reopening the suggestions panel ~DEBOUNCE_MS after a selection had just closed it", () => {
+  const src = read("admin/address-autocomplete.js");
+
+  // A suppression flag exists, private to attach()'s closure, starting false.
+  assert.ok(
+    /var suppressNextInputEvent = false;/.test(src),
+    "must declare a suppression flag (initialized false) to distinguish applySelection()'s own synthetic dispatch from real user typing"
+  );
+
+  // applySelection() sets it to true immediately before firing the
+  // synthetic "input" events, and still dispatches on all four fields —
+  // external listeners must keep getting notified.
+  const applySelectionBody = src.slice(src.indexOf("function applySelection("), src.indexOf("function renderSuggestions("));
+  assert.ok(
+    /suppressNextInputEvent = true;[\s\S]*?\[addressInput, fields\.city, fields\.state, fields\.zip\]\.forEach/.test(applySelectionBody),
+    "applySelection() must set the suppression flag immediately before dispatching the synthetic input events"
+  );
+  assert.ok(
+    /input\.dispatchEvent\(new Event\("input", \{ bubbles: true \}\)\)/.test(applySelectionBody),
+    "the synthetic dispatch to every field (so external listeners are still notified) must remain unchanged"
+  );
+  assert.ok(/closePanel\(\)/.test(applySelectionBody), "applySelection() must still close the panel after applying a selection");
+
+  // addressInput's own "input" listener checks the flag FIRST: when set, it
+  // consumes it (resets to false) and returns before touching the debounce
+  // timer or issuing any search — so the synthetic event triggers nothing.
+  const inputListenerMatch = src.match(/addressInput\.addEventListener\("input", function \(\) \{[\s\S]*?\n {4}\}\);/);
+  assert.ok(inputListenerMatch, "must find addressInput's own input listener");
+  const inputListenerBody = inputListenerMatch[0];
+  const guardIndex = inputListenerBody.indexOf("suppressNextInputEvent");
+  const clearTimeoutIndex = inputListenerBody.indexOf("clearTimeout(debounceTimer)");
+  assert.ok(guardIndex !== -1 && clearTimeoutIndex !== -1 && guardIndex < clearTimeoutIndex, "the suppression check must run before any debounce/search logic in the input listener");
+  assert.ok(/if \(suppressNextInputEvent\) \{\s*suppressNextInputEvent = false;\s*return;\s*\}/.test(inputListenerBody), "the listener must consume (reset) the flag and return early, without starting a new debounced search, when it is set");
+
+  // Real typing is untouched: the same listener still runs the ordinary
+  // MIN_CHARS check and debounced loadPlacesLibrary().then(runSearch) path
+  // once the suppression guard has passed (i.e. for every event that is
+  // NOT the one synthetic echo).
+  assert.ok(/term\.length < MIN_CHARS/.test(inputListenerBody), "normal typing must still be measured against MIN_CHARS");
+  assert.ok(/debounceTimer = setTimeout\(/.test(inputListenerBody), "normal typing must still schedule the debounced search");
+  assert.ok(/loadPlacesLibrary\(\)/.test(inputListenerBody) && /runSearch\(placesLib, term\)/.test(inputListenerBody), "normal typing must still resolve loadPlacesLibrary() and call runSearch() exactly as before this fix");
+});
+
 test("address-autocomplete.js: every Google call is wrapped so a failure degrades to manual entry, never blocks or disables the input", () => {
   const src = read("admin/address-autocomplete.js");
   assert.ok(!/addressInput\.disabled\s*=\s*true/.test(src), "must never disable the manual input");

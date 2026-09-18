@@ -205,6 +205,17 @@ window.AdminAddressAutocomplete = (function () {
     var sessionToken = null;
     var currentRequestId = 0;
     var suggestions = []; // the current AutocompleteSuggestion[]
+    // applySelection() dispatches a synthetic "input" event on addressInput
+    // itself so external listeners (a form's own change tracking) see the
+    // populated value — but that same event also reaches this component's
+    // OWN "input" listener below, which would otherwise read it as a new
+    // user keystroke and kick off another debounced search, reopening the
+    // panel ~DEBOUNCE_MS after a selection was just made and closed. This
+    // flag lets the synthetic dispatch notify every listener (nothing is
+    // suppressed for anyone else) while telling this component's own
+    // listener, and only that one, to treat this specific event as an
+    // internal echo rather than real typing.
+    var suppressNextInputEvent = false;
 
     function closePanel() {
       panel.setAttribute("hidden", "");
@@ -227,7 +238,11 @@ window.AdminAddressAutocomplete = (function () {
         // Fire native input events so any listener already bound to these
         // fields (e.g. a form's own change tracking) sees the update —
         // this file never assumes it's the only code watching these
-        // inputs.
+        // inputs. addressInput's own "input" listener below is told to
+        // ignore this one, specific dispatch (see suppressNextInputEvent
+        // above) so this synthetic notification never triggers a new
+        // search; every other listener on every field still gets it.
+        suppressNextInputEvent = true;
         [addressInput, fields.city, fields.state, fields.zip].forEach(function (input) {
           if (input) input.dispatchEvent(new Event("input", { bubbles: true }));
         });
@@ -308,6 +323,10 @@ window.AdminAddressAutocomplete = (function () {
     }
 
     addressInput.addEventListener("input", function () {
+      if (suppressNextInputEvent) {
+        suppressNextInputEvent = false;
+        return;
+      }
       clearTimeout(debounceTimer);
       var term = addressInput.value.trim();
       if (term.length < MIN_CHARS) {
