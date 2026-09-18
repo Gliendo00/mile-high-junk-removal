@@ -398,8 +398,8 @@
   appearance: none;
   display: flex;
   flex-direction: column;
-  flex: 1 1 128px;
-  min-width: 128px;
+  flex: 1 1 136px;
+  min-width: 136px;
   text-align: left;
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
@@ -441,13 +441,50 @@
   color: var(--color-accent-700, #2f6f13);
 }
 .admin-week-day-row.is-selected .admin-week-day-row-count { color: #9fe37a; }
-.admin-week-day-row-jobs { margin-top: 6px; }
-.admin-week-day-row-job {
-  font-size: 13px;
-  color: var(--color-neutral-700, #645c50);
-  line-height: 1.5;
+/* Stage 2.4.2 (second pass): each job is its own compact mini-card — never
+   a run-on list — so a busy day's jobs read as separate grouped objects at
+   a glance. Off-white against the day column's own white background when
+   unselected; a light translucent overlay against the selected day's dark
+   background, so the "clearly bounded row" reads in both states. */
+.admin-week-day-row-jobs {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.admin-week-day-row.is-selected .admin-week-day-row-job { color: rgba(255, 255, 255, 0.85); }
+.admin-week-day-row-job {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  background: var(--color-neutral-100, #f9f4ed);
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 6px;
+  padding: 3px 5px;
+}
+.admin-week-day-row.is-selected .admin-week-day-row-job {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.admin-week-day-row-job-time {
+  flex: none;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--color-text, #201e1d);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-job-time { color: #fff; }
+.admin-week-day-row-job-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--color-neutral-700, #645c50);
+}
+.admin-week-day-row-job-name::before { content: '\00b7'; margin-right: 4px; opacity: 0.7; }
+.admin-week-day-row.is-selected .admin-week-day-row-job-name { color: rgba(255, 255, 255, 0.85); }
 .admin-week-day-row-more {
   font-size: 12px;
   font-weight: 700;
@@ -582,7 +619,7 @@
 .admin-schedule-day-heading:first-child { margin-top: 2px; }
 
 /* Schedule job card: same visual language as .admin-booking-card (white
-   surface, left status-accent stripe, reuses .admin-card-accent-*/
+   surface, left status-accent stripe, reuses .admin-card-accent-* /
    .admin-status-badge/.admin-card-name/.admin-card-service/.admin-card-when
    as-is) but with inline Call/Text/Directions actions, which the Requests
    card doesn't need. The clickable "open detail" area and the action
@@ -590,23 +627,31 @@
    tappable and the markup stays valid.
 
    Stage 2.4.2: the owner found Today/Tomorrow's white cards blending into
-   the page's pale-green tint (--admin-tint) — the original neutral-200
-   border reads as near-white against it. A slightly darker border plus a
-   very light shadow gives each job its own clearly-defined surface without
-   changing the card's information hierarchy at all. Applies equally to
-   Yesterday, which reuses this exact same card/markup. */
+   the page's pale-green tint (--admin-tint). A first pass (neutral-300
+   border + a very faint shadow) was still not visually apparent enough on
+   a real device — next to the large, saturated Call/Text/Directions button
+   row inside the same card, a 1px near-neutral border and a 7%-opacity
+   shadow simply lost the fight for attention, even though the wrapper
+   already correctly contained the whole job (badge/name/service/price AND
+   the actions row — never just the text section). Stage 2.4.2's second
+   pass makes the container itself unmistakable regardless of what's inside
+   it: a clearly darker, higher-contrast border (neutral-400, not
+   neutral-300) and a real, visible (if still restrained) shadow. Applies
+   equally to Yesterday and any date reached via the previous/next-day
+   arrows, which all reuse this exact same card/markup. */
 .admin-schedule-card {
   background: #fff;
-  border: 1px solid var(--color-neutral-300, #dcd3c4);
-  border-left: 5px solid var(--color-neutral-300, #dcd3c4);
+  border: 1px solid var(--color-neutral-400, #c0b6a5);
+  border-left: 5px solid var(--color-neutral-400, #c0b6a5);
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.07);
+  box-shadow: 0 2px 6px rgba(20, 21, 15, 0.12);
   overflow: hidden;
 }
-/* A bit more breathing room between jobs than the denser Requests list
-   (.admin-booking-list) uses, so each card's own separation reads clearly
-   at a glance — scoped to the Schedule list only. */
-#schedule-list { gap: 12px; }
+/* Comfortable, clearly-visible breathing room between jobs — more than the
+   denser Requests list (.admin-booking-list) uses, so each card's own
+   separation reads unambiguously at a glance — scoped to the Schedule list
+   only. */
+#schedule-list { gap: 16px; }
 .admin-schedule-card-main {
   display: block;
   padding: 12px 14px 10px;

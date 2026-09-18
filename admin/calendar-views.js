@@ -83,6 +83,22 @@ window.AdminCalendarViews = (function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // Stage 2.4.2 (second pass): Week's compact per-job mini-card has room
+  // for a start time and a client name, not a full "8:00 AM – 10:00 AM"
+  // range plus a name — the range alone was already most of the card's
+  // width, leaving the name truncated to nothing. Only api/_lib/time-
+  // windows.js's modern w_HHMM_HHMM labels use a spaced en dash (" – ")
+  // between two clock times; the older morning/midday/afternoon/evening
+  // labels ("Morning (8am–11am)") use an unspaced dash inside their own
+  // parentheses and are left completely untouched by this split — this is
+  // a plain string trim, never a second copy of the time-window-to-label
+  // table client-side.
+  function shortTimeLabel(label) {
+    if (!label) return '—';
+    var idx = label.indexOf(' – ');
+    return idx === -1 ? label : label.slice(0, idx);
+  }
+
   var todayIso = denverTodayIso();
   var todayParts = todayIso.split('-').map(Number);
 
@@ -425,10 +441,19 @@ window.AdminCalendarViews = (function () {
       row.appendChild(head);
 
       if (jobs.length) {
+        // Stage 2.4.2 (second pass): each job is its own compact mini-card
+        // — not one run-on line — so multiple jobs on a busy day read as
+        // distinct grouped objects. Time is its own non-wrapping element
+        // (so "10:00 AM" never breaks mid-unit) and the client name
+        // ellipsis-truncates instead of wrapping awkwardly if the column is
+        // too narrow for both — see .admin-week-day-row-job's CSS.
         var jobsList = el('div', 'admin-week-day-row-jobs');
         jobs.slice(0, WEEK_ROW_MAX_JOB_LINES).forEach(function (job) {
           var name = (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
-          jobsList.appendChild(el('div', 'admin-week-day-row-job', (job.timeWindowLabel || '—') + ' · ' + name));
+          var jobRow = el('div', 'admin-week-day-row-job');
+          jobRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(job.timeWindowLabel)));
+          jobRow.appendChild(el('span', 'admin-week-day-row-job-name', name));
+          jobsList.appendChild(jobRow);
         });
         if (jobs.length > WEEK_ROW_MAX_JOB_LINES) {
           jobsList.appendChild(el('div', 'admin-week-day-row-more', '+' + (jobs.length - WEEK_ROW_MAX_JOB_LINES) + ' more'));

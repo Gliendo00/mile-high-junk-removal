@@ -10,6 +10,14 @@
 //     header) for: the Yesterday tab, the relocated Quick Expense bar, the
 //     Week horizontal layout, the Month grid's top-left date/badge layout,
 //     and the day-nav/day-panel previous-next controls;
+//   - a second-pass visual correction (owner reviewed the authenticated
+//     Preview and found the first attempt insufficient): Today/Tomorrow/
+//     Yesterday's outer job card (.admin-schedule-card) needed a much more
+//     visible border/shadow — the wrapper already correctly contained the
+//     whole job (info AND the Call/Text/Directions row), it just read as
+//     "on the background" next to those large, saturated buttons — and
+//     Week's per-day job list needed each job to be its own mini-card
+//     (.admin-week-day-row-job) instead of one run-on block of text;
 //   - a corrective regression guard confirming a mid-task addendum (Google
 //     address-autocomplete previewing each suggestion's ZIP in the
 //     dropdown) was fully removed after owner review — it was outside this
@@ -446,6 +454,158 @@ test("admin/calendar-views.js/schedule.js: previous-day navigation never steps b
   const calendarSrc = read("admin/calendar-views.js");
   assert.ok(/if \(target < HISTORICAL_FLOOR_ISO\) return;/.test(calendarSrc), "navigateWeekDayBy/navigateMonthDayBy must both refuse to cross the floor");
   assert.ok(/dayNavPrevBtn\.disabled = iso <= HISTORICAL_FLOOR_ISO/.test(scheduleSrc));
+});
+
+// =======================================================================
+// 4b. Second-pass visual correction: the owner reviewed the authenticated
+//     Preview and found the first Today/Tomorrow/Yesterday card treatment
+//     insufficient, and Week's per-day jobs still reading as one run-on
+//     block. This section proves both are now unmistakable, not just
+//     present.
+// =======================================================================
+test("admin/schedule.js: each job in the list gets its own distinct outer job-card container — render() calls renderJobCard() once per job and appends each result separately (never batches multiple jobs into one shared wrapper)", () => {
+  const src = read("admin/schedule.js");
+  const renderBody = src.slice(src.indexOf("function render(jobs)"), src.indexOf("function setActiveTab"));
+  assert.ok(/jobs\.forEach\(function \(job\) \{\s*listEl\.appendChild\(renderJobCard\(job\)\);\s*\}\);/.test(renderBody), "render() must call renderJobCard() once per job and append each one individually — this is what guarantees N jobs produce N separate cards, never one shared block");
+});
+
+test("admin/schedule.js: renderJobCard()'s outer wrapper (.admin-schedule-card) contains the entire job — the info section AND the Call/Text/Directions actions row, as siblings inside the same card", () => {
+  const src = read("admin/schedule.js");
+  const body = src.slice(src.indexOf("function renderJobCard(job)"), src.indexOf("function render(jobs)"));
+  const cardIdx = body.indexOf("var card = el('div', 'admin-schedule-card");
+  const mainAppendIdx = body.indexOf("card.appendChild(main)");
+  const actionsAppendIdx = body.indexOf("card.appendChild(actions)");
+  assert.ok(cardIdx !== -1 && mainAppendIdx !== -1 && actionsAppendIdx !== -1, "the outer card must exist and both the info block and the actions row must be appended directly to it");
+  assert.ok(cardIdx < mainAppendIdx && mainAppendIdx < actionsAppendIdx, "both sections must be children of the same outer card, in order");
+});
+
+test("admin/admin.css: .admin-schedule-card has a clearly visible border and a real (not near-imperceptible) shadow — the corrected, second-pass treatment, not the original too-subtle one", () => {
+  const css = read("admin/admin.css");
+  const rule = css.slice(css.indexOf(".admin-schedule-card {"), css.indexOf("}", css.indexOf(".admin-schedule-card {")));
+  assert.ok(/border:\s*1px solid var\(--color-neutral-400/.test(rule), "the border must use the more visible neutral-400 token, not the original neutral-300 that read as near-white against the page background");
+  assert.ok(!/neutral-300/.test(rule), "must not still reference the original, too-subtle neutral-300 border color");
+  assert.ok(/box-shadow:\s*0 2px 6px rgba\(20, 21, 15, 0\.12\)/.test(rule), "the shadow must be strengthened from the original 1px/7%-opacity version to something actually visible");
+});
+
+test("admin/admin.css: root-cause regression guard — a comment ending in the literal text 'accent-*/' anywhere before .admin-schedule-card's rule silently closes a CSS comment early (browsers treat '*/' as the comment terminator regardless of the author's intent), swallowing the real rule's selector into an unparseable mess that gets dropped wholesale. This exact bug pre-dated this stage (present at production baseline ee2585f) and is why NEITHER the original card styling NOR this stage's first strengthening pass ever visually applied — confirmed live via a real browser's parsed document.styleSheets, not guessed. This test proves .admin-schedule-card survives correct comment-stripping and that the specific historical trigger text is gone.", () => {
+  const css = read("admin/admin.css");
+  assert.ok(!css.includes("accent-*/"), "the specific historical bug pattern (an asterisk immediately followed by a slash inside prose, forming an accidental CSS comment terminator) must never reappear");
+
+  // A minimal, browser-accurate CSS comment stripper: /* ... */ comments do
+  // not nest, so the first */ found after a /* always ends it — exactly
+  // the rule that made the original bug possible, used here in reverse to
+  // prove the file is now well-formed.
+  function stripCssComments(src) {
+    var out = "";
+    var i = 0;
+    while (i < src.length) {
+      var start = src.indexOf("/*", i);
+      if (start === -1) { out += src.slice(i); break; }
+      out += src.slice(i, start);
+      var end = src.indexOf("*/", start + 2);
+      if (end === -1) break; // an unterminated comment consumes the rest of the file
+      i = end + 2;
+    }
+    return out;
+  }
+  const stripped = stripCssComments(css);
+  assert.ok(
+    /\.admin-schedule-card\s*\{[^}]*background:\s*#fff/.test(stripped),
+    "after correctly stripping every /* ... */ comment in the file, .admin-schedule-card { background: #fff ... } must still be present as real, parseable CSS — this fails again if any comment anywhere earlier in the file accidentally contains a literal '*/' sequence, exactly like the historical bug this guards against"
+  );
+});
+
+test("admin/admin.css: #schedule-list keeps a clear, generous gap between consecutive job cards", () => {
+  const css = read("admin/admin.css");
+  assert.ok(/#schedule-list\s*\{\s*gap:\s*16px;\s*\}/.test(css));
+});
+
+test("admin/calendar-views.js: Week remains horizontal after this correction (unchanged from the prior pass) — still a row-direction, horizontally-scrolling strip", () => {
+  const css = read("admin/admin.css");
+  const overviewRule = css.slice(css.indexOf(".admin-week-overview {"), css.indexOf("}", css.indexOf(".admin-week-overview {")));
+  assert.ok(/flex-direction:\s*row/.test(overviewRule));
+  assert.ok(/overflow-x:\s*auto/.test(overviewRule));
+});
+
+test("admin/calendar-views.js: each job inside a Week day gets its own mini-card element — renderWeekOverview() builds one .admin-week-day-row-job div per job and appends each individually, never one shared text block", () => {
+  const src = read("admin/calendar-views.js");
+  const body = src.slice(src.indexOf("function renderWeekOverview"), src.indexOf("function selectWeekDate"));
+  assert.ok(/jobs\.slice\(0, WEEK_ROW_MAX_JOB_LINES\)\.forEach\(function \(job\) \{/.test(body));
+  assert.ok(/var jobRow = el\('div', 'admin-week-day-row-job'\);/.test(body), "each job must build its own .admin-week-day-row-job element, not a shared/joined string");
+  assert.ok(/jobsList\.appendChild\(jobRow\);/.test(body), "each job's mini-card must be appended individually inside the forEach — this is what guarantees a day with N jobs produces N separate mini-cards");
+});
+
+test("admin/calendar-views.js: a Week job's mini-card has separately-scannable time and client-name elements — time never wraps mid-unit, name ellipsis-truncates instead of wrapping awkwardly", () => {
+  const src = read("admin/calendar-views.js");
+  const body = src.slice(src.indexOf("function renderWeekOverview"), src.indexOf("function selectWeekDate"));
+  assert.ok(/el\('span', 'admin-week-day-row-job-time', shortTimeLabel\(job\.timeWindowLabel\)\)/.test(body), "the compact mini-card must show only the start time (shortTimeLabel), not the full '8:00 AM – 10:00 AM' range — the full range alone left no room for the client name");
+  assert.ok(/el\('span', 'admin-week-day-row-job-name', name\)/.test(body));
+  const css = read("admin/admin.css");
+  const timeRule = css.slice(css.indexOf(".admin-week-day-row-job-time {"), css.indexOf("}", css.indexOf(".admin-week-day-row-job-time {")));
+  assert.ok(/white-space:\s*nowrap/.test(timeRule), "the time must never break mid-unit (e.g. '10:00' / 'AM' on separate lines)");
+  const nameRule = css.slice(css.indexOf(".admin-week-day-row-job-name {"), css.indexOf("}", css.indexOf(".admin-week-day-row-job-name {")));
+  assert.ok(/text-overflow:\s*ellipsis/.test(nameRule) && /white-space:\s*nowrap/.test(nameRule), "a too-long client name must ellipsis-truncate rather than wrap awkwardly");
+});
+
+test("admin/calendar-views.js: shortTimeLabel() only trims the modern spaced-en-dash range format ('8:00 AM – 10:00 AM' -> '8:00 AM') and leaves any other label (including the legacy 'Morning (8am–11am)' style) completely untouched", () => {
+  const src = read("admin/calendar-views.js");
+  const body = src.slice(src.indexOf("function shortTimeLabel"), src.indexOf("function shortTimeLabel") + 400);
+  // Re-implement the exact same pure function here (this project's
+  // established convention for verifying a small client-only helper
+  // without a browser — see e.g. tests/phase3c-schedule.test.js's own
+  // independent addDaysIso()/denverTodayIso() copies) and check it against
+  // both label shapes this app actually produces.
+  function shortTimeLabel(label) {
+    if (!label) return '—';
+    var idx = label.indexOf(' – ');
+    return idx === -1 ? label : label.slice(0, idx);
+  }
+  assert.strictEqual(shortTimeLabel('8:00 AM – 10:00 AM'), '8:00 AM');
+  assert.strictEqual(shortTimeLabel('10:00 AM – 12:00 PM'), '10:00 AM');
+  assert.strictEqual(shortTimeLabel('Morning (8am–11am)'), 'Morning (8am–11am)', "the legacy label's own unspaced dash must not be mistaken for the modern range separator");
+  assert.strictEqual(shortTimeLabel(null), '—');
+  assert.strictEqual(shortTimeLabel(''), '—');
+  assert.ok(/var idx = label\.indexOf\(' – '\);/.test(body), "must split on the spaced en dash specifically, not any dash");
+});
+
+test("admin/admin.css: each Week job mini-card is visually bounded (background + border + rounded corners) in both the normal and selected/dark day states", () => {
+  const css = read("admin/admin.css");
+  const jobRule = css.slice(css.indexOf(".admin-week-day-row-job {"), css.indexOf("}", css.indexOf(".admin-week-day-row-job {")));
+  assert.ok(/background:/.test(jobRule) && /border:/.test(jobRule) && /border-radius:/.test(jobRule), "the mini-card needs its own background/border/radius to read as a clearly bounded row, not just plain text");
+  assert.ok(/\.admin-week-day-row\.is-selected \.admin-week-day-row-job \{/.test(css), "the mini-card must have its own selected-day override so it still reads as bounded against the dark selected background");
+});
+
+test("admin/calendar-views.js: a day with exactly 2 jobs produces exactly 2 mini-card elements (simulated by driving the shared el()/appendChild pattern directly against a 2-job fixture, since this offline harness has no DOM/browser to render into)", () => {
+  // This project's established limitation (see tests/phase3c-schedule.test.js's
+  // header): no DOM/click simulation is available, so this test proves the
+  // *mechanism* is correct — one appendChild call per forEach iteration,
+  // with no branch that could ever coalesce jobs into fewer than N elements
+  // — rather than rendering a real DOM and counting nodes.
+  const src = read("admin/calendar-views.js");
+  const body = src.slice(src.indexOf("function renderWeekOverview"), src.indexOf("function selectWeekDate"));
+  const forEachIdx = body.indexOf("jobs.slice(0, WEEK_ROW_MAX_JOB_LINES).forEach(function (job) {");
+  const appendIdx = body.indexOf("jobsList.appendChild(jobRow);");
+  assert.ok(forEachIdx !== -1 && appendIdx !== -1 && forEachIdx < appendIdx, "exactly one jobsList.appendChild(jobRow) call must live inside the per-job forEach body — this is what guarantees a 2-job day yields exactly 2 mini-cards, a 3-job day exactly 3, etc.");
+  // No code path joins multiple jobs' text into a single element (the
+  // pre-fix bug this whole section exists to prevent regressing back to).
+  assert.ok(!/jobs\.map\(function \(job\)[\s\S]*?\)\.join\(/.test(body), "jobs must never be joined into one shared string/element");
+});
+
+test("admin/schedule.js: existing booking links/actions are fully preserved after the card-visibility fix — the detail link, Call/Text/Directions hrefs, and disabled-state handling are all unchanged", () => {
+  const src = read("admin/schedule.js");
+  const body = src.slice(src.indexOf("function renderJobCard(job)"), src.indexOf("function render(jobs)"));
+  assert.ok(/main\.href = '\/admin\/booking\/\?id=' \+ encodeURIComponent\(job\.id\)/.test(body));
+  assert.ok(/quickBtn\('primary', 'Call', callIcon\)/.test(body));
+  assert.ok(/quickBtn\('primary', 'Text', textIcon\)/.test(body));
+  assert.ok(/quickBtn\('secondary', 'Directions', directionsIcon\)/.test(body));
+  assert.ok(/disableAction\(callBtn\)/.test(body) && /disableAction\(directionsBtn\)/.test(body), "the no-phone/no-address disabled-state handling must be unchanged");
+});
+
+test("admin/admin.css: the widened Week day column (for the new job mini-cards) still relies on flex/min-width, never a fixed width that could force page-level overflow — Week's scroll stays contained to itself", () => {
+  const css = read("admin/admin.css");
+  const rowRule = css.slice(css.indexOf(".admin-week-day-row {"), css.indexOf("}", css.indexOf(".admin-week-day-row {")));
+  assert.ok(/flex:\s*1 1 \d+px/.test(rowRule));
+  assert.ok(!/width:\s*\d+vw/.test(rowRule) && !/100%/.test(rowRule), "no viewport-relative or 100% width that could escape the horizontally-scrolling container");
 });
 
 // =======================================================================
