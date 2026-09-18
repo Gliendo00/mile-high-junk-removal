@@ -140,6 +140,21 @@ test("address-autocomplete.js: the location-bias radius stays within Places API 
   assert.ok(radius > 0 && radius <= 50000, "locationBias.circle.radius must be <= 50000 meters (Google's documented Places API (New) limit) — a request with a larger radius fails every single search with INVALID_ARGUMENT, indistinguishable from Google being fully broken unless you inspect the raw error");
 });
 
+test("address-autocomplete.js: readiness after script load uses google.maps.importLibrary('places'), never a synchronous window.google.maps.places check — found live on Preview: loading=async defers each library's own init to run AFTER script.onload fires, so a synchronous check at onload time always lost the race, permanently rejected the cached load promise, and was silently swallowed by every caller's .catch() (confirmed via instrumentation: google.maps.places was still undefined at every one of 7 onload firings observed)", () => {
+  const src = read("admin/address-autocomplete.js");
+  assert.ok(/loading=async/.test(src), "must still request the async loading mode");
+  assert.ok(
+    /google\.maps\.importLibrary\(\s*["']places["']\s*\)/.test(src),
+    "script.onload must hand off to google.maps.importLibrary('places'), which returns its own promise resolving only once that library has actually finished initializing"
+  );
+  const onloadBlock = src.match(/script\.onload = function \(\) \{[\s\S]*?\n {10}\};/);
+  assert.ok(onloadBlock, "must find the script.onload handler block");
+  assert.ok(
+    !/window\.google\.maps\.places\)\s*\{\s*\n\s*resolve\(window\.google\.maps\.places\)/.test(onloadBlock[0]),
+    "script.onload must not resolve off a synchronous window.google.maps.places check — that races loading=async's deferred init and loses"
+  );
+});
+
 test("address-autocomplete.js: every Google call is wrapped so a failure degrades to manual entry, never blocks or disables the input", () => {
   const src = read("admin/address-autocomplete.js");
   assert.ok(!/addressInput\.disabled\s*=\s*true/.test(src), "must never disable the manual input");

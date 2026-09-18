@@ -108,10 +108,20 @@ window.AdminAddressAutocomplete = (function () {
             reject(new Error("Failed to load the Google Maps script"));
           };
           script.onload = function () {
-            if (window.google && window.google.maps && window.google.maps.places) {
-              resolve(window.google.maps.places);
+            // The bootstrap script is loaded with loading=async, which defers
+            // each library's own initialization to run asynchronously AFTER
+            // this onload fires — google.maps.places is not populated yet at
+            // this exact moment (confirmed live: every onload firing observed
+            // google.maps.places still undefined). google.maps.importLibrary()
+            // is the API this loading mode is designed to pair with: it
+            // returns its own promise that resolves only once that specific
+            // library has actually finished initializing, instead of relying
+            // on a script.onload timing assumption that this loading mode
+            // does not honor.
+            if (window.google && window.google.maps && typeof window.google.maps.importLibrary === "function") {
+              window.google.maps.importLibrary("places").then(resolve, reject);
             } else {
-              reject(new Error("Google Maps script loaded but google.maps.places is unavailable"));
+              reject(new Error("Google Maps script loaded but google.maps.importLibrary is unavailable"));
             }
           };
           document.head.appendChild(script);
