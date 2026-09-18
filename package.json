@@ -4,6 +4,7 @@
   "private": true,
   "description": "Static site + Vercel serverless functions for Mile High Junk Removal.",
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.2"
+    "@supabase/supabase-js": "^2.112.2",
+    "braintree": "^3.39.0"
   }
 }

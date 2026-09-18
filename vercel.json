@@ -36,6 +36,9 @@
     { "source": "/admin/booking", "destination": "/admin/booking/", "permanent": true }
   ],
   "rewrites": [
-    { "source": "/privacy-policy", "destination": "/privacy-policy.html" }
+    { "source": "/privacy-policy", "destination": "/privacy-policy.html" },
+
+    { "source": "/api/admin/login", "destination": "/api/admin/auth?action=login" },
+    { "source": "/api/admin/logout", "destination": "/api/admin/auth?action=logout" }
   ]
 }

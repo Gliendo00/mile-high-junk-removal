@@ -1,6 +1,7 @@
 // Local, offline test harness for the Phase 2 admin auth + read-only
-// dashboard API (api/admin/login.js, logout.js, bookings.js, booking.js,
-// and the shared helpers in api/_lib/admin-auth.js, supabase-admin.js,
+// dashboard API (api/admin/auth.js — login+logout, consolidated in Phase
+// 3C Stage 2.5-v2, see that file's header — bookings.js, booking.js, and
+// the shared helpers in api/_lib/admin-auth.js, supabase-admin.js,
 // booking-format.js).
 //
 // Like tests/phase1-api.test.js, this never touches the real network or the
@@ -146,8 +147,14 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net, Second.Admin@Example.com";
 
-const loginHandler = require("../api/admin/login.js");
-const logoutHandler = require("../api/admin/logout.js");
+// login and logout are now one consolidated handler (api/admin/auth.js),
+// dispatched on ?action=login|logout — see that file's header for why.
+// Kept as two names here so every existing call site below (which already
+// reads clearly as "the login handler" / "the logout handler") needs no
+// further change beyond adding the query param each now requires.
+const authHandler = require("../api/admin/auth.js");
+const loginHandler = authHandler;
+const logoutHandler = authHandler;
 const bookingsHandler = require("../api/admin/bookings.js");
 const bookingHandler = require("../api/admin/booking.js");
 const { normalizedStatus, statusLabel, timeWindowLabel } = require("../api/_lib/booking-format");
@@ -332,7 +339,7 @@ function configureAuthWithCredentials(trueEmail, truePassword) {
 // succeed.
 async function loginAs(email, password) {
   configureAuthWithCredentials(email, password);
-  return run(loginHandler, makeReq({ method: "POST", body: { email: email, password: password } }));
+  return run(loginHandler, makeReq({ method: "POST", query: { action: "login" }, body: { email: email, password: password } }));
 }
 
 // ---------------------------------------------------------------------
@@ -383,7 +390,7 @@ test("login: valid admin credentials succeed and set session cookies", async () 
 
 test("login: wrong password is rejected with a generic error and no cookies", async () => {
   configureAuthWithCredentials(ADMIN_EMAIL, "correct-password");
-  const res = await run(loginHandler, makeReq({ method: "POST", body: { email: ADMIN_EMAIL, password: "wrong-password" } }));
+  const res = await run(loginHandler, makeReq({ method: "POST", query: { action: "login" }, body: { email: ADMIN_EMAIL, password: "wrong-password" } }));
   assert.strictEqual(res.statusCode, 401);
   assert.strictEqual(res.body.error, "Invalid email or password.");
   assert.strictEqual(res.getHeader("Set-Cookie"), undefined);
@@ -396,7 +403,7 @@ test("login: real Supabase account but non-allowlisted email is rejected identic
       error: null,
     }),
   });
-  const res = await run(loginHandler, makeReq({ method: "POST", body: { email: NON_ADMIN_EMAIL, password: "whatever" } }));
+  const res = await run(loginHandler, makeReq({ method: "POST", query: { action: "login" }, body: { email: NON_ADMIN_EMAIL, password: "whatever" } }));
   assert.strictEqual(res.statusCode, 401);
   assert.strictEqual(res.body.error, "Invalid email or password.");
   assert.strictEqual(res.getHeader("Set-Cookie"), undefined, "a non-admin must never receive a session cookie");
@@ -409,12 +416,12 @@ test("login: allowlist comparison is case-insensitive and trims whitespace", asy
       error: null,
     }),
   });
-  const res = await run(loginHandler, makeReq({ method: "POST", body: { email: "second.admin@example.com", password: "whatever" } }));
+  const res = await run(loginHandler, makeReq({ method: "POST", query: { action: "login" }, body: { email: "second.admin@example.com", password: "whatever" } }));
   assert.strictEqual(res.statusCode, 200);
 });
 
 test("login: missing email/password is a 400, not a Supabase call", async () => {
-  const res = await run(loginHandler, makeReq({ method: "POST", body: { email: "", password: "" } }));
+  const res = await run(loginHandler, makeReq({ method: "POST", query: { action: "login" }, body: { email: "", password: "" } }));
   assert.strictEqual(res.statusCode, 400);
 });
 
@@ -625,7 +632,7 @@ test("logout: clears both cookies and calls Supabase sign-out", async () => {
       return { error: null };
     },
   });
-  const res = await run(logoutHandler, makeReq({ method: "POST", cookie: "mhjr_admin_at=at-good; mhjr_admin_rt=rt-good" }));
+  const res = await run(logoutHandler, makeReq({ method: "POST", query: { action: "logout" }, cookie: "mhjr_admin_at=at-good; mhjr_admin_rt=rt-good" }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(signOutCalled, true);
   assert.deepStrictEqual(setSessionArgs, { access_token: "at-good", refresh_token: "rt-good" });
