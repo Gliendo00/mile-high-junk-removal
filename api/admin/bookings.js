@@ -32,7 +32,13 @@ const SCHEDULABLE_STATUSES = ["booked", "completed"];
 // docs/phase-3/stage2.4-calendar-address-proposal.md "Week start day" for
 // why Sunday was chosen. "month" and "year" are new bounded calendar
 // navigation modes added the same stage.
-const VALID_RANGES = ["today", "tomorrow", "week", "month", "year"];
+// Phase 3C Stage 2.4.2: "yesterday" joins today/tomorrow as a third named
+// single-day range (Schedule UX polish — the owner wanted one-tap access to
+// yesterday's jobs, not just today's/tomorrow's). "day" is not a tab at
+// all — it backs the restrained previous-day/next-day arrows on the
+// Today/Tomorrow/Yesterday view (see handleDay()), taking an explicit
+// ?date= instead of computing one from "today".
+const VALID_RANGES = ["today", "tomorrow", "yesterday", "day", "week", "month", "year"];
 const WEEK_SPAN_DAYS = 7;
 
 // The earliest Sunday-aligned week that calendar navigation will ever show
@@ -328,14 +334,27 @@ async function handleSchedule(req, res, supabase) {
 
   if (range === "month") return handleMonth(req, res, supabase, todayIso);
   if (range === "year") return handleYear(req, res, supabase, todayIso);
+  if (range === "day") return handleDay(req, res, supabase, todayIso);
 
   let startDate, endDate, weekStart, weekEnd;
+  let beforeHistoricalFloor = false;
   if (range === "today") {
     startDate = todayIso;
     endDate = todayIso;
   } else if (range === "tomorrow") {
     startDate = addDaysIso(todayIso, 1);
     endDate = startDate;
+  } else if (range === "yesterday") {
+    // Same Denver-local model as today/tomorrow: yesterday is simply
+    // "todayIso minus one calendar day". If that falls before the
+    // historical floor (only possible when "today" itself is at or just
+    // past the floor), this is handled cleanly — zero jobs, no query, a
+    // `beforeHistoricalFloor` flag the client shows a dedicated empty state
+    // for — rather than running a query against a date range the floor was
+    // never designed to bound.
+    startDate = addDaysIso(todayIso, -1);
+    endDate = startDate;
+    beforeHistoricalFloor = startDate < HISTORICAL_FLOOR_ISO;
   } else {
     // Navigable calendar week (Phase 3C Stage 2.4) — replaces the Stage 1
     // "today + next 6 days" rolling window. An explicit ?weekStart= must be
@@ -368,8 +387,9 @@ async function handleSchedule(req, res, supabase) {
   }
 
   try {
-    const jobs = await fetchScheduleJobs(supabase, startDate, endDate);
+    const jobs = beforeHistoricalFloor ? [] : await fetchScheduleJobs(supabase, startDate, endDate);
     const body = { ok: true, range: range, startDate: startDate, endDate: endDate, jobs: jobs, today: todayIso };
+    if (beforeHistoricalFloor) body.beforeHistoricalFloor = true;
     if (range === "week") {
       body.weekStart = weekStart;
       body.weekEnd = weekEnd;
@@ -380,6 +400,43 @@ async function handleSchedule(req, res, supabase) {
   } catch (err) {
     console.error("Admin schedule failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load the schedule." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Single explicit date (?view=schedule&range=day&date=YYYY-MM-DD) — Phase
+// 3C Stage 2.4.2. Backs the Today/Tomorrow/Yesterday view's restrained
+// previous-day/next-day arrows (admin/schedule.js): those buttons compute
+// the adjacent calendar date client-side (the same Denver-local addDaysIso
+// this file already uses) and ask for that one explicit date, rather than
+// guessing which named range (if any) it corresponds to. This never
+// replaces today/tomorrow/yesterday themselves, which stay their own
+// explicit ranges specifically so "today" is always resolved from the real
+// server clock, never trusted from the client. Same bounded single-day
+// query fetchScheduleJobs() already provides for today/tomorrow/yesterday.
+// ---------------------------------------------------------------------
+async function handleDay(req, res, supabase, todayIso) {
+  const dateRaw = typeof req.query.date === "string" ? req.query.date.trim() : "";
+  if (!isValidIsoDate(dateRaw)) {
+    res.status(400).json({ error: "A valid date is required." });
+    return;
+  }
+  if (dateRaw < HISTORICAL_FLOOR_ISO) {
+    res.status(400).json({ error: "Cannot navigate before the historical floor (January 1, 2026)." });
+    return;
+  }
+  const maxYear = Number(todayIso.slice(0, 4)) + MAX_FUTURE_YEARS;
+  if (Number(dateRaw.slice(0, 4)) > maxYear) {
+    res.status(400).json({ error: "That date is too far in the future." });
+    return;
+  }
+
+  try {
+    const jobs = await fetchScheduleJobs(supabase, dateRaw, dateRaw);
+    res.status(200).json({ ok: true, range: "day", startDate: dateRaw, endDate: dateRaw, jobs: jobs, today: todayIso });
+  } catch (err) {
+    console.error("Admin day schedule failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load that date." });
   }
 }
 

@@ -1,7 +1,10 @@
-// /admin — Schedule homepage: Today/Tomorrow (Phase 3C Stage 1) plus the
-// range-tab orchestrator for all five ranges. Week/Month/Year each live in
-// their own view container, rendered by admin/calendar-views.js (Week
-// redesigned into a compact 7-day overview in Stage 2.4.1 — see that file).
+// /admin — Schedule homepage: Today/Tomorrow/Yesterday (Yesterday added
+// Stage 2.4.2) plus the range-tab orchestrator for all six ranges.
+// Week/Month/Year each live in their own view container, rendered by
+// admin/calendar-views.js (Week redesigned into a compact 7-day overview in
+// Stage 2.4.1 — see that file). Stage 2.4.2 also added the restrained
+// previous-day/next-day stepper (#day-nav) so browsing isn't limited to
+// exactly these three named days — see loadDate()/applyDayResult() below.
 //
 // Every dynamic value below is written with textContent (never
 // innerHTML/insertAdjacentHTML with a concatenated string), so a
@@ -20,13 +23,30 @@ document.addEventListener('DOMContentLoaded', function () {
   var weekView = document.getElementById('week-view');
   var monthView = document.getElementById('month-view');
   var yearView = document.getElementById('year-view');
+  var dayNavPrevBtn = document.getElementById('day-nav-prev');
+  var dayNavNextBtn = document.getElementById('day-nav-next');
+  var dayNavLabel = document.getElementById('day-nav-label');
 
   var currentRange = 'today';
   var requestSeq = 0; // guards against an in-flight request resolving after a newer range change
+  // The single date currently on screen — set from the server's own
+  // startDate on every today/tomorrow/yesterday/day response, never derived
+  // from the client's clock. Backs the previous-day/next-day arrows, which
+  // only ever need "one day before/after whatever is showing right now".
+  var activeDateIso = null;
+
+  // Small local copy of the historical floor — same value as
+  // api/_lib/historical-floor.js, duplicated client-side per this project's
+  // established convention (see that file's own header, and
+  // admin/calendar-views.js's identical copy) rather than a cross-runtime
+  // import.
+  var HISTORICAL_FLOOR_ISO = '2026-01-01';
 
   var EMPTY_MESSAGES = {
     today: 'No jobs scheduled for today.',
     tomorrow: 'No jobs scheduled for tomorrow.',
+    yesterday: 'No jobs scheduled for yesterday.',
+    day: 'No jobs scheduled for this date.',
   };
 
   function showError(msg) {
@@ -43,6 +63,18 @@ document.addEventListener('DOMContentLoaded', function () {
     var n = Number(value);
     if (!Number.isFinite(n)) return null;
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+
+  // Adds `days` calendar days to a YYYY-MM-DD string — a small local copy of
+  // api/admin/bookings.js's own addDaysIso, matching admin/calendar-views.js's
+  // identical copy (this project's established convention of a small
+  // duplicated calendar-math helper per client file rather than a shared
+  // cross-runtime import).
+  function addDaysIso(iso, days) {
+    var p = iso.split('-').map(Number);
+    var dt = new Date(Date.UTC(p[0], p[1] - 1, p[2], 12, 0, 0));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
   }
 
   function buildTelHref(phone) {
@@ -187,11 +219,58 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // range: 'today' | 'tomorrow' only — Week/Month/Year are all handled by
-  // admin/calendar-views.js.
-  function load(range) {
-    currentRange = range;
-    setActiveTab(range);
+  // Formats the day-nav heading and disables "Previous day" once the
+  // displayed date is the historical floor itself — matches
+  // admin/calendar-views.js's identical "day before the floor is disabled"
+  // treatment on Week/Month/Year's own Prev controls.
+  function updateDayNav(iso) {
+    var d = new Date(iso + 'T00:00:00');
+    dayNavLabel.textContent = isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+    dayNavPrevBtn.disabled = iso <= HISTORICAL_FLOOR_ISO;
+  }
+
+  // Highlights whichever of the Yesterday/Today/Tomorrow tabs (if any)
+  // exactly matches the date just loaded — comparing against the server's
+  // own `today`, never the client's clock. A date reached only via the
+  // day-nav arrows (e.g. two days from now) matches none of the three, so
+  // every tab is correctly left unhighlighted rather than guessing.
+  function updateActiveTabForDate(body) {
+    var iso = body.startDate;
+    var today = body.today;
+    var matched = null;
+    if (iso === today) matched = 'today';
+    else if (iso === addDaysIso(today, -1)) matched = 'yesterday';
+    else if (iso === addDaysIso(today, 1)) matched = 'tomorrow';
+    setActiveTab(matched || '');
+  }
+
+  // Shared tail end of every today/tomorrow/yesterday/day-nav fetch: update
+  // the day-nav heading, the active tab, the relocated Quick Expense bar
+  // (admin/quick-expense.js), and the job list itself — in that order, so
+  // every one of those four stays perfectly in sync with whichever single
+  // date the response actually resolved (never the date that was merely
+  // requested, which matters for `beforeHistoricalFloor`).
+  function applyDayResult(body) {
+    activeDateIso = body.startDate;
+    updateDayNav(activeDateIso);
+    updateActiveTabForDate(body);
+    if (body.beforeHistoricalFloor) {
+      render([]);
+      emptyEl.textContent = 'No historical records before January 1, 2026.';
+      window.AdminQuickExpense.hideBar();
+    } else {
+      render(body.jobs || []);
+      window.AdminQuickExpense.showBar(activeDateIso);
+    }
+  }
+
+  // Common setup for every today/tomorrow/yesterday/day-nav fetch: show this
+  // view (hiding Week/Month/Year), reset the loading/empty/list UI, and hide
+  // the Quick Expense bar until the new date's response actually resolves
+  // (rather than briefly showing the previous date's controls).
+  function beginDayLoad() {
     todayTomorrowView.hidden = false;
     weekView.hidden = true;
     monthView.hidden = true;
@@ -202,31 +281,44 @@ document.addEventListener('DOMContentLoaded', function () {
     emptyEl.style.display = 'none';
     loadingEl.style.display = 'block';
     clearError();
+    window.AdminQuickExpense.hideBar();
+    return seq;
+  }
 
-    // Served by api/admin/bookings.js's ?view=schedule mode rather than a
-    // dedicated api/admin/schedule.js file — see the countsOnly/scheduleView
-    // comment in that file (Vercel Hobby plan's 12-Serverless-Function
-    // limit; docs/phase-3/vercel-function-limit.md).
-    fetch('/api/admin/bookings?view=schedule&range=' + encodeURIComponent(range))
-      .then(function (res) {
-        if (res.status === 401) {
-          window.location.href = '/admin/login/';
-          return null;
-        }
-        return res
-          .json()
-          .catch(function () { return null; })
-          .then(function (body) {
-            if (!res.ok) {
-              throw new Error((body && body.error) || 'Could not load the schedule.');
-            }
-            return body;
-          });
-      })
+  // Served by api/admin/bookings.js's ?view=schedule mode rather than a
+  // dedicated api/admin/schedule.js file — see the countsOnly/scheduleView
+  // comment in that file (Vercel Hobby plan's 12-Serverless-Function
+  // limit; docs/phase-3/vercel-function-limit.md).
+  function fetchDay(url, fallbackErrorMsg) {
+    return fetch(url).then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/admin/login/';
+        return null;
+      }
+      return res
+        .json()
+        .catch(function () { return null; })
+        .then(function (body) {
+          if (!res.ok) {
+            throw new Error((body && body.error) || fallbackErrorMsg);
+          }
+          return body;
+        });
+    });
+  }
+
+  // range: 'today' | 'tomorrow' | 'yesterday' only — Week/Month/Year are all
+  // handled by admin/calendar-views.js.
+  function load(range) {
+    currentRange = range;
+    setActiveTab(range);
+    var seq = beginDayLoad();
+
+    fetchDay('/api/admin/bookings?view=schedule&range=' + encodeURIComponent(range), 'Could not load the schedule.')
       .then(function (body) {
         if (!body || seq !== requestSeq) return; // redirected to login, or superseded by a newer range change
         loadingEl.style.display = 'none';
-        render(body.jobs || []);
+        applyDayResult(body);
       })
       .catch(function (err) {
         if (seq !== requestSeq) return;
@@ -234,6 +326,37 @@ document.addEventListener('DOMContentLoaded', function () {
         showError(err && err.message ? err.message : 'Could not load the schedule.');
       });
   }
+
+  // Previous-day/next-day navigation (Stage 2.4.2) — an explicit date via
+  // ?range=day&date=, for browsing beyond exactly yesterday/today/tomorrow.
+  // "Yesterday" stays its own dedicated tab regardless (see admin/index.html)
+  // — this is an additional, independent way to reach any date one step at
+  // a time, not a replacement for it.
+  function loadDate(iso) {
+    currentRange = 'day';
+    var seq = beginDayLoad();
+
+    fetchDay('/api/admin/bookings?view=schedule&range=day&date=' + encodeURIComponent(iso), 'Could not load that date.')
+      .then(function (body) {
+        if (!body || seq !== requestSeq) return;
+        loadingEl.style.display = 'none';
+        applyDayResult(body);
+      })
+      .catch(function (err) {
+        if (seq !== requestSeq) return;
+        loadingEl.style.display = 'none';
+        showError(err && err.message ? err.message : 'Could not load that date.');
+      });
+  }
+
+  dayNavPrevBtn.addEventListener('click', function () {
+    if (dayNavPrevBtn.disabled || !activeDateIso) return;
+    loadDate(addDaysIso(activeDateIso, -1));
+  });
+  dayNavNextBtn.addEventListener('click', function () {
+    if (!activeDateIso) return;
+    loadDate(addDaysIso(activeDateIso, 1));
+  });
 
   // Week/Month/Year are rendered entirely by admin/calendar-views.js, which
   // manages its own view-container visibility and active-tab state (see

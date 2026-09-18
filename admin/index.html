@@ -42,6 +42,7 @@
   </div>
 
   <div class="admin-range-tabs" role="tablist" aria-label="Schedule range">
+    <button type="button" class="admin-range-tab" data-range="yesterday" role="tab" aria-selected="false">Yesterday</button>
     <button type="button" class="admin-range-tab is-active" data-range="today" role="tab" aria-selected="true">Today</button>
     <button type="button" class="admin-range-tab" data-range="tomorrow" role="tab" aria-selected="false">Tomorrow</button>
     <button type="button" class="admin-range-tab" data-range="week" role="tab" aria-selected="false">Week</button>
@@ -49,9 +50,28 @@
     <button type="button" class="admin-range-tab" data-range="year" role="tab" aria-selected="false">Year</button>
   </div>
 
-  <!-- Today / Tomorrow — Phase 3C Stage 1. Week moved out to its own
-       compact 7-day overview (#week-view) in Stage 2.4.1. -->
+  <!-- Quick Expense — Phase 3C Stage 2.4.2: relocated here, directly under
+       the Schedule tabs, so it's always in the same place regardless of
+       which range is open. admin/quick-expense.js's showBar()/hideBar()
+       mount into and clear this container; its active date always tracks
+       whichever single day is currently on screen (Today/Tomorrow/
+       Yesterday/a day-nav date, or a tapped day in Week/Month). Hidden
+       (via the `hidden` attribute) whenever no single day is in view, e.g.
+       Year, or Week/Month before a day is selected. -->
+  <div id="quick-expense-bar" class="admin-quick-expense-bar" hidden></div>
+
+  <!-- Today / Tomorrow / Yesterday — Phase 3C Stage 1, Yesterday added
+       Stage 2.4.2. Week moved out to its own compact 7-day overview
+       (#week-view) in Stage 2.4.1. #day-nav is the restrained previous-day/
+       next-day stepper (Stage 2.4.2) — always shows whichever single date
+       is currently displayed, independent of which (if any) of the three
+       named tabs happens to match it exactly. -->
   <div id="today-tomorrow-view">
+    <div class="admin-calendar-nav">
+      <button type="button" id="day-nav-prev" class="admin-calendar-nav-btn" aria-label="Previous day">&larr;</button>
+      <span id="day-nav-label" class="admin-calendar-nav-label">—</span>
+      <button type="button" id="day-nav-next" class="admin-calendar-nav-btn" aria-label="Next day">&rarr;</button>
+    </div>
     <div id="loading" class="admin-loading">Loading schedule…</div>
     <div id="empty" class="admin-empty" style="display:none"></div>
     <ul id="schedule-list" class="admin-booking-list" style="display:none"></ul>
@@ -74,12 +94,16 @@
     <div id="week-day-panel" class="admin-day-panel" hidden></div>
   </div>
 
-  <!-- Month — Phase 3C Stage 2.4 -->
+  <!-- Month — Phase 3C Stage 2.4. #month-current-wrap (Stage 2.4.2) mirrors
+       Week's own "Jump to this week" pattern. -->
   <div id="month-view" hidden>
     <div class="admin-calendar-nav">
       <button type="button" id="month-prev" class="admin-calendar-nav-btn" aria-label="Previous month">&larr;</button>
       <span id="month-label" class="admin-calendar-nav-label">—</span>
       <button type="button" id="month-next" class="admin-calendar-nav-btn" aria-label="Next month">&rarr;</button>
+    </div>
+    <div id="month-current-wrap" style="display:none">
+      <button type="button" id="month-current-btn" class="admin-calendar-jump-btn">Jump to today</button>
     </div>
     <div id="month-loading" class="admin-loading">Loading month…</div>
     <div id="month-error" class="admin-error-banner" style="display:none"></div>

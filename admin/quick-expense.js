@@ -1,8 +1,11 @@
-// Daily Quick Expense Tracking — Phase 3C Stage 2.4 addendum. Mounted by
-// admin/calendar-views.js under the Month view's selected-day panel (and
-// nothing else — see docs/phase-3/stage2.4-calendar-address-proposal.md's
-// "Daily Quick Expense Tracking" section for why this stays scoped to the
-// explicit day-selection surface rather than every Schedule range).
+// Daily Quick Expense Tracking — Phase 3C Stage 2.4 addendum. Originally
+// mounted under the Month view's selected-day panel only; Stage 2.4.2
+// (Schedule UX polish) relocated it to a single persistent bar directly
+// under the Schedule range tabs (#quick-expense-bar in admin/index.html) so
+// it's always in the same place regardless of range — see showBar()/
+// hideBar() below, called by admin/schedule.js (Today/Tomorrow/Yesterday/
+// day-nav) and admin/calendar-views.js (Week/Month's selected day; hidden
+// entirely on Year, which has no single day in view).
 //
 // Tracking only: this file computes nothing beyond a plain same-day sum
 // for the "Tracked expenses: $X" line — never a total described as Profit,
@@ -251,7 +254,10 @@ window.AdminQuickExpense = (function () {
   function mount(container, dateIso) {
     while (container.firstChild) container.removeChild(container.firstChild);
 
-    var heading = el('div', 'admin-form-section-label', 'Expenses');
+    // The bar now sits above every range's own date display (Stage 2.4.2),
+    // so the heading names its own date directly rather than relying on a
+    // date heading elsewhere on the page to give it context.
+    var heading = el('div', 'admin-form-section-label', 'Quick Expense — ' + formatDateLabel(dateIso));
     container.appendChild(heading);
 
     var quickRow = el('div', 'admin-quick-expense-row');
@@ -351,5 +357,26 @@ window.AdminQuickExpense = (function () {
     loadAndRender();
   }
 
-  return { mount: mount };
+  // ---------------------------------------------------------------------
+  // Persistent top-of-page bar (Stage 2.4.2) — the single #quick-expense-bar
+  // element in admin/index.html, directly under the Schedule range tabs.
+  // showBar() just re-mount()s into it (mount() already rebuilds its
+  // container from scratch and re-fetches, so switching which date is
+  // "active" is simply calling this again with a new dateIso); hideBar()
+  // clears and hides it for ranges with no single day in view.
+  // ---------------------------------------------------------------------
+  function showBar(dateIso) {
+    var bar = document.getElementById('quick-expense-bar');
+    if (!bar) return;
+    bar.hidden = false;
+    mount(bar, dateIso);
+  }
+  function hideBar() {
+    var bar = document.getElementById('quick-expense-bar');
+    if (!bar) return;
+    bar.hidden = true;
+    while (bar.firstChild) bar.removeChild(bar.firstChild);
+  }
+
+  return { mount: mount, showBar: showBar, hideBar: hideBar };
 })();

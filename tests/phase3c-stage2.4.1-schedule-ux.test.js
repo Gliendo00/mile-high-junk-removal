@@ -1,8 +1,13 @@
 // Local, offline test harness for Phase 3C Stage 2.4.1: the Selected-day/
-// Daily layout reorder (Selected date -> Quick Expense icons -> Jobs), the
-// new compact per-job card, and the Week redesign (a 7-day overview + the
-// shared selected-day panel, replacing the old rolling list-of-cards
-// presentation). No API contract changed this stage — Week/Month/Year all
+// Daily layout reorder (originally Selected date -> Quick Expense icons ->
+// Jobs; Stage 2.4.2 later moved Quick Expense out to its own persistent bar
+// — see the first two tests below, updated in place rather than left
+// asserting stale behavior), the new compact per-job card, and the Week
+// redesign (a 7-day overview + the shared selected-day panel, replacing the
+// old rolling list-of-cards presentation — Stage 2.4.2 additionally made
+// this overview horizontal instead of stacked; see
+// tests/phase3c-stage2.4.2-schedule-polish.test.js for that CSS/markup
+// coverage). No API contract changed this stage — Week/Month/Year all
 // still call the exact same api/admin/bookings.js ?view=schedule endpoint
 // established in Stage 2.4 (see tests/phase3c-stage2.4-calendar.test.js for
 // that server-side coverage, unchanged and still passing).
@@ -49,24 +54,37 @@ function functionBody(name) {
 }
 
 // =======================================================================
-// 1. Selected-day panel hierarchy: Selected date -> Quick Expense icons ->
-//    Jobs (the action link + each job card), in that exact order.
+// 1. Selected-day panel hierarchy: Selected date (with previous/next-day
+//    arrows, Stage 2.4.2) -> Jobs (the action link + each job card), in
+//    that order. Quick Expense no longer mounts inside this panel as of
+//    Stage 2.4.2 — see tests/phase3c-stage2.4.2-schedule-polish.test.js for
+//    its relocated-bar coverage.
 // =======================================================================
-test("renderDayPanel(): appends heading, then the expense mount, then the action link, then the jobs list — in that exact order", () => {
+test("renderDayPanel(): appends the heading row, then the action link, then the jobs list — in that order", () => {
   const body = functionBody("renderDayPanel");
-  const headingIdx = body.indexOf("container.appendChild(heading)");
-  const expenseIdx = body.indexOf("container.appendChild(expenseMount)");
+  const headingRowIdx = body.indexOf("container.appendChild(headingRow)");
   const actionIdx = body.indexOf("container.appendChild(actionLink)");
   const jobsIdx = body.indexOf("container.appendChild(jobsWrap)");
-  [headingIdx, expenseIdx, actionIdx, jobsIdx].forEach((i) => assert.ok(i !== -1, "all four sections must be appended to the day panel"));
-  assert.ok(headingIdx < expenseIdx, "the date heading must come before the expense mount");
-  assert.ok(expenseIdx < actionIdx, "Quick Expense icons must come above the Jobs section (action link + cards), per the owner's explicit hierarchy");
+  [headingRowIdx, actionIdx, jobsIdx].forEach((i) => assert.ok(i !== -1, "all three sections must be appended to the day panel"));
+  assert.ok(headingRowIdx < actionIdx, "the date heading row must come before the Jobs section");
   assert.ok(actionIdx < jobsIdx, "the +New/Past Job action stays with the Jobs section, immediately above the job cards");
 });
 
-test("renderDayPanel(): still mounts admin/quick-expense.js and preserves the automatic selected-date assignment (iso passed straight through)", () => {
+test("renderDayPanel(): Stage 2.4.2 — no longer mounts admin/quick-expense.js inside the day panel (relocated to the persistent top-of-page bar)", () => {
   const body = functionBody("renderDayPanel");
-  assert.ok(/window\.AdminQuickExpense\.mount\(expenseMount, iso\)/.test(body));
+  assert.ok(!/AdminQuickExpense\.mount/.test(body), "the day panel must not mount Quick Expense directly any more");
+});
+
+test("renderDayPanel(): previous/next-day arrows call the caller-supplied onNavigate(-1)/onNavigate(1), and Previous is disabled at the historical floor", () => {
+  const body = functionBody("renderDayPanel");
+  assert.ok(/onNavigate\(-1\)/.test(body), "the previous-day arrow must call onNavigate(-1)");
+  assert.ok(/onNavigate\(1\)/.test(body), "the next-day arrow must call onNavigate(1)");
+  assert.ok(/prevBtn\.disabled = iso <= HISTORICAL_FLOOR_ISO/.test(body), "previous-day must be disabled once the displayed date is the historical floor itself");
+});
+
+test("selectWeekDate()/selectMonthDate() each pass their own onNavigate callback into renderDayPanel(), and call showQuickExpenseFor() with the selected date", () => {
+  assert.ok(/function selectWeekDate\(iso\) \{[\s\S]*?renderDayPanel\(weekDayPanel, iso, state\.weekJobsByDate\[iso\] \|\| \[\], function \(delta\) \{ navigateWeekDayBy\(iso, delta\); \}\);[\s\S]*?showQuickExpenseFor\(iso\);/.test(src));
+  assert.ok(/function selectMonthDate\(iso\) \{[\s\S]*?renderDayPanel\(monthDayPanel, iso, state\.monthJobsByDate\[iso\] \|\| \[\], function \(delta\) \{ navigateMonthDayBy\(iso, delta\); \}\);[\s\S]*?showQuickExpenseFor\(iso\);/.test(src));
 });
 
 test("renderDayPanel(): the +New/Past Job split by historical-vs-current/future date is unchanged", () => {

@@ -1,19 +1,24 @@
 // /admin — Week, Month, and Year calendar navigation (Phase 3C Stage 2.4;
-// Week redesigned and the selected-day panel reordered in Stage 2.4.1).
+// Week redesigned and the selected-day panel reordered in Stage 2.4.1; Week
+// made genuinely horizontal, the day panel gained previous/next-day arrows,
+// and Quick Expense moved out to the shared top-of-page bar in Stage 2.4.2).
 // Fetched from api/admin/bookings.js's ?view=schedule&range=week|month|year
 // modes (see that file's handleSchedule()/handleMonth()/handleYear() for
 // the exact bounded-query contract) — no new API endpoint was added for
 // this redesign, only how the client renders the same responses.
 //
 // Shared "selected day" experience: renderDayPanel() builds, in this exact
-// order per the owner's requested hierarchy —
-//   1. the selected date (heading)
-//   2. Quick Expense icons (admin/quick-expense.js — daily actions, so they
-//      visually belong to the date, not buried under the job list)
-//   3. Jobs for that date (the "+ New/Past Job" action, then each job as
+// order —
+//   1. the selected date (heading), flanked by previous-day/next-day arrows
+//      (Stage 2.4.2 — see the onNavigate callback each caller passes in)
+//   2. Jobs for that date (the "+ New/Past Job" action, then each job as
 //      its own compact tappable card — see renderDailyJobCard())
 // — used by both Month's day panel and Week's per-day selection, so the two
-// can never visually drift apart.
+// can never visually drift apart. Quick Expense (admin/quick-expense.js) no
+// longer mounts inside this panel as of Stage 2.4.2 — it lives in the one
+// persistent bar directly under the Schedule tabs instead (see
+// showQuickExpenseFor()/hideQuickExpense() below), so its active date stays
+// obviously in sync no matter which range is open.
 //
 // Every dynamic value is written with textContent (never innerHTML/
 // insertAdjacentHTML with a concatenated string), matching every other
@@ -50,6 +55,13 @@ window.AdminCalendarViews = (function () {
     dt.setUTCDate(dt.getUTCDate() + days);
     return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
   }
+  // The Sunday on/before `iso` — a small local copy of
+  // api/admin/bookings.js's identical helper (Stage 2.4.2's day-panel
+  // previous/next-day arrows need it client-side to know which week to load
+  // when a delta steps outside the currently displayed one).
+  function startOfWeekSundayIso(iso) {
+    return addDaysIso(iso, -dayOfWeekIso(iso));
+  }
   function ymdIso(y, m, d) {
     return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
   }
@@ -75,7 +87,7 @@ window.AdminCalendarViews = (function () {
   var todayParts = todayIso.split('-').map(Number);
 
   var weekView, weekPrevBtn, weekNextBtn, weekRangeLabel, weekCurrentWrap, weekCurrentBtn, weekLoading, weekError, weekOverviewEl, weekDayPanel;
-  var monthView, monthPrevBtn, monthNextBtn, monthLabel, monthLoading, monthError, monthGrid, monthDayPanel;
+  var monthView, monthPrevBtn, monthNextBtn, monthLabel, monthCurrentWrap, monthCurrentBtn, monthLoading, monthError, monthGrid, monthDayPanel;
   var yearView, yearPrevBtn, yearNextBtn, yearLabel, yearLoading, yearError, yearGrid;
   var domReady = false;
 
@@ -113,6 +125,8 @@ window.AdminCalendarViews = (function () {
     monthPrevBtn = document.getElementById('month-prev');
     monthNextBtn = document.getElementById('month-next');
     monthLabel = document.getElementById('month-label');
+    monthCurrentWrap = document.getElementById('month-current-wrap');
+    monthCurrentBtn = document.getElementById('month-current-btn');
     monthLoading = document.getElementById('month-loading');
     monthError = document.getElementById('month-error');
     monthGrid = document.getElementById('month-grid');
@@ -153,6 +167,11 @@ window.AdminCalendarViews = (function () {
       state.monthMonth = m;
       loadMonth();
     });
+    monthCurrentBtn.addEventListener('click', function () {
+      state.monthYear = todayParts[0];
+      state.monthMonth = todayParts[1];
+      loadMonth(todayIso);
+    });
     yearPrevBtn.addEventListener('click', function () {
       if (yearPrevBtn.disabled) return;
       state.yearYear -= 1;
@@ -179,11 +198,26 @@ window.AdminCalendarViews = (function () {
     });
   }
 
+  // Stage 2.4.2: the relocated Quick Expense bar (#quick-expense-bar,
+  // directly under the Schedule tabs — see admin/index.html) is shared with
+  // admin/schedule.js's Today/Tomorrow/Yesterday/day-nav. Week/Month show it
+  // for whichever day is currently selected; Year hides it outright (no
+  // single day is ever "selected" in Year). Hidden up front on every
+  // show*()/load*() so a stale previous date's controls never linger while
+  // a new range's own data is still loading.
+  function showQuickExpenseFor(iso) {
+    if (window.AdminQuickExpense) window.AdminQuickExpense.showBar(iso);
+  }
+  function hideQuickExpense() {
+    if (window.AdminQuickExpense) window.AdminQuickExpense.hideBar();
+  }
+
   function showWeek() {
     ensureDom();
     hideAllViews();
     weekView.hidden = false;
     setActiveRangeTab('week');
+    hideQuickExpense();
     loadWeek(state.weekStart);
   }
   function showMonth() {
@@ -191,6 +225,7 @@ window.AdminCalendarViews = (function () {
     hideAllViews();
     monthView.hidden = false;
     setActiveRangeTab('month');
+    hideQuickExpense();
     loadMonth();
   }
   function showYear() {
@@ -198,12 +233,13 @@ window.AdminCalendarViews = (function () {
     hideAllViews();
     yearView.hidden = false;
     setActiveRangeTab('year');
+    hideQuickExpense();
     loadYear();
   }
 
   // ---------------------------------------------------------------------
-  // Shared: the selected-day panel (Selected date -> Quick Expense icons ->
-  // Jobs), and the compact job card used inside it.
+  // Shared: the selected-day panel (Selected date, with previous/next-day
+  // arrows -> Jobs), and the compact job card used inside it.
   // ---------------------------------------------------------------------
   function renderDailyJobCard(job) {
     var a = document.createElement('a');
@@ -229,25 +265,48 @@ window.AdminCalendarViews = (function () {
 
   // container: the .admin-day-panel element to fill. iso: the selected
   // date. jobs: that date's jobs (already filtered by the caller).
-  function renderDayPanel(container, iso, jobs) {
+  // onNavigate(deltaDays): called with -1/+1 when the previous-day/next-day
+  // arrow is tapped — left to the caller (selectWeekDate/selectMonthDate)
+  // to decide how to resolve a delta that lands outside the currently
+  // loaded week/month (see navigateWeekDayBy()/navigateMonthDayBy() below).
+  function renderDayPanel(container, iso, jobs, onNavigate) {
     while (container.firstChild) container.removeChild(container.firstChild);
     container.hidden = false;
 
-    // 1. Selected date.
-    var heading = el('div', 'admin-day-panel-heading');
+    // 1. Selected date, flanked by restrained previous-day/next-day arrows
+    // (Stage 2.4.2) — reuses the exact same .admin-calendar-nav/-btn chrome
+    // as Week/Month/Year's own Prev/Next row for a consistent look.
+    var headingRow = el('div', 'admin-calendar-nav admin-day-panel-heading-row');
+    var prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'admin-calendar-nav-btn';
+    prevBtn.setAttribute('aria-label', 'Previous day');
+    prevBtn.textContent = '←';
+    prevBtn.disabled = iso <= HISTORICAL_FLOOR_ISO;
+    prevBtn.addEventListener('click', function () { onNavigate(-1); });
+    headingRow.appendChild(prevBtn);
+
+    var heading = el('span', 'admin-day-panel-heading');
     var d = new Date(iso + 'T00:00:00');
     heading.textContent = isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-    container.appendChild(heading);
+    headingRow.appendChild(heading);
 
-    // 2. Quick Expense icons — daily actions, so they sit directly under
-    // the date and above every job, per the owner's explicit hierarchy.
-    var expenseMount = el('div', 'admin-day-panel-expenses');
-    container.appendChild(expenseMount);
-    if (window.AdminQuickExpense) window.AdminQuickExpense.mount(expenseMount, iso);
+    var nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'admin-calendar-nav-btn';
+    nextBtn.setAttribute('aria-label', 'Next day');
+    nextBtn.textContent = '→';
+    nextBtn.addEventListener('click', function () { onNavigate(1); });
+    headingRow.appendChild(nextBtn);
 
-    // 3. Jobs: the create-job action, then each job as its own compact,
+    container.appendChild(headingRow);
+
+    // 2. Jobs: the create-job action, then each job as its own compact,
     // fully-tappable card (see renderDailyJobCard()) — never a tiny "View"
-    // link tucked at the bottom.
+    // link tucked at the bottom. (Quick Expense used to mount here too —
+    // Stage 2.4.2 moved it to the persistent top-of-page bar instead; see
+    // showQuickExpenseFor(), called by selectWeekDate()/selectMonthDate()
+    // below.)
     var actionLink = document.createElement('a');
     actionLink.className = 'admin-btn admin-btn-outline admin-day-panel-action';
     if (iso < todayIso) {
@@ -285,12 +344,17 @@ window.AdminCalendarViews = (function () {
   // panel below once a day is tapped. Never seven full Daily views stacked
   // together.
   // ---------------------------------------------------------------------
-  function loadWeek(weekStartOverride) {
+  // selectAfterLoad (Stage 2.4.2, optional): an explicit date to select once
+  // this week loads, used by navigateWeekDayBy() when the previous/next-day
+  // arrow steps outside the currently displayed week — overrides the
+  // default "auto-select today if it's in range" behavior below.
+  function loadWeek(weekStartOverride, selectAfterLoad) {
     weekOverviewEl.style.display = 'none';
     weekDayPanel.hidden = true;
     weekError.style.display = 'none';
     weekLoading.style.display = 'block';
     weekCurrentWrap.style.display = 'none';
+    hideQuickExpense();
 
     var seq = ++weekRequestSeq;
     var url = '/api/admin/bookings?view=schedule&range=week';
@@ -319,9 +383,11 @@ window.AdminCalendarViews = (function () {
         weekRangeLabel.textContent = formatMonthDay(body.weekStart) + ' – ' + formatMonthDay(body.weekEnd);
         weekCurrentWrap.style.display = body.isCurrentWeek ? 'none' : 'block';
         renderWeekOverview(body.weekStart);
-        // Auto-select today when it falls within the displayed week — a
-        // useful default, matching Month's own auto-select-today behavior.
-        if (todayIso >= body.weekStart && todayIso <= body.weekEnd) {
+        if (selectAfterLoad) {
+          selectWeekDate(selectAfterLoad);
+        } else if (todayIso >= body.weekStart && todayIso <= body.weekEnd) {
+          // Auto-select today when it falls within the displayed week — a
+          // useful default, matching Month's own auto-select-today behavior.
           selectWeekDate(todayIso);
         } else {
           state.weekSelectedDate = null;
@@ -384,19 +450,41 @@ window.AdminCalendarViews = (function () {
     Array.prototype.forEach.call(weekOverviewEl.querySelectorAll('.admin-week-day-row'), function (row) {
       row.classList.toggle('is-selected', row.dataset.date === iso);
     });
-    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || []);
+    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || [], function (delta) { navigateWeekDayBy(iso, delta); });
+    showQuickExpenseFor(iso);
+  }
+
+  // Previous-day/next-day arrows inside Week's day panel (Stage 2.4.2).
+  // Staying within the currently loaded week is just re-selecting a date
+  // already in state.weekJobsByDate; stepping past Saturday into the next
+  // week (or before Sunday into the previous one) loads that week first,
+  // then selects the target date once it arrives — never left showing a
+  // date whose data was never fetched.
+  function navigateWeekDayBy(iso, delta) {
+    var target = addDaysIso(iso, delta);
+    if (target < HISTORICAL_FLOOR_ISO) return;
+    var weekEnd = addDaysIso(state.weekStart, 6);
+    if (target >= state.weekStart && target <= weekEnd) {
+      selectWeekDate(target);
+    } else {
+      loadWeek(startOfWeekSundayIso(target), target);
+    }
   }
 
   // ---------------------------------------------------------------------
   // Month
   // ---------------------------------------------------------------------
-  function loadMonth() {
+  // selectAfterLoad (Stage 2.4.2, optional): an explicit date to select once
+  // this month loads — used by navigateMonthDayBy() when the previous/
+  // next-day arrow steps into an adjacent month.
+  function loadMonth(selectAfterLoad) {
     monthPrevBtn.disabled = state.monthYear === HISTORICAL_FLOOR_YEAR && state.monthMonth === HISTORICAL_FLOOR_MONTH;
     monthLabel.textContent = MONTH_NAMES[state.monthMonth - 1] + ' ' + state.monthYear;
     monthGrid.style.display = 'none';
     monthDayPanel.hidden = true;
     monthError.style.display = 'none';
     monthLoading.style.display = 'block';
+    hideQuickExpense();
 
     var seq = ++monthRequestSeq;
     fetch('/api/admin/bookings?view=schedule&range=month&year=' + state.monthYear + '&month=' + state.monthMonth)
@@ -417,13 +505,16 @@ window.AdminCalendarViews = (function () {
         if (!body || seq !== monthRequestSeq) return;
         monthLoading.style.display = 'none';
         state.monthJobsByDate = groupJobsByDate(body.jobs);
+        monthCurrentWrap.style.display = (body.year === todayParts[0] && body.month === todayParts[1]) ? 'none' : 'block';
         renderMonthGrid(body);
-        // Auto-select today if it falls within the loaded month — an
-        // immediately useful default rather than an empty grid with
-        // nothing selected. Any other month opens with no day selected, an
-        // intentionally empty resting state (see renderMonthGrid's "empty
-        // days should look intentionally empty, not broken").
-        if (body.year === todayParts[0] && body.month === todayParts[1]) {
+        if (selectAfterLoad && Number(selectAfterLoad.slice(0, 4)) === body.year && Number(selectAfterLoad.slice(5, 7)) === body.month) {
+          selectMonthDate(selectAfterLoad);
+        } else if (body.year === todayParts[0] && body.month === todayParts[1]) {
+          // Auto-select today if it falls within the loaded month — an
+          // immediately useful default rather than an empty grid with
+          // nothing selected. Any other month opens with no day selected, an
+          // intentionally empty resting state (see renderMonthGrid's "empty
+          // days should look intentionally empty, not broken").
           selectMonthDate(todayIso);
         } else {
           state.monthSelectedDate = null;
@@ -493,7 +584,27 @@ window.AdminCalendarViews = (function () {
     Array.prototype.forEach.call(monthGrid.querySelectorAll('.admin-month-grid-cell.is-day'), function (cell) {
       cell.classList.toggle('is-selected', cell.dataset.date === iso);
     });
-    renderDayPanel(monthDayPanel, iso, state.monthJobsByDate[iso] || []);
+    renderDayPanel(monthDayPanel, iso, state.monthJobsByDate[iso] || [], function (delta) { navigateMonthDayBy(iso, delta); });
+    showQuickExpenseFor(iso);
+  }
+
+  // Previous-day/next-day arrows inside Month's day panel (Stage 2.4.2).
+  // Staying within the currently loaded month is just re-selecting a date
+  // already in state.monthJobsByDate; stepping past the 1st or the last day
+  // of the month switches month/year state and reloads first, then selects
+  // the target date once that month's data arrives.
+  function navigateMonthDayBy(iso, delta) {
+    var target = addDaysIso(iso, delta);
+    if (target < HISTORICAL_FLOOR_ISO) return;
+    var targetYear = Number(target.slice(0, 4));
+    var targetMonth = Number(target.slice(5, 7));
+    if (targetYear === state.monthYear && targetMonth === state.monthMonth) {
+      selectMonthDate(target);
+    } else {
+      state.monthYear = targetYear;
+      state.monthMonth = targetMonth;
+      loadMonth(target);
+    }
   }
 
   // ---------------------------------------------------------------------

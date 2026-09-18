@@ -255,16 +255,24 @@
   color: var(--color-neutral-600, #82796a);
   padding-bottom: 4px;
 }
+/* Stage 2.4.2: previously a perfect 1:1-aspect square, centering its
+   contents — fine on a phone-width grid, but on a wider screen (the
+   .admin-main column grows to 1040px on desktop) each cell became an
+   enormous square with a tiny number floating in the middle. Dropping the
+   forced aspect ratio in favor of a compact, content-sized height (date
+   number top-left, count badge just beneath it) keeps every cell a
+   sensible size at any width while still meeting the ~44px minimum touch
+   target via min-height alone. */
 .admin-month-grid-cell {
   -webkit-appearance: none;
   appearance: none;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  aspect-ratio: 1 / 1;
-  min-height: 44px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 3px;
+  min-height: 42px;
+  padding: 5px 4px 4px 6px;
   border-radius: 8px;
   border: 1px solid transparent;
   background: #fff;
@@ -301,24 +309,23 @@
 
 /* Selected-day panel — shared by Month's day panel and Week's per-day
    selection (admin/calendar-views.js's renderDayPanel()). Stage 2.4.1
-   hierarchy, in this exact order: Selected date -> Quick Expense icons
-   (daily actions, so they visually belong to the date) -> Jobs. */
+   hierarchy: Selected date -> Jobs. Stage 2.4.2 added restrained previous/
+   next-day arrows around the date (reusing .admin-calendar-nav/-btn, the
+   same chrome Week/Month/Year's own Prev/Next row uses) and moved Quick
+   Expense out to the persistent top-of-page bar (#quick-expense-bar). */
 .admin-day-panel {
   margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid var(--color-neutral-200, #eee7db);
 }
+.admin-day-panel-heading-row { margin-bottom: 10px; }
 .admin-day-panel-heading {
+  flex: 1;
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
   font-size: 16px;
-  margin-bottom: 10px;
-}
-.admin-day-panel-expenses {
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px dashed var(--color-neutral-200, #eee7db);
+  text-align: center;
 }
 .admin-day-panel-action { margin-bottom: 12px; }
 
@@ -364,41 +371,55 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Week — compact 7-day overview (Stage 2.4.1). Every day always shows;   */
-/* a day with jobs shows up to a few compact "time · client" lines plus   */
-/* a "+N more" indicator rather than growing unbounded. The whole row is  */
-/* one tap target that opens the shared selected-day panel below.        */
+/* Week — a genuinely horizontal 7-day strip (Stage 2.4.2; a compact       */
+/* 7-day overview since Stage 2.4.1, but stacked as a vertical list until   */
+/* now). Sunday through Saturday run left-to-right as their own columns;    */
+/* every day always shows, including empty ones, with up to a few compact  */
+/* "time · client" lines plus a "+N more" indicator rather than growing     */
+/* unbounded. The strip scrolls horizontally, contained to itself (never    */
+/* the page), on any screen too narrow to show all 7 at once — on a wide    */
+/* enough screen (see the flex-grow below) all 7 simply fill the available  */
+/* width instead. Each column is one tap target that opens the shared       */
+/* selected-day panel below.                                                */
 /* ------------------------------------------------------------------ */
 .admin-week-overview {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
 }
+.admin-week-overview::-webkit-scrollbar { display: none; }
 .admin-week-day-row {
   -webkit-appearance: none;
   appearance: none;
-  display: block;
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 128px;
+  min-width: 128px;
   text-align: left;
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
-  border-left: 4px solid var(--color-neutral-300, #dcd3c4);
+  border-top: 3px solid var(--color-neutral-300, #dcd3c4);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 10px 10px 12px;
   font-family: var(--font-body);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.admin-week-day-row.is-today { border-left-color: var(--color-accent-700, #2f6f13); }
+.admin-week-day-row.is-today { border-top-color: var(--color-accent-700, #2f6f13); }
 .admin-week-day-row.is-selected {
   background: var(--color-dark, #14150f);
-  border-left-color: var(--color-dark, #14150f);
+  border-top-color: var(--color-dark, #14150f);
   border-color: var(--color-dark, #14150f);
 }
 .admin-week-day-row-head {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 1px;
 }
 .admin-week-day-row-weekday {
   font-size: 11.5px;
@@ -414,7 +435,7 @@
 }
 .admin-week-day-row.is-selected .admin-week-day-row-date { color: #fff; }
 .admin-week-day-row-count {
-  margin-left: auto;
+  margin-top: 2px;
   font-size: 12px;
   font-weight: 700;
   color: var(--color-accent-700, #2f6f13);
@@ -469,8 +490,21 @@
 /* Daily Quick Expense Tracking — Phase 3C Stage 2.4 addendum            */
 /* (admin/quick-expense.js). Compact, mobile-first: three one-tap icon    */
 /* buttons + "+ More", a single summary line, and a plain list — this     */
-/* deliberately never grows into an accounting screen.                   */
+/* deliberately never grows into an accounting screen. Stage 2.4.2         */
+/* relocated the whole thing to a persistent bar directly under the        */
+/* Schedule tabs (#quick-expense-bar in admin/index.html) instead of        */
+/* mounting inside whichever day panel happened to be open — a restrained   */
+/* card so it doesn't read as more prominent than the tabs above it or the  */
+/* jobs below it, hidden entirely (via the `hidden` attribute) whenever no  */
+/* single day is in view (Year; Week/Month before a day is tapped).         */
 /* ------------------------------------------------------------------ */
+.admin-quick-expense-bar {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
 .admin-quick-expense-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -553,14 +587,26 @@
    as-is) but with inline Call/Text/Directions actions, which the Requests
    card doesn't need. The clickable "open detail" area and the action
    buttons are siblings, never nested <a> tags, so each stays independently
-   tappable and the markup stays valid. */
+   tappable and the markup stays valid.
+
+   Stage 2.4.2: the owner found Today/Tomorrow's white cards blending into
+   the page's pale-green tint (--admin-tint) — the original neutral-200
+   border reads as near-white against it. A slightly darker border plus a
+   very light shadow gives each job its own clearly-defined surface without
+   changing the card's information hierarchy at all. Applies equally to
+   Yesterday, which reuses this exact same card/markup. */
 .admin-schedule-card {
   background: #fff;
-  border: 1px solid var(--color-neutral-200, #eee7db);
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
   border-left: 5px solid var(--color-neutral-300, #dcd3c4);
   border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.07);
   overflow: hidden;
 }
+/* A bit more breathing room between jobs than the denser Requests list
+   (.admin-booking-list) uses, so each card's own separation reads clearly
+   at a glance — scoped to the Schedule list only. */
+#schedule-list { gap: 12px; }
 .admin-schedule-card-main {
   display: block;
   padding: 12px 14px 10px;
@@ -1505,3 +1551,10 @@
 .admin-address-autocomplete-item:hover { background: var(--admin-tint); }
 .admin-address-autocomplete-item-main { font-weight: 700; font-size: 14px; color: var(--color-text, #201e1d); }
 .admin-address-autocomplete-item-secondary { font-size: 12.5px; color: var(--color-neutral-600, #82796a); }
+/* ZIP preview — fills in a beat after the suggestion itself renders (see
+   address-autocomplete.js's enrichment delay), so it can read aloud-ready
+   to confirm with a client on the phone before the address is even
+   selected. Hidden via the `hidden` attribute (never an empty line) for a
+   suggestion Google has no postal code for. */
+.admin-address-autocomplete-item-zip { font-size: 12.5px; font-weight: 700; color: var(--color-accent-700, #2f6f13); }
+.admin-address-autocomplete-item-zip[hidden] { display: none; }
