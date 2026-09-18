@@ -238,7 +238,14 @@ function validLightDemoPayload(overrides) {
   );
 }
 
-function validDumpsterPayload(overrides) {
+// Phase 3C Stage 2.5-v2: dumpster_rental now requires a payment step (see
+// tests/phase3c-stage2.5v2-rental-payments.test.js for the full payment/
+// booking test matrix — customer/booking/dumpster_rentals/rental_payments
+// inserts, Braintree success/decline, idempotency, slot-collision, etc.).
+// This fixture stays here only to back the one boundary test below,
+// confirming the old bare-request (no `payment` object) path is
+// intentionally, permanently gone — not to re-test the payment flow itself.
+function validDumpsterPayloadMissingPayment(overrides) {
   const pickup = new Date(FAR_FUTURE_DATE);
   pickup.setDate(pickup.getDate() + 3);
   return Object.assign(
@@ -307,16 +314,18 @@ async function main() {
     assert.strictEqual(bookingInsert.payload.service_zip, "80226");
   });
 
-  test("book: dumpster rental booking also snapshots the submitted address onto the booking row", async function () {
+  // Superseded by Phase 3C Stage 2.5-v2's payment-integrated dumpster
+  // rental flow (address-snapshot behavior is covered there instead, on
+  // the real handleDumpsterRentalBooking() path — see
+  // tests/phase3c-stage2.5v2-rental-payments.test.js). This is now a
+  // boundary test: without payment fields, dumpster_rental must be
+  // rejected outright, never silently fall back to the old lead-form
+  // behavior.
+  test("book: dumpster rental booking without payment fields is rejected with 400 (old lead-form path is gone)", async function () {
     currentFakeSupabase = createFakeSupabase();
-    const res = await run(bookHandler, makeReq(validDumpsterPayload(), null, "198.51.100.21"));
-    assert.strictEqual(res.statusCode, 200);
-    const bookingInsert = currentFakeSupabase.calls.find(function (c) { return c.table === "bookings"; });
-    const expected = validCustomer();
-    assert.strictEqual(bookingInsert.payload.service_address, expected.streetAddress);
-    assert.strictEqual(bookingInsert.payload.service_city, expected.city);
-    assert.strictEqual(bookingInsert.payload.service_state, expected.state);
-    assert.strictEqual(bookingInsert.payload.service_zip, expected.zip);
+    const res = await run(bookHandler, makeReq(validDumpsterPayloadMissingPayment(), null, "198.51.100.21"));
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(currentFakeSupabase.calls.length, 0, "a payment-less dumpster_rental submission must never reach the database");
   });
 
   // 2. Light demo booking — happy path
@@ -329,14 +338,12 @@ async function main() {
     assert.strictEqual(bookingInsert.payload.service_type, "light_demo");
   });
 
-  // 3. Dumpster rental booking — happy path, also writes dumpster_rentals
-  test("book: dumpster rental booking succeeds and writes a dumpster_rentals row", async function () {
-    currentFakeSupabase = createFakeSupabase();
-    const res = await run(bookHandler, makeReq(validDumpsterPayload(), null, "198.51.100.12"));
-    assert.strictEqual(res.statusCode, 200);
-    const tables = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; }).map(function (c) { return c.table; });
-    assert.deepStrictEqual(tables, ["customers", "bookings", "dumpster_rentals"]);
-  });
+  // 3. Dumpster rental happy path (customer+booking+dumpster_rentals+
+  // rental_payments inserts, Braintree charge, status: "booked") is fully
+  // covered in tests/phase3c-stage2.5v2-rental-payments.test.js instead —
+  // this file's fake Supabase builder doesn't model rental_payments or a
+  // fake Braintree gateway, and duplicating that harness here would just
+  // be a second, divergent copy of the same coverage.
 
   // 4. Booking without photos — the booking endpoint itself is identical
   //    whether or not the customer attaches photos afterward; this just

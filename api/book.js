@@ -5,6 +5,13 @@
 //   SUPABASE_URL
 //   SUPABASE_SECRET_KEY
 //   UPLOAD_TOKEN_SECRET — signs the short-lived photo-upload token (see below)
+//   BRAINTREE_ENVIRONMENT / BRAINTREE_MERCHANT_ID / BRAINTREE_PUBLIC_KEY /
+//     BRAINTREE_PRIVATE_KEY — see api/_lib/braintree-client.js. Required only
+//     for the dumpster_rental payment path (below); junk_removal/light_demo
+//     never touch Braintree.
+//   BRAINTREE_TOKENIZATION_KEY — read directly by GET (below), not through
+//     api/_lib/braintree-client.js: a separate, non-secret, publishable-style
+//     value echoed to the browser so Braintree Drop-in can initialize.
 //
 // Column names below match the live schema exactly:
 //   customers(id, first_name, last_name, phone, email, address, city, state, zip,
@@ -15,6 +22,11 @@
 //   dumpster_rentals(id, booking_id UNIQUE, delivery_date, pickup_date, material_type,
 //                     placement_notes, created_at)
 //   booking_photos(id, booking_id, storage_path, created_at) — written by api/upload-photo.js.
+//   rental_payments(id, booking_id UNIQUE, idempotency_key UNIQUE, payment_status,
+//                    amount_charged, braintree_transaction_id, braintree_customer_id,
+//                    braintree_payment_method_token, payment_method_summary,
+//                    dispute_status, agreement_version, agreement_accepted_at,
+//                    created_at, updated_at) — Phase 3C Stage 2.5-v2, dumpster_rental only.
 //
 // bookings.service_address/service_city/service_state/service_zip are a
 // point-in-time snapshot of where this specific job happens, copied from the
@@ -43,11 +55,23 @@
 // in api/upload-photo.js for the corresponding verification logic (kept as a small,
 // duplicated helper in both files rather than a shared module, matching this project's
 // existing pattern of self-contained /api functions).
+//
+// Phase 3C Stage 2.5-v2 — dumpster_rental is now a REAL BOOKING, not a lead
+// form: available + agreed + paid => status: "booked" directly (no admin
+// review step), via Braintree. See
+// docs/phase-3/stage2.5-rental-payments-v2-proposal.md for the full design.
+// junk_removal and light_demo are completely unaffected — same validation,
+// same insert sequence, same response shape as before this stage. GET is
+// new (previously an unconditional 405): public, non-secret config the
+// booking page needs before it can render Braintree Drop-in — see
+// handlePublicConfig() below.
 
 const { createClient } = require("@supabase/supabase-js");
 const crypto = require("crypto");
 const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
 const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
+const { getBraintreeGateway } = require("./_lib/braintree-client");
+const rentalPricing = require("./_lib/rental-pricing");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -59,6 +83,17 @@ const RATE_LIMIT_MAX = 8;
 // A human filling out this multi-step wizard cannot realistically finish in
 // under this long; a script that fills and submits it can.
 const MIN_FILL_TIME_MS = 3000;
+// GET (public rental config) is read-only and far cheaper to serve than a
+// POST, and every real visitor to /book/ needs it exactly once per page
+// load — a higher ceiling than RATE_LIMIT_MAX is appropriate, still on the
+// same RATE_LIMIT_WINDOW_MS window and the same per-IP key namespace
+// convention as the POST limiter above.
+const CONFIG_RATE_LIMIT_MAX = 40;
+// How far into the future GET's takenDeliverySlots list looks — comfortably
+// covers book/book.js's own MONTH_COUNT (6 months) date picker with room to
+// spare. Purely a display convenience (see handlePublicConfig's header
+// comment) — never the actual availability authority.
+const TAKEN_SLOTS_WINDOW_DAYS = 200;
 
 const SERVICE_TYPES = ["junk_removal", "dumpster_rental", "light_demo"];
 const SERVICE_LABELS = { junk_removal: "Junk Removal", dumpster_rental: "15-Yard Dumpster Rental", light_demo: "Light Demo" };
@@ -129,12 +164,23 @@ const MAX = {
   zip: 10,
   short: 200,
   long: 2000,
+  paymentNonce: 4096, // generous headroom — a real Braintree nonce is far shorter
+  idempotencyKey: 100,
 };
 
 const MAX_BODY_BYTES = 20 * 1024; // plenty for a text-only booking form; no photo bytes travel through this endpoint
 
 module.exports = async (req, res) => {
   try {
+    // Phase 3C Stage 2.5-v2: public, non-secret config for the booking
+    // page — the Braintree tokenization key, current rental pricing, the
+    // agreement version, and (best-effort, non-authoritative — see
+    // handlePublicConfig) which delivery slots already look taken. No spam
+    // protection needed (nothing is written), but still IP-rate-limited as
+    // cheap insurance against casual scraping, matching this endpoint's
+    // existing defensive style.
+    if (req.method === "GET") return handlePublicConfig(req, res);
+
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method not allowed" });
       return;
@@ -192,6 +238,14 @@ module.exports = async (req, res) => {
     const supabase = createClient(supabaseUrl, supabaseSecretKey, {
       auth: { persistSession: false },
     });
+
+    // Phase 3C Stage 2.5-v2: dumpster_rental is a completely separate,
+    // payment-integrated flow from here on — see
+    // handleDumpsterRentalBooking() below. junk_removal/light_demo fall
+    // through to the existing flow, byte-for-byte unchanged.
+    if (data.serviceType === "dumpster_rental") {
+      return handleDumpsterRentalBooking(res, supabase, data);
+    }
 
     const phoneNorm = normalizePhone(data.customer.phone);
     const emailNorm = normalizeEmail(data.customer.email);
@@ -315,40 +369,15 @@ module.exports = async (req, res) => {
       return;
     }
 
-    if (data.serviceType === "dumpster_rental") {
-      try {
-        const { error } = await supabase.from("dumpster_rentals").insert({
-          booking_id: bookingId,
-          delivery_date: data.jobDetails.deliveryDate,
-          pickup_date: data.jobDetails.pickupDate,
-          material_type: data.jobDetails.materialType,
-          placement_notes: data.jobDetails.placementLocation,
-        });
-
-        if (error) {
-          console.error("Booking submission failed creating dumpster_rentals row:", error);
-          await safeDelete(supabase, "bookings", bookingId);
-          if (customerWasCreated) {
-            await safeDelete(supabase, "customers", customerId);
-          }
-          res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
-          return;
-        }
-      } catch (err) {
-        console.error("Booking submission failed creating dumpster_rentals row:", err);
-        await safeDelete(supabase, "bookings", bookingId);
-        if (customerWasCreated) {
-          await safeDelete(supabase, "customers", customerId);
-        }
-        res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
-        return;
-      }
-    }
+    // dumpster_rental never reaches here — see the branch to
+    // handleDumpsterRentalBooking() above. Only junk_removal/light_demo
+    // bookings (neither of which has a dumpster_rentals row) reach this
+    // point.
 
     // Best-effort admin notification — sent only after every required row for
-    // this booking (customer, booking, and dumpster_rentals when applicable)
-    // has been saved. Awaited so it completes before the response is sent, but
-    // fully self-contained: nothing it does can change the response below.
+    // this booking (customer and booking) has been saved. Awaited so it
+    // completes before the response is sent, but fully self-contained:
+    // nothing it does can change the response below.
     await sendBookingNotificationEmail(data);
 
     // Intentionally never returns the raw booking UUID. If photo upload is
@@ -380,6 +409,450 @@ async function safeDelete(supabase, table, id) {
   }
 }
 
+// Same rollback-only, never-throws contract as safeDelete() above, but
+// keyed on an arbitrary column rather than always "id" — used below to
+// clean up rental_payments/dumpster_rentals rows by booking_id.
+async function safeDeleteByColumn(supabase, table, column, value) {
+  try {
+    await supabase.from(table).delete().eq(column, value);
+  } catch (err) {
+    console.error("Rollback failed for " + table + " where " + column + "=" + value + ":", err);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Phase 3C Stage 2.5-v2 — GET: public, non-secret rental config.
+// ---------------------------------------------------------------------
+// Everything this returns is safe for any caller, authenticated or not:
+// the Braintree tokenization key is designed by Braintree to be embedded
+// in client code (same trust model as a Stripe publishable key — see
+// docs/phase-3/stage2.5-rental-payments-v2-proposal.md §3), pricing is
+// public marketing information already shown on dumpster-rental.html, and
+// takenDeliverySlots carries no customer data (just date + time_window) and
+// is explicitly a UX convenience, not an authority: the real availability
+// enforcement is the database's own partial unique index, checked
+// atomically at booking-insert time in handleDumpsterRentalBooking() below
+// — a caller of this endpoint could return stale or fabricated data here
+// and it would change nothing about what can actually be booked.
+async function handlePublicConfig(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
+  const clientIp = getClientIp(req);
+  if (isRateLimited("book-config:" + clientIp, RATE_LIMIT_WINDOW_MS, CONFIG_RATE_LIMIT_MAX)) {
+    res.status(429).json({ error: "Too many requests. Please wait a bit and try again." });
+    return;
+  }
+
+  let takenDeliverySlots = [];
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+  if (supabaseUrl && supabaseSecretKey) {
+    try {
+      const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
+      const fromIso = denverTodayIso();
+      const toDate = new Date();
+      toDate.setDate(toDate.getDate() + TAKEN_SLOTS_WINDOW_DAYS);
+      const toIso = toDate.toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("appointment_date, time_window")
+        .eq("service_type", "dumpster_rental")
+        .eq("status", "booked")
+        .gte("appointment_date", fromIso)
+        .lte("appointment_date", toIso);
+      if (!error && Array.isArray(data)) {
+        takenDeliverySlots = data.map(function (row) {
+          return { date: row.appointment_date, timeWindow: row.time_window };
+        });
+      } else if (error) {
+        console.error("Public rental config: failed loading taken slots (non-fatal, list stays empty):", error);
+      }
+    } catch (err) {
+      console.error("Public rental config: failed loading taken slots (non-fatal, list stays empty):", err);
+    }
+  }
+
+  res.status(200).json({
+    ok: true,
+    braintree: {
+      // Null when unconfigured rather than omitted — the client checks
+      // this explicitly and shows "payment is temporarily unavailable"
+      // rather than a confusing broken Drop-in widget. No separate
+      // "environment" field: Braintree Drop-in infers sandbox vs.
+      // production entirely from the tokenization key's own value, so
+      // echoing BRAINTREE_ENVIRONMENT here too would just be a second,
+      // potentially-inconsistent source of truth for the same fact.
+      tokenizationKey: process.env.BRAINTREE_TOKENIZATION_KEY || null,
+    },
+    pricing: {
+      baseRate: rentalPricing.BASE_RATE,
+      includedDays: rentalPricing.INCLUDED_DAYS,
+      includedTons: rentalPricing.INCLUDED_TONS,
+      overageTonRate: rentalPricing.OVERAGE_TON_RATE,
+      overageDayRate: rentalPricing.OVERAGE_DAY_RATE,
+    },
+    agreementVersion: rentalPricing.RENTAL_AGREEMENT_VERSION,
+    takenDeliverySlots: takenDeliverySlots,
+  });
+}
+
+// ---------------------------------------------------------------------
+// Phase 3C Stage 2.5-v2 — dumpster_rental booking + payment.
+// ---------------------------------------------------------------------
+// Reached only from module.exports' POST branch, only for
+// data.serviceType === "dumpster_rental", only after validateBooking() has
+// already confirmed every field (including payment.nonce/idempotencyKey/
+// agreementAccepted) is present and well-formed. junk_removal/light_demo
+// never reach this function.
+//
+// Sequence (see docs/phase-3/stage2.5-rental-payments-v2-proposal.md §6 for
+// the full design and reasoning):
+//   1. Idempotency check by payment.idempotencyKey — BEFORE any customer/
+//      booking row is touched, so a retried/duplicated submit can never
+//      create a second customer or double-charge.
+//   2. Customer lookup/reuse — identical logic to the generic flow above.
+//   3. Insert bookings with status: "booked" directly (not left NULL) —
+//      this insert is what the database's partial unique index
+//      (idx_bookings_dumpster_delivery_slot) actually protects. A
+//      collision here means someone else just took this exact
+//      delivery-date/time-window combination; it's caught specifically and
+//      turned into a clean 409, and — critically — Braintree is never
+//      called for a slot that turned out to be unavailable, so a losing
+//      race never touches the customer's card.
+//   4. Insert dumpster_rentals — same as the generic flow.
+//   5. Insert rental_payments with payment_status: "processing" — this row
+//      plus the "booked" bookings row above together ARE the reservation
+//      for the remainder of this one request.
+//   6. Call Braintree. Success -> update rental_payments to "paid" and
+//      respond booked. Failure/decline/error -> roll back every row this
+//      request created (freeing the delivery slot immediately) and respond
+//      with a customer-safe reason, never a generic 500 for an actual
+//      decline.
+async function handleDumpsterRentalBooking(res, supabase, data) {
+  const idempotencyKey = data.payment.idempotencyKey;
+
+  // 1. Idempotency check.
+  let existingPayment;
+  try {
+    const { data: rows, error } = await supabase.from("rental_payments").select("id, booking_id, payment_status").eq("idempotency_key", idempotencyKey);
+    if (error) throw error;
+    existingPayment = Array.isArray(rows) && rows.length ? rows[0] : null;
+  } catch (err) {
+    console.error("Dumpster rental booking failed: idempotency lookup errored:", err);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
+
+  if (existingPayment) {
+    if (existingPayment.payment_status === "paid") {
+      // A genuine repeat of an already-successful submit (double-click,
+      // browser back/resubmit, a retried fetch) — return the same success
+      // shape again rather than re-processing anything. No email is
+      // re-sent; that already happened on the original successful attempt.
+      res.status(200).json(withUploadToken(existingPayment.booking_id, { ok: true, booked: true }));
+      return;
+    }
+    // "processing" (a genuine concurrent duplicate racing the first
+    // request) — any other lingering status shouldn't exist given the
+    // rollback discipline below, but is treated identically, defensively.
+    res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again." });
+    return;
+  }
+
+  // 2. Customer lookup/reuse — identical rule to the generic flow's own
+  // Step 4a.3 logic above (kept as a separate, deliberately duplicated
+  // block rather than a shared helper — see that flow's own comment for
+  // why repeat-client reuse lives inline per call site in this file).
+  const phoneNorm = normalizePhone(data.customer.phone);
+  const emailNorm = normalizeEmail(data.customer.email);
+  let customerId = null;
+  if (emailNorm) {
+    try {
+      const { data: matches, error } = await supabase.from("customers").select("id").eq("phone_normalized", phoneNorm).eq("email_normalized", emailNorm);
+      if (!error && Array.isArray(matches) && matches.length === 1) {
+        customerId = matches[0].id;
+      }
+    } catch (err) {
+      console.error("Repeat-client lookup failed, creating a new customer instead:", err);
+    }
+  }
+
+  let customerWasCreated = false;
+  if (customerId === null) {
+    try {
+      const { data: customerRow, error } = await supabase
+        .from("customers")
+        .insert({
+          first_name: data.customer.firstName,
+          last_name: data.customer.lastName || null,
+          phone: data.customer.phone,
+          email: data.customer.email || null,
+          address: data.customer.streetAddress,
+          city: data.customer.city,
+          state: data.customer.state,
+          zip: data.customer.zip,
+          phone_normalized: phoneNorm,
+          email_normalized: emailNorm,
+        })
+        .select("id")
+        .single();
+      if (error || !customerRow) {
+        console.error("Dumpster rental booking failed creating customer:", error);
+        res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+        return;
+      }
+      customerId = customerRow.id;
+      customerWasCreated = true;
+    } catch (err) {
+      console.error("Dumpster rental booking failed creating customer:", err);
+      res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+      return;
+    }
+  }
+
+  // 3. Authoritative price — NEVER trust a client-submitted amount. This is
+  // the only dollar figure Braintree is ever asked to charge below.
+  const amount = rentalPricing.baseRentalAmount();
+
+  // 4. Insert bookings with status: "booked" directly.
+  let bookingId;
+  try {
+    const { data: bookingRow, error } = await supabase
+      .from("bookings")
+      .insert({
+        customer_id: customerId,
+        service_type: "dumpster_rental",
+        appointment_date: data.appointmentDate,
+        time_window: data.schedule.timeWindow,
+        status: "booked",
+        description: data.description,
+        service_address: data.customer.streetAddress,
+        service_city: data.customer.city,
+        service_state: data.customer.state,
+        service_zip: data.customer.zip,
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      if (isUniqueViolation(error)) {
+        if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+        res.status(409).json({ error: "That delivery window was just booked by someone else. Please choose a different date or time." });
+        return;
+      }
+      throw error;
+    }
+    if (!bookingRow) throw new Error("Insert returned no row.");
+    bookingId = bookingRow.id;
+  } catch (err) {
+    console.error("Dumpster rental booking failed creating booking:", err);
+    if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
+
+  // 5. Insert dumpster_rentals — same rollback pattern as the generic flow.
+  try {
+    const { error } = await supabase.from("dumpster_rentals").insert({
+      booking_id: bookingId,
+      delivery_date: data.jobDetails.deliveryDate,
+      pickup_date: data.jobDetails.pickupDate,
+      material_type: data.jobDetails.materialType,
+      placement_notes: data.jobDetails.placementLocation,
+    });
+    if (error) throw error;
+  } catch (err) {
+    console.error("Dumpster rental booking failed creating dumpster_rentals row:", err);
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
+
+  // 6. Insert rental_payments ("processing") — claims the idempotency key.
+  // A UNIQUE-constraint collision here (the backstop for a race this
+  // function's own pre-check at step 1 can't fully close) means a
+  // concurrent duplicate request with the same key won the race.
+  try {
+    const { error } = await supabase.from("rental_payments").insert({
+      booking_id: bookingId,
+      idempotency_key: idempotencyKey,
+      payment_status: "processing",
+      amount_charged: amount,
+      agreement_version: rentalPricing.RENTAL_AGREEMENT_VERSION,
+      agreement_accepted_at: new Date().toISOString(),
+    });
+    if (error) {
+      if (isUniqueViolation(error)) {
+        await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+        res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again." });
+        return;
+      }
+      throw error;
+    }
+  } catch (err) {
+    console.error("Dumpster rental booking failed creating rental_payments row:", err);
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
+
+  // 7. Charge via Braintree.
+  const gateway = getBraintreeGateway();
+  if (!gateway) {
+    console.error("Dumpster rental booking failed: BRAINTREE_* environment variables not configured");
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
+    return;
+  }
+
+  let saleResult;
+  try {
+    saleResult = await gateway.transaction.sale({
+      amount: amount.toFixed(2),
+      paymentMethodNonce: data.payment.nonce,
+      options: { submitForSettlement: true, storeInVaultOnSuccess: true },
+    });
+  } catch (err) {
+    console.error("Dumpster rental booking: Braintree call threw:", err && err.stack ? err.stack : err);
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    res.status(502).json({ error: "We couldn't reach the payment processor. Please try again in a moment, or call or text 303-990-1812." });
+    return;
+  }
+
+  if (!saleResult || !saleResult.success) {
+    console.error("Dumpster rental booking: payment declined —", describeDeclineForLogs(saleResult));
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    res.status(402).json({ error: extractDeclineMessage(saleResult) });
+    return;
+  }
+
+  // 8. Success — finalize the payment row.
+  const txn = saleResult.transaction;
+  const methodInfo = extractPaymentMethodInfo(txn);
+  try {
+    const { error } = await supabase
+      .from("rental_payments")
+      .update({
+        payment_status: "paid",
+        braintree_transaction_id: txn.id,
+        braintree_customer_id: txn.customer && txn.customer.id ? txn.customer.id : null,
+        braintree_payment_method_token: methodInfo.token,
+        payment_method_summary: methodInfo.summary,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("booking_id", bookingId);
+    if (error) throw error;
+  } catch (err) {
+    // The charge already SUCCEEDED on Braintree's side at this point — this
+    // is now a reconciliation problem, never a reason to tell the customer
+    // their booking failed (it didn't; money moved and the slot is
+    // genuinely theirs). Logged loudly for manual admin follow-up rather
+    // than surfaced as an error response.
+    console.error(
+      "CRITICAL: Braintree charge succeeded but rental_payments could not be marked paid. bookingId=" + bookingId + " braintreeTransactionId=" + txn.id + ":",
+      err
+    );
+  }
+
+  await sendBookingNotificationEmail(data, { amount: amount, transactionId: txn.id, methodSummary: methodInfo.summary });
+
+  res.status(200).json(withUploadToken(bookingId, { ok: true, booked: true }));
+}
+
+// Deletes every row a dumpster-rental booking attempt may have created, in
+// FK-safe order, freeing the delivery slot (and the idempotency key)
+// immediately. Safe to call even when some of these rows were never
+// created (each delete is a harmless no-op if nothing matches) — used both
+// for a failed insert partway through and for a Braintree decline/error
+// after every row already exists.
+async function rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated) {
+  await safeDeleteByColumn(supabase, "rental_payments", "booking_id", bookingId);
+  await safeDeleteByColumn(supabase, "dumpster_rentals", "booking_id", bookingId);
+  await safeDelete(supabase, "bookings", bookingId);
+  if (customerWasCreated) {
+    await safeDelete(supabase, "customers", customerId);
+  }
+}
+
+function isUniqueViolation(error) {
+  return !!error && (error.code === "23505" || /duplicate key value violates unique constraint/i.test(String(error.message || "")));
+}
+
+// A customer-safe message for a declined/failed Braintree sale. Prefers
+// Braintree's own processor-response text (written by Braintree/the card
+// networks specifically to be shown to the cardholder, e.g. "Do Not
+// Honor") when present, falling back to a generic message that still
+// clearly invites a retry with a different payment method — never a bare
+// "something went wrong" for an actual decline, since that reads as a site
+// error rather than a payment problem.
+function extractDeclineMessage(saleResult) {
+  try {
+    const txn = saleResult && saleResult.transaction;
+    if (txn && txn.processorResponseText) {
+      return "Payment declined: " + txn.processorResponseText + ". Please try a different payment method, or call or text 303-990-1812.";
+    }
+    if (saleResult && saleResult.message) {
+      return "Your payment could not be processed. Please check your payment details and try again, or try a different payment method.";
+    }
+  } catch (err) {
+    // fall through to the generic message below
+  }
+  return "Your payment could not be processed. Please check your payment details or try a different payment method.";
+}
+
+// Server-log-only detail (never sent to the client) — kept separate from
+// extractDeclineMessage() so a change to the customer-facing wording can
+// never accidentally also change what gets logged, or vice versa.
+function describeDeclineForLogs(saleResult) {
+  try {
+    if (saleResult && saleResult.transaction) {
+      return "status=" + saleResult.transaction.status + " processorResponseText=" + saleResult.transaction.processorResponseText;
+    }
+    if (saleResult && saleResult.message) {
+      return saleResult.message;
+    }
+  } catch (err) {
+    // fall through
+  }
+  return "unknown reason (no transaction/message on result)";
+}
+
+// Extracts the vaultable payment-method token (never card data itself) and
+// a display-safe summary from a successful transaction result, regardless
+// of which payment method the customer used. Returns a token of null (never
+// throws) for a payment-method shape this doesn't recognize, so a future
+// Braintree-supported method this code doesn't yet know about degrades to
+// "no later-charge capability for this booking" rather than crashing the
+// success path.
+function extractPaymentMethodInfo(txn) {
+  if (txn.creditCard && txn.creditCard.token) {
+    const last4 = txn.creditCard.last4 || "????";
+    const cardType = txn.creditCard.cardType || "Card";
+    return { token: txn.creditCard.token, summary: cardType + " ending in " + last4 };
+  }
+  if (txn.venmoAccount && txn.venmoAccount.token) {
+    const username = txn.venmoAccount.username;
+    return { token: txn.venmoAccount.token, summary: username ? "Venmo (@" + username + ")" : "Venmo" };
+  }
+  if (txn.paypalAccount && txn.paypalAccount.token) {
+    return { token: txn.paypalAccount.token, summary: txn.paypalAccount.payerEmail ? "PayPal (" + txn.paypalAccount.payerEmail + ")" : "PayPal" };
+  }
+  return { token: null, summary: "Payment method on file" };
+}
+
+// Mints the same short-lived photo-upload token every other success path in
+// this file returns, merged into `body`. Kept as one small helper since
+// handleDumpsterRentalBooking() above needs it from two different places
+// (the idempotent-replay branch and the real success branch).
+function withUploadToken(bookingId, body) {
+  const uploadTokenSecret = process.env.UPLOAD_TOKEN_SECRET;
+  if (!uploadTokenSecret) {
+    console.error("Dumpster rental booking succeeded but UPLOAD_TOKEN_SECRET is not configured — photo upload will be unavailable for this booking.");
+    return body;
+  }
+  return Object.assign({}, body, { uploadToken: signUploadToken(bookingId, uploadTokenSecret) });
+}
+
 // Admin notification email via Resend, mirroring the raw-fetch pattern already
 // used in api/contact.js (no @resend/node dependency in this project). Reuses
 // the same RESEND_API_KEY / RESEND_FROM_EMAIL / CONTACT_TO_EMAIL env vars —
@@ -387,7 +860,12 @@ async function safeDelete(supabase, table, id) {
 // path here only logs server-side and returns normally: this function must
 // never throw, since its caller awaits it in the middle of an already-
 // successful booking response.
-async function sendBookingNotificationEmail(data) {
+//
+// `paymentInfo` (Phase 3C Stage 2.5-v2) is only ever passed by
+// handleDumpsterRentalBooking(), after a successful Braintree charge —
+// junk_removal/light_demo always call this with just `data`, and the
+// subject/body render exactly as before this stage for them.
+async function sendBookingNotificationEmail(data, paymentInfo) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
     console.error("Booking notification email skipped: RESEND_API_KEY is not configured.");
@@ -399,6 +877,7 @@ async function sendBookingNotificationEmail(data) {
     const toEmail = process.env.CONTACT_TO_EMAIL || "contact@milehighjunkremoval.net";
     const serviceLabel = SERVICE_LABELS[data.serviceType] || data.serviceType;
     const customerName = data.customer.firstName + " " + data.customer.lastName;
+    const subjectPrefix = paymentInfo ? "New Booking (Paid) — " : "New Booking Request — ";
 
     const resendRes = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -409,8 +888,8 @@ async function sendBookingNotificationEmail(data) {
       body: JSON.stringify({
         from: fromEmail,
         to: [toEmail],
-        subject: "New Booking Request — " + serviceLabel + " — " + customerName,
-        html: buildBookingNotificationHtml(data, serviceLabel, customerName),
+        subject: subjectPrefix + serviceLabel + " — " + customerName,
+        html: buildBookingNotificationHtml(data, serviceLabel, customerName, paymentInfo),
       }),
     });
 
@@ -427,8 +906,11 @@ async function sendBookingNotificationEmail(data) {
 // escapeHtml() (via infoRowText/infoRow's callers below) or is a
 // server-derived href built from safe parts (digits-only for tel:,
 // encodeURIComponent for the Maps query string), never raw customer input
-// concatenated straight into an attribute.
-function buildBookingNotificationHtml(data, serviceLabel, customerName) {
+// concatenated straight into an attribute. `paymentInfo` is server-derived
+// (Braintree's own response + the authoritative rental-pricing amount,
+// never anything customer-submitted) so it needs no separate escaping
+// discipline beyond what infoRowText already applies.
+function buildBookingNotificationHtml(data, serviceLabel, customerName, paymentInfo) {
   const c = data.customer;
   const j = data.jobDetails;
 
@@ -481,7 +963,19 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
   }
   const jobDetailsSection = sectionHeading("Job Details") + detailRows;
 
+  // Phase 3C Stage 2.5-v2 — only ever present for a paid dumpster_rental
+  // booking (see sendBookingNotificationEmail's header comment). Renders as
+  // an empty string for junk_removal/light_demo, leaving their email
+  // byte-for-byte the same as before this stage.
+  const paymentSection = paymentInfo
+    ? sectionHeading("Payment") +
+      infoRowText("Amount Charged", "$" + paymentInfo.amount.toFixed(2)) +
+      infoRowText("Payment Method", paymentInfo.methodSummary) +
+      infoRowText("Braintree Transaction ID", paymentInfo.transactionId)
+    : "";
+
   const fontStack = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+  const bannerText = paymentInfo ? "NEW BOOKING — PAID & CONFIRMED" : "NEW BOOKING REQUEST";
 
   return (
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3e6;">' +
@@ -492,7 +986,7 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
     // header
     '<tr><td style="background:#141414;padding:26px 30px 22px;">' +
     '<div style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:0.12em;opacity:0.85;">MILE HIGH JUNK REMOVAL</div>' +
-    '<div style="color:#8ce85a;font-size:23px;font-weight:800;letter-spacing:0.02em;margin-top:6px;">NEW BOOKING REQUEST</div>' +
+    '<div style="color:#8ce85a;font-size:23px;font-weight:800;letter-spacing:0.02em;margin-top:6px;">' + bannerText + "</div>" +
     "</td></tr>" +
     // service + name banner
     '<tr><td style="background:#eaf7de;padding:18px 30px;border-bottom:1px solid #d7ecc4;">' +
@@ -509,7 +1003,11 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName) {
     // address
     '<tr><td style="padding:14px 30px 8px;">' + addressSection + "</td></tr>" +
     // job details
-    '<tr><td style="padding:14px 30px 28px;">' + jobDetailsSection + "</td></tr>" +
+    '<tr><td style="padding:14px 30px' +
+    (paymentSection ? " 8px" : " 28px") +
+    ';">' + jobDetailsSection + "</td></tr>" +
+    // payment (dumpster_rental only)
+    (paymentSection ? '<tr><td style="padding:14px 30px 28px;">' + paymentSection + "</td></tr>" : "") +
     // photos footer
     '<tr><td style="background:#f6f8f2;padding:18px 30px;border-top:1px solid #ececec;">' +
     '<div style="font-size:12.5px;color:#666666;font-style:italic;line-height:1.5;">Customer may have uploaded photos with this booking. View Supabase to review booking photos.</div>' +
@@ -633,6 +1131,9 @@ function validateBooking(body) {
   const additionalDetails = sanitizeText(jobIn.additionalDetails, MAX.long);
   let jobDetails = { additionalDetails: additionalDetails || null };
   let appointmentDate = date;
+  // Only ever populated in the dumpster_rental branch below — stays null
+  // for junk_removal/light_demo, which never carry payment fields at all.
+  let payment = null;
 
   if (serviceType === "junk_removal") {
     const itemsDescription = sanitizeText(jobIn.itemsDescription, MAX.long);
@@ -664,6 +1165,28 @@ function validateBooking(body) {
     // appointment_date represents the requested delivery date, not the generic
     // "preferred date" collected in the schedule step.
     appointmentDate = deliveryDate;
+
+    // Phase 3C Stage 2.5-v2 — required for every dumpster_rental submission,
+    // and validated here alongside everything else so a missing/invalid
+    // payment field fails exactly like a missing/invalid job-detail field
+    // (a clean 400, before any Supabase or Braintree call). See
+    // handleDumpsterRentalBooking() for what happens with this once
+    // validation passes.
+    const paymentIn = body.payment && typeof body.payment === "object" && !Array.isArray(body.payment) ? body.payment : {};
+    const paymentNonce = sanitizeText(paymentIn.nonce, MAX.paymentNonce);
+    const idempotencyKey = sanitizeText(paymentIn.idempotencyKey, MAX.idempotencyKey);
+    const agreementAccepted = paymentIn.agreementAccepted === true;
+    if (!paymentNonce) return { ok: false, error: "Payment information is missing. Please try again." };
+    // A UUID (crypto.randomUUID(), what book/book.js actually generates) —
+    // checked defensively rather than trusted freeform, since this value
+    // becomes a UNIQUE database column.
+    if (!idempotencyKey || !/^[A-Za-z0-9-]{8,100}$/.test(idempotencyKey)) {
+      return { ok: false, error: "Invalid request. Please refresh the page and try again." };
+    }
+    if (!agreementAccepted) {
+      return { ok: false, error: "You must accept the rental agreement to book online." };
+    }
+    payment = { nonce: paymentNonce, idempotencyKey: idempotencyKey };
   } else if (serviceType === "light_demo") {
     const demoDescription = sanitizeText(jobIn.demoDescription, MAX.long);
     const approximateSize = sanitizeText(jobIn.approximateSize, MAX.short);
@@ -682,6 +1205,7 @@ function validateBooking(body) {
       description: buildDescription(serviceType, jobDetails),
       appointmentDate,
       schedule: { date, timeWindow },
+      payment,
       customer: {
         firstName,
         lastName,

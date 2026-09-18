@@ -202,7 +202,18 @@ function validPayload(customerOverrides) {
   };
 }
 
+// Phase 3C Stage 2.5-v2: dumpster_rental now requires a `payment` object
+// (see api/book.js's validateBooking()). This file's own dumpster-rental
+// tests below are specifically about the customer-reuse/rollback rules
+// (they predate the payment feature and were originally written against
+// the pre-payment flow) — they never reach the Braintree call in either
+// failing case they test (both fail earlier, at the dumpster_rentals
+// insert), so no fake Braintree gateway is needed here. Each call gets its
+// own idempotencyKey purely for realism; the fake Supabase's per-test-case
+// fresh instance already isolates them regardless.
+let dumpsterIdempotencyCounter = 0;
 function validDumpsterPayload(customerOverrides) {
+  dumpsterIdempotencyCounter += 1;
   return {
     serviceType: "dumpster_rental",
     hp: "",
@@ -216,6 +227,7 @@ function validDumpsterPayload(customerOverrides) {
     },
     schedule: { date: FAR_FUTURE_DATE, timeWindow: "w_0800_1000" },
     customer: baseCustomer(customerOverrides),
+    payment: { nonce: "fake-valid-nonce", idempotencyKey: "test-idem-key-" + dumpsterIdempotencyCounter, agreementAccepted: true },
   };
 }
 
