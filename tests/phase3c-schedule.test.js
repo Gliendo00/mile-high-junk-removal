@@ -639,8 +639,26 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
     [
       "api/admin/booking-status.js: .update(",
       "api/admin/booking.js: .insert(",
+      // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
+      // one new insert (handleProposeCharge — moves no money, see that
+      // function's header) and four new updates, all inside
+      // handleApproveCharge/markChargeFailed: the proposed->approved
+      // transition, the approved->processing transition, the
+      // processing->paid transition, and markChargeFailed's single
+      // ->failed transition (one function body, called from three
+      // call sites — the source text contains it once). See
+      // tests/phase3c-stage2.5v2-rental-payments.test.js for full coverage
+      // of this write surface, including that a proposal alone never
+      // reaches Braintree. (Sorted alphabetically below along with every
+      // other entry here — see the sort() call above this array — so every
+      // ".insert(" for a given file groups before that file's ".update(".)
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

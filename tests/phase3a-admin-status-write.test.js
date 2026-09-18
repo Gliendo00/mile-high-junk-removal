@@ -670,11 +670,23 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
     [
       "api/admin/booking-status.js: .update(",
       "api/admin/booking.js: .insert(",
+      // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
+      // one new insert (handleProposeCharge — moves no money) and four new
+      // updates (handleApproveCharge's proposed->approved,
+      // approved->processing, processing->paid transitions, plus
+      // markChargeFailed's single ->failed transition, called from three
+      // sites but written once in source). See
+      // tests/phase3c-stage2.5v2-rental-payments.test.js for full coverage.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
       // api/admin/booking.js's handleUpdate() header comment for why this
       // stays a controlled, allowlisted update rather than a new "write
       // anything" endpoint.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

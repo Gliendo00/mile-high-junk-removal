@@ -15,6 +15,8 @@ const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus, SERVICE_LABELS } = require("../_lib/booking-format");
 const { TIME_WINDOW_DEFS } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
+const rentalPricing = require("../_lib/rental-pricing");
+const { getBraintreeGateway } = require("../_lib/braintree-client");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -23,6 +25,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 module.exports = async (req, res) => {
   const session = await requireAdmin(req, res);
   if (!session) return;
+
+  // Phase 3C Stage 2.5-v2: the additional-charge propose/approve/list
+  // workflow for a dumpster rental. Dispatched by ?resource=charges — same
+  // query-param-branching convention api/admin/bookings.js already
+  // established (?view=google-config, ?countsOnly=1) to add a new,
+  // clearly-separated concern without a new Vercel function file. Every
+  // existing GET/POST/PATCH behavior on this route (booking detail/create/
+  // update) below is completely unaffected — this branch is checked first
+  // and returns before any of that code is ever reached.
+  if (req.query.resource === "charges") {
+    if (req.method === "GET") return handleListCharges(req, res);
+    if (req.method === "POST") return handleProposeCharge(req, res, session);
+    if (req.method === "PATCH") return handleApproveCharge(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
 
   if (req.method === "POST") return handleCreate(req, res);
   if (req.method === "PATCH") return handleUpdate(req, res);
@@ -882,6 +900,276 @@ async function handleUpdate(req, res) {
     console.error("Admin job update failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save changes." });
   }
+}
+
+// ---------------------------------------------------------------------
+// Phase 3C Stage 2.5-v2 — additional-charge propose/approve/list
+// (?resource=charges). See
+// docs/phase-3/stage2.5-rental-payments-v2-proposal.md §7 for the full
+// design. State machine: proposed -> approved -> processing ->
+// paid/failed. A PROPOSAL NEVER CALLS BRAINTREE — it only computes and
+// records an amount from api/_lib/rental-pricing.js's rates (or, for
+// "other", a manually-entered flat amount) and writes status: "proposed".
+// Only handleApproveCharge, and only for a row it itself just transitioned
+// from "proposed" to "approved" in the same request, ever submits a
+// transaction — a calculation is never authorization to charge.
+// ---------------------------------------------------------------------
+
+const CHARGE_TYPES = ["overweight_tonnage", "additional_days", "other"];
+const MAX_QUANTITY = 999999;
+
+function serializeCharge(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    chargeType: row.charge_type,
+    quantity: row.quantity,
+    rate: row.rate,
+    amount: row.amount,
+    description: row.description,
+    status: row.status,
+    proposedBy: row.proposed_by,
+    proposedAt: row.proposed_at,
+    approvedBy: row.approved_by,
+    approvedAt: row.approved_at,
+    braintreeTransactionId: row.braintree_transaction_id,
+    failureReason: row.failure_reason,
+    disputeStatus: row.dispute_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+// GET ?resource=charges&bookingId=<uuid> — list every additional charge for
+// one booking, newest first. Read-only.
+async function handleListCharges(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin list charges failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const bookingId = typeof req.query.bookingId === "string" ? req.query.bookingId.trim() : "";
+  if (!bookingId || !UUID_RE.test(bookingId)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  try {
+    const { data, error } = await supabase.from("rental_additional_charges").select("*").eq("booking_id", bookingId).order("created_at", { ascending: false });
+    if (error) throw error;
+    res.status(200).json({ ok: true, charges: (data || []).map(serializeCharge) });
+  } catch (err) {
+    console.error("Admin list charges failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load charges." });
+  }
+}
+
+// POST ?resource=charges — propose a new additional charge. Moves no
+// money: writes exactly one rental_additional_charges row with
+// status: "proposed". `quantity`/`chargeType` (or, for "other", a raw
+// `amount`) are the only fields ever read from the body — never a
+// client-submitted `amount` for the two rate-based types, and never a
+// client-submitted `rate` at all; both are always computed here from
+// api/_lib/rental-pricing.js's current rates and snapshotted onto the row.
+async function handleProposeCharge(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin propose charge failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+  if (!bookingId || !UUID_RE.test(bookingId)) {
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+
+  const chargeType = typeof body.chargeType === "string" ? body.chargeType.trim() : "";
+  if (!CHARGE_TYPES.includes(chargeType)) {
+    res.status(400).json({ error: "Please choose a valid charge type." });
+    return;
+  }
+
+  const description = sanitizeText(body.description, MAX.long) || null;
+
+  let quantity = null;
+  let rate = null;
+  let amount;
+  if (chargeType === "other") {
+    const n = Number(body.amount);
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid amount." });
+      return;
+    }
+    amount = rentalPricing.round2(n);
+    if (!description) {
+      res.status(400).json({ error: "Please describe this charge." });
+      return;
+    }
+  } else {
+    const q = Number(body.quantity);
+    if (!Number.isFinite(q) || q <= 0 || q > MAX_QUANTITY) {
+      res.status(400).json({ error: "Please enter a valid quantity." });
+      return;
+    }
+    quantity = rentalPricing.round2(q);
+    rate = rentalPricing.overageRate(chargeType);
+    amount = rentalPricing.round2(quantity * rate);
+  }
+
+  try {
+    const bookingRes = await supabase.from("bookings").select("id, service_type").eq("id", bookingId).maybeSingle();
+    if (bookingRes.error) throw bookingRes.error;
+    if (!bookingRes.data) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (bookingRes.data.service_type !== "dumpster_rental") {
+      res.status(400).json({ error: "Additional charges are only available for dumpster rentals." });
+      return;
+    }
+
+    const { data: created, error } = await supabase
+      .from("rental_additional_charges")
+      .insert({
+        booking_id: bookingId,
+        charge_type: chargeType,
+        quantity: quantity,
+        rate: rate,
+        amount: amount,
+        description: description,
+        status: "proposed",
+        proposed_by: session.email,
+      })
+      .select("*")
+      .single();
+    if (error || !created) throw error || new Error("Insert returned no row.");
+
+    res.status(200).json({ ok: true, charge: serializeCharge(created) });
+  } catch (err) {
+    console.error("Admin propose charge failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not propose this charge." });
+  }
+}
+
+// PATCH ?resource=charges { id, action: "approve" } — approve AND process
+// an additional charge in one atomic admin action. The UPDATE that
+// transitions "proposed" -> "approved" is conditioned on the row's CURRENT
+// status still being "proposed" (`.eq("status", "proposed")`, the same
+// optimistic-concurrency-style guard handleUpdate() above uses for
+// `updated_at`) — a second concurrent "Approve" click on the same charge
+// matches zero rows here and gets a clean "already processed" response,
+// never a second Braintree submission. Only a row THIS request just
+// approved is ever charged.
+async function handleApproveCharge(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin approve charge failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Charge not found." });
+    return;
+  }
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  if (action !== "approve") {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const { data: approvedRow, error: approveErr } = await supabase
+      .from("rental_additional_charges")
+      .update({ status: "approved", approved_by: session.email, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "proposed")
+      .select("id, booking_id, amount")
+      .maybeSingle();
+    if (approveErr) throw approveErr;
+    if (!approvedRow) {
+      res.status(409).json({ error: "This charge was already processed, or no longer exists." });
+      return;
+    }
+
+    const paymentRes = await supabase
+      .from("rental_payments")
+      .select("braintree_payment_method_token")
+      .eq("booking_id", approvedRow.booking_id)
+      .maybeSingle();
+    if (paymentRes.error) throw paymentRes.error;
+    const paymentMethodToken = paymentRes.data && paymentRes.data.braintree_payment_method_token;
+
+    if (!paymentMethodToken) {
+      const failed = await markChargeFailed(supabase, id, "No payment method on file for this booking.");
+      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+      return;
+    }
+
+    const gateway = getBraintreeGateway();
+    if (!gateway) {
+      console.error("Admin approve charge failed: BRAINTREE_* environment variables not configured");
+      const failed = await markChargeFailed(supabase, id, "Payment processing is not configured.");
+      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+      return;
+    }
+
+    await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
+
+    let saleResult;
+    try {
+      saleResult = await gateway.transaction.sale({
+        amount: approvedRow.amount.toFixed(2),
+        paymentMethodToken: paymentMethodToken,
+        options: { submitForSettlement: true },
+      });
+    } catch (err) {
+      console.error("Admin approve charge: Braintree call threw:", err && err.stack ? err.stack : err);
+      const failed = await markChargeFailed(supabase, id, "Could not reach the payment processor.");
+      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+      return;
+    }
+
+    if (!saleResult || !saleResult.success) {
+      const reason = (saleResult && saleResult.transaction && saleResult.transaction.processorResponseText) || (saleResult && saleResult.message) || "Payment declined.";
+      const failed = await markChargeFailed(supabase, id, reason);
+      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+      return;
+    }
+
+    const { data: paidRow, error: paidErr } = await supabase
+      .from("rental_additional_charges")
+      .update({ status: "paid", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select("*")
+      .maybeSingle();
+    if (paidErr) throw paidErr;
+    res.status(200).json({ ok: true, charge: serializeCharge(paidRow) });
+  } catch (err) {
+    console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not process this charge." });
+  }
+}
+
+// Shared failure path for handleApproveCharge — always re-reads the full
+// row back (via .select().maybeSingle()) so the response reflects exactly
+// what's now in the database, never an assembled-in-memory guess.
+async function markChargeFailed(supabase, id, reason) {
+  const { data } = await supabase
+    .from("rental_additional_charges")
+    .update({ status: "failed", failure_reason: reason, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  return data;
 }
 
 // Derived from booking-format.js's SERVICE_LABELS keys rather than a third
