@@ -132,6 +132,14 @@ test("address-autocomplete.js: restricts to the US and applies a Denver-area bia
   assert.ok(/DENVER_BIAS_CENTER/.test(src));
 });
 
+test("address-autocomplete.js: the location-bias radius stays within Places API (New)'s hard 50,000-meter cap — found live on Preview as a real INVALID_ARGUMENT once credentials were otherwise correctly configured", () => {
+  const src = read("admin/address-autocomplete.js");
+  const match = src.match(/var DENVER_BIAS_RADIUS_METERS = (\d+);/);
+  assert.ok(match, "DENVER_BIAS_RADIUS_METERS must be declared as a plain numeric literal");
+  const radius = Number(match[1]);
+  assert.ok(radius > 0 && radius <= 50000, "locationBias.circle.radius must be <= 50000 meters (Google's documented Places API (New) limit) — a request with a larger radius fails every single search with INVALID_ARGUMENT, indistinguishable from Google being fully broken unless you inspect the raw error");
+});
+
 test("address-autocomplete.js: every Google call is wrapped so a failure degrades to manual entry, never blocks or disables the input", () => {
   const src = read("admin/address-autocomplete.js");
   assert.ok(!/addressInput\.disabled\s*=\s*true/.test(src), "must never disable the manual input");

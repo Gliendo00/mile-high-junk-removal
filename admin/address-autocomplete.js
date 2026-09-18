@@ -41,9 +41,16 @@ window.AdminAddressAutocomplete = (function () {
   // Denver-area location bias (not a hard restriction — a legitimate
   // service address well outside this radius must still be selectable, see
   // the stage's explicit "must not prevent legitimate addresses elsewhere"
-  // requirement). A generous ~80km circle centered on downtown Denver.
+  // requirement). A generous circle centered on downtown Denver, bounded
+  // by Places API (New)'s own hard cap: locationBias.circle.radius must be
+  // <= 50,000 meters (a real 80,000 value here previously made every
+  // single autocomplete request fail with INVALID_ARGUMENT once
+  // credentials were otherwise correctly configured — found live during
+  // Preview verification once the key's API-restriction issue was fixed
+  // and this became the next real error). Kept a little under the exact
+  // limit rather than exactly 50000 to leave zero boundary-rounding risk.
   var DENVER_BIAS_CENTER = { lat: 39.7392, lng: -104.9903 };
-  var DENVER_BIAS_RADIUS_METERS = 80000;
+  var DENVER_BIAS_RADIUS_METERS = 48000;
 
   var placesLibraryPromise = null;
   var apiKeyPromise = null;
