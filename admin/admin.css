@@ -1077,15 +1077,21 @@
 .admin-charge-status-failed { background: #b91c1c; color: #fff; }
 .admin-charge-status-voided { background: #374151; color: #fff; }
 /* Deliberately a visually distinct, attention-getting color from every
-   other status here — an ambiguous Braintree outcome needs a human to
-   check the Braintree dashboard, never a routine retry. */
+   other status here — an ambiguous Stripe outcome needs a human to
+   check the Stripe Dashboard, never a routine retry. */
 .admin-charge-status-error_pending_review { background: #ea580c; color: #fff; }
 /* Distinct from error_pending_review's orange: this one means the charge
-   DEFINITELY succeeded (a transaction id exists), just the local record
+   DEFINITELY succeeded (a PaymentIntent id exists), just the local record
    is incomplete — a narrower, less urgent situation than "outcome
    unknown," so it gets the same green family as "paid" with a visibly
    different shade rather than an alarm color. */
 .admin-charge-status-paid_reconciliation_required { background: #15803d; color: #fff; }
+/* Stripe-specific — no Braintree equivalent existed. A distinct violet-
+   adjacent hue (not reused from any status above) since this isn't a
+   failure OR a success — it's "waiting on the customer," a genuinely
+   different kind of pending state from "processing" (waiting on Stripe)
+   or "error_pending_review" (waiting on an admin to check the Dashboard). */
+.admin-charge-status-requires_customer_action { background: #9333ea; color: #fff; }
 
 .admin-charges-list { display: flex; flex-direction: column; gap: 10px; }
 .admin-charge-row {

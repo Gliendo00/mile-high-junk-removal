@@ -670,23 +670,32 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
     [
       "api/admin/booking-status.js: .update(",
       "api/admin/booking.js: .insert(",
-      // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
-      // one new insert (handleProposeCharge — moves no money) and, as of
-      // the 2026-09-18 readiness pass, seven updates
-      // (handleApproveCharge's proposed-or-failed->approved,
-      // approved->processing, the initial processing->paid attempt,
-      // markChargeFailed's ->failed transition,
-      // markChargeErrorPendingReview's ->error_pending_review transition,
-      // and the readiness pass's retryUpdate-wrapped retry of the
-      // paid-confirmation write plus its minimal
-      // paid_reconciliation_required fallback write). See
-      // tests/phase3c-stage2.5v2-rental-payments.test.js for full coverage.
+      // Phase 3C Stage 2.5-v2's ?resource=charges workflow (originally
+      // built on Braintree, switched to Stripe before any production
+      // rollout — see docs/phase-3/stage2.5-stripe-rental-payments-migration.md)
+      // added exactly one new insert (handleProposeCharge — moves no
+      // money) and, as of the Stripe migration, eleven updates:
+      // handleApprove's proposed-or-failed->approved, approved->processing,
+      // the initial processing->paid attempt, markChargeFailed's ->failed
+      // transition, markChargeErrorPendingReview's ->error_pending_review
+      // transition, markChargeRequiresCustomerAction's
+      // ->requires_customer_action transition (Stripe-specific — an
+      // off-session confirmation needing Strong Customer Authentication),
+      // the retryUpdate-wrapped retry of the paid-confirmation write plus
+      // its minimal paid_reconciliation_required fallback write, and
+      // handleCheckStatus's two conditional reconciliation writes
+      // (->paid, ->failed — a safe, non-charging Stripe re-fetch, never a
+      // new charge). See tests/phase3c-stage2.5v2-stripe-rental-payments.test.js
+      // for full coverage.
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
       // api/admin/booking.js's handleUpdate() header comment for why this
       // stays a controlled, allowlisted update rather than a new "write
       // anything" endpoint.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",

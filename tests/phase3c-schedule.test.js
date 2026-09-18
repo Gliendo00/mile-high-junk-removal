@@ -639,30 +639,40 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
     [
       "api/admin/booking-status.js: .update(",
       "api/admin/booking.js: .insert(",
-      // Phase 3C Stage 2.5-v2's ?resource=charges workflow added exactly
-      // one new insert (handleProposeCharge — moves no money, see that
-      // function's header) and, as of the 2026-09-18 readiness pass, seven
-      // updates, all inside handleApproveCharge/markChargeFailed/
-      // markChargeErrorPendingReview: the proposed-or-failed->approved
-      // transition, the approved->processing transition, the initial
-      // processing->paid attempt, markChargeFailed's ->failed transition,
+      // Phase 3C Stage 2.5-v2's ?resource=charges workflow (originally
+      // built on Braintree, switched to Stripe before any production
+      // rollout — see docs/phase-3/stage2.5-stripe-rental-payments-migration.md)
+      // added exactly one new insert (handleProposeCharge — moves no
+      // money) and, as of the Stripe migration, eleven updates, all inside
+      // handleApprove/handleCheckStatus/markChargeFailed/
+      // markChargeErrorPendingReview/markChargeRequiresCustomerAction: the
+      // proposed-or-failed->approved transition, the approved->processing
+      // transition, the initial processing->paid attempt,
+      // markChargeFailed's ->failed transition,
       // markChargeErrorPendingReview's ->error_pending_review transition
-      // (hardening audit — an ambiguous Braintree outcome, never
-      // retryable), and the readiness pass's retryUpdate-wrapped retry of
-      // the paid-confirmation write plus its minimal
-      // paid_reconciliation_required fallback write (a Braintree charge
-      // that DEFINITELY succeeded but couldn't be fully persisted even
-      // after retries — never silently lost to Vercel logs alone; see
-      // docs/phase-3/stage2.5-rental-payments-v2-readiness-pass.md §2-3).
-      // See tests/phase3c-stage2.5v2-rental-payments.test.js for full
+      // (an ambiguous Stripe outcome, never retryable),
+      // markChargeRequiresCustomerAction's ->requires_customer_action
+      // transition (Stripe-specific — an off-session confirmation needing
+      // Strong Customer Authentication, also never retryable via Approve),
+      // the retryUpdate-wrapped retry of the paid-confirmation write plus
+      // its minimal paid_reconciliation_required fallback write (a Stripe
+      // charge that DEFINITELY succeeded but couldn't be fully persisted
+      // even after retries — never silently lost to Vercel logs alone),
+      // and handleCheckStatus's two conditional reconciliation writes
+      // (->paid, ->failed — a safe, non-charging Stripe re-fetch that
+      // never creates a new charge). See
+      // tests/phase3c-stage2.5v2-stripe-rental-payments.test.js for full
       // coverage of this write surface, including that a proposal alone
-      // never reaches Braintree. (Sorted alphabetically below along with
+      // never reaches Stripe. (Sorted alphabetically below along with
       // every other entry here — see the sort() call above this array —
       // so every ".insert(" for a given file groups before that file's
       // ".update(".)
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",

@@ -19,9 +19,11 @@ document.addEventListener('DOMContentLoaded', function () {
     photos: [], // File objects kept in memory until submit; uploaded only after the booking is confirmed.
     // Phase 3C Stage 2.5-v2 — dumpster_rental only, populated lazily the
     // first time the payment panel is shown (see showPaymentPanel below).
-    rentalConfig: null, // { braintree: {tokenizationKey}, pricing: {...} } from GET /api/book
+    rentalConfig: null, // { stripe: {publishableKey}, pricing: {...} } from GET /api/book
     idempotencyKey: null, // generated once per checkout attempt, reused across any retry
-    dropinInstance: null,
+    stripe: null, // Stripe(publishableKey) instance
+    stripeElements: null, // this attempt's Elements instance (tied to one PaymentIntent's clientSecret)
+    paymentIntentId: null, // set once handleCreatePaymentIntent's response comes back
   };
 
   // GA4: booking flow entered. Fires once per page load — not on step
@@ -955,10 +957,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var paymentPanel = document.getElementById('payment-panel');
   var paymentActions = document.getElementById('payment-actions');
   var paymentConfigError = document.getElementById('payment-config-error');
-  var dropinContainer = document.getElementById('braintree-dropin-container');
+  var elementContainer = document.getElementById('stripe-payment-element-container');
   var agreementCheckbox = document.getElementById('agreement-checkbox');
   var payAndBookBtn = document.getElementById('pay-and-book-btn');
   var paymentBackBtn = document.getElementById('payment-back-btn');
+  var paymentElement = null; // this attempt's mounted Stripe Payment Element
 
   function newIdempotencyKey() {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
@@ -1002,73 +1005,82 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (state.rentalConfig) {
       renderPriceBreakdown(state.rentalConfig.pricing);
-      initDropin();
+      initPaymentElement();
       return;
     }
 
-    dropinContainer.textContent = 'Loading payment options…';
+    elementContainer.textContent = 'Loading payment options…';
     fetch('/api/book', { method: 'GET' })
       .then(function (res) {
         return res.json().catch(function () { return null; });
       })
       .then(function (body) {
-        if (!body || !body.ok || !body.braintree || !body.braintree.tokenizationKey) {
+        if (!body || !body.ok || !body.stripe || !body.stripe.publishableKey) {
           throw new Error('Rental config unavailable');
         }
         state.rentalConfig = body;
         renderPriceBreakdown(body.pricing);
-        initDropin();
+        initPaymentElement();
       })
       .catch(function () {
-        dropinContainer.textContent = '';
+        elementContainer.textContent = '';
         paymentConfigError.hidden = false;
         payAndBookBtn.disabled = true;
       });
   }
 
-  function initDropin() {
-    if (typeof braintree === 'undefined' || !braintree.dropin) {
-      dropinContainer.textContent = '';
+  // Authorizes (never charges) the card via a manual-capture PaymentIntent
+  // created server-side, then mounts Stripe's Payment Element against that
+  // PaymentIntent's client_secret. See api/book.js's
+  // handleCreatePaymentIntent() for why this has to happen before the
+  // Payment Element can render at all — unlike the previous Braintree
+  // integration, Stripe's Payment Element requires a real PaymentIntent to
+  // exist first.
+  function initPaymentElement() {
+    if (typeof Stripe === 'undefined') {
+      elementContainer.textContent = '';
       paymentConfigError.hidden = false;
       payAndBookBtn.disabled = true;
       return;
     }
-    if (state.dropinInstance) {
-      // Re-showing the panel after "Back to Review" — tear down the
-      // previous instance rather than stacking a second one in the same
-      // container.
-      state.dropinInstance.teardown(function () {
-        state.dropinInstance = null;
-        createDropin();
-      });
-    } else {
-      createDropin();
+    if (!state.stripe) {
+      state.stripe = Stripe(state.rentalConfig.stripe.publishableKey);
     }
-  }
 
-  function createDropin() {
-    dropinContainer.textContent = '';
+    elementContainer.textContent = 'Loading payment options…';
     paymentConfigError.hidden = true;
-    payAndBookBtn.disabled = false;
-    braintree.dropin.create(
-      {
-        authorization: state.rentalConfig.braintree.tokenizationKey,
-        container: '#braintree-dropin-container',
-        // Renders automatically only on browsers Braintree supports it for,
-        // and only if the merchant account has Venmo enabled — otherwise
-        // this option is silently a no-op, no branching needed here.
-        venmo: { allowNewBrowserTab: false },
-      },
-      function (err, instance) {
-        if (err) {
-          console.error('Braintree Drop-in failed to initialize:', err);
-          paymentConfigError.hidden = false;
-          payAndBookBtn.disabled = true;
-          return;
+    payAndBookBtn.disabled = true;
+
+    var body = buildBookingPayload();
+    // agreementAccepted/paymentIntentId aren't required yet at this stage —
+    // see api/book.js's validateBooking() header comment for why.
+    body.payment = { idempotencyKey: state.idempotencyKey };
+
+    fetch('/api/book?resource=payment-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (resBody) {
+        if (!resBody || !resBody.ok || !resBody.clientSecret) {
+          throw new Error((resBody && resBody.error) || 'Payment unavailable');
         }
-        state.dropinInstance = instance;
-      }
-    );
+        state.paymentIntentId = resBody.paymentIntentId;
+        state.stripeElements = state.stripe.elements({ clientSecret: resBody.clientSecret });
+        elementContainer.textContent = '';
+        paymentElement = state.stripeElements.create('payment');
+        paymentElement.mount('#stripe-payment-element-container');
+        payAndBookBtn.disabled = false;
+      })
+      .catch(function (err) {
+        console.error('Stripe Payment Element failed to initialize:', err);
+        elementContainer.textContent = '';
+        paymentConfigError.hidden = false;
+        payAndBookBtn.disabled = true;
+      });
   }
 
   paymentBackBtn.addEventListener('click', function () {
@@ -1085,7 +1097,7 @@ document.addEventListener('DOMContentLoaded', function () {
       agreementCheckbox.focus();
       return;
     }
-    if (!state.dropinInstance) {
+    if (!state.stripe || !state.stripeElements) {
       showError('Payment isn’t ready yet — please wait a moment and try again.');
       return;
     }
@@ -1094,59 +1106,76 @@ document.addEventListener('DOMContentLoaded', function () {
     paymentBackBtn.disabled = true;
     payAndBookBtn.textContent = 'Processing…';
 
-    state.dropinInstance.requestPaymentMethod(function (err, payload) {
-      if (err) {
-        // Drop-in's own validation covers most cases (e.g. no card entered)
-        // with inline UI already — this is the fallback for whatever it
-        // doesn't catch itself.
-        showError(err.message || 'Please check your payment details and try again.');
+    // redirect: 'if_required' keeps the customer on this page for the
+    // overwhelming majority of cards (no redesign, no new return-URL
+    // landing page needed) — Stripe only redirects away when a payment
+    // method genuinely requires it, which automatic_payment_methods'
+    // allow_redirects: 'never' (set server-side when the PaymentIntent was
+    // created) already steers away from for this integration.
+    state.stripe
+      .confirmPayment({
+        elements: state.stripeElements,
+        redirect: 'if_required',
+        confirmParams: { return_url: window.location.href },
+      })
+      .then(function (result) {
+        if (result.error) {
+          // Stripe's own inline Payment Element validation covers most
+          // cases (e.g. an incomplete card number) already — this is the
+          // fallback for whatever it doesn't catch itself, including a
+          // genuine decline surfaced back from confirmPayment.
+          throw result.error;
+        }
+        // capture_method: 'manual' means a successful confirmation lands
+        // on "requires_capture" (authorized, not yet charged), not
+        // "succeeded" — the actual charge only happens once the server has
+        // safely claimed the delivery slot (see api/book.js's
+        // handleDumpsterRentalBooking()).
+        if (!result.paymentIntent || result.paymentIntent.status !== 'requires_capture') {
+          throw new Error('Your payment could not be confirmed. Please try again.');
+        }
+
+        var body = buildBookingPayload();
+        body.payment = {
+          paymentIntentId: result.paymentIntent.id,
+          idempotencyKey: state.idempotencyKey,
+          agreementAccepted: true,
+        };
+
+        return fetch('/api/book', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+          .then(function (res) {
+            return res
+              .json()
+              .catch(function () {
+                return null;
+              })
+              .then(function (resBody) {
+                if (!res.ok) {
+                  var reqErr = new Error(resBody && resBody.error ? resBody.error : GENERIC_ERROR);
+                  reqErr.isServerMessage = true;
+                  throw reqErr;
+                }
+                return resBody;
+              });
+          });
+      })
+      .then(function (resBody) {
+        finishBookingSuccess(
+          resBody,
+          'Your dumpster rental is booked!',
+          'You’re all set — your 15-yard dumpster is booked and your payment has been processed. We’ll see you on your delivery date. Questions? Call or text <a href="tel:3039901812">303-990-1812</a>.'
+        );
+      })
+      .catch(function (err) {
+        showError(err && err.isServerMessage && err.message ? err.message : (err && err.message) || GENERIC_ERROR);
         payAndBookBtn.disabled = false;
         paymentBackBtn.disabled = false;
         payAndBookBtn.textContent = 'Pay & Book Now';
-        return;
-      }
-
-      var body = buildBookingPayload();
-      body.payment = {
-        nonce: payload.nonce,
-        idempotencyKey: state.idempotencyKey,
-        agreementAccepted: true,
-      };
-
-      fetch('/api/book', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-        .then(function (res) {
-          return res
-            .json()
-            .catch(function () {
-              return null;
-            })
-            .then(function (resBody) {
-              if (!res.ok) {
-                var reqErr = new Error(resBody && resBody.error ? resBody.error : GENERIC_ERROR);
-                reqErr.isServerMessage = true;
-                throw reqErr;
-              }
-              return resBody;
-            });
-        })
-        .then(function (resBody) {
-          finishBookingSuccess(
-            resBody,
-            'Your dumpster rental is booked!',
-            'You’re all set — your 15-yard dumpster is booked and your payment has been processed. We’ll see you on your delivery date. Questions? Call or text <a href="tel:3039901812">303-990-1812</a>.'
-          );
-        })
-        .catch(function (err) {
-          showError(err && err.isServerMessage && err.message ? err.message : GENERIC_ERROR);
-          payAndBookBtn.disabled = false;
-          paymentBackBtn.disabled = false;
-          payAndBookBtn.textContent = 'Pay & Book Now';
-        });
-    });
+      });
   });
 
   goToStep(1);

@@ -1,23 +1,24 @@
 // Shared helper for the one class of database write in this codebase
-// worth retrying: recording the outcome of a Braintree charge that has
-// ALREADY definitively succeeded (transaction.sale() returned success —
-// money has moved). Both api/book.js (the initial rental charge) and
-// api/admin/booking.js's handleApproveCharge (an admin-approved additional
-// charge) use this for exactly one write each — never for anything before
-// the Braintree call, where a failure just means "nothing happened yet,"
-// not "a real charge exists with no durable local trace of it."
+// worth retrying: recording the outcome of a Stripe charge that has
+// ALREADY definitively succeeded (a PaymentIntent capture/off-session
+// confirmation returned status: "succeeded" — money has moved). Both
+// api/book.js (the initial rental charge) and api/admin/booking.js's
+// handleApprove (an admin-approved additional charge) use this for exactly
+// one write each — never for anything before the Stripe call, where a
+// failure just means "nothing happened yet," not "a real charge exists
+// with no durable local trace of it."
 //
-// 2026-09-18 post-hardening-audit readiness pass — see
-// docs/phase-3/stage2.5-rental-payments-v2-hardening-audit.md and
-// docs/phase-3/stage2.5-rental-payments-v2-readiness-pass.md for the full
-// reasoning: this does not pretend Braintree + Supabase can be one ACID
-// transaction. It's a practical, bounded saga step — retry the write a
-// few times with short backoff (transient network blips are the most
-// likely real-world cause of this write failing), and if every attempt
-// still fails, the caller falls back to a smaller, most-likely-to-succeed
-// write, then finally to logging plus the Braintree transaction's own
-// orderId (set BEFORE the charge, independent of any of this) as the
-// last-resort correlation path.
+// See docs/phase-3/stage2.5-stripe-rental-payments-migration.md §2.3/§2.5
+// for the full reasoning (originally established during this feature's
+// Braintree-era hardening/readiness passes, carried over unchanged when
+// the processor switched to Stripe): this does not pretend Stripe +
+// Supabase can be one ACID transaction. It's a practical, bounded saga
+// step — retry the write a few times with short backoff (transient
+// network blips are the most likely real-world cause of this write
+// failing), and if every attempt still fails, the caller falls back to a
+// smaller, most-likely-to-succeed write, then finally to logging plus the
+// Stripe PaymentIntent's own id/metadata (set BEFORE the charge,
+// independent of any of this) as the last-resort correlation path.
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

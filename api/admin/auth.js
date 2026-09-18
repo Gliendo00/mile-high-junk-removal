@@ -2,8 +2,10 @@
 // Consolidated from the former api/admin/login.js + api/admin/logout.js
 // into one file (Phase 3C Stage 2.5-v2) specifically to stay within the
 // Vercel Hobby plan's 12-Serverless-Function-per-deployment ceiling while
-// adding api/braintree-webhook.js — see
-// docs/phase-3/stage2.5-rental-payments-v2-proposal.md §5 and
+// adding a new payment-webhook endpoint (api/braintree-webhook.js
+// originally, replaced in place by api/stripe-webhook.js when this stage
+// switched processors before any production rollout) — see
+// docs/phase-3/stage2.5-stripe-rental-payments-migration.md §3 and
 // docs/phase-3/vercel-function-limit.md for the constraint this responds
 // to. This is a legitimate single-concern merge (both were already tiny,
 // both were already POST-only, both are exactly "manage this admin's

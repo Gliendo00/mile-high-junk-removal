@@ -23,23 +23,28 @@ document.addEventListener('DOMContentLoaded', function () {
   // Phase 3C Stage 2.5-v2 — display labels for rental_payments.payment_status
   // and rental_additional_charges.status. Display-only, mirroring
   // STATUS_TEXT's own pattern; never written back anywhere from this file.
-  // 'error_pending_review' (2026-09-18 hardening audit): the Braintree
-  // call itself failed/timed out with no definitive answer — outcome
-  // unknown, never auto-resolved. Labeled distinctly so this never reads
-  // like an ordinary failure the admin can just retry.
-  // 'paid_reconciliation_required' (2026-09-18 readiness pass): Braintree
-  // DEFINITELY succeeded (a transaction id exists) but the full local
-  // record couldn't be confirmed even after retries — distinct from
-  // 'error_pending_review' ("outcome unknown"), which is why the label
-  // says "Paid" up front rather than "Needs Review" first.
+  // 'error_pending_review': the Stripe call itself failed/timed out with no
+  // definitive answer — outcome unknown, never auto-resolved. Labeled
+  // distinctly so this never reads like an ordinary failure the admin can
+  // just retry.
+  // 'paid_reconciliation_required': Stripe DEFINITELY succeeded (a
+  // PaymentIntent id exists) but the full local record couldn't be
+  // confirmed even after retries — distinct from 'error_pending_review'
+  // ("outcome unknown"), which is why the label says "Paid" up front
+  // rather than "Needs Review" first.
+  // 'requires_customer_action' (charges only — no equivalent state existed
+  // under the original Braintree design): an off-session confirmation came
+  // back requiring Strong Customer Authentication the customer isn't
+  // present to complete. Recovered via the "Check Status" action below,
+  // never by re-approving.
   var PAYMENT_STATUS_TEXT = {
     processing: 'Processing',
     paid: 'Paid',
     failed: 'Failed',
     voided: 'Voided',
     refunded: 'Refunded',
-    error_pending_review: 'Needs Review — Check Braintree',
-    paid_reconciliation_required: 'Paid — Record Incomplete, Check Braintree',
+    error_pending_review: 'Needs Review — Check Stripe',
+    paid_reconciliation_required: 'Paid — Record Incomplete, Check Stripe',
   };
   var CHARGE_STATUS_TEXT = {
     proposed: 'Proposed',
@@ -48,8 +53,9 @@ document.addEventListener('DOMContentLoaded', function () {
     paid: 'Paid',
     failed: 'Failed',
     voided: 'Voided',
-    error_pending_review: 'Needs Review — Check Braintree',
-    paid_reconciliation_required: 'Paid — Record Incomplete, Check Braintree',
+    error_pending_review: 'Needs Review — Check Stripe',
+    paid_reconciliation_required: 'Paid — Record Incomplete, Check Stripe',
+    requires_customer_action: 'Needs Customer Authentication',
   };
   var CHARGE_TYPE_TEXT = { overweight_tonnage: 'Overweight tonnage', additional_days: 'Additional days', other: 'Other' };
 
@@ -430,6 +436,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var chargeDescriptionEl = document.getElementById('d-charge-description');
   var chargeProposeBtn = document.getElementById('d-charge-propose-btn');
   var chargeApproveInFlight = false;
+  var chargeCheckStatusInFlight = false;
 
   function updateChargeFormMode() {
     var isOther = chargeTypeEl.value === 'other';
@@ -498,10 +505,13 @@ document.addEventListener('DOMContentLoaded', function () {
       }
 
       // 'failed' (a clean decline) is retryable — the server allows
-      // re-approving it. 'error_pending_review' (an ambiguous Braintree
-      // outcome) deliberately is NOT — no button shown for it; a human
-      // must resolve it via the Braintree dashboard first (see the server-
-      // side comment in handleApproveCharge for why retrying it here could
+      // re-approving it. 'error_pending_review' (an ambiguous Stripe
+      // outcome) and 'requires_customer_action' (Stripe-specific — the
+      // off-session confirmation needs Strong Customer Authentication the
+      // customer isn't present to complete) deliberately are NOT — no
+      // Approve button for either; a human must resolve them via "Check
+      // Status" below or the Stripe Dashboard first (see the server-side
+      // comment in handleApprove for why retrying it here could
       // double-charge).
       if (charge.status === 'proposed' || charge.status === 'failed') {
         var approveBtn = document.createElement('button');
@@ -514,6 +524,18 @@ document.addEventListener('DOMContentLoaded', function () {
           approveCharge(charge.id, approveBtn);
         });
         row.appendChild(approveBtn);
+      }
+      if (charge.status === 'requires_customer_action' || charge.status === 'error_pending_review') {
+        var checkStatusBtn = document.createElement('button');
+        checkStatusBtn.type = 'button';
+        checkStatusBtn.className = 'admin-btn admin-btn-outline';
+        checkStatusBtn.style.alignSelf = 'flex-start';
+        checkStatusBtn.style.marginTop = '4px';
+        checkStatusBtn.textContent = 'Check Status';
+        checkStatusBtn.addEventListener('click', function () {
+          checkChargeStatus(charge.id, checkStatusBtn);
+        });
+        row.appendChild(checkStatusBtn);
       }
 
       chargesListEl.appendChild(row);
@@ -629,6 +651,50 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .finally(function () {
         chargeApproveInFlight = false;
+      });
+  }
+
+  // Safe, non-charging reconciliation action — re-fetches the charge's
+  // stored PaymentIntent status from Stripe and advances the local row to
+  // match reality. Never calls confirm/capture itself (see
+  // api/admin/booking.js's handleCheckStatus()), so this can be clicked any
+  // number of times without risk.
+  function checkChargeStatus(chargeId, btn) {
+    if (chargeCheckStatusInFlight) return;
+    chargeCheckStatusInFlight = true;
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+
+    fetch('/api/admin/booking?resource=charges', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: chargeId, action: 'check-status' }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (resBody) {
+            if (!res.ok) throw new Error((resBody && resBody.error) || 'Could not check this charge.');
+            return resBody;
+          });
+      })
+      .then(function (resBody) {
+        var charge = resBody && resBody.charge;
+        if (charge && charge.status === 'paid') {
+          showToast('Customer completed authentication — charge is paid.', 'success');
+        } else if (charge && charge.status === 'failed') {
+          showToast('Customer did not complete authentication — charge failed, safely retryable.', 'error');
+        } else {
+          showToast('Still pending — no change yet.', 'success');
+        }
+        loadCharges();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not check this charge.', 'error');
+      })
+      .finally(function () {
+        chargeCheckStatusInFlight = false;
       });
   }
 

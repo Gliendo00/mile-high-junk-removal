@@ -5,13 +5,12 @@
 //   SUPABASE_URL
 //   SUPABASE_SECRET_KEY
 //   UPLOAD_TOKEN_SECRET — signs the short-lived photo-upload token (see below)
-//   BRAINTREE_ENVIRONMENT / BRAINTREE_MERCHANT_ID / BRAINTREE_PUBLIC_KEY /
-//     BRAINTREE_PRIVATE_KEY — see api/_lib/braintree-client.js. Required only
-//     for the dumpster_rental payment path (below); junk_removal/light_demo
-//     never touch Braintree.
-//   BRAINTREE_TOKENIZATION_KEY — read directly by GET (below), not through
-//     api/_lib/braintree-client.js: a separate, non-secret, publishable-style
-//     value echoed to the browser so Braintree Drop-in can initialize.
+//   STRIPE_SECRET_KEY — see api/_lib/stripe-client.js. Required only for the
+//     dumpster_rental payment path (below); junk_removal/light_demo never
+//     touch Stripe.
+//   STRIPE_PUBLISHABLE_KEY — read directly by GET (below), not through
+//     api/_lib/stripe-client.js: a separate, non-secret, publishable value
+//     echoed to the browser so Stripe.js can initialize the Payment Element.
 //
 // Column names below match the live schema exactly:
 //   customers(id, first_name, last_name, phone, email, address, city, state, zip,
@@ -23,8 +22,8 @@
 //                     placement_notes, created_at)
 //   booking_photos(id, booking_id, storage_path, created_at) — written by api/upload-photo.js.
 //   rental_payments(id, booking_id UNIQUE, idempotency_key UNIQUE, payment_status,
-//                    amount_charged, braintree_transaction_id, braintree_customer_id,
-//                    braintree_payment_method_token, payment_method_summary,
+//                    amount_charged, stripe_payment_intent_id, stripe_customer_id,
+//                    stripe_payment_method_id, payment_method_summary,
 //                    dispute_status, agreement_version, agreement_accepted_at,
 //                    created_at, updated_at) — Phase 3C Stage 2.5-v2, dumpster_rental only.
 //
@@ -58,19 +57,34 @@
 //
 // Phase 3C Stage 2.5-v2 — dumpster_rental is now a REAL BOOKING, not a lead
 // form: available + agreed + paid => status: "booked" directly (no admin
-// review step), via Braintree. See
-// docs/phase-3/stage2.5-rental-payments-v2-proposal.md for the full design.
+// review step), via Stripe. See
+// docs/phase-3/stage2.5-stripe-rental-payments-migration.md for the full
+// design (this feature was originally built on Braintree and switched to
+// Stripe before any production rollout — see that doc's header for why).
 // junk_removal and light_demo are completely unaffected — same validation,
 // same insert sequence, same response shape as before this stage. GET is
 // new (previously an unconditional 405): public, non-secret config the
-// booking page needs before it can render Braintree Drop-in — see
+// booking page needs before it can render the Stripe Payment Element — see
 // handlePublicConfig() below.
+//
+// Stripe architecture in one paragraph (see the migration doc for the full
+// reasoning): the booking flow uses a manual-capture PaymentIntent so the
+// database's own slot-uniqueness index can be checked BEFORE any money
+// moves — mirroring the original Braintree design's "claim the slot, then
+// charge" ordering, which a naive Stripe integration (confirm = capture)
+// would not preserve. `POST ?resource=payment-intent` (below) authorizes
+// the card (a hold, no charge yet) once the browser has collected payment
+// details via the Payment Element; the plain `POST` (no resource param)
+// then inserts the booking (claiming the slot) and only THEN captures the
+// already-authorized PaymentIntent. A losing race for the same delivery
+// slot never gets captured — the authorization is cancelled and released
+// instead, so a losing customer is never charged even a temporary amount.
 
 const { createClient } = require("@supabase/supabase-js");
 const crypto = require("crypto");
 const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
 const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
-const { getBraintreeGateway } = require("./_lib/braintree-client");
+const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
 
@@ -165,7 +179,7 @@ const MAX = {
   zip: 10,
   short: 200,
   long: 2000,
-  paymentNonce: 4096, // generous headroom — a real Braintree nonce is far shorter
+  paymentIntentId: 100, // a real Stripe PaymentIntent id ("pi_...") is far shorter
   idempotencyKey: 100,
 };
 
@@ -174,13 +188,29 @@ const MAX_BODY_BYTES = 20 * 1024; // plenty for a text-only booking form; no pho
 module.exports = async (req, res) => {
   try {
     // Phase 3C Stage 2.5-v2: public, non-secret config for the booking
-    // page — the Braintree tokenization key, current rental pricing, the
+    // page — the Stripe publishable key, current rental pricing, the
     // agreement version, and (best-effort, non-authoritative — see
     // handlePublicConfig) which delivery slots already look taken. No spam
     // protection needed (nothing is written), but still IP-rate-limited as
     // cheap insurance against casual scraping, matching this endpoint's
     // existing defensive style.
     if (req.method === "GET") return handlePublicConfig(req, res);
+
+    // Phase 3C Stage 2.5-v2 — Stripe's Payment Element needs a PaymentIntent
+    // to exist (and its client_secret handed to the browser) BEFORE the
+    // customer can enter card details, unlike Braintree's tokenization-key
+    // model. This is a separate, clearly-scoped POST branch — dispatched the
+    // same way api/admin/booking.js's `?resource=charges` is — rather than a
+    // new Vercel function, keeping the 12/12 function budget unchanged. See
+    // handleCreatePaymentIntent() below for the full flow and why this is
+    // safe to call before any booking/customer row exists.
+    if (req.query && req.query.resource === "payment-intent") {
+      if (req.method !== "POST") {
+        res.status(405).json({ error: "Method not allowed" });
+        return;
+      }
+      return handleCreatePaymentIntent(req, res);
+    }
 
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method not allowed" });
@@ -425,16 +455,15 @@ async function safeDeleteByColumn(supabase, table, column, value) {
 // Phase 3C Stage 2.5-v2 — GET: public, non-secret rental config.
 // ---------------------------------------------------------------------
 // Everything this returns is safe for any caller, authenticated or not:
-// the Braintree tokenization key is designed by Braintree to be embedded
-// in client code (same trust model as a Stripe publishable key — see
-// docs/phase-3/stage2.5-rental-payments-v2-proposal.md §3), pricing is
-// public marketing information already shown on dumpster-rental.html, and
-// takenDeliverySlots carries no customer data (just date + time_window) and
-// is explicitly a UX convenience, not an authority: the real availability
-// enforcement is the database's own partial unique index, checked
-// atomically at booking-insert time in handleDumpsterRentalBooking() below
-// — a caller of this endpoint could return stale or fabricated data here
-// and it would change nothing about what can actually be booked.
+// the Stripe publishable key is designed by Stripe to be embedded in client
+// code, pricing is public marketing information already shown on
+// dumpster-rental.html, and takenDeliverySlots carries no customer data
+// (just date + time_window) and is explicitly a UX convenience, not an
+// authority: the real availability enforcement is the database's own
+// partial unique index, checked atomically at booking-insert time in
+// handleDumpsterRentalBooking() below — a caller of this endpoint could
+// return stale or fabricated data here and it would change nothing about
+// what can actually be booked.
 async function handlePublicConfig(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
@@ -475,15 +504,15 @@ async function handlePublicConfig(req, res) {
 
   res.status(200).json({
     ok: true,
-    braintree: {
+    stripe: {
       // Null when unconfigured rather than omitted — the client checks
       // this explicitly and shows "payment is temporarily unavailable"
-      // rather than a confusing broken Drop-in widget. No separate
-      // "environment" field: Braintree Drop-in infers sandbox vs.
-      // production entirely from the tokenization key's own value, so
-      // echoing BRAINTREE_ENVIRONMENT here too would just be a second,
-      // potentially-inconsistent source of truth for the same fact.
-      tokenizationKey: process.env.BRAINTREE_TOKENIZATION_KEY || null,
+      // rather than a confusing broken Payment Element widget. No separate
+      // "environment" field: Stripe.js infers test vs. live entirely from
+      // the publishable key's own value (test keys start "pk_test_", live
+      // keys "pk_live_"), so echoing anything else here would just be a
+      // second, potentially-inconsistent source of truth for the same fact.
+      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null,
     },
     pricing: {
       baseRate: rentalPricing.BASE_RATE,
@@ -498,37 +527,216 @@ async function handlePublicConfig(req, res) {
 }
 
 // ---------------------------------------------------------------------
+// Phase 3C Stage 2.5-v2 — POST ?resource=payment-intent: authorize (but
+// never capture) a card before the booking exists.
+// ---------------------------------------------------------------------
+// Stripe's Payment Element requires a PaymentIntent's client_secret to
+// exist before it can render — unlike Braintree's tokenization-key model,
+// there is no way to collect card details first and create the charge
+// object after. This endpoint is called once, when the customer reaches
+// the Payment step, with the full booking payload already filled in
+// (everything validateBooking() can check except the payment method
+// itself, which doesn't exist yet).
+//
+// This function creates ZERO database rows — no customers/bookings/
+// dumpster_rentals/rental_payments row exists yet. It only talks to
+// Stripe: it looks up (read-only) whether this repeat customer has a
+// Stripe Customer id on file from a past rental (via their most recent
+// rental_payments row, if any — see findExistingStripeCustomerId() below),
+// creates a Stripe Customer otherwise, and creates a PaymentIntent with
+// capture_method: "manual" (authorize now, never auto-capture) and
+// setup_future_usage: "off_session" (save the payment method for later
+// admin-approved charges once the eventual capture succeeds).
+//
+// Idempotency: every Stripe write below passes payment.idempotencyKey as
+// Stripe's own request Idempotency-Key. Calling this endpoint twice with
+// the same key (e.g. the customer reopens the Payment panel after going
+// Back to Review and forward again) returns the SAME Stripe objects rather
+// than creating duplicates — Stripe enforces this natively, so no local
+// tracking row is needed for this step.
+async function handleCreatePaymentIntent(req, res) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+  if (!supabaseUrl || !supabaseSecretKey) {
+    console.error("Create payment intent failed: SUPABASE_URL / SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : null;
+  if (!body) {
+    res.status(400).json({ error: "Invalid request body." });
+    return;
+  }
+
+  const clientIp = getClientIp(req);
+  if (isRateLimited("book-intent:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+    res.status(429).json({ error: "Too many requests. Please wait a bit and try again, or call or text 303-990-1812." });
+    return;
+  }
+
+  if (isHoneypotTripped(body.hp) || isSubmittedTooFast(body.elapsedMs, MIN_FILL_TIME_MS)) {
+    // Mirrors module.exports' own bot-signal handling: respond as if
+    // everything is fine (never reveal to a scripted sender that it was
+    // caught), but never actually create a Stripe object for it.
+    console.error("Create payment intent rejected as likely spam (ip=" + clientIp + ")");
+    res.status(200).json({ ok: true, clientSecret: null });
+    return;
+  }
+
+  const validation = validateBooking(body, { requirePaymentMethod: false });
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
+    return;
+  }
+  const data = validation.data;
+  if (data.serviceType !== "dumpster_rental") {
+    res.status(400).json({ error: "Online payment is only available for dumpster rental bookings." });
+    return;
+  }
+
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.error("Create payment intent failed: STRIPE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
+    return;
+  }
+
+  const idempotencyKey = data.payment.idempotencyKey;
+  const amount = rentalPricing.baseRentalAmount();
+  const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
+
+  try {
+    const stripeCustomerId = await resolveStripeCustomerId(stripe, supabase, data, idempotencyKey);
+
+    const intent = await stripe.paymentIntents.create(
+      {
+        amount: Math.round(amount * 100),
+        currency: "usd",
+        customer: stripeCustomerId,
+        capture_method: "manual",
+        setup_future_usage: "off_session",
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        // No bookingId yet — this PaymentIntent is created before any
+        // booking row exists. handleDumpsterRentalBooking() below updates
+        // this same PaymentIntent's metadata with the real bookingId the
+        // moment that row is successfully inserted (see step 4 there),
+        // so the Stripe object is durably linked to the booking regardless
+        // of anything that happens to this database afterward.
+        metadata: { idempotencyKey: idempotencyKey, serviceType: "dumpster_rental" },
+      },
+      { idempotencyKey: "intent:" + idempotencyKey }
+    );
+
+    res.status(200).json({ ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id });
+  } catch (err) {
+    console.error("Create payment intent failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
+  }
+}
+
+// Repeat-client Stripe Customer reuse: if the submitted phone+email match
+// exactly one existing local customer (the same Step 4a.3 rule used
+// elsewhere in this file), and that customer has a prior rental_payments
+// row with a stripe_customer_id on it, reuse that Stripe Customer instead
+// of creating a new one for every rental the same person books. This
+// project stores no dedicated customers.stripe_customer_id column — reusing
+// the most recent per-booking record is a deliberately minimal way to get
+// this without adding schema for a feature (cross-booking Stripe Customer
+// tracking) nothing else here needs. Any lookup failure falls open to
+// creating a fresh Stripe Customer, exactly like the analogous local
+// customer-reuse lookup elsewhere in this file — this must never turn into
+// a 500 or block payment.
+async function resolveStripeCustomerId(stripe, supabase, data, idempotencyKey) {
+  const phoneNorm = normalizePhone(data.customer.phone);
+  const emailNorm = normalizeEmail(data.customer.email);
+
+  if (emailNorm) {
+    try {
+      const { data: matches, error } = await supabase.from("customers").select("id").eq("phone_normalized", phoneNorm).eq("email_normalized", emailNorm);
+      if (!error && Array.isArray(matches) && matches.length === 1) {
+        const { data: pastBookings, error: bookingsErr } = await supabase.from("bookings").select("id").eq("customer_id", matches[0].id);
+        const pastBookingIds = !bookingsErr && Array.isArray(pastBookings) ? pastBookings.map((b) => b.id) : [];
+        if (pastBookingIds.length) {
+          const { data: pastPayments, error: pastErr } = await supabase
+            .from("rental_payments")
+            .select("stripe_customer_id, created_at")
+            .in("booking_id", pastBookingIds)
+            .not("stripe_customer_id", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1);
+          if (!pastErr && Array.isArray(pastPayments) && pastPayments.length && pastPayments[0].stripe_customer_id) {
+            return pastPayments[0].stripe_customer_id;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Stripe Customer reuse lookup failed, creating a new Stripe Customer instead:", err);
+    }
+  }
+
+  const customer = await stripe.customers.create(
+    {
+      name: data.customer.firstName + " " + data.customer.lastName,
+      email: data.customer.email || undefined,
+      phone: data.customer.phone,
+    },
+    { idempotencyKey: "customer:" + idempotencyKey }
+  );
+  return customer.id;
+}
+
+// ---------------------------------------------------------------------
 // Phase 3C Stage 2.5-v2 — dumpster_rental booking + payment.
 // ---------------------------------------------------------------------
-// Reached only from module.exports' POST branch, only for
+// Reached only from module.exports' plain POST branch, only for
 // data.serviceType === "dumpster_rental", only after validateBooking() has
-// already confirmed every field (including payment.nonce/idempotencyKey/
-// agreementAccepted) is present and well-formed. junk_removal/light_demo
-// never reach this function.
+// already confirmed every field (including payment.paymentIntentId/
+// idempotencyKey/agreementAccepted) is present and well-formed.
+// junk_removal/light_demo never reach this function. By the time this runs,
+// handleCreatePaymentIntent() above has already authorized the card (a
+// Stripe hold, not a charge) and the browser has confirmed it client-side
+// via Stripe.js — this function's job is to claim the delivery slot and
+// only THEN convert that authorization into an actual charge.
 //
-// Sequence (see docs/phase-3/stage2.5-rental-payments-v2-proposal.md §6 for
-// the full design and reasoning):
+// Sequence (see docs/phase-3/stage2.5-stripe-rental-payments-migration.md
+// for the full design and reasoning):
 //   1. Idempotency check by payment.idempotencyKey — BEFORE any customer/
 //      booking row is touched, so a retried/duplicated submit can never
 //      create a second customer or double-charge.
-//   2. Customer lookup/reuse — identical logic to the generic flow above.
-//   3. Insert bookings with status: "booked" directly (not left NULL) —
+//   2. Retrieve the PaymentIntent from Stripe and verify it's actually this
+//      request's own authorized-but-uncaptured intent (status
+//      "requires_capture", metadata.idempotencyKey matches) — never trust
+//      the client-submitted paymentIntentId/amount for anything beyond
+//      looking the object up.
+//   3. Customer lookup/reuse — identical logic to the generic flow above.
+//   4. Insert rental_payments FIRST, with payment_status: "processing" and
+//      booking_id left NULL — this atomically claims the idempotency key
+//      (via its own UNIQUE constraint) BEFORE the delivery slot is ever
+//      touched. This ordering — the opposite of the original Braintree
+//      design's — is the one real architectural change Stripe required:
+//      because the PaymentIntent's authorization already exists by this
+//      point, a same-key concurrent duplicate must be caught here, never
+//      at the slot-uniqueness check below, or it could end up cancelling a
+//      sibling request's still-needed shared authorization.
+//   5. Insert bookings with status: "booked" directly (not left NULL) —
 //      this insert is what the database's partial unique index
 //      (idx_bookings_dumpster_delivery_slot) actually protects. A
-//      collision here means someone else just took this exact
-//      delivery-date/time-window combination; it's caught specifically and
-//      turned into a clean 409, and — critically — Braintree is never
-//      called for a slot that turned out to be unavailable, so a losing
-//      race never touches the customer's card.
-//   4. Insert dumpster_rentals — same as the generic flow.
-//   5. Insert rental_payments with payment_status: "processing" — this row
-//      plus the "booked" bookings row above together ARE the reservation
-//      for the remainder of this one request.
-//   6. Call Braintree. Success -> update rental_payments to "paid" and
-//      respond booked. Failure/decline/error -> roll back every row this
-//      request created (freeing the delivery slot immediately) and respond
-//      with a customer-safe reason, never a generic 500 for an actual
-//      decline.
+//      collision here means a genuinely DIFFERENT customer just took this
+//      exact delivery-date/time-window combination (our own idempotency
+//      key was already uniquely claimed in step 4, so this can never be a
+//      same-key duplicate) — the PaymentIntent's authorization is safely
+//      CANCELLED (never captured — the hold is simply released), and the
+//      customer is told to pick a different slot. A losing race never
+//      gets charged, not even temporarily.
+//   6. Link rental_payments.booking_id to the new booking, and (best-effort)
+//      attach bookingId to the PaymentIntent's own metadata.
+//   7. Insert dumpster_rentals — same as the generic flow.
+//   8. Capture the PaymentIntent. Success -> update rental_payments to
+//      "paid" and respond booked. Decline/error -> roll back every row
+//      this request created (freeing the delivery slot immediately) and
+//      respond with a customer-safe reason, never a generic 500 for an
+//      actual decline.
 async function handleDumpsterRentalBooking(res, supabase, data) {
   const idempotencyKey = data.payment.idempotencyKey;
 
@@ -551,17 +759,17 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       // shape again rather than re-processing anything. No email is
       // re-sent; that already happened on the original successful attempt.
       // 'paid_reconciliation_required' is included here deliberately: that
-      // status means Braintree DEFINITELY succeeded (see the sale()
-      // success block below) — the customer genuinely is booked, even
-      // though our own confirmation record is incomplete. That's an admin
-      // reconciliation concern, never a reason to tell the customer
+      // status means Stripe DEFINITELY captured the charge (see the
+      // capture() success block below) — the customer genuinely is booked,
+      // even though our own confirmation record is incomplete. That's an
+      // admin reconciliation concern, never a reason to tell the customer
       // anything other than the truth.
       res.status(200).json(withUploadToken(existingPayment.booking_id, { ok: true, booked: true }));
       return;
     }
     if (existingPayment.payment_status === "error_pending_review") {
       // A previous attempt with this exact idempotency key had an
-      // ambiguous Braintree outcome (see the sale() catch block below) —
+      // ambiguous Stripe outcome (see the capture() catch block below) —
       // never silently retried. The customer must call in so a human can
       // confirm what actually happened before anything moves forward.
       res.status(409).json({
@@ -576,7 +784,57 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     return;
   }
 
-  // 2. Customer lookup/reuse — identical rule to the generic flow's own
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.error("Dumpster rental booking failed: STRIPE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
+    return;
+  }
+
+  // 2. Retrieve & verify the PaymentIntent handleCreatePaymentIntent()
+  // already authorized. This is the one place a client-submitted value
+  // (paymentIntentId) is trusted at all — and only to look the object up;
+  // every fact used below (amount, whether it's actually authorized, which
+  // idempotencyKey it belongs to) comes back from Stripe itself, never
+  // from the request body.
+  const amount = rentalPricing.baseRentalAmount();
+  const paymentIntentId = data.payment.paymentIntentId;
+  let intent;
+  try {
+    intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  } catch (err) {
+    console.error("Dumpster rental booking failed: could not retrieve PaymentIntent " + paymentIntentId + ":", err && err.message ? err.message : err);
+    res.status(400).json({ error: "We couldn't find your payment authorization. Please go back and try again." });
+    return;
+  }
+  if (!intent || !intent.metadata || intent.metadata.idempotencyKey !== idempotencyKey) {
+    // Guards against a paymentIntentId that doesn't belong to this exact
+    // checkout attempt — e.g. a stale id from an abandoned earlier session.
+    res.status(400).json({ error: "Invalid payment session. Please refresh the page and try again." });
+    return;
+  }
+  if (intent.status !== "requires_capture") {
+    // Any definitive decline or in-page validation failure was already
+    // surfaced to the customer by Stripe.js's own confirmPayment() before
+    // this endpoint was ever called (see book/book.js) — reaching here with
+    // a status other than "requires_capture" means the authorization
+    // expired, was already cancelled/captured, or never actually completed
+    // client-side. Never proceed to claim a delivery slot or attempt a
+    // capture against an intent that isn't a live, authorized hold.
+    res.status(402).json({ error: "Your payment could not be confirmed. Please go back to Review and try again." });
+    return;
+  }
+  if (intent.amount !== Math.round(amount * 100)) {
+    // Defense in depth — amount is always server-set at PaymentIntent
+    // creation time (handleCreatePaymentIntent), so this should never
+    // actually mismatch. Treated as a hard stop rather than trusting
+    // anything else about this PaymentIntent if it ever does.
+    console.error("Dumpster rental booking: PaymentIntent amount mismatch — expected " + Math.round(amount * 100) + ", got " + intent.amount);
+    res.status(400).json({ error: "Invalid payment session. Please refresh the page and try again." });
+    return;
+  }
+
+  // 3. Customer lookup/reuse — identical rule to the generic flow's own
   // Step 4a.3 logic above (kept as a separate, deliberately duplicated
   // block rather than a shared helper — see that flow's own comment for
   // why repeat-client reuse lives inline per call site in this file).
@@ -615,6 +873,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
         .single();
       if (error || !customerRow) {
         console.error("Dumpster rental booking failed creating customer:", error);
+        await cancelPaymentIntent(stripe, paymentIntentId);
         res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
         return;
       }
@@ -622,16 +881,86 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       customerWasCreated = true;
     } catch (err) {
       console.error("Dumpster rental booking failed creating customer:", err);
+      await cancelPaymentIntent(stripe, paymentIntentId);
       res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
       return;
     }
   }
 
-  // 3. Authoritative price — NEVER trust a client-submitted amount. This is
-  // the only dollar figure Braintree is ever asked to charge below.
-  const amount = rentalPricing.baseRentalAmount();
+  // 4. Insert rental_payments ("processing", booking_id: null) FIRST —
+  // claims the idempotency key as its own atomic, unique DB operation
+  // BEFORE the delivery slot is ever touched. This ordering (rental_payments
+  // before bookings) is deliberately the opposite of the original Braintree
+  // design's and is the one real architectural change this Stripe migration
+  // required: because a Stripe PaymentIntent's authorization already exists
+  // by this point (created in handleCreatePaymentIntent(), before any DB
+  // row does), a concurrent duplicate submission sharing this SAME
+  // idempotency key must be caught here — atomically, via
+  // rental_payments.idempotency_key's UNIQUE constraint — before it could
+  // ever reach the bookings-slot-uniqueness check and risk cancelling a
+  // sibling request's still-needed shared authorization. booking_id starts
+  // NULL (the column is UNIQUE but nullable — Postgres allows multiple
+  // NULLs under a UNIQUE constraint) and is linked in step 6, once the
+  // booking actually exists. See
+  // docs/phase-3/stage2.5-stripe-rental-payments-migration.md for the full
+  // reasoning.
+  //
+  // A UNIQUE-constraint collision here means a concurrent duplicate request
+  // with the SAME idempotency key won the race — that request shares this
+  // SAME PaymentIntent (Stripe's own idempotency key on the create call
+  // guarantees it), so this branch must NOT cancel it: the other request
+  // may be about to capture it successfully.
+  let paymentRowId;
+  try {
+    const { data: paymentRow, error } = await supabase
+      .from("rental_payments")
+      .insert({
+        booking_id: null,
+        idempotency_key: idempotencyKey,
+        payment_status: "processing",
+        amount_charged: amount,
+        // Rate-schedule snapshot (2026-09-18 hardening audit, §11) — frozen
+        // at the moment of booking, never re-derived from possibly-changed
+        // global config later. api/admin/booking.js's handleProposeCharge()
+        // reads these back for THIS booking's overage charges in preference
+        // to the current global rate.
+        base_rate: rentalPricing.BASE_RATE,
+        included_days: rentalPricing.INCLUDED_DAYS,
+        included_tons: rentalPricing.INCLUDED_TONS,
+        overage_ton_rate: rentalPricing.OVERAGE_TON_RATE,
+        overage_day_rate: rentalPricing.OVERAGE_DAY_RATE,
+        stripe_payment_intent_id: paymentIntentId,
+        stripe_customer_id: intent.customer || null,
+        agreement_version: rentalPricing.RENTAL_AGREEMENT_VERSION,
+        agreement_accepted_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+    if (error) {
+      if (isUniqueViolation(error)) {
+        if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+        res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again." });
+        return;
+      }
+      throw error;
+    }
+    if (!paymentRow) throw new Error("Insert returned no row.");
+    paymentRowId = paymentRow.id;
+  } catch (err) {
+    console.error("Dumpster rental booking failed creating rental_payments row:", err);
+    if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+    await cancelPaymentIntent(stripe, paymentIntentId);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
 
-  // 4. Insert bookings with status: "booked" directly.
+  // 5. Insert bookings with status: "booked" directly — this insert is what
+  // the database's partial unique index (idx_bookings_dumpster_delivery_slot)
+  // actually protects. A collision here means someone else just took this
+  // exact delivery-date/time-window combination — and because step 4 above
+  // already uniquely claimed OUR idempotency key, reaching here means we
+  // are definitely not a same-key duplicate of whoever won the slot, so
+  // cancelling our own distinct PaymentIntent is always safe.
   let bookingId;
   try {
     const { data: bookingRow, error } = await supabase
@@ -653,7 +982,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
 
     if (error) {
       if (isUniqueViolation(error)) {
-        if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+        await rollbackDumpsterBooking(supabase, null, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
         res.status(409).json({ error: "That delivery window was just booked by someone else. Please choose a different date or time." });
         return;
       }
@@ -663,12 +992,37 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     bookingId = bookingRow.id;
   } catch (err) {
     console.error("Dumpster rental booking failed creating booking:", err);
-    if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
+    await rollbackDumpsterBooking(supabase, null, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
     res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
     return;
   }
 
-  // 5. Insert dumpster_rentals — same rollback pattern as the generic flow.
+  // 6. Link rental_payments to the now-existing booking, and (best-effort)
+  // attach bookingId to the PaymentIntent's own metadata on Stripe's side —
+  // durable regardless of anything that happens to this database afterward
+  // (the last-resort correlation path if every write below fails). Losing
+  // the Stripe metadata write doesn't affect the charge's correctness, only
+  // how easy it is to find by bookingId later — the idempotencyKey already
+  // in metadata since creation remains the primary correlation key either
+  // way, so it never blocks the booking. The rental_payments link-back
+  // update, however, is treated as a real failure: if it doesn't land,
+  // nothing has been charged yet, so a full rollback is still safe.
+  try {
+    const { error } = await supabase.from("rental_payments").update({ booking_id: bookingId, updated_at: new Date().toISOString() }).eq("id", paymentRowId);
+    if (error) throw error;
+  } catch (err) {
+    console.error("Dumpster rental booking failed linking rental_payments to its booking:", err);
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    return;
+  }
+  try {
+    await stripe.paymentIntents.update(paymentIntentId, { metadata: { idempotencyKey: idempotencyKey, serviceType: "dumpster_rental", bookingId: bookingId } });
+  } catch (err) {
+    console.error("Dumpster rental booking: failed to attach bookingId to PaymentIntent metadata (non-fatal):", err && err.message ? err.message : err);
+  }
+
+  // 7. Insert dumpster_rentals — same rollback pattern as the generic flow.
   try {
     const { error } = await supabase.from("dumpster_rentals").insert({
       booking_id: bookingId,
@@ -680,133 +1034,90 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     if (error) throw error;
   } catch (err) {
     console.error("Dumpster rental booking failed creating dumpster_rentals row:", err);
-    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
     res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
     return;
   }
 
-  // 6. Insert rental_payments ("processing") — claims the idempotency key.
-  // A UNIQUE-constraint collision here (the backstop for a race this
-  // function's own pre-check at step 1 can't fully close) means a
-  // concurrent duplicate request with the same key won the race.
-  try {
-    const { error } = await supabase.from("rental_payments").insert({
-      booking_id: bookingId,
-      idempotency_key: idempotencyKey,
-      payment_status: "processing",
-      amount_charged: amount,
-      // Rate-schedule snapshot (2026-09-18 hardening audit, §11) — frozen
-      // at the moment of booking, never re-derived from possibly-changed
-      // global config later. api/admin/booking.js's handleProposeCharge()
-      // reads these back for THIS booking's overage charges in preference
-      // to the current global rate.
-      base_rate: rentalPricing.BASE_RATE,
-      included_days: rentalPricing.INCLUDED_DAYS,
-      included_tons: rentalPricing.INCLUDED_TONS,
-      overage_ton_rate: rentalPricing.OVERAGE_TON_RATE,
-      overage_day_rate: rentalPricing.OVERAGE_DAY_RATE,
-      agreement_version: rentalPricing.RENTAL_AGREEMENT_VERSION,
-      agreement_accepted_at: new Date().toISOString(),
-    });
-    if (error) {
-      if (isUniqueViolation(error)) {
-        await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
-        res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again." });
-        return;
-      }
-      throw error;
-    }
-  } catch (err) {
-    console.error("Dumpster rental booking failed creating rental_payments row:", err);
-    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
-    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
-    return;
-  }
-
-  // 7. Charge via Braintree.
-  const gateway = getBraintreeGateway();
-  if (!gateway) {
-    console.error("Dumpster rental booking failed: BRAINTREE_* environment variables not configured");
-    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
-    res.status(500).json({ error: "Payment is not available right now. Please call or text 303-990-1812." });
-    return;
-  }
-
-  // 2026-09-18 hardening audit, §6 — the distinction below is deliberate
-  // and load-bearing, not stylistic:
-  //   - The catch block below means the transaction.sale() CALL ITSELF
-  //     failed (network error, timeout, gateway 5xx) — Braintree may or
-  //     may not have actually processed the charge; we have NO definitive
-  //     answer and, critically, no transaction id to look up or void. This
-  //     is AMBIGUOUS, not a decline. Rolling everything back here would be
-  //     actively dangerous: if the charge in fact succeeded on Braintree's
-  //     side, deleting rental_payments (freeing the idempotency key and the
-  //     delivery slot) would both lose our only record that a real charge
-  //     may have happened AND let the slot be re-sold/re-charged to someone
-  //     else. So this path preserves every row exactly as-is and marks the
-  //     payment "error_pending_review" for a human to reconcile against the
-  //     Braintree dashboard — never an automatic retry, never a silent
+  // 8. Capture the already-authorized PaymentIntent — this is the moment
+  // money actually moves.
+  //
+  // 2026-09-18 hardening-audit-equivalent reasoning, carried over from the
+  // original Braintree design and still load-bearing for Stripe:
+  //   - The catch block below distinguishes a DEFINITIVE decline
+  //     (err.type === "StripeCardError" — Stripe's own card network
+  //     telling us plainly no money moved, safe to roll back and free the
+  //     slot immediately) from an AMBIGUOUS failure (a network error,
+  //     timeout, or any other Stripe error type — no definitive answer,
+  //     the capture may have actually succeeded on Stripe's side). Rolling
+  //     back on an ambiguous failure would be actively dangerous: deleting
+  //     rental_payments would both lose our only record that a capture may
+  //     have happened AND free the delivery slot for someone else to book
+  //     (and pay for) while the first charge's fate is unknown. So the
+  //     ambiguous path preserves every row exactly as-is and marks the
+  //     payment "error_pending_review" for a human to reconcile against
+  //     the Stripe Dashboard — never an automatic retry, never a silent
   //     rollback.
-  //   - The `!saleResult.success` branch further below is a DEFINITIVE
-  //     answer from Braintree (a clean decline or a request-validation
-  //     failure) — Braintree is explicitly telling us no money moved, so
-  //     rolling back and freeing the slot immediately is correct and safe.
-  // 2026-09-18 readiness pass, §2-3 — orderId is a standard, searchable
-  // Braintree transaction field (Control Panel search + the Search API),
-  // set here as part of the SAME request that creates the charge — so it
-  // exists on the Braintree transaction regardless of anything that
-  // happens afterward, including a total Supabase outage. This is the
-  // last-resort correlation path: if every local write below fails, an
-  // admin can search the Braintree dashboard for orderId = this booking's
-  // id and find the transaction directly. Deliberately just the internal
-  // booking UUID — no name, address, phone, or other customer data ever
-  // reaches Braintree's metadata.
-  let saleResult;
+  //   - metadata.bookingId (set just above, right after the bookings
+  //     insert succeeded) and metadata.idempotencyKey (set at PaymentIntent
+  //     creation) are both standard, Dashboard-searchable Stripe fields —
+  //     durable on Stripe's side regardless of anything that happens to
+  //     this database afterward. This is the last-resort correlation path:
+  //     if every local write below fails, an admin can search the Stripe
+  //     Dashboard for either value and find the PaymentIntent directly.
+  let captured;
   try {
-    saleResult = await gateway.transaction.sale({
-      amount: amount.toFixed(2),
-      paymentMethodNonce: data.payment.nonce,
-      orderId: bookingId,
-      options: { submitForSettlement: true, storeInVaultOnSuccess: true },
-    });
+    captured = await stripe.paymentIntents.capture(paymentIntentId, { expand: ["payment_method"] }, { idempotencyKey: "capture:" + idempotencyKey });
   } catch (err) {
+    if (err && err.type === "StripeCardError") {
+      // A definitive decline at capture time — rare (the authorization
+      // already succeeded once) but possible (e.g. the card was cancelled
+      // in the intervening minutes) — Stripe confirms no money moved, so
+      // rolling back and freeing the slot immediately is correct and safe.
+      console.error("Dumpster rental booking: payment declined at capture —", err.code, err.message);
+      await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
+      res.status(402).json({ error: extractDeclineMessage(err) });
+      return;
+    }
     console.error(
-      "AMBIGUOUS PAYMENT OUTCOME — Braintree call threw, actual result unknown. Check the Braintree dashboard for a transaction matching bookingId=" +
+      "AMBIGUOUS PAYMENT OUTCOME — Stripe capture call failed/threw, actual result unknown. Check the Stripe Dashboard for a PaymentIntent matching bookingId=" +
         bookingId +
         " idempotencyKey=" +
         idempotencyKey +
+        " paymentIntentId=" +
+        paymentIntentId +
         " amount=" +
         amount.toFixed(2) +
         " before any manual action:",
       err && err.stack ? err.stack : err
     );
-    await markPaymentErrorPendingReview(supabase, bookingId, "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action.");
+    await markPaymentErrorPendingReview(supabase, bookingId, "Stripe capture request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for PaymentIntent " + paymentIntentId + " before taking any action.");
     res.status(502).json({
       error: "We couldn't confirm your payment went through. Please do not submit again — call or text 303-990-1812 so we can confirm your charge before booking to avoid being charged twice.",
     });
     return;
   }
 
-  if (!saleResult || !saleResult.success) {
-    // A definitive decline/validation failure — Braintree confirms no
-    // money moved, so this is the one branch where a full rollback
-    // (freeing the slot immediately) is genuinely safe.
-    console.error("Dumpster rental booking: payment declined —", describeDeclineForLogs(saleResult));
-    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated);
-    res.status(402).json({ error: extractDeclineMessage(saleResult) });
+  if (!captured || captured.status !== "succeeded") {
+    // Defensive: capture() resolving without throwing but not reaching
+    // "succeeded" shouldn't normally happen for a card capture, but is
+    // treated the same as a definitive decline rather than assumed safe.
+    console.error("Dumpster rental booking: capture did not reach 'succeeded' — status=" + (captured && captured.status));
+    await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
+    res.status(402).json({ error: "Your payment could not be completed. Please try again or use a different payment method." });
     return;
   }
 
-  // 8. Success — finalize the payment row. The charge has ALREADY
+  // 9. Success — finalize the payment row. The charge has ALREADY
   // happened at this point — every write below is best-effort persistence
   // of that fact, never a condition for whether the customer is told
   // they're booked (see the response at the end of this function, which
   // is unconditional from here on).
-  const txn = saleResult.transaction;
-  const methodInfo = extractPaymentMethodInfo(txn);
+  const methodInfo = extractPaymentMethodInfo(captured.payment_method);
 
-  // 2026-09-18 readiness pass, §2-3 — a bounded, practical saga step, not
-  // pretended atomicity: retry the full confirmation write a few times
+  // 2026-09-18 readiness-pass-equivalent reasoning, carried over from the
+  // original Braintree design: a bounded, practical saga step, not
+  // pretended atomicity — retry the full confirmation write a few times
   // (short backoff — a transient blip is the most likely real-world cause
   // of this specific write failing) before giving up on it. Wrapped in
   // try/catch, not just relying on retryUpdate's own internal catch,
@@ -820,9 +1131,9 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
           .from("rental_payments")
           .update({
             payment_status: "paid",
-            braintree_transaction_id: txn.id,
-            braintree_customer_id: txn.customer && txn.customer.id ? txn.customer.id : null,
-            braintree_payment_method_token: methodInfo.token,
+            stripe_payment_intent_id: captured.id,
+            stripe_customer_id: captured.customer || null,
+            stripe_payment_method_id: methodInfo.id,
             payment_method_summary: methodInfo.summary,
             updated_at: new Date().toISOString(),
           })
@@ -835,23 +1146,25 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
 
   if (!confirmed) {
     // Every retry of the full update failed. Fall back to the smallest
-    // possible write — just enough to durably record THAT Braintree
-    // succeeded and WHICH transaction it was — in case the original
-    // failure was shaped by the payload (e.g. one unexpected field) rather
-    // than a total outage. This is deliberately a DIFFERENT status from
-    // "paid": 'paid_reconciliation_required' means "Braintree definitely
-    // succeeded, but the full record could not be persisted" — never
-    // confused with 'error_pending_review' ("outcome unknown"), and never
-    // reachable by any retry/replay path (see the idempotency pre-check
-    // above and rollbackDumpsterBooking, neither of which treat this
-    // status as anything but a dead end requiring a human).
+    // possible write — just enough to durably record THAT Stripe succeeded
+    // and WHICH PaymentIntent it was — in case the original failure was
+    // shaped by the payload (e.g. one unexpected field) rather than a
+    // total outage. This is deliberately a DIFFERENT status from "paid":
+    // 'paid_reconciliation_required' means "Stripe definitely captured the
+    // charge, but the full record could not be persisted" — never confused
+    // with 'error_pending_review' ("outcome unknown"), and never reachable
+    // by any retry/replay path (see the idempotency pre-check above and
+    // rollbackDumpsterBooking, neither of which treat this status as
+    // anything but a dead end requiring a human — api/stripe-webhook.js's
+    // payment_intent.succeeded handler is the one path that can still
+    // self-heal a row stuck here, once that asynchronous event arrives).
     let minimalConfirmed = false;
     try {
       minimalConfirmed = await retryUpdate(
         () =>
           supabase
             .from("rental_payments")
-            .update({ payment_status: "paid_reconciliation_required", braintree_transaction_id: txn.id, updated_at: new Date().toISOString() })
+            .update({ payment_status: "paid_reconciliation_required", stripe_payment_intent_id: captured.id, updated_at: new Date().toISOString() })
             .eq("booking_id", bookingId),
         [150]
       );
@@ -861,60 +1174,95 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
 
     // Whether or not even the minimal write succeeded, this is logged
     // loudly either way — Vercel logs are a real but last-resort trace;
-    // the durable, database-independent one is the orderId set on the
-    // Braintree transaction itself, above, which exists regardless of
+    // the durable, database-independent one is the metadata set on the
+    // Stripe PaymentIntent itself, above, which exists regardless of
     // anything that happens from here on.
     console.error(
-      "CRITICAL: Braintree charge succeeded (transaction.sale() success=true) but rental_payments could not be fully confirmed after retries. " +
-        (minimalConfirmed ? "Minimal fallback write (status + transaction id only) DID succeed — see rental_payments.payment_status='paid_reconciliation_required' for this booking. " : "Even the minimal fallback write failed — this booking's payment record does not reflect this charge at all. ") +
-        "Search the Braintree dashboard for orderId='" +
+      "CRITICAL: Stripe capture succeeded (status=succeeded) but rental_payments could not be fully confirmed after retries. " +
+        (minimalConfirmed ? "Minimal fallback write (status + PaymentIntent id only) DID succeed — see rental_payments.payment_status='paid_reconciliation_required' for this booking. " : "Even the minimal fallback write failed — this booking's payment record does not reflect this charge at all. ") +
+        "Search the Stripe Dashboard for PaymentIntent '" +
+        captured.id +
+        "' or metadata.bookingId='" +
         bookingId +
         "' to find this transaction. bookingId=" +
         bookingId +
-        " braintreeTransactionId=" +
-        txn.id +
+        " stripePaymentIntentId=" +
+        captured.id +
         " amount=" +
         amount.toFixed(2)
     );
   }
 
-  await sendBookingNotificationEmail(data, { amount: amount, transactionId: txn.id, methodSummary: methodInfo.summary });
+  await sendBookingNotificationEmail(data, { amount: amount, transactionId: captured.id, methodSummary: methodInfo.summary });
 
   // Unconditional success from here regardless of `confirmed` above — the
   // booking (status: "booked") and the delivery-slot claim both already
-  // existed before Braintree was ever called (step 4), and Braintree has
-  // now definitively confirmed the charge. Telling the customer anything
-  // other than "booked" here would be false, and — per the explicit design
-  // principle this pass confirmed — the browser must never be nudged
-  // toward resubmitting a payment that has already succeeded.
+  // existed before capture was ever attempted (step 4), and Stripe has now
+  // definitively confirmed the charge. Telling the customer anything other
+  // than "booked" here would be false, and — per the explicit design
+  // principle carried over from the original Braintree hardening pass —
+  // the browser must never be nudged toward resubmitting a payment that
+  // has already succeeded.
   res.status(200).json(withUploadToken(bookingId, { ok: true, booked: true }));
+}
+
+// Best-effort release of an authorized-but-not-yet-captured PaymentIntent's
+// hold. Safe to call even if the intent was already cancelled/expired
+// (Stripe's cancel() throws in that case; swallowed here) — never called
+// once a capture has actually been attempted (see rollbackDumpsterBooking's
+// own cancelIntent contract below, and the idempotency-race branch in step
+// 6, which deliberately passes no cancelIntent at all).
+async function cancelPaymentIntent(stripe, paymentIntentId) {
+  try {
+    await stripe.paymentIntents.cancel(paymentIntentId);
+  } catch (err) {
+    console.error("Could not cancel PaymentIntent " + paymentIntentId + " (may already be settled/canceled):", err && err.message ? err.message : err);
+  }
 }
 
 // Deletes every row a dumpster-rental booking attempt may have created, in
 // FK-safe order, freeing the delivery slot (and the idempotency key)
 // immediately. Safe to call even when some of these rows were never
 // created (each delete is a harmless no-op if nothing matches). Used for a
-// failed insert partway through, and for a Braintree DECLINE (a definitive
-// "no money moved" answer) — never for an ambiguous Braintree call
+// failed insert partway through, and for a Stripe DECLINE (a definitive
+// "no money moved" answer) — never for an ambiguous Stripe capture
 // failure, where markPaymentErrorPendingReview() below is used instead
 // specifically because deleting these rows in that case could destroy the
 // only record of a possibly-successful charge.
-async function rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated) {
-  await safeDeleteByColumn(supabase, "rental_payments", "booking_id", bookingId);
+//
+// `bookingId` may be null (the rental_payments row is inserted in step 4,
+// before bookings exists yet — see the sequence comment above) — deleting
+// rental_payments by `idempotencyKey` (its own UNIQUE column) works
+// regardless of whether booking_id has been linked yet, unlike deleting by
+// booking_id which can't identify an unlinked row.
+//
+// `cancelIntent` is `{ stripe, paymentIntentId }` — always safe to pass
+// here, since by the time this function can be reached, this exact
+// idempotency key has already been uniquely claimed by step 4, meaning
+// this is never a same-key duplicate racing a sibling that still needs the
+// PaymentIntent alive (that race is instead caught earlier, atomically, by
+// step 4's own unique-constraint branch, which never calls this function).
+async function rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, cancelIntent, idempotencyKey) {
+  await safeDeleteByColumn(supabase, "rental_payments", "idempotency_key", idempotencyKey);
   await safeDeleteByColumn(supabase, "dumpster_rentals", "booking_id", bookingId);
   await safeDelete(supabase, "bookings", bookingId);
   if (customerWasCreated) {
     await safeDelete(supabase, "customers", customerId);
   }
+  if (cancelIntent && cancelIntent.stripe && cancelIntent.paymentIntentId) {
+    await cancelPaymentIntent(cancelIntent.stripe, cancelIntent.paymentIntentId);
+  }
 }
 
-// 2026-09-18 hardening audit, §6 — called only when gateway.transaction.sale()
-// itself threw (no definitive response from Braintree). Never deletes
-// anything: the booking, dumpster_rentals, and this rental_payments row all
-// stay exactly as they are (the slot stays claimed, the idempotency key
-// stays claimed), so neither a possibly-successful charge nor the evidence
-// of it is ever destroyed. A human must resolve this by checking the
-// Braintree dashboard directly — this function only records why.
+// Called only when the Stripe capture call itself threw with no definitive
+// response. Never deletes anything: the booking, dumpster_rentals, and
+// this rental_payments row all stay exactly as they are (the slot stays
+// claimed, the idempotency key stays claimed), so neither a possibly-
+// successful charge nor the evidence of it is ever destroyed. A human must
+// resolve this by checking the Stripe Dashboard directly — this function
+// only records why. (api/stripe-webhook.js's payment_intent.succeeded
+// handler can also self-heal this row automatically if the asynchronous
+// event later confirms the capture did succeed.)
 async function markPaymentErrorPendingReview(supabase, bookingId, reason) {
   try {
     await supabase
@@ -922,7 +1270,7 @@ async function markPaymentErrorPendingReview(supabase, bookingId, reason) {
       .update({ payment_status: "error_pending_review", failure_reason: reason, updated_at: new Date().toISOString() })
       .eq("booking_id", bookingId);
   } catch (err) {
-    console.error("CRITICAL: could not even record error_pending_review for bookingId=" + bookingId + " — reconcile manually via the Braintree dashboard:", err);
+    console.error("CRITICAL: could not even record error_pending_review for bookingId=" + bookingId + " — reconcile manually via the Stripe Dashboard:", err);
   }
 }
 
@@ -930,66 +1278,47 @@ function isUniqueViolation(error) {
   return !!error && (error.code === "23505" || /duplicate key value violates unique constraint/i.test(String(error.message || "")));
 }
 
-// A customer-safe message for a declined/failed Braintree sale. Prefers
-// Braintree's own processor-response text (written by Braintree/the card
-// networks specifically to be shown to the cardholder, e.g. "Do Not
-// Honor") when present, falling back to a generic message that still
-// clearly invites a retry with a different payment method — never a bare
-// "something went wrong" for an actual decline, since that reads as a site
-// error rather than a payment problem.
-function extractDeclineMessage(saleResult) {
+// A customer-safe message for a declined/failed Stripe charge. Stripe's own
+// card-error messages (err.message on a StripeCardError, e.g. "Your card
+// was declined.") are already written to be shown to the cardholder, so
+// they're used directly when present, falling back to a generic message
+// that still clearly invites a retry with a different payment method —
+// never a bare "something went wrong" for an actual decline, since that
+// reads as a site error rather than a payment problem.
+function extractDeclineMessage(err) {
   try {
-    const txn = saleResult && saleResult.transaction;
-    if (txn && txn.processorResponseText) {
-      return "Payment declined: " + txn.processorResponseText + ". Please try a different payment method, or call or text 303-990-1812.";
+    if (err && err.message) {
+      return "Payment declined: " + err.message + " Please try a different payment method, or call or text 303-990-1812.";
     }
-    if (saleResult && saleResult.message) {
-      return "Your payment could not be processed. Please check your payment details and try again, or try a different payment method.";
-    }
-  } catch (err) {
+  } catch (e) {
     // fall through to the generic message below
   }
   return "Your payment could not be processed. Please check your payment details or try a different payment method.";
 }
 
-// Server-log-only detail (never sent to the client) — kept separate from
-// extractDeclineMessage() so a change to the customer-facing wording can
-// never accidentally also change what gets logged, or vice versa.
-function describeDeclineForLogs(saleResult) {
-  try {
-    if (saleResult && saleResult.transaction) {
-      return "status=" + saleResult.transaction.status + " processorResponseText=" + saleResult.transaction.processorResponseText;
-    }
-    if (saleResult && saleResult.message) {
-      return saleResult.message;
-    }
-  } catch (err) {
-    // fall through
+// Extracts the vaultable PaymentMethod id (never card data itself) and a
+// display-safe summary from a captured PaymentIntent's expanded
+// payment_method, regardless of which payment method the customer used.
+// Returns an id of null (never throws) for a payment-method shape this
+// doesn't recognize, so a future Stripe-supported method this code doesn't
+// yet know about degrades to "no later-charge capability for this booking"
+// rather than crashing the success path.
+function extractPaymentMethodInfo(pm) {
+  if (!pm || typeof pm !== "object") return { id: null, summary: "Payment method on file" };
+  if (pm.card) {
+    const last4 = pm.card.last4 || "????";
+    const brand = pm.card.brand ? pm.card.brand.charAt(0).toUpperCase() + pm.card.brand.slice(1) : "Card";
+    return { id: pm.id, summary: brand + " ending in " + last4 };
   }
-  return "unknown reason (no transaction/message on result)";
-}
-
-// Extracts the vaultable payment-method token (never card data itself) and
-// a display-safe summary from a successful transaction result, regardless
-// of which payment method the customer used. Returns a token of null (never
-// throws) for a payment-method shape this doesn't recognize, so a future
-// Braintree-supported method this code doesn't yet know about degrades to
-// "no later-charge capability for this booking" rather than crashing the
-// success path.
-function extractPaymentMethodInfo(txn) {
-  if (txn.creditCard && txn.creditCard.token) {
-    const last4 = txn.creditCard.last4 || "????";
-    const cardType = txn.creditCard.cardType || "Card";
-    return { token: txn.creditCard.token, summary: cardType + " ending in " + last4 };
+  if (pm.cashapp) {
+    const cashtag = pm.cashapp.cashtag;
+    return { id: pm.id, summary: cashtag ? "Cash App Pay ($" + cashtag + ")" : "Cash App Pay" };
   }
-  if (txn.venmoAccount && txn.venmoAccount.token) {
-    const username = txn.venmoAccount.username;
-    return { token: txn.venmoAccount.token, summary: username ? "Venmo (@" + username + ")" : "Venmo" };
+  if (pm.us_bank_account) {
+    const last4 = pm.us_bank_account.last4 || "????";
+    return { id: pm.id, summary: "Bank account ending in " + last4 };
   }
-  if (txn.paypalAccount && txn.paypalAccount.token) {
-    return { token: txn.paypalAccount.token, summary: txn.paypalAccount.payerEmail ? "PayPal (" + txn.paypalAccount.payerEmail + ")" : "PayPal" };
-  }
-  return { token: null, summary: "Payment method on file" };
+  return { id: pm.id || null, summary: "Payment method on file" };
 }
 
 // Mints the same short-lived photo-upload token every other success path in
@@ -1014,7 +1343,7 @@ function withUploadToken(bookingId, body) {
 // successful booking response.
 //
 // `paymentInfo` (Phase 3C Stage 2.5-v2) is only ever passed by
-// handleDumpsterRentalBooking(), after a successful Braintree charge —
+// handleDumpsterRentalBooking(), after a successful Stripe charge —
 // junk_removal/light_demo always call this with just `data`, and the
 // subject/body render exactly as before this stage for them.
 async function sendBookingNotificationEmail(data, paymentInfo) {
@@ -1059,7 +1388,7 @@ async function sendBookingNotificationEmail(data, paymentInfo) {
 // server-derived href built from safe parts (digits-only for tel:,
 // encodeURIComponent for the Maps query string), never raw customer input
 // concatenated straight into an attribute. `paymentInfo` is server-derived
-// (Braintree's own response + the authoritative rental-pricing amount,
+// (Stripe's own response + the authoritative rental-pricing amount,
 // never anything customer-submitted) so it needs no separate escaping
 // discipline beyond what infoRowText already applies.
 function buildBookingNotificationHtml(data, serviceLabel, customerName, paymentInfo) {
@@ -1123,7 +1452,7 @@ function buildBookingNotificationHtml(data, serviceLabel, customerName, paymentI
     ? sectionHeading("Payment") +
       infoRowText("Amount Charged", "$" + paymentInfo.amount.toFixed(2)) +
       infoRowText("Payment Method", paymentInfo.methodSummary) +
-      infoRowText("Braintree Transaction ID", paymentInfo.transactionId)
+      infoRowText("Stripe PaymentIntent ID", paymentInfo.transactionId)
     : "";
 
   const fontStack = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -1231,7 +1560,25 @@ function signUploadToken(bookingId, secret) {
   return payloadB64 + "." + sig;
 }
 
-function validateBooking(body) {
+// `options.requirePaymentMethod` (default true) controls whether a
+// dumpster_rental submission must carry `payment.agreementAccepted`/
+// `payment.paymentIntentId` — the two-phase Stripe flow validates the SAME
+// booking payload twice:
+//   - handleCreatePaymentIntent() (before any PaymentIntent exists yet,
+//     and before the customer has necessarily checked the agreement box —
+//     see the payment-panel UX note below) calls this with
+//     `{ requirePaymentMethod: false }` — everything about the booking
+//     itself must already be valid, but neither the agreement nor a
+//     payment method is checked yet.
+//   - the plain POST finalize path (module.exports, after the browser has
+//     confirmed payment client-side) calls this with the default (true) —
+//     both `payment.agreementAccepted` and `payment.paymentIntentId` must
+//     be present.
+// `payment.idempotencyKey` is required in BOTH calls either way, since
+// it's what ties a PaymentIntent created in the first call back to the
+// exact same checkout attempt in the second.
+function validateBooking(body, options) {
+  const requirePaymentMethod = !options || options.requirePaymentMethod !== false;
   if (!SERVICE_TYPES.includes(body.serviceType)) {
     return { ok: false, error: "Please choose a valid service." };
   }
@@ -1321,24 +1668,39 @@ function validateBooking(body) {
     // Phase 3C Stage 2.5-v2 — required for every dumpster_rental submission,
     // and validated here alongside everything else so a missing/invalid
     // payment field fails exactly like a missing/invalid job-detail field
-    // (a clean 400, before any Supabase or Braintree call). See
-    // handleDumpsterRentalBooking() for what happens with this once
-    // validation passes.
+    // (a clean 400, before any Supabase or Stripe call). See
+    // handleCreatePaymentIntent()/handleDumpsterRentalBooking() for what
+    // happens with this once validation passes.
     const paymentIn = body.payment && typeof body.payment === "object" && !Array.isArray(body.payment) ? body.payment : {};
-    const paymentNonce = sanitizeText(paymentIn.nonce, MAX.paymentNonce);
     const idempotencyKey = sanitizeText(paymentIn.idempotencyKey, MAX.idempotencyKey);
-    const agreementAccepted = paymentIn.agreementAccepted === true;
-    if (!paymentNonce) return { ok: false, error: "Payment information is missing. Please try again." };
     // A UUID (crypto.randomUUID(), what book/book.js actually generates) —
     // checked defensively rather than trusted freeform, since this value
-    // becomes a UNIQUE database column.
+    // becomes a UNIQUE database column (rental_payments.idempotency_key)
+    // and a Stripe idempotency key. Required at BOTH validation stages —
+    // even PaymentIntent creation needs it, since it's what ties that
+    // Stripe object back to this exact checkout attempt.
     if (!idempotencyKey || !/^[A-Za-z0-9-]{8,100}$/.test(idempotencyKey)) {
       return { ok: false, error: "Invalid request. Please refresh the page and try again." };
     }
-    if (!agreementAccepted) {
-      return { ok: false, error: "You must accept the rental agreement to book online." };
+    payment = { idempotencyKey: idempotencyKey };
+    // agreementAccepted and paymentIntentId are both only required to
+    // FINALIZE the booking (capture the charge) — not to create the
+    // PaymentIntent/authorize a hold. This matches the pre-existing UX
+    // (carried over from the original Braintree design): the payment
+    // widget loads and the card can be entered as soon as the panel opens,
+    // before the customer has necessarily checked the agreement box yet;
+    // the checkbox is enforced (both client- and server-side) only when
+    // they click "Pay & Book Now".
+    if (requirePaymentMethod) {
+      if (paymentIn.agreementAccepted !== true) {
+        return { ok: false, error: "You must accept the rental agreement to book online." };
+      }
+      const paymentIntentId = sanitizeText(paymentIn.paymentIntentId, MAX.paymentIntentId);
+      if (!paymentIntentId || !/^pi_[A-Za-z0-9_]{5,95}$/.test(paymentIntentId)) {
+        return { ok: false, error: "Payment information is missing. Please try again." };
+      }
+      payment.paymentIntentId = paymentIntentId;
     }
-    payment = { nonce: paymentNonce, idempotencyKey: idempotencyKey };
   } else if (serviceType === "light_demo") {
     const demoDescription = sanitizeText(jobIn.demoDescription, MAX.long);
     const approximateSize = sanitizeText(jobIn.approximateSize, MAX.short);

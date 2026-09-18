@@ -1,7 +1,11 @@
 // Local, offline test harness for Phase 3C Stage 2.5-v2 — dumpster rental
-// real booking + Braintree payments. See
-// docs/phase-3/stage2.5-rental-payments-v2-proposal.md for the full design
-// this exercises.
+// real booking + Stripe payments. See
+// docs/phase-3/stage2.5-stripe-rental-payments-migration.md for the full
+// design this exercises. This feature was originally built on Braintree
+// (tests/phase3c-stage2.5v2-rental-payments.test.js, preserved on branch
+// phase-3c/stage2.5-rental-payments-v2 as a fallback/reference) and
+// switched to Stripe before any production rollout, staging deployment, or
+// real transaction of any kind.
 //
 // Same approach as every prior phase's test file: "@supabase/supabase-js"
 // is intercepted at require-time and replaced with an in-memory fake — the
@@ -9,11 +13,11 @@
 // stage's SQL migration adds (the partial unique index on
 // bookings(appointment_date, time_window) for booked dumpster rentals, and
 // rental_payments.idempotency_key's UNIQUE constraint) — never the real
-// network, never the production Supabase project. "braintree" is
-// intercepted the same way, with a swappable fake transaction.sale/
-// webhookNotification.parse/verify implementation per test.
+// network, never the production Supabase project. "stripe" is intercepted
+// the same way, with a swappable fake paymentIntents.create/retrieve/
+// update/capture/cancel + webhooks.constructEvent implementation per test.
 //
-// Run with:  node tests/phase3c-stage2.5v2-rental-payments.test.js
+// Run with:  node tests/phase3c-stage2.5v2-stripe-rental-payments.test.js
 // Exits with a non-zero code if any assertion fails.
 
 const Module = require("module");
@@ -55,8 +59,10 @@ class FakeQueryBuilder {
     this.table = table;
     this.db = db;
     this.filters = [];
+    this.notFilters = [];
     this.rangeFilters = [];
     this._order = null;
+    this._limit = null;
     this._insertPayload = null;
     this._updatePayload = null;
     this._deleteMode = false;
@@ -74,6 +80,10 @@ class FakeQueryBuilder {
     this.filters.push({ col: col, in: set });
     return this;
   }
+  not(col, op, val) {
+    this.notFilters.push({ col: col, op: op, val: val });
+    return this;
+  }
   gte(col, val) {
     this.rangeFilters.push({ col: col, val: val, op: "gte" });
     return this;
@@ -84,6 +94,10 @@ class FakeQueryBuilder {
   }
   order(col, opts) {
     this._order = { col: col, asc: !opts || opts.ascending !== false };
+    return this;
+  }
+  limit(n) {
+    this._limit = n;
     return this;
   }
   insert(payload) {
@@ -121,7 +135,10 @@ class FakeQueryBuilder {
     }
 
     let matched = rows.filter(
-      (r) => this.filters.every((f) => (f.in ? f.in.has(r[f.col]) : r[f.col] === f.val)) && this.rangeFilters.every((f) => (f.op === "gte" ? r[f.col] >= f.val : r[f.col] <= f.val))
+      (r) =>
+        this.filters.every((f) => (f.in ? f.in.has(r[f.col]) : r[f.col] === f.val)) &&
+        this.notFilters.every((f) => (f.op === "eq" ? r[f.col] !== f.val : true)) &&
+        this.rangeFilters.every((f) => (f.op === "gte" ? r[f.col] >= f.val : r[f.col] <= f.val))
     );
 
     if (this._updatePayload) {
@@ -145,6 +162,9 @@ class FakeQueryBuilder {
         if (a[col] > b[col]) return asc ? 1 : -1;
         return 0;
       });
+    }
+    if (this._limit != null) {
+      matched = matched.slice(0, this._limit);
     }
 
     if (this._single === "maybeSingle") {
@@ -187,74 +207,157 @@ let currentFakeAnon = null;
 let currentFakeService = null;
 
 // ---------------------------------------------------------------------
-// Fake Braintree — one static gateway object whose method bodies delegate
-// to swappable module-level implementations, reset per test via
-// resetBraintree(). This lets `new braintree.BraintreeGateway({...})`
-// (called fresh inside getBraintreeGateway() on every request, matching
-// real serverless-function statelessness) always return an object backed
-// by whatever this test currently wants it to do.
+// Fake Stripe — one client object whose method bodies delegate to
+// swappable module-level implementations/logs, reset per test via
+// resetStripe(). This lets `new Stripe(secretKey)` (called fresh inside
+// getStripeClient() on every request, matching real serverless-function
+// statelessness) always return an object backed by whatever this test
+// currently wants it to do. `intentStore`/`customerStore` persist real
+// mutable state across calls WITHIN one test (mirroring how a real
+// PaymentIntent's status genuinely changes across create -> capture), reset
+// fresh by resetStripe() between tests.
 // ---------------------------------------------------------------------
-let saleCallLog = [];
-let saleImpl = async () => defaultSaleSuccess();
-let webhookParseImpl = async () => {
-  throw new Error("webhookNotification.parse not configured in this test");
-};
-let webhookVerifyImpl = async (challenge) => "verified-" + challenge;
+let intentStore = {};
+let createIntentCallLog = [];
+let confirmChargeCallLog = []; // admin off-session create+confirm calls (params.confirm === true)
+let captureCallLog = [];
+let cancelCallLog = [];
+let updateCallLog = [];
+let createIntentImpl = null; // (params, options) => intent | throws — override for the initial-checkout create() call
+let captureImpl = null; // (id, params, options) => intent | throws
+let confirmChargeImpl = null; // (params, options) => intent | throws — the admin off-session create+confirm call
+let webhookConstructImpl = null; // (rawBody, sig, secret) => event | throws
 
-// Deliberately "submitted_for_settlement", never "settled" — a real
-// synchronous transaction.sale() response never reports "settled" (that
-// only happens hours later in a nightly batch). Per current Braintree
-// documentation, a transaction in submitted_for_settlement/settling/
-// settled is considered successful; api/book.js/handleApproveCharge()
-// correctly mark payment_status "paid" straight from this response and
-// never wait for anything more "final" than this.
-function defaultSaleSuccess(overrides) {
-  return Object.assign(
+// At least 5 characters after the prefix — api/book.js's validateBooking()
+// requires a real-Stripe-shaped id (/^pi_[A-Za-z0-9_]{5,95}$/), and a plain
+// counter like "pi_1" would fail that length check for the first several
+// dozen ids generated in this file.
+function makeStripeId(prefix) {
+  return prefix + "_test" + String(nextId++).padStart(6, "0");
+}
+
+// A default successful card PaymentMethod shape, matching what Stripe's
+// `expand: ["payment_method"]` returns on a captured PaymentIntent.
+function defaultPaymentMethod(id) {
+  return { id: id || makeStripeId("pm"), card: { brand: "visa", last4: "4242" } };
+}
+
+function stripeCardError(code, message) {
+  const err = new Error(message || "Your card was declined.");
+  err.type = "StripeCardError";
+  err.code = code || "card_declined";
+  return err;
+}
+
+function stripeAuthenticationRequiredError(paymentIntentId) {
+  const err = stripeCardError("authentication_required", "This payment requires additional authentication.");
+  err.raw = { payment_intent: { id: paymentIntentId || makeStripeId("pi") } };
+  return err;
+}
+
+function stripeAmbiguousError() {
+  const err = new Error("ECONNRESET");
+  // Deliberately no `.type` — mirrors a raw network/timeout error, never a
+  // StripeCardError, so the code under test must treat it as ambiguous.
+  return err;
+}
+
+const fakeStripeClient = {
+  customers: {
+    create: async function (params) {
+      const id = makeStripeId("cus");
+      return { id: id, email: params && params.email, name: params && params.name, phone: params && params.phone };
+    },
+  },
+  paymentIntents: {
+    create: async function (params, options) {
+      if (params && params.confirm === true) {
+        confirmChargeCallLog.push({ params: params, options: options });
+        if (confirmChargeImpl) return confirmChargeImpl(params, options);
+        const id = makeStripeId("pi");
+        const intent = { id: id, status: "succeeded", amount: params.amount, currency: params.currency, customer: params.customer, metadata: params.metadata || {}, payment_method: params.payment_method };
+        intentStore[id] = intent;
+        return intent;
+      }
+      createIntentCallLog.push({ params: params, options: options });
+      if (createIntentImpl) return createIntentImpl(params, options);
+      const id = makeStripeId("pi");
+      const intent = { id: id, client_secret: id + "_secret", status: "requires_capture", amount: params.amount, currency: params.currency, customer: params.customer, metadata: Object.assign({}, params.metadata) };
+      intentStore[id] = intent;
+      return intent;
+    },
+    retrieve: async function (id) {
+      const intent = intentStore[id];
+      if (!intent) throw new Error("No such PaymentIntent: " + id);
+      return intent;
+    },
+    update: async function (id, params) {
+      updateCallLog.push({ id: id, params: params });
+      const intent = intentStore[id];
+      if (!intent) throw new Error("No such PaymentIntent: " + id);
+      if (params && params.metadata) Object.assign(intent.metadata, params.metadata);
+      return intent;
+    },
+    capture: async function (id, params, options) {
+      captureCallLog.push({ id: id, params: params, options: options });
+      if (captureImpl) return captureImpl(id, params, options);
+      const intent = intentStore[id];
+      if (!intent) throw new Error("No such PaymentIntent: " + id);
+      intent.status = "succeeded";
+      intent.payment_method = defaultPaymentMethod();
+      return intent;
+    },
+    cancel: async function (id) {
+      cancelCallLog.push(id);
+      const intent = intentStore[id];
+      if (intent) intent.status = "canceled";
+      return intent || { id: id, status: "canceled" };
+    },
+  },
+  webhooks: {
+    constructEvent: function (rawBody, sig, secret) {
+      if (webhookConstructImpl) return webhookConstructImpl(rawBody, sig, secret);
+      throw new Error("webhooks.constructEvent not configured in this test");
+    },
+  },
+};
+
+function resetStripe() {
+  intentStore = {};
+  createIntentCallLog = [];
+  confirmChargeCallLog = [];
+  captureCallLog = [];
+  cancelCallLog = [];
+  updateCallLog = [];
+  createIntentImpl = null;
+  captureImpl = null;
+  confirmChargeImpl = null;
+  webhookConstructImpl = null;
+}
+
+// Seeds an already-authorized (capture_method: manual, status:
+// requires_capture) PaymentIntent directly into the fake's store — a
+// stand-in for "the browser already called POST ?resource=payment-intent
+// and confirmed it via Stripe.js", the same way the Braintree-era file used
+// a fixed nonce string as a stand-in for "Drop-in already tokenized a
+// card." Dedicated tests further down exercise
+// handleCreatePaymentIntent() itself directly.
+function seedAuthorizedIntent(idempotencyKey, overrides) {
+  const id = makeStripeId("pi");
+  const intent = Object.assign(
     {
-      success: true,
-      transaction: {
-        id: "txn-" + nextId++,
-        status: "submitted_for_settlement",
-        processorResponseText: "Approved",
-        customer: { id: "bt-cust-1" },
-        creditCard: { token: "tok-visa-1", last4: "4242", cardType: "Visa" },
-      },
+      id: id,
+      client_secret: id + "_secret",
+      status: "requires_capture",
+      amount: 34900,
+      currency: "usd",
+      customer: makeStripeId("cus"),
+      metadata: { idempotencyKey: idempotencyKey, serviceType: "dumpster_rental" },
     },
     overrides || {}
   );
-}
-
-function declineSaleResult(processorResponseText) {
-  return {
-    success: false,
-    transaction: { status: "processor_declined", processorResponseText: processorResponseText || "Do Not Honor" },
-  };
-}
-
-const fakeBraintreeGateway = {
-  transaction: {
-    sale: async function (options) {
-      saleCallLog.push(options);
-      return saleImpl(options);
-    },
-  },
-  webhookNotification: {
-    parse: function (sig, payload) {
-      return webhookParseImpl(sig, payload);
-    },
-    verify: function (challenge) {
-      return webhookVerifyImpl(challenge);
-    },
-  },
-};
-
-function resetBraintree() {
-  saleCallLog = [];
-  saleImpl = async () => defaultSaleSuccess();
-  webhookParseImpl = async () => {
-    throw new Error("webhookNotification.parse not configured in this test");
-  };
-  webhookVerifyImpl = async (challenge) => "verified-" + challenge;
+  intentStore[id] = intent;
+  return intent;
 }
 
 function interceptModules() {
@@ -269,12 +372,9 @@ function interceptModules() {
         },
       };
     }
-    if (request === "braintree") {
-      return {
-        Environment: { Sandbox: "Sandbox", Production: "Production" },
-        BraintreeGateway: function () {
-          return fakeBraintreeGateway;
-        },
+    if (request === "stripe") {
+      return function FakeStripe() {
+        return fakeStripeClient;
       };
     }
     return originalLoad.call(this, request, parent, isMain);
@@ -295,14 +395,12 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.UPLOAD_TOKEN_SECRET = "mock-upload-token-secret";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
-process.env.BRAINTREE_ENVIRONMENT = "Sandbox";
-process.env.BRAINTREE_MERCHANT_ID = "mock-merchant-id";
-process.env.BRAINTREE_PUBLIC_KEY = "mock-public-key";
-process.env.BRAINTREE_PRIVATE_KEY = "mock-private-key";
-process.env.BRAINTREE_TOKENIZATION_KEY = "mock_sandbox_tokenization_key";
+process.env.STRIPE_SECRET_KEY = "sk_test_mock";
+process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_mock";
+process.env.STRIPE_WEBHOOK_SECRET = "whsec_mock";
 
 const bookHandler = require("../api/book.js");
-const webhookHandler = require("../api/braintree-webhook.js");
+const webhookHandler = require("../api/stripe-webhook.js");
 const bookingHandler = require("../api/admin/booking.js");
 const rentalPricing = require("../api/_lib/rental-pricing");
 const { retryUpdate } = require("../api/_lib/db-retry");
@@ -319,13 +417,12 @@ const { retryUpdate } = require("../api/_lib/db-retry");
 let nextIpOctet = 1;
 function makeReq(opts) {
   opts = opts || {};
-  const isForm = opts.form === true;
-  const bodyStr = opts.body !== undefined ? (isForm ? formEncode(opts.body) : JSON.stringify(opts.body)) : "";
+  const bodyStr = opts.body !== undefined ? JSON.stringify(opts.body) : "";
   return {
     method: opts.method || "GET",
     headers: Object.assign(
       {
-        "content-type": isForm ? "application/x-www-form-urlencoded" : "application/json",
+        "content-type": "application/json",
         "content-length": String(Buffer.byteLength(bodyStr)),
         cookie: opts.cookie || "",
         "x-forwarded-proto": "https",
@@ -338,10 +435,26 @@ function makeReq(opts) {
     socket: { remoteAddress: "127.0.0.1" },
   };
 }
-function formEncode(obj) {
-  return Object.keys(obj)
-    .map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(obj[k]))
-    .join("&");
+
+// A minimal readable-stream-like mock for api/stripe-webhook.js, which
+// disables Vercel's default body parsing (module.exports.config) and reads
+// the raw request body itself via req.on("data"/"end"/"error") — required
+// for Stripe's signature verification, which needs the exact raw bytes,
+// not a re-serialized JSON object. `constructEvent` is faked anyway (see
+// webhookConstructImpl above), so the raw bytes' actual content never
+// matters beyond round-tripping through this mock.
+function makeWebhookReq(opts) {
+  opts = opts || {};
+  const bodyBuf = Buffer.from(opts.rawBody || "", "utf8");
+  return {
+    method: opts.method || "POST",
+    headers: Object.assign({ "stripe-signature": opts.signature || "t=1,v1=mock" }, opts.headers || {}),
+    on: function (event, cb) {
+      if (event === "data") cb(bodyBuf);
+      else if (event === "end") cb();
+      return this;
+    },
+  };
 }
 
 function makeRes() {
@@ -390,7 +503,18 @@ function freshIdempotencyKey() {
   return "test-idem-key-" + idemCounter + "-" + Date.now();
 }
 
-function validDumpsterPayload(overrides) {
+// `seedIntent: false` skips seeding a matching authorized PaymentIntent —
+// used by validation tests that must never reach the Stripe retrieve() call
+// at all. `intentOverrides` lets a test seed an intent with a deliberately
+// wrong status/amount/metadata to exercise the verification checks in
+// handleDumpsterRentalBooking()'s step 2.
+function validDumpsterPayload(overrides, opts) {
+  opts = opts || {};
+  const idempotencyKey = (overrides && overrides.payment && overrides.payment.idempotencyKey) || freshIdempotencyKey();
+  let paymentIntentId;
+  if (opts.seedIntent !== false) {
+    paymentIntentId = (overrides && overrides.payment && overrides.payment.paymentIntentId) || seedAuthorizedIntent(idempotencyKey, opts.intentOverrides).id;
+  }
   const base = {
     serviceType: "dumpster_rental",
     hp: "",
@@ -413,7 +537,7 @@ function validDumpsterPayload(overrides) {
       state: "CO",
       zip: "80202",
     },
-    payment: { nonce: "fake-valid-nonce", idempotencyKey: freshIdempotencyKey(), agreementAccepted: true },
+    payment: { paymentIntentId: paymentIntentId, idempotencyKey: idempotencyKey, agreementAccepted: true },
   };
   return deepMerge(base, overrides || {});
 }
@@ -472,8 +596,7 @@ test("rental-pricing: round2 rounds to the nearest cent", () => {
 
 // =======================================================================
 // 1b. api/_lib/db-retry.js — the shared retry helper for the one class of
-// write worth retrying (recording a Braintree charge that already
-// succeeded). 2026-09-18 readiness pass.
+// write worth retrying (recording a Stripe charge that already succeeded).
 // =======================================================================
 test("db-retry: retryUpdate succeeds immediately when the first attempt has no error", async () => {
   let calls = 0;
@@ -517,11 +640,11 @@ test("db-retry: retryUpdate treats a thrown attempt the same as a returned error
 // =======================================================================
 // 2. GET /api/book — public rental config
 // =======================================================================
-test("GET /api/book: returns tokenization key, pricing, agreement version", async () => {
+test("GET /api/book: returns publishable key, pricing, agreement version", async () => {
   freshDb();
   const res = await run(bookHandler, makeReq({ method: "GET" }));
   assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(res.body.braintree.tokenizationKey, "mock_sandbox_tokenization_key");
+  assert.strictEqual(res.body.stripe.publishableKey, "pk_test_mock");
   assert.strictEqual(res.body.pricing.baseRate, 349.0);
   assert.strictEqual(res.body.pricing.overageTonRate, 90.0);
   assert.strictEqual(res.body.pricing.overageDayRate, 15.0);
@@ -538,39 +661,140 @@ test("GET /api/book: taken delivery slots reflect existing booked dumpster renta
 });
 
 // =======================================================================
-// 3. POST /api/book (dumpster_rental) — validation
+// 3. POST /api/book?resource=payment-intent — PaymentIntent creation
 // =======================================================================
-test("POST dumpster_rental: missing payment.nonce is rejected with 400, no DB or Braintree calls", async () => {
+test("POST payment-intent: creates a manual-capture PaymentIntent with the authoritative $349 amount, setup_future_usage off_session, returns a client secret", async () => {
+  freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(res.body.clientSecret);
+  assert.ok(res.body.paymentIntentId);
+  assert.strictEqual(createIntentCallLog.length, 1);
+  assert.strictEqual(createIntentCallLog[0].params.amount, 34900, "amount must be in cents, computed server-side, never trusted from the client");
+  assert.strictEqual(createIntentCallLog[0].params.currency, "usd");
+  assert.strictEqual(createIntentCallLog[0].params.capture_method, "manual");
+  assert.strictEqual(createIntentCallLog[0].params.setup_future_usage, "off_session");
+  assert.strictEqual(createIntentCallLog[0].options.idempotencyKey, "intent:" + payload.payment.idempotencyKey);
+  assert.strictEqual(createIntentCallLog[0].params.metadata.idempotencyKey, payload.payment.idempotencyKey);
+});
+test("POST payment-intent: a spoofed price field is completely ignored — the server always requests its own authoritative rate", async () => {
+  freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  payload.amount = 1;
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(createIntentCallLog[0].params.amount, 34900);
+});
+test("POST payment-intent: never requires the agreement checkbox or a payment method yet — only the booking fields, agreement is enforced later at finalize", async () => {
+  freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  payload.payment.agreementAccepted = false; // not yet checked — must not block intent creation
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 200);
+});
+test("POST payment-intent: invalid booking fields (e.g. missing material type) are rejected with 400, no Stripe call", async () => {
+  freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({ jobDetails: { materialType: "" } }, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(createIntentCallLog.length, 0);
+});
+test("POST payment-intent: repeat customer (matched phone+email) with a prior Stripe Customer on file reuses it instead of creating a new one", async () => {
   const db = freshDb();
-  resetBraintree();
-  const payload = validDumpsterPayload({ payment: { nonce: "", idempotencyKey: freshIdempotencyKey(), agreementAccepted: true } });
+  resetStripe();
+  db.customers.push({ id: "existing-cust", phone_normalized: "3035550100", email_normalized: "jamie@example.com" });
+  db.bookings.push({ id: "past-booking", customer_id: "existing-cust" });
+  db.rental_payments.push({ id: "past-payment", booking_id: "past-booking", stripe_customer_id: "cus_existing_1", created_at: "2026-01-01T00:00:00Z" });
+
+  const payload = validDumpsterPayload({}, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(createIntentCallLog[0].params.customer, "cus_existing_1", "must reuse the customer's own prior Stripe Customer id");
+});
+test("POST payment-intent: a new customer gets a freshly-created Stripe Customer", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { seedIntent: false });
+  delete payload.payment.paymentIntentId;
+  const res = await run(bookHandler, makeReq({ method: "POST", query: { resource: "payment-intent" }, body: payload }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(createIntentCallLog[0].params.customer, "a Stripe Customer id must be attached even for a first-time customer");
+});
+
+// =======================================================================
+// 4. POST /api/book (dumpster_rental finalize) — validation
+// =======================================================================
+test("POST dumpster_rental: missing payment.paymentIntentId is rejected with 400, no DB or Stripe calls", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: "", idempotencyKey: freshIdempotencyKey(), agreementAccepted: true } }, { seedIntent: false });
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(db.bookings.length, 0);
-  assert.strictEqual(saleCallLog.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
 });
 test("POST dumpster_rental: agreementAccepted !== true is rejected with 400", async () => {
   freshDb();
-  resetBraintree();
-  const payload = validDumpsterPayload({ payment: { nonce: "n", idempotencyKey: freshIdempotencyKey(), agreementAccepted: false } });
+  resetStripe();
+  const idempotencyKey = freshIdempotencyKey();
+  const intent = seedAuthorizedIntent(idempotencyKey);
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: intent.id, idempotencyKey: idempotencyKey, agreementAccepted: false } }, { seedIntent: false });
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 400);
   assert.ok(/agreement/i.test(res.body.error));
 });
 test("POST dumpster_rental: malformed idempotencyKey is rejected with 400", async () => {
   freshDb();
-  resetBraintree();
-  const payload = validDumpsterPayload({ payment: { nonce: "n", idempotencyKey: "!!!", agreementAccepted: true } });
+  resetStripe();
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: "pi_test1", idempotencyKey: "!!!", agreementAccepted: true } }, { seedIntent: false });
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 400);
 });
+test("POST dumpster_rental: a paymentIntentId whose metadata.idempotencyKey doesn't match this request is rejected with 400, no capture attempted", async () => {
+  const db = freshDb();
+  resetStripe();
+  const otherIntent = seedAuthorizedIntent("some-other-checkout-attempt");
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: otherIntent.id, idempotencyKey: freshIdempotencyKey(), agreementAccepted: true } }, { seedIntent: false });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+});
+test("POST dumpster_rental: a PaymentIntent NOT in requires_capture (e.g. never actually confirmed) is rejected with 402, no booking created", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { intentOverrides: { status: "requires_payment_method" } });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 402);
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+});
+test("POST dumpster_rental: an amount mismatch between the PaymentIntent and the authoritative rate is rejected with 400", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { intentOverrides: { amount: 1 } });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+});
 
 // =======================================================================
-// 4. POST /api/book (dumpster_rental) — successful payment
+// 5. POST /api/book (dumpster_rental finalize) — successful payment
 // =======================================================================
-test("POST dumpster_rental: successful payment books the rental, charges the authoritative base rate, vaults the payment method", async () => {
+test("POST dumpster_rental: successful payment books the rental, captures the authoritative base rate, saves the payment method", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const payload = validDumpsterPayload();
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
 
@@ -587,29 +811,17 @@ test("POST dumpster_rental: successful payment books the rental, charges the aut
   assert.strictEqual(db.rental_payments.length, 1);
   assert.strictEqual(db.rental_payments[0].payment_status, "paid");
   assert.strictEqual(db.rental_payments[0].amount_charged, 349.0);
-  assert.strictEqual(db.rental_payments[0].braintree_payment_method_token, "tok-visa-1");
+  assert.ok(db.rental_payments[0].stripe_payment_method_id);
   assert.strictEqual(db.rental_payments[0].payment_method_summary, "Visa ending in 4242");
   assert.strictEqual(db.rental_payments[0].agreement_version, rentalPricing.RENTAL_AGREEMENT_VERSION);
   assert.ok(db.rental_payments[0].agreement_accepted_at);
 
-  assert.strictEqual(saleCallLog.length, 1);
-  assert.strictEqual(saleCallLog[0].amount, "349.00");
-  assert.strictEqual(saleCallLog[0].options.submitForSettlement, true);
-  assert.strictEqual(saleCallLog[0].options.storeInVaultOnSuccess, true);
+  assert.strictEqual(captureCallLog.length, 1);
+  assert.strictEqual(captureCallLog[0].id, payload.payment.paymentIntentId);
 });
-test("POST dumpster_rental: a client-submitted price field is completely ignored — the server always charges its own authoritative rate", async () => {
+test("POST dumpster_rental: notification email includes a Payment section with amount/method/PaymentIntent id", async () => {
   freshDb();
-  resetBraintree();
-  const payload = validDumpsterPayload();
-  payload.amount = 1; // spoofed — not a real field this endpoint reads at all
-  payload.jobDetails.amount = 0.01;
-  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
-  assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(saleCallLog[0].amount, "349.00");
-});
-test("POST dumpster_rental: notification email includes a Payment section with amount/method/transaction id", async () => {
-  freshDb();
-  resetBraintree();
+  resetStripe();
   fetchCalls = [];
   process.env.RESEND_API_KEY = "mock-resend-key";
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
@@ -620,38 +832,48 @@ test("POST dumpster_rental: notification email includes a Payment section with a
   assert.ok(/PAID & CONFIRMED/.test(body.html));
   assert.ok(/Amount Charged/.test(body.html));
   assert.ok(/\$349\.00/.test(body.html));
-  assert.ok(/Braintree Transaction ID/.test(body.html));
+  assert.ok(/Stripe PaymentIntent ID/.test(body.html));
   delete process.env.RESEND_API_KEY;
+});
+test("POST dumpster_rental: metadata.bookingId is attached to the PaymentIntent once the booking exists — a durable, Dashboard-searchable correlation path", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload();
+  await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  const intent = intentStore[payload.payment.paymentIntentId];
+  assert.strictEqual(intent.metadata.bookingId, db.bookings[0].id);
 });
 
 // =======================================================================
-// 5. POST /api/book (dumpster_rental) — decline / processor error
+// 6. POST /api/book (dumpster_rental finalize) — decline / ambiguous error
 // =======================================================================
-test("POST dumpster_rental: a declined payment rolls back every row and frees the slot — no booking is left behind", async () => {
+test("POST dumpster_rental: a definitive decline at capture time rolls back every row and cancels the authorization — no booking is left behind", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => declineSaleResult("Do Not Honor");
-  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  resetStripe();
+  captureImpl = async () => {
+    throw stripeCardError("card_declined", "Your card was declined.");
+  };
+  const payload = validDumpsterPayload();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
 
   assert.strictEqual(res.statusCode, 402);
-  assert.ok(/Do Not Honor/.test(res.body.error));
+  assert.ok(/declined/i.test(res.body.error));
   assert.strictEqual(db.bookings.length, 0, "no booking should remain after a decline");
   assert.strictEqual(db.dumpster_rentals.length, 0);
   assert.strictEqual(db.rental_payments.length, 0);
   assert.strictEqual(db.customers.length, 0, "the customer created for this failed attempt must also be rolled back");
+  assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId], "the authorization must be released on a definitive decline");
 });
-// 2026-09-18 hardening audit, §6: a THROWN Braintree call (network error/
-// timeout) is an AMBIGUOUS outcome — Braintree may have actually charged
-// the customer, and there's no transaction id to check or void. Rolling
-// back here (as an earlier version of this code did) would be dangerous:
-// it would delete the only record of a possibly-successful charge AND
-// free the slot for someone else. The correct behavior is the opposite of
-// the old test's assertion — preserve everything, mark it for review.
-test("POST dumpster_rental: an ambiguous Braintree failure (thrown error) preserves every row instead of rolling back, and never claims a raw stack trace to the customer", async () => {
+// A THROWN, non-StripeCardError capture failure (network error/timeout) is
+// an AMBIGUOUS outcome — Stripe may have actually captured the charge, and
+// there's no definitive answer to check. Rolling back here would be
+// dangerous: it would delete the only record of a possibly-successful
+// charge AND free the slot for someone else.
+test("POST dumpster_rental: an ambiguous Stripe failure (thrown error) preserves every row instead of rolling back, and never leaks a raw stack trace to the customer", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => {
-    throw new Error("ECONNRESET");
+  resetStripe();
+  captureImpl = async () => {
+    throw stripeAmbiguousError();
   };
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(res.statusCode, 502);
@@ -663,27 +885,28 @@ test("POST dumpster_rental: an ambiguous Braintree failure (thrown error) preser
   assert.strictEqual(db.rental_payments.length, 1);
   assert.strictEqual(db.rental_payments[0].payment_status, "error_pending_review");
   assert.ok(/outcome unknown/i.test(db.rental_payments[0].failure_reason));
+  assert.strictEqual(cancelCallLog.length, 0, "an ambiguous outcome must never cancel the authorization either — its fate is unknown");
 });
-test("POST dumpster_rental: resubmitting the same idempotency key after an ambiguous failure is blocked (never silently retried, never a second Braintree call)", async () => {
+test("POST dumpster_rental: resubmitting the same idempotency key after an ambiguous failure is blocked (never silently retried, never a second capture)", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => {
-    throw new Error("ECONNRESET");
+  resetStripe();
+  captureImpl = async () => {
+    throw stripeAmbiguousError();
   };
   const payload = validDumpsterPayload();
   const first = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(first.statusCode, 502);
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(captureCallLog.length, 1);
 
   const second = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(second.statusCode, 409);
   assert.ok(/call or text/i.test(second.body.error));
-  assert.strictEqual(saleCallLog.length, 1, "must never call Braintree again for a key stuck in error_pending_review");
+  assert.strictEqual(captureCallLog.length, 1, "must never capture again for a key stuck in error_pending_review");
   assert.strictEqual(db.bookings.length, 1, "must not create a second booking either");
 });
 test("POST dumpster_rental: rate-schedule snapshot (base rate, included days/tons, overage rates) is durably stored on rental_payments at booking time", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(res.statusCode, 200);
   const rp = db.rental_payments[0];
@@ -693,12 +916,9 @@ test("POST dumpster_rental: rate-schedule snapshot (base rate, included days/ton
   assert.strictEqual(rp.overage_ton_rate, rentalPricing.OVERAGE_TON_RATE);
   assert.strictEqual(rp.overage_day_rate, rentalPricing.OVERAGE_DAY_RATE);
 });
-// 2026-09-18 readiness pass — the full "mark paid" write is now retried,
-// then falls back to a minimal write (status + transaction id only) at a
-// genuinely distinct status rather than silently staying "processing".
-test("POST dumpster_rental: if every attempt at the full 'mark paid' write fails, a minimal fallback write still records paid_reconciliation_required + the transaction id — the customer still gets a booked response either way", async () => {
+test("POST dumpster_rental: if every attempt at the full 'mark paid' write fails, a minimal fallback write still records paid_reconciliation_required + the PaymentIntent id — the customer still gets a booked response either way", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = {
     from: function (table) {
       const builder = new FakeQueryBuilder(table, db);
@@ -717,13 +937,13 @@ test("POST dumpster_rental: if every attempt at the full 'mark paid' write fails
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.booked, true, "the booking is genuinely valid regardless of the local persistence gap — never told anything but the truth");
-  assert.strictEqual(saleCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
+  assert.strictEqual(captureCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
   assert.strictEqual(db.rental_payments[0].payment_status, "paid_reconciliation_required", "the minimal fallback write must still land, distinctly from both 'paid' and 'processing'");
-  assert.ok(db.rental_payments[0].braintree_transaction_id, "the transaction id must be recoverable from our own database even when the full record failed to save");
+  assert.ok(db.rental_payments[0].stripe_payment_intent_id, "the PaymentIntent id must be recoverable from our own database even when the full record failed to save");
 });
 test("POST dumpster_rental: if EVERY write fails — even the minimal fallback — the customer still gets a booked response (truthful either way), and the row is left exactly as it was rather than a fabricated status", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = {
     from: function (table) {
       const builder = new FakeQueryBuilder(table, db);
@@ -742,90 +962,87 @@ test("POST dumpster_rental: if EVERY write fails — even the minimal fallback �
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.booked, true);
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(captureCallLog.length, 1);
   assert.strictEqual(db.rental_payments[0].payment_status, "processing", "the row is genuinely stuck — proves the response's honesty isn't hiding a successful write that didn't happen");
 });
 test("POST dumpster_rental: resubmitting the same idempotency key against a booking stuck at paid_reconciliation_required returns the same booked response, never a 409 — the charge genuinely succeeded", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   db.bookings.push({ id: "existing-booking", customer_id: "c1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
   db.rental_payments.push({ id: "rp1", booking_id: "existing-booking", idempotency_key: "stuck-key-1", payment_status: "paid_reconciliation_required" });
   const res = await run(
     bookHandler,
-    makeReq({ method: "POST", body: validDumpsterPayload({ payment: { nonce: "n", idempotencyKey: "stuck-key-1", agreementAccepted: true } }) })
+    makeReq({ method: "POST", body: validDumpsterPayload({ payment: { paymentIntentId: "pi_stuck1", idempotencyKey: "stuck-key-1", agreementAccepted: true } }, { seedIntent: false }) })
   );
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.booked, true);
-  assert.strictEqual(saleCallLog.length, 0, "must never call Braintree again for a key already known to have succeeded");
-});
-test("POST dumpster_rental: orderId is set to this booking's own id — a durable, Braintree-side correlation path independent of any local DB write outcome", async () => {
-  const db = freshDb();
-  resetBraintree();
-  await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
-  assert.ok(saleCallLog[0].orderId, "orderId must be set on every charge attempt");
-  assert.strictEqual(saleCallLog[0].orderId, db.bookings[0].id, "orderId must be exactly this booking's id, so it's findable in the Braintree dashboard even if Supabase never records the transaction at all");
+  assert.strictEqual(captureCallLog.length, 0, "must never capture again for a key already known to have succeeded");
 });
 test("POST dumpster_rental: after a decline, the SAME delivery slot can be booked again by a new attempt", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => declineSaleResult();
+  resetStripe();
+  captureImpl = async () => {
+    throw stripeCardError();
+  };
   const declined = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(declined.statusCode, 402);
 
-  saleImpl = async () => defaultSaleSuccess();
+  captureImpl = null;
   const succeeded = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
   assert.strictEqual(succeeded.statusCode, 200);
   assert.strictEqual(db.bookings.length, 1);
 });
 
 // =======================================================================
-// 6. POST /api/book (dumpster_rental) — idempotency / duplicate submission
+// 7. POST /api/book (dumpster_rental finalize) — idempotency / duplicate
 // =======================================================================
-test("POST dumpster_rental: resubmitting the same idempotency key after success returns the same booked response without charging again", async () => {
+test("POST dumpster_rental: resubmitting the same idempotency key after success returns the same booked response without capturing again", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const payload = validDumpsterPayload();
   const first = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(first.statusCode, 200);
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(captureCallLog.length, 1);
 
   const second = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(second.statusCode, 200);
   assert.strictEqual(second.body.booked, true);
-  assert.strictEqual(saleCallLog.length, 1, "must not call Braintree a second time for a repeated idempotency key");
+  assert.strictEqual(captureCallLog.length, 1, "must not capture a second time for a repeated idempotency key");
   assert.strictEqual(db.bookings.length, 1, "must not create a second booking");
 });
 test("POST dumpster_rental: a concurrent duplicate (same idempotency key, still processing) gets a clean 409, never a second charge", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   // Simulate the state right after the reservation rows are inserted but
-  // before the (first, in-flight) request's Braintree call has resolved.
+  // before the (first, in-flight) request's capture call has resolved.
   db.rental_payments.push({ id: "rp1", booking_id: "b1", idempotency_key: "shared-key-123", payment_status: "processing" });
-
-  const payload = validDumpsterPayload({ payment: { nonce: "n", idempotencyKey: "shared-key-123", agreementAccepted: true } });
+  const intent = seedAuthorizedIntent("shared-key-123");
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: intent.id, idempotencyKey: "shared-key-123", agreementAccepted: true } }, { seedIntent: false });
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 409);
-  assert.strictEqual(saleCallLog.length, 0, "a concurrent duplicate must never itself call Braintree");
+  assert.strictEqual(captureCallLog.length, 0, "a concurrent duplicate must never itself capture");
 });
 
 // =======================================================================
-// 7. POST /api/book (dumpster_rental) — availability / slot collision
+// 8. POST /api/book (dumpster_rental finalize) — availability / slot
 // =======================================================================
-test("POST dumpster_rental: booking the exact same date+time window as an existing booked rental is rejected with 409, Braintree is never called", async () => {
+test("POST dumpster_rental: booking the exact same date+time window as an existing booked rental is rejected with 409, the authorization is cancelled, capture is never attempted", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   db.bookings.push({ id: "existing-1", customer_id: "c1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
 
-  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  const payload = validDumpsterPayload();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 409);
   assert.ok(/just booked/i.test(res.body.error));
-  assert.strictEqual(saleCallLog.length, 0, "a losing race for a slot must never reach the payment processor");
+  assert.strictEqual(captureCallLog.length, 0, "a losing race for a slot must never reach capture");
+  assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId], "the loser's authorization must be released, not left as a lingering hold");
   assert.strictEqual(db.bookings.length, 1, "only the pre-existing booking should remain — the loser's row and its customer are rolled back");
   assert.strictEqual(db.customers.length, 0);
 });
 test("POST dumpster_rental: a different time window on the same date is NOT blocked", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   db.bookings.push({ id: "existing-1", customer_id: "c1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_1200_1400" });
 
   const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload({ schedule: { date: FAR_FUTURE_DATE, timeWindow: "w_0800_1000" } }) }));
@@ -834,7 +1051,7 @@ test("POST dumpster_rental: a different time window on the same date is NOT bloc
 });
 test("POST dumpster_rental: server-side availability enforcement is independent of anything the client claims — a spoofed 'available' flag changes nothing", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   db.bookings.push({ id: "existing-1", customer_id: "c1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
   const payload = validDumpsterPayload();
   payload.availabilityConfirmed = true; // not a real field — this endpoint never reads it
@@ -843,49 +1060,51 @@ test("POST dumpster_rental: server-side availability enforcement is independent 
 });
 
 // =======================================================================
-// 7b. 2026-09-18 hardening audit §4/§5 — TRUE CONCURRENCY, not sequential
-// duplicate POSTs. Both requests in each test below are fired together via
-// Promise.all so their internal awaits genuinely interleave (Node's
-// single-threaded microtask queue processes each call's pending step in
-// turn, exactly the way two separate serverless invocations hitting the
-// same real Postgres database would race at the DB level) — this is not
-// simulating "request A fully finishes, then request B starts."
+// 8b. TRUE CONCURRENCY, not sequential duplicate POSTs. Both requests in
+// each test below are fired together via Promise.all so their internal
+// awaits genuinely interleave (Node's single-threaded microtask queue
+// processes each call's pending step in turn, exactly the way two separate
+// serverless invocations hitting the same real Postgres database would
+// race at the DB level) — this is not simulating "request A fully
+// finishes, then request B starts."
 // =======================================================================
-test("CONCURRENCY: two simultaneous requests with the SAME idempotency key never both call Braintree — exactly one sale(), no double charge", async () => {
+test("CONCURRENCY: two simultaneous requests with the SAME idempotency key never both capture — exactly one capture(), no double charge, and the shared authorization is never cancelled out from under the winner", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const payload = validDumpsterPayload(); // same idempotency key AND same slot for both
 
   const [resA, resB] = await Promise.all([run(bookHandler, makeReq({ method: "POST", body: payload })), run(bookHandler, makeReq({ method: "POST", body: payload }))]);
 
   const statuses = [resA.statusCode, resB.statusCode].sort();
   assert.deepStrictEqual(statuses, [200, 409], "exactly one of the two concurrent identical requests must succeed");
-  assert.strictEqual(saleCallLog.length, 1, "transaction.sale() must be invoked exactly once — this is the actual proof, not just the HTTP status codes");
+  assert.strictEqual(captureCallLog.length, 1, "capture() must be invoked exactly once — this is the actual proof, not just the HTTP status codes");
+  assert.strictEqual(cancelCallLog.length, 0, "the shared PaymentIntent must never be cancelled here — a same-key sibling might still need it to capture");
   assert.strictEqual(db.bookings.length, 1);
   assert.strictEqual(db.rental_payments.length, 1);
   assert.strictEqual(db.rental_payments[0].payment_status, "paid");
 });
-test("CONCURRENCY: two simultaneous requests for the SAME delivery slot (different idempotency keys) — exactly one booking confirmed, the loser retains no charge at all", async () => {
+test("CONCURRENCY: two simultaneous requests for the SAME delivery slot (different idempotency keys, different PaymentIntents) — exactly one booking confirmed, the loser retains no charge at all and its authorization is released", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const payloadA = validDumpsterPayload();
-  const payloadB = validDumpsterPayload(); // fresh idempotency key, same default slot as A
+  const payloadB = validDumpsterPayload(); // fresh idempotency key + fresh PaymentIntent, same default slot as A
 
   const [resA, resB] = await Promise.all([run(bookHandler, makeReq({ method: "POST", body: payloadA })), run(bookHandler, makeReq({ method: "POST", body: payloadB }))]);
 
   const statuses = [resA.statusCode, resB.statusCode].sort();
   assert.deepStrictEqual(statuses, [200, 409]);
-  assert.strictEqual(saleCallLog.length, 1, "the losing request must be blocked at the DB slot-claim step and never reach Braintree at all — proves Client A and Client B can never BOTH be charged for the last remaining slot");
+  assert.strictEqual(captureCallLog.length, 1, "the losing request must be blocked at the DB slot-claim step and never reach capture at all — proves Client A and Client B can never BOTH be charged for the last remaining slot");
+  assert.strictEqual(cancelCallLog.length, 1, "the loser's own distinct PaymentIntent must be cancelled — never left as a charge of any kind");
   assert.strictEqual(db.bookings.length, 1, "exactly one booking exists — no duplicate active slot");
   assert.strictEqual(db.rental_payments.length, 1, "exactly one payment record — the loser has no retained charge of any kind, not even a stray row");
   assert.strictEqual(db.rental_payments[0].payment_status, "paid");
 });
-test("CONCURRENCY: two simultaneous admin Approve requests for the SAME charge never both call Braintree", async () => {
+test("CONCURRENCY: two simultaneous admin Approve requests for the SAME charge never both confirm a Stripe charge", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const [resA, resB] = await Promise.all([
@@ -895,17 +1114,16 @@ test("CONCURRENCY: two simultaneous admin Approve requests for the SAME charge n
 
   const statuses = [resA.statusCode, resB.statusCode].sort();
   assert.deepStrictEqual(statuses, [200, 409]);
-  assert.strictEqual(saleCallLog.length, 1, "transaction.sale() must be invoked exactly once for two concurrent Approve clicks on the same charge");
+  assert.strictEqual(confirmChargeCallLog.length, 1, "the off-session create+confirm call must be invoked exactly once for two concurrent Approve clicks on the same charge");
   assert.strictEqual(db.rental_additional_charges[0].status, "paid");
 });
 
 // =======================================================================
-// 8. POST /api/book (dumpster_rental) — insert-step failures
+// 9. POST /api/book (dumpster_rental finalize) — insert-step failures
 // =======================================================================
-test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booking and customer, never calls Braintree", async () => {
+test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booking and customer, cancels the authorization, never captures", async () => {
   const db = freshDb();
-  resetBraintree();
-  const originalFrom = createFakeServiceClient(db).from;
+  resetStripe();
   currentFakeService = {
     from: function (table) {
       const builder = new FakeQueryBuilder(table, db);
@@ -919,100 +1137,143 @@ test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booki
       return builder;
     },
   };
-  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  const payload = validDumpsterPayload();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 500);
   assert.strictEqual(db.bookings.length, 0);
   assert.strictEqual(db.customers.length, 0);
-  assert.strictEqual(saleCallLog.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+  assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId]);
 });
 
 // =======================================================================
-// 9. Braintree webhook
-//
-// 2026-09-18 hardening audit correction: transaction_settled/
-// transaction_settlement_declined are ACH/SEPA-only per current Braintree
-// docs, not fired for the card/Venmo transactions this app actually
-// creates — see api/braintree-webhook.js's header. The two tests below
-// covering those kinds exist only to prove the (currently dead, harmless,
-// future-proofing) handler code is itself correct, not because real
-// traffic exercises it. Dispute tests are the ones that matter for actual
-// card/Venmo traffic.
+// 10. Stripe webhook (api/stripe-webhook.js)
 // =======================================================================
-test("webhook GET ?bt_challenge=: answers with webhookNotification.verify()'s output", async () => {
-  resetBraintree();
-  const res = await run(webhookHandler, makeReq({ method: "GET", query: { bt_challenge: "abc123" } }));
-  assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(res.body, "verified-abc123");
-});
-test("webhook POST: an invalid signature is rejected with 400 and nothing is written", async () => {
+test("webhook: an invalid signature is rejected with 400 and nothing is written", async () => {
   const db = freshDb();
-  resetBraintree();
-  webhookParseImpl = async () => {
+  resetStripe();
+  webhookConstructImpl = () => {
     throw new Error("signature does not match");
   };
-  db.rental_payments.push({ id: "rp1", booking_id: "b1", braintree_transaction_id: "txn-1", payment_status: "paid" });
-  const res = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "bad", bt_payload: "x" } }));
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_1", payment_status: "paid" });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(db.rental_payments[0].payment_status, "paid", "must be untouched");
 });
-test("webhook POST: transaction_settlement_declined marks the matching rental_payments row failed", async () => {
+test("webhook: payment_intent.succeeded self-heals a row stuck at paid_reconciliation_required back to paid — a real reconciliation backstop, unlike Braintree's dead settlement webhooks", async () => {
   const db = freshDb();
-  resetBraintree();
-  db.rental_payments.push({ id: "rp1", booking_id: "b1", braintree_transaction_id: "txn-1", payment_status: "paid" });
-  webhookParseImpl = async () => ({ kind: "transaction_settlement_declined", transaction: { id: "txn-1" } });
-  const res = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "sig", bt_payload: "payload" } }));
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_stuck", payment_status: "paid_reconciliation_required" });
+  webhookConstructImpl = () => ({ type: "payment_intent.succeeded", data: { object: { id: "pi_stuck", customer: "cus_1", payment_method: { id: "pm_1", card: { brand: "visa", last4: "4242" } } } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].payment_status, "paid");
+  assert.strictEqual(db.rental_payments[0].payment_method_summary, "Visa ending in 4242");
+});
+test("webhook: payment_intent.succeeded is a no-op for an already-paid row (idempotent, never re-writes)", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_1", payment_status: "paid", payment_method_summary: "Visa ending in 4242", updated_at: "2026-01-01T00:00:00Z" });
+  webhookConstructImpl = () => ({ type: "payment_intent.succeeded", data: { object: { id: "pi_1", customer: "cus_1", payment_method: "pm_1" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].updated_at, "2026-01-01T00:00:00Z", "an already-paid row must never be re-written by a late/duplicate event");
+});
+test("webhook: payment_intent.payment_failed marks a processing row failed, but never downgrades an already-paid row", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_2", payment_status: "processing" });
+  webhookConstructImpl = () => ({ type: "payment_intent.payment_failed", data: { object: { id: "pi_2", last_payment_error: { message: "Card declined." } } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(db.rental_payments[0].payment_status, "failed");
-});
-test("webhook POST: processing the same transaction_settled notification twice is idempotent (Braintree's at-least-once delivery)", async () => {
-  const db = freshDb();
-  resetBraintree();
-  db.rental_payments.push({ id: "rp1", booking_id: "b1", braintree_transaction_id: "txn-2", payment_status: "processing" });
-  webhookParseImpl = async () => ({ kind: "transaction_settled", transaction: { id: "txn-2" } });
 
-  const first = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "sig", bt_payload: "payload" } }));
+  db.rental_payments[0].payment_status = "paid";
+  const res2 = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res2.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].payment_status, "paid", "a late/out-of-order failed event must never downgrade an already-paid row");
+});
+test("webhook: processing the same payment_intent.succeeded notification twice is idempotent (Stripe's at-least-once delivery)", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_3", payment_status: "processing" });
+  webhookConstructImpl = () => ({ type: "payment_intent.succeeded", data: { object: { id: "pi_3", customer: "cus_1", payment_method: "pm_1" } } });
+
+  const first = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(first.statusCode, 200);
   assert.strictEqual(db.rental_payments[0].payment_status, "paid");
 
-  const second = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "sig", bt_payload: "payload" } }));
+  const second = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(second.statusCode, 200);
   assert.strictEqual(db.rental_payments[0].payment_status, "paid", "re-processing the same delivery must land on the same end state, not error or duplicate anything");
 });
-test("webhook POST: dispute_opened records dispute_status without changing payment_status", async () => {
+test("webhook: charge.dispute.created records dispute_status without changing payment_status", async () => {
   const db = freshDb();
-  resetBraintree();
-  db.rental_payments.push({ id: "rp1", booking_id: "b1", braintree_transaction_id: "txn-3", payment_status: "paid" });
-  webhookParseImpl = async () => ({ kind: "dispute_opened", dispute: { transaction: { id: "txn-3" } } });
-  const res = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "sig", bt_payload: "payload" } }));
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_4", payment_status: "paid" });
+  webhookConstructImpl = () => ({ type: "charge.dispute.created", data: { object: { payment_intent: "pi_4", status: "needs_response" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(db.rental_payments[0].dispute_status, "opened");
+  assert.strictEqual(db.rental_payments[0].dispute_status, "needs_response");
   assert.strictEqual(db.rental_payments[0].payment_status, "paid");
 });
-test("webhook POST: settlement events also update a matching rental_additional_charges row when no rental_payments row matches", async () => {
+test("webhook: charge.dispute.closed records the final dispute outcome (won/lost)", async () => {
   const db = freshDb();
-  resetBraintree();
-  db.rental_additional_charges.push({ id: "rac1", booking_id: "b1", braintree_transaction_id: "txn-4", status: "processing" });
-  webhookParseImpl = async () => ({ kind: "transaction_settled", transaction: { id: "txn-4" } });
-  const res = await run(webhookHandler, makeReq({ method: "POST", form: true, body: { bt_signature: "sig", bt_payload: "payload" } }));
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_5", payment_status: "paid", dispute_status: "needs_response" });
+  webhookConstructImpl = () => ({ type: "charge.dispute.closed", data: { object: { payment_intent: "pi_5", status: "lost" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].dispute_status, "lost");
+});
+test("webhook: payment_intent.succeeded also updates a matching rental_additional_charges row when no rental_payments row matches", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_additional_charges.push({ id: "rac1", booking_id: "b1", stripe_payment_intent_id: "pi_6", status: "paid_reconciliation_required" });
+  webhookConstructImpl = () => ({ type: "payment_intent.succeeded", data: { object: { id: "pi_6", customer: "cus_1", payment_method: "pm_1" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(db.rental_additional_charges[0].status, "paid");
 });
+test("webhook: payment_intent.canceled marks a stuck processing row voided", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_7", payment_status: "processing" });
+  webhookConstructImpl = () => ({ type: "payment_intent.canceled", data: { object: { id: "pi_7" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].payment_status, "voided");
+});
+test("webhook: an unrecognized event type is acknowledged with 200 and changes nothing", async () => {
+  const db = freshDb();
+  resetStripe();
+  db.rental_payments.push({ id: "rp1", booking_id: "b1", stripe_payment_intent_id: "pi_8", payment_status: "paid" });
+  webhookConstructImpl = () => ({ type: "customer.created", data: { object: { id: "cus_1" } } });
+  const res = await run(webhookHandler, makeWebhookReq({ rawBody: "{}" }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.rental_payments[0].payment_status, "paid");
+});
+test("webhook: a GET request is rejected with 405 — Stripe never uses a GET-challenge verification step the way Braintree did", async () => {
+  resetStripe();
+  const res = await run(webhookHandler, makeWebhookReq({ method: "GET" }));
+  assert.strictEqual(res.statusCode, 405);
+});
 
 // =======================================================================
-// 10. Admin additional-charge propose/approve workflow
+// 11. Admin additional-charge propose/approve/check-status workflow
 // =======================================================================
-test("admin charges: no admin session -> 401, no DB or Braintree calls", async () => {
+test("admin charges: no admin session -> 401, no DB or Stripe calls", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   currentFakeAnon = createFakeAnonClient();
   const res = await run(bookingHandler, makeReq({ method: "POST", query: { resource: "charges" }, body: { bookingId: "x" } }));
   assert.strictEqual(res.statusCode, 401);
-  assert.strictEqual(saleCallLog.length, 0);
+  assert.strictEqual(confirmChargeCallLog.length, 0);
 });
-test("admin charges: proposing an overweight_tonnage charge computes amount from the current rate and never calls Braintree", async () => {
+test("admin charges: proposing an overweight_tonnage charge computes amount from the current rate and never calls Stripe", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
@@ -1026,11 +1287,11 @@ test("admin charges: proposing an overweight_tonnage charge computes amount from
   assert.strictEqual(res.body.charge.quantity, 1.5);
   assert.strictEqual(res.body.charge.rate, 90.0);
   assert.strictEqual(res.body.charge.amount, 135.0);
-  assert.strictEqual(saleCallLog.length, 0, "a proposal must never move money");
+  assert.strictEqual(confirmChargeCallLog.length, 0, "a proposal must never move money");
 });
 test("admin charges: proposing an additional_days charge computes amount from the day rate", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
@@ -1052,30 +1313,33 @@ test("admin charges: proposing on a non-dumpster-rental booking is rejected", as
   );
   assert.strictEqual(res.statusCode, 400);
 });
-test("admin charges: approving a proposed charge charges the vaulted payment method and marks it paid", async () => {
+test("admin charges: approving a proposed charge confirms an off-session PaymentIntent against the saved Customer/PaymentMethod and marks it paid", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_vaulted_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "paid");
-  assert.strictEqual(saleCallLog.length, 1);
-  assert.strictEqual(saleCallLog[0].amount, "90.00");
-  assert.strictEqual(saleCallLog[0].paymentMethodToken, "tok-vaulted-1");
+  assert.strictEqual(confirmChargeCallLog.length, 1);
+  assert.strictEqual(confirmChargeCallLog[0].params.amount, 9000, "amount must be in cents");
+  assert.strictEqual(confirmChargeCallLog[0].params.customer, "cus_vaulted_1");
+  assert.strictEqual(confirmChargeCallLog[0].params.payment_method, "pm_vaulted_1");
+  assert.strictEqual(confirmChargeCallLog[0].params.off_session, true);
+  assert.strictEqual(confirmChargeCallLog[0].params.confirm, true);
   assert.strictEqual(db.rental_additional_charges[0].approved_by, ADMIN_EMAIL);
   assert.ok(db.rental_additional_charges[0].approved_at);
 });
 test("admin charges: approving ignores any client-submitted amount — only the row's own snapshotted amount is ever charged", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const res = await run(
@@ -1083,89 +1347,156 @@ test("admin charges: approving ignores any client-submitted amount — only the 
     makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve", amount: 1 } })
   );
   assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(saleCallLog[0].amount, "90.00");
+  assert.strictEqual(confirmChargeCallLog[0].params.amount, 9000);
 });
 test("admin charges: a second concurrent Approve on the same charge is rejected with 409, never a second charge", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const first = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(first.statusCode, 200);
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(confirmChargeCallLog.length, 1);
 
   const second = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(second.statusCode, 409);
-  assert.strictEqual(saleCallLog.length, 1, "approving an already-processed charge must never call Braintree again");
+  assert.strictEqual(confirmChargeCallLog.length, 1, "approving an already-processed charge must never call Stripe again");
 });
 test("admin charges: a declined approved charge is recorded as failed with a reason, admin can see it and retry later", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => declineSaleResult("Insufficient Funds");
+  resetStripe();
+  confirmChargeImpl = async () => {
+    throw stripeCardError("insufficient_funds", "Insufficient funds.");
+  };
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "failed");
-  assert.ok(/Insufficient Funds/.test(res.body.charge.failureReason));
+  assert.ok(/insufficient funds/i.test(res.body.charge.failureReason));
 });
 test("admin charges: a 'failed' (cleanly declined) charge IS safely retryable — a second Approve after the decline succeeds and charges exactly once more", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => declineSaleResult("Insufficient Funds");
+  resetStripe();
+  confirmChargeImpl = async () => {
+    throw stripeCardError("insufficient_funds", "Insufficient funds.");
+  };
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const first = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(first.body.charge.status, "failed");
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(confirmChargeCallLog.length, 1);
 
   // Customer presumably fixed their card — admin clicks Approve again.
-  saleImpl = async () => defaultSaleSuccess();
+  confirmChargeImpl = null;
   const second = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(second.statusCode, 200);
   assert.strictEqual(second.body.charge.status, "paid");
-  assert.strictEqual(saleCallLog.length, 2, "exactly one more call for the retry — not a duplicate of the first, not blocked");
+  assert.strictEqual(confirmChargeCallLog.length, 2, "exactly one more call for the retry — not a duplicate of the first, not blocked");
   assert.strictEqual(db.rental_additional_charges[0].failure_reason, null, "the stale decline reason must be cleared once the retry succeeds");
 });
-test("admin charges: an ambiguous Braintree failure (thrown error) during approval is marked error_pending_review and is NOT retryable via Approve again", async () => {
+test("admin charges: an ambiguous Stripe failure (thrown error) during approval is marked error_pending_review and is NOT retryable via Approve again", async () => {
   const db = freshDb();
-  resetBraintree();
-  saleImpl = async () => {
-    throw new Error("ECONNRESET");
+  resetStripe();
+  confirmChargeImpl = async () => {
+    throw stripeAmbiguousError();
   };
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const first = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(first.statusCode, 200);
   assert.strictEqual(first.body.charge.status, "error_pending_review");
   assert.ok(/outcome unknown/i.test(first.body.charge.failureReason));
-  assert.strictEqual(saleCallLog.length, 1);
+  assert.strictEqual(confirmChargeCallLog.length, 1);
 
   // Admin (or a naive double-click) tries Approve again — must be refused,
   // never silently retried, since the first attempt's outcome is unknown.
-  saleImpl = async () => defaultSaleSuccess();
+  confirmChargeImpl = null;
   const second = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(second.statusCode, 409);
-  assert.strictEqual(saleCallLog.length, 1, "must never call Braintree again for a charge stuck in error_pending_review");
+  assert.strictEqual(confirmChargeCallLog.length, 1, "must never call Stripe again for a charge stuck in error_pending_review");
 });
-// 2026-09-18 readiness pass — the "mark paid" write is now retried before
-// falling back, and the fallback outcome is a genuinely distinct status
-// (never a comforting "paid" the database doesn't actually reflect).
-test("admin charges: if every attempt at the full 'mark paid' write fails, a minimal fallback write still records paid_reconciliation_required + the transaction id", async () => {
+// Stripe-specific — no Braintree equivalent existed. An off-session
+// confirmation that needs Strong Customer Authentication the customer
+// isn't present to complete must never be falsely marked paid, and must
+// never be blindly retried (retrying the same off-session confirmation
+// would most likely fail identically, or worse, create ambiguity about
+// which attempt the customer actually authenticated).
+test("admin charges: an off-session confirmation requiring customer authentication is marked requires_customer_action — never falsely paid, never retryable via Approve", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
+  confirmChargeImpl = async () => {
+    throw stripeAuthenticationRequiredError("pi_needs_auth_1");
+  };
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
+
+  const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.status, "requires_customer_action");
+  assert.strictEqual(db.rental_additional_charges[0].stripe_payment_intent_id, "pi_needs_auth_1");
+
+  // A naive re-Approve must be refused — this state is deliberately
+  // excluded from the retryable set.
+  confirmChargeImpl = null;
+  const retry = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
+  assert.strictEqual(retry.statusCode, 409);
+  assert.strictEqual(confirmChargeCallLog.length, 1, "must never attempt a second off-session confirmation for a charge stuck needing customer authentication");
+});
+test("admin charges: check-status on a requires_customer_action charge advances it to paid once Stripe confirms the customer completed authentication — a safe, non-charging read", async () => {
+  const db = freshDb();
+  resetStripe();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  intentStore["pi_needs_auth_2"] = { id: "pi_needs_auth_2", status: "succeeded", payment_method: "pm_1" };
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "requires_customer_action", stripe_payment_intent_id: "pi_needs_auth_2" });
+
+  const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "check-status" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.status, "paid");
+  assert.strictEqual(confirmChargeCallLog.length, 0, "check-status must never itself create or confirm a charge");
+});
+test("admin charges: check-status on a requires_customer_action charge marks it failed (safely retryable) once Stripe confirms the customer never completed authentication", async () => {
+  const db = freshDb();
+  resetStripe();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  intentStore["pi_needs_auth_3"] = { id: "pi_needs_auth_3", status: "canceled" };
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "requires_customer_action", stripe_payment_intent_id: "pi_needs_auth_3" });
+
+  const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "check-status" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.status, "failed");
+});
+test("admin charges: check-status leaves a still-pending requires_customer_action charge unchanged", async () => {
+  const db = freshDb();
+  resetStripe();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  intentStore["pi_needs_auth_4"] = { id: "pi_needs_auth_4", status: "requires_action" };
+  db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "requires_customer_action", stripe_payment_intent_id: "pi_needs_auth_4" });
+
+  const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "check-status" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.status, "requires_customer_action");
+});
+test("admin charges: if every attempt at the full 'mark paid' write fails, a minimal fallback write still records paid_reconciliation_required + the PaymentIntent id", async () => {
+  const db = freshDb();
+  resetStripe();
   currentFakeService = {
     from: function (table) {
       const builder = new FakeQueryBuilder(table, db);
@@ -1182,23 +1513,23 @@ test("admin charges: if every attempt at the full 'mark paid' write fails, a min
     },
   };
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "paid_reconciliation_required", "must never report a plain 'paid' the database doesn't actually reflect");
-  assert.ok(res.body.charge.braintreeTransactionId, "the transaction id must still reach the response even though the full record failed to save");
+  assert.ok(res.body.charge.stripePaymentIntentId, "the PaymentIntent id must still reach the response even though the full record failed to save");
   assert.ok(res.body.warning);
-  assert.strictEqual(saleCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
+  assert.strictEqual(confirmChargeCallLog.length, 1, "must not attempt to charge a second time trying to recover from a local DB write failure");
   // The minimal fallback write DID land in the (fake) database, even
   // though the full one never did.
   assert.strictEqual(db.rental_additional_charges[0].status, "paid_reconciliation_required");
-  assert.strictEqual(db.rental_additional_charges[0].braintree_transaction_id, res.body.charge.braintreeTransactionId);
+  assert.strictEqual(db.rental_additional_charges[0].stripe_payment_intent_id, res.body.charge.stripePaymentIntentId);
 });
 test("admin charges: if EVERY write fails — even the minimal fallback — the response still reports paid_reconciliation_required rather than a false 'paid'", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = {
     from: function (table) {
       const builder = new FakeQueryBuilder(table, db);
@@ -1215,30 +1546,30 @@ test("admin charges: if EVERY write fails — even the minimal fallback — the 
     },
   };
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "paid_reconciliation_required");
-  assert.ok(res.body.charge.braintreeTransactionId, "the transaction id is still surfaced to the admin even though nothing could be persisted");
+  assert.ok(res.body.charge.stripePaymentIntentId, "the PaymentIntent id is still surfaced to the admin even though nothing could be persisted");
   assert.ok(res.body.warning);
   // Confirms the database genuinely could not be updated at all — the row
   // is stuck at "processing" (the last write that DID succeed, the
-  // interim approved->processing transition before the Braintree call),
+  // interim approved->processing transition before the Stripe call),
   // proving the response's honesty rather than a fabricated success.
   assert.strictEqual(db.rental_additional_charges[0].status, "processing");
 });
-test("admin charges: orderId links the Braintree transaction back to the booking and charge, set independent of any local DB write outcome", async () => {
+test("admin charges: metadata links the PaymentIntent back to the booking and charge, set independent of any local DB write outcome", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, braintree_payment_method_token: "tok-vaulted-1" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_vaulted_1" });
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
 
   await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
-  assert.strictEqual(saleCallLog[0].orderId, BOOKING_ID + "-charge-" + CHARGE_ID);
+  assert.deepStrictEqual(confirmChargeCallLog[0].params.metadata, { bookingId: BOOKING_ID, chargeId: CHARGE_ID });
 });
 test("admin charges: proposing overweight_tonnage uses THIS booking's own locked-in rate, not the current global rate, when they differ", async () => {
   const db = freshDb();
@@ -1270,16 +1601,16 @@ test("admin charges: proposing on a booking with no rental_payments row of its o
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.rate, rentalPricing.OVERAGE_TON_RATE);
 });
-test("admin charges: approving a booking with no payment method on file fails cleanly without calling Braintree", async () => {
+test("admin charges: approving a booking with no payment method on file fails cleanly without calling Stripe", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.rental_additional_charges.push({ id: CHARGE_ID, booking_id: BOOKING_ID, charge_type: "overweight_tonnage", quantity: 1, rate: 90, amount: 90, status: "proposed" });
   const res = await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "failed");
-  assert.strictEqual(saleCallLog.length, 0);
+  assert.strictEqual(confirmChargeCallLog.length, 0);
 });
 test("admin charges: GET lists charges for a booking, newest first", async () => {
   const db = freshDb();
@@ -1304,7 +1635,7 @@ test("admin booking detail (GET, no resource param): includes payment info for a
     payment_status: "paid",
     amount_charged: 349,
     payment_method_summary: "Visa ending in 4242",
-    braintree_transaction_id: "txn-9",
+    stripe_payment_intent_id: "pi_9",
     agreement_version: "2026-09-18",
     agreement_accepted_at: "2026-09-18T12:00:00Z",
     dispute_status: null,
@@ -1314,7 +1645,7 @@ test("admin booking detail (GET, no resource param): includes payment info for a
   assert.strictEqual(res.body.payment.status, "paid");
   assert.strictEqual(res.body.payment.amountCharged, 349);
   assert.strictEqual(res.body.payment.methodSummary, "Visa ending in 4242");
-  assert.strictEqual(res.body.payment.transactionId, "txn-9");
+  assert.strictEqual(res.body.payment.transactionId, "pi_9");
 });
 test("admin booking detail (GET): payment is null for a booking with no rental_payments row (e.g. an admin-created dumpster rental)", async () => {
   const db = freshDb();
@@ -1326,7 +1657,7 @@ test("admin booking detail (GET): payment is null for a booking with no rental_p
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.payment, null);
 });
-test("admin booking detail (GET): exposes failureReason for a payment stuck in error_pending_review, so the admin sees why without opening Braintree first", async () => {
+test("admin booking detail (GET): exposes failureReason for a payment stuck in error_pending_review, so the admin sees why without opening Stripe first", async () => {
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
@@ -1337,7 +1668,7 @@ test("admin booking detail (GET): exposes failureReason for a payment stuck in e
     booking_id: BOOKING_ID,
     payment_status: "error_pending_review",
     amount_charged: 349,
-    failure_reason: "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action.",
+    failure_reason: "Stripe capture request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for PaymentIntent pi_10 before taking any action.",
   });
   const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
   assert.strictEqual(res.statusCode, 200);
@@ -1346,11 +1677,11 @@ test("admin booking detail (GET): exposes failureReason for a payment stuck in e
 });
 
 // =======================================================================
-// 11. Existing junk_removal/light_demo behavior is unaffected
+// 12. Existing junk_removal/light_demo behavior is unaffected
 // =======================================================================
 test("POST /api/book: junk_removal booking still succeeds exactly as before, no payment fields required, status left unset", async () => {
   const db = freshDb();
-  resetBraintree();
+  resetStripe();
   const res = await run(
     bookHandler,
     makeReq({
@@ -1367,7 +1698,7 @@ test("POST /api/book: junk_removal booking still succeeds exactly as before, no 
   );
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(db.bookings[0].status, undefined, "junk_removal must still never set status explicitly");
-  assert.strictEqual(saleCallLog.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
 });
 
 // ---------------------------------------------------------------------

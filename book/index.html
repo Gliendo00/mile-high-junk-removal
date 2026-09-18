@@ -472,7 +472,7 @@
         <div class="card elev-sm" style="margin-bottom:16px">
           <div class="card-title">Payment</div>
           <p class="field-note" id="payment-config-error" hidden>Online payment isn't available right now. Please call or text <a href="tel:3039901812">303-990-1812</a> to book.</p>
-          <div id="braintree-dropin-container" style="margin-top:10px"></div>
+          <div id="stripe-payment-element-container" style="margin-top:10px"></div>
         </div>
 
         <div class="wizard-actions" id="payment-actions">
@@ -551,13 +551,13 @@
 </footer>
 
 <script src="../nav.js"></script>
-<!-- Braintree Drop-in UI — official hosted script, required by Braintree's
-     own integration model (never self-bundled/npm-packaged for a live
-     payment form). Only exercised for the dumpster_rental service type;
-     loaded unconditionally here since service type isn't known until step
-     1, but book.js never calls into it unless serviceType ===
-     'dumpster_rental'. -->
-<script src="https://js.braintreegateway.com/web/dropin/1.48.0/js/dropin.min.js"></script>
+<!-- Stripe.js — official hosted script, required by Stripe's own PCI-
+     compliance model (never self-bundled/npm-packaged for a live payment
+     form; must always load fresh from js.stripe.com). Only exercised for
+     the dumpster_rental service type; loaded unconditionally here since
+     service type isn't known until step 1, but book.js never calls into
+     it unless serviceType === 'dumpster_rental'. -->
+<script src="https://js.stripe.com/v3/"></script>
 <script src="book.js"></script>
 </body>
 </html>

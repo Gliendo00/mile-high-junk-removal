@@ -16,7 +16,7 @@ const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normaliz
 const { TIME_WINDOW_DEFS } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
-const { getBraintreeGateway } = require("../_lib/braintree-client");
+const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
 
 const BUCKET = "booking-photos";
@@ -103,7 +103,7 @@ module.exports = async (req, res) => {
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
       supabase
         .from("rental_payments")
-        .select("payment_status, amount_charged, payment_method_summary, braintree_transaction_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason")
+        .select("payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason")
         .eq("booking_id", id)
         .maybeSingle(),
     ]);
@@ -200,15 +200,15 @@ module.exports = async (req, res) => {
             placementNotes: dumpster.placement_notes,
           }
         : null,
-      // Never card data — only what Braintree itself already returns as
+      // Never card data — only what Stripe itself already returns as
       // display-safe (a "Visa ending in 4242"-style summary, its own
-      // transaction id). See sql/2026-09-18_...rental-payments.sql.
+      // PaymentIntent id). See sql/2026-09-18_...stripe-rental-payments.sql.
       payment: payment
         ? {
             status: payment.payment_status,
             amountCharged: payment.amount_charged,
             methodSummary: payment.payment_method_summary,
-            transactionId: payment.braintree_transaction_id,
+            transactionId: payment.stripe_payment_intent_id,
             agreementVersion: payment.agreement_version,
             agreementAcceptedAt: payment.agreement_accepted_at,
             disputeStatus: payment.dispute_status,
@@ -932,16 +932,18 @@ async function handleUpdate(req, res) {
 }
 
 // ---------------------------------------------------------------------
-// Phase 3C Stage 2.5-v2 — additional-charge propose/approve/list
+// Phase 3C Stage 2.5-v2 — additional-charge propose/approve/check-status
 // (?resource=charges). See
-// docs/phase-3/stage2.5-rental-payments-v2-proposal.md §7 for the full
-// design. State machine: proposed -> approved -> processing ->
-// paid/failed. A PROPOSAL NEVER CALLS BRAINTREE — it only computes and
-// records an amount from api/_lib/rental-pricing.js's rates (or, for
-// "other", a manually-entered flat amount) and writes status: "proposed".
-// Only handleApproveCharge, and only for a row it itself just transitioned
-// from "proposed" to "approved" in the same request, ever submits a
-// transaction — a calculation is never authorization to charge.
+// docs/phase-3/stage2.5-stripe-rental-payments-migration.md §2.5/§2.6 for
+// the full design. State machine: proposed -> approved -> processing ->
+// paid/failed/requires_customer_action. A PROPOSAL NEVER CALLS STRIPE — it
+// only computes and records an amount from api/_lib/rental-pricing.js's
+// rates (or, for "other", a manually-entered flat amount) and writes
+// status: "proposed". Only handleApprove, and only for a row it itself
+// just transitioned from "proposed" to "approved" in the same request,
+// ever submits a charge — a calculation is never authorization to charge.
+// handleCheckStatus is a separate, deliberately non-charging read-only
+// reconciliation action — see its own header comment below.
 // ---------------------------------------------------------------------
 
 const CHARGE_TYPES = ["overweight_tonnage", "additional_days", "other"];
@@ -961,7 +963,7 @@ function serializeCharge(row) {
     proposedAt: row.proposed_at,
     approvedBy: row.approved_by,
     approvedAt: row.approved_at,
-    braintreeTransactionId: row.braintree_transaction_id,
+    stripePaymentIntentId: row.stripe_payment_intent_id,
     failureReason: row.failure_reason,
     disputeStatus: row.dispute_status,
     createdAt: row.created_at,
@@ -1106,33 +1108,13 @@ async function handleProposeCharge(req, res, session) {
   }
 }
 
-// PATCH ?resource=charges { id, action: "approve" } — approve AND process
-// an additional charge in one atomic admin action. The UPDATE that
-// transitions to "approved" is conditioned on the row's CURRENT status
-// still being "proposed" OR "failed" (`.in("status", [...])`, the same
-// optimistic-concurrency-style guard handleUpdate() above uses for
-// `updated_at`) — a second concurrent "Approve" click on the same charge
-// matches zero rows here and gets a clean "already processed" response,
-// never a second Braintree submission. Only a row THIS request just
-// approved is ever charged.
-//
-// "failed" is deliberately retryable (2026-09-18 hardening audit, §8) — a
-// clean decline (insufficient funds, expired card, etc.) is exactly the
-// kind of thing an admin should be able to try again after talking to the
-// client. "error_pending_review" is deliberately NOT in this list: that
-// status means a PRIOR Braintree call for this charge had an ambiguous
-// outcome (see markChargeErrorPendingReview below) — retrying it here
-// could double-charge if the ambiguous attempt actually succeeded, so it
-// can only be resolved by a human checking the Braintree dashboard
-// directly, never by clicking Approve again.
+// PATCH ?resource=charges { id, action: "approve" | "check-status" }.
+// Dispatches on body.action: "approve" (the money-moving action — see
+// handleApprove() below) or "check-status" (a safe, non-charging
+// reconciliation re-fetch — see handleCheckStatus() below, only ever
+// useful for a charge stuck at "requires_customer_action" or
+// "error_pending_review").
 async function handleApproveCharge(req, res, session) {
-  const supabase = getServiceClient();
-  if (!supabase) {
-    console.error("Admin approve charge failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
-    res.status(500).json({ error: "Admin data is not available right now." });
-    return;
-  }
-
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const id = typeof body.id === "string" ? body.id.trim() : "";
   if (!id || !UUID_RE.test(id)) {
@@ -1140,8 +1122,38 @@ async function handleApproveCharge(req, res, session) {
     return;
   }
   const action = typeof body.action === "string" ? body.action.trim() : "";
-  if (action !== "approve") {
-    res.status(400).json({ error: "Invalid action." });
+  if (action === "approve") return handleApprove(id, res, session);
+  if (action === "check-status") return handleCheckStatus(id, res);
+  res.status(400).json({ error: "Invalid action." });
+}
+
+// Approve AND process an additional charge in one atomic admin action —
+// the money-moving path. The UPDATE that transitions to "approved" is
+// conditioned on the row's CURRENT status still being "proposed" OR
+// "failed" (`.in("status", [...])`, the same optimistic-concurrency-style
+// guard handleUpdate() above uses for `updated_at`) — a second concurrent
+// "Approve" click on the same charge matches zero rows here and gets a
+// clean "already processed" response, never a second Stripe confirmation.
+// Only a row THIS request just approved is ever charged.
+//
+// "failed" is deliberately retryable — a clean decline (insufficient
+// funds, expired card, etc.) is exactly the kind of thing an admin should
+// be able to try again after talking to the client. "error_pending_review"
+// and "requires_customer_action" are deliberately NOT in this list:
+// - "error_pending_review" means a PRIOR Stripe call for this charge had
+//   an ambiguous outcome — retrying it here could double-charge if the
+//   ambiguous attempt actually succeeded.
+// - "requires_customer_action" (Stripe-specific) means the off-session
+//   confirmation attempt needs Strong Customer Authentication the
+//   customer isn't present to complete — clicking Approve again would
+//   just re-attempt the same off-session confirmation and most likely
+//   fail identically. Both can only be resolved via handleCheckStatus()
+//   above, never by re-approving.
+async function handleApprove(id, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin approve charge failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
     return;
   }
 
@@ -1167,21 +1179,22 @@ async function handleApproveCharge(req, res, session) {
 
     const paymentRes = await supabase
       .from("rental_payments")
-      .select("braintree_payment_method_token")
+      .select("stripe_customer_id, stripe_payment_method_id")
       .eq("booking_id", approvedRow.booking_id)
       .maybeSingle();
     if (paymentRes.error) throw paymentRes.error;
-    const paymentMethodToken = paymentRes.data && paymentRes.data.braintree_payment_method_token;
+    const stripeCustomerId = paymentRes.data && paymentRes.data.stripe_customer_id;
+    const paymentMethodId = paymentRes.data && paymentRes.data.stripe_payment_method_id;
 
-    if (!paymentMethodToken) {
+    if (!stripeCustomerId || !paymentMethodId) {
       const failed = await markChargeFailed(supabase, id, "No payment method on file for this booking.");
       res.status(200).json({ ok: true, charge: serializeCharge(failed) });
       return;
     }
 
-    const gateway = getBraintreeGateway();
-    if (!gateway) {
-      console.error("Admin approve charge failed: BRAINTREE_* environment variables not configured");
+    const stripe = getStripeClient();
+    if (!stripe) {
+      console.error("Admin approve charge failed: STRIPE_SECRET_KEY not configured");
       const failed = await markChargeFailed(supabase, id, "Payment processing is not configured.");
       res.status(200).json({ ok: true, charge: serializeCharge(failed) });
       return;
@@ -1189,32 +1202,62 @@ async function handleApproveCharge(req, res, session) {
 
     await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
 
-    // 2026-09-18 hardening audit, §6/§8 — same load-bearing distinction as
-    // api/book.js's own sale() call: a THROWN error here means Braintree
-    // gave no definitive answer (network/timeout/gateway error) — the
-    // charge may have actually gone through. That is never treated as
-    // "failed" (which this endpoint's own Approve button would let an
-    // admin retry) — it's marked "error_pending_review" instead, which is
-    // deliberately excluded from the retry-eligible statuses above, so a
-    // human must check the Braintree dashboard before anything happens to
-    // this charge again.
-    // 2026-09-18 readiness pass — orderId (a standard, Control-Panel-
-    // searchable Braintree field) links this transaction back to both the
-    // charge and its booking, set as part of the SAME request that
-    // creates the charge — durable on Braintree's side regardless of
-    // whether any write below succeeds. Only an internal id, never
-    // customer data.
-    let saleResult;
+    // The load-bearing distinction below mirrors api/book.js's own
+    // capture() call:
+    //   - err.type === "StripeCardError" with err.code ===
+    //     "authentication_required": Stripe's documented behavior for an
+    //     off-session confirmation the card issuer won't allow without
+    //     Strong Customer Authentication — the customer isn't present to
+    //     complete it. Modeled as its own explicit state
+    //     ("requires_customer_action"), never falsely marked paid and
+    //     never blindly retried (see handleApprove()'s own header comment).
+    //   - Any other StripeCardError is a DEFINITIVE decline — Stripe
+    //     confirms no money moved, so "failed" (safely retryable via
+    //     Approve again) is correct.
+    //   - Any other thrown error (network/timeout/API error) is AMBIGUOUS —
+    //     no definitive answer, the charge may have actually gone through
+    //     — marked "error_pending_review" for a human to check the Stripe
+    //     Dashboard, never auto-retried.
+    // metadata.bookingId/chargeId (standard, Dashboard-searchable Stripe
+    // fields) link this PaymentIntent back to both the charge and its
+    // booking, set as part of the SAME request that creates it — durable
+    // on Stripe's side regardless of whether any write below succeeds.
+    // Only internal ids, never customer data.
+    let intent;
     try {
-      saleResult = await gateway.transaction.sale({
-        amount: approvedRow.amount.toFixed(2),
-        paymentMethodToken: paymentMethodToken,
-        orderId: approvedRow.booking_id + "-charge-" + id,
-        options: { submitForSettlement: true },
-      });
+      intent = await stripe.paymentIntents.create(
+        {
+          amount: Math.round(approvedRow.amount * 100),
+          currency: "usd",
+          customer: stripeCustomerId,
+          payment_method: paymentMethodId,
+          off_session: true,
+          confirm: true,
+          metadata: { bookingId: approvedRow.booking_id, chargeId: id },
+        },
+        { idempotencyKey: "charge:" + id }
+      );
     } catch (err) {
+      if (err && err.type === "StripeCardError" && err.code === "authentication_required") {
+        const piId = err.raw && err.raw.payment_intent && err.raw.payment_intent.id;
+        const pending = await markChargeRequiresCustomerAction(
+          supabase,
+          id,
+          piId,
+          "This card's issuer requires the customer to authenticate this charge before it can be completed off-session. Use \"Check Status\" after the customer has authenticated, or contact them to run a fresh, on-session payment."
+        );
+        res.status(200).json({ ok: true, charge: serializeCharge(pending) });
+        return;
+      }
+      if (err && err.type === "StripeCardError") {
+        // A definitive decline — Stripe confirms no money moved, so
+        // "failed" (safely retryable via Approve again) is correct here.
+        const failed = await markChargeFailed(supabase, id, err.message || "Payment declined.");
+        res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+        return;
+      }
       console.error(
-        "AMBIGUOUS CHARGE OUTCOME — Braintree call threw, actual result unknown. Check the Braintree dashboard for a transaction matching chargeId=" +
+        "AMBIGUOUS CHARGE OUTCOME — Stripe call threw, actual result unknown. Check the Stripe Dashboard for a PaymentIntent matching chargeId=" +
           id +
           " bookingId=" +
           approvedRow.booking_id +
@@ -1226,29 +1269,29 @@ async function handleApproveCharge(req, res, session) {
       const pending = await markChargeErrorPendingReview(
         supabase,
         id,
-        "Braintree request failed/timed out before a response was received. Outcome unknown — check the Braintree dashboard for a matching transaction before taking any action."
+        "Stripe request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for a matching PaymentIntent before taking any action."
       );
       res.status(200).json({ ok: true, charge: serializeCharge(pending) });
       return;
     }
 
-    if (!saleResult || !saleResult.success) {
-      // A definitive decline — Braintree confirms no money moved, so
-      // "failed" (safely retryable via Approve again) is correct here.
-      const reason = (saleResult && saleResult.transaction && saleResult.transaction.processorResponseText) || (saleResult && saleResult.message) || "Payment declined.";
-      const failed = await markChargeFailed(supabase, id, reason);
-      res.status(200).json({ ok: true, charge: serializeCharge(failed) });
+    if (!intent || intent.status !== "succeeded") {
+      // Defensive: confirm:true resolving without throwing but not
+      // reaching "succeeded" shouldn't normally happen for an off-session
+      // card confirmation, but is treated as requiring review rather than
+      // assumed safe.
+      const pending = await markChargeRequiresCustomerAction(supabase, id, intent && intent.id, "Stripe returned an unexpected status (" + (intent && intent.status) + ") for this off-session charge. Use \"Check Status\" to re-check, or contact the customer for a fresh payment.");
+      res.status(200).json({ ok: true, charge: serializeCharge(pending) });
       return;
     }
 
-    // 2026-09-18 readiness pass — same bounded retry-then-minimal-fallback
-    // saga step as api/book.js's own post-charge write (see
-    // docs/phase-3/stage2.5-rental-payments-v2-readiness-pass.md §2-3):
-    // the charge has already happened; everything below is best-effort
-    // persistence of that fact, never a condition for the response.
+    // The charge has already happened; everything below is best-effort
+    // persistence of that fact, never a condition for the response — same
+    // bounded retry-then-minimal-fallback saga step as api/book.js's own
+    // post-capture write.
     const { data: paidRow, error: paidErr } = await supabase
       .from("rental_additional_charges")
-      .update({ status: "paid", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() })
+      .update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() })
       .eq("id", id)
       .select("*")
       .maybeSingle();
@@ -1260,56 +1303,56 @@ async function handleApproveCharge(req, res, session) {
     // The single-attempt update above failed (or returned no row) —
     // retry it a couple more times before falling back to a minimal write.
     const fullConfirmed = await retryUpdate(
-      () => supabase.from("rental_additional_charges").update({ status: "paid", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() }).eq("id", id),
+      () => supabase.from("rental_additional_charges").update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
       [400]
     );
     if (fullConfirmed) {
       res.status(200).json({
         ok: true,
-        charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", braintreeTransactionId: saleResult.transaction.id }),
+        charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", stripePaymentIntentId: intent.id }),
       });
       return;
     }
 
     // Every attempt at the full update failed. Minimal fallback write —
-    // just status + transaction id — distinct from "failed" (which the
+    // just status + PaymentIntent id — distinct from "failed" (which the
     // Approve button would let an admin retry and risk a double charge):
-    // 'paid_reconciliation_required' means Braintree DEFINITELY
+    // 'paid_reconciliation_required' means Stripe DEFINITELY
     // succeeded, only the full record couldn't be persisted.
     const minimalConfirmed = await retryUpdate(
-      () => supabase.from("rental_additional_charges").update({ status: "paid_reconciliation_required", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() }).eq("id", id),
+      () => supabase.from("rental_additional_charges").update({ status: "paid_reconciliation_required", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
       [150]
     );
     console.error(
-      "CRITICAL: Braintree charge succeeded but rental_additional_charges could not be fully confirmed after retries. " +
-        (minimalConfirmed ? "Minimal fallback write (status + transaction id only) DID succeed — see status='paid_reconciliation_required'. " : "Even the minimal fallback write failed — this charge's record does not reflect it at all. ") +
-        "Search the Braintree dashboard for orderId='" +
-        approvedRow.booking_id +
-        "-charge-" +
+      "CRITICAL: Stripe charge succeeded but rental_additional_charges could not be fully confirmed after retries. " +
+        (minimalConfirmed ? "Minimal fallback write (status + PaymentIntent id only) DID succeed — see status='paid_reconciliation_required'. " : "Even the minimal fallback write failed — this charge's record does not reflect it at all. ") +
+        "Search the Stripe Dashboard for PaymentIntent '" +
+        intent.id +
+        "' or metadata.chargeId='" +
         id +
         "' to find this transaction. chargeId=" +
         id +
         " bookingId=" +
         approvedRow.booking_id +
-        " braintreeTransactionId=" +
-        saleResult.transaction.id,
+        " stripePaymentIntentId=" +
+        intent.id,
       paidErr
     );
     // Reports 'paid_reconciliation_required' here regardless of whether
     // even the minimal write itself succeeded — that's the true state the
-    // admin needs to act on either way (Braintree charged the customer;
-    // our own record of it is incomplete-to-nonexistent). Telling the
-    // admin "paid" outright here would risk them believing the database
-    // already reflects a state it may not.
+    // admin needs to act on either way (Stripe charged the customer; our
+    // own record of it is incomplete-to-nonexistent). Telling the admin
+    // "paid" outright here would risk them believing the database already
+    // reflects a state it may not.
     res.status(200).json({
       ok: true,
       charge: Object.assign({}, serializeCharge(approvedRow), {
         status: "paid_reconciliation_required",
-        braintreeTransactionId: saleResult.transaction.id,
+        stripePaymentIntentId: intent.id,
       }),
       warning: minimalConfirmed
         ? "Charged successfully, but the full record couldn't be saved — marked for reconciliation. Refresh to verify."
-        : "Charged successfully, but this charge's record could not be updated at all — search the Braintree dashboard for this transaction to reconcile manually.",
+        : "Charged successfully, but this charge's record could not be updated at all — search the Stripe Dashboard for this PaymentIntent to reconcile manually.",
     });
   } catch (err) {
     console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
@@ -1317,11 +1360,75 @@ async function handleApproveCharge(req, res, session) {
   }
 }
 
-// Shared failure path for handleApproveCharge — always re-reads the full
-// row back (via .select().maybeSingle()) so the response reflects exactly
-// what's now in the database, never an assembled-in-memory guess. Only
-// ever used for a DEFINITIVE decline — see markChargeErrorPendingReview
-// below for the ambiguous case.
+// A safe, non-charging reconciliation action: re-fetches the charge's
+// stored PaymentIntent from Stripe and advances the local row to match
+// reality. Never calls confirm/capture/create — this is a READ against
+// Stripe, the only write is to our own database, and it never risks a
+// double charge no matter how many times it's called. Only meaningful for
+// a charge currently "requires_customer_action" or "error_pending_review"
+// (both mean "we don't know/can't act until the customer or a human
+// resolves this out-of-band") — any other status is left untouched, since
+// there's nothing to reconcile.
+async function handleCheckStatus(id, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin check charge status failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  try {
+    const { data: row, error } = await supabase.from("rental_additional_charges").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    if (!row) {
+      res.status(404).json({ error: "Charge not found." });
+      return;
+    }
+    if (row.status !== "requires_customer_action" && row.status !== "error_pending_review") {
+      // Nothing to reconcile — return the row as-is rather than erroring,
+      // so a stale UI click just shows the current (already-resolved)
+      // state instead of a confusing failure.
+      res.status(200).json({ ok: true, charge: serializeCharge(row) });
+      return;
+    }
+    if (!row.stripe_payment_intent_id) {
+      res.status(200).json({ ok: true, charge: serializeCharge(row) });
+      return;
+    }
+
+    const stripe = getStripeClient();
+    if (!stripe) {
+      console.error("Admin check charge status failed: STRIPE_SECRET_KEY not configured");
+      res.status(500).json({ error: "Payment processing is not configured." });
+      return;
+    }
+
+    const intent = await stripe.paymentIntents.retrieve(row.stripe_payment_intent_id);
+    let updated = row;
+    if (intent.status === "succeeded") {
+      const { data } = await supabase.from("rental_additional_charges").update({ status: "paid", failure_reason: null, updated_at: new Date().toISOString() }).eq("id", id).select("*").maybeSingle();
+      updated = data || updated;
+    } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
+      // The customer's authentication attempt failed, expired, or was
+      // never completed — no charge occurred, so this is safely retryable
+      // via a fresh Approve.
+      const { data } = await supabase.from("rental_additional_charges").update({ status: "failed", failure_reason: "Customer did not complete the required authentication.", updated_at: new Date().toISOString() }).eq("id", id).select("*").maybeSingle();
+      updated = data || updated;
+    }
+    // Any other status (still "requires_action") — no change, still pending.
+
+    res.status(200).json({ ok: true, charge: serializeCharge(updated) });
+  } catch (err) {
+    console.error("Admin check charge status failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not check this charge's status." });
+  }
+}
+
+// Shared failure path for handleApprove — always re-reads the full row
+// back (via .select().maybeSingle()) so the response reflects exactly what
+//'s now in the database, never an assembled-in-memory guess. Only ever
+// used for a DEFINITIVE decline — see markChargeErrorPendingReview and
+// markChargeRequiresCustomerAction below for the two non-definitive cases.
 async function markChargeFailed(supabase, id, reason) {
   const { data } = await supabase
     .from("rental_additional_charges")
@@ -1332,14 +1439,33 @@ async function markChargeFailed(supabase, id, reason) {
   return data;
 }
 
-// 2026-09-18 hardening audit, §6/§8 — called only when the Braintree call
-// itself threw. Never reachable again via this endpoint's Approve action
+// Called only when the Stripe call itself threw with no definitive
+// response. Never reachable again via this endpoint's Approve action
 // (excluded from the retry-eligible status list above) — a human must
-// resolve it by checking the Braintree dashboard directly.
+// resolve it by checking the Stripe Dashboard directly, or via
+// handleCheckStatus() above.
 async function markChargeErrorPendingReview(supabase, id, reason) {
   const { data } = await supabase
     .from("rental_additional_charges")
     .update({ status: "error_pending_review", failure_reason: reason, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  return data;
+}
+
+// Stripe-specific (no Braintree equivalent existed): called when an
+// off-session confirmation came back with Stripe's documented
+// authentication_required error — the card issuer requires the customer to
+// complete Strong Customer Authentication before this charge can succeed,
+// which cannot happen automatically off-session. Never reachable again via
+// this endpoint's Approve action (excluded from the retry-eligible status
+// list above, for the same double-charge-safety reason as
+// error_pending_review) — recovery is handleCheckStatus() above.
+async function markChargeRequiresCustomerAction(supabase, id, paymentIntentId, reason) {
+  const { data } = await supabase
+    .from("rental_additional_charges")
+    .update({ status: "requires_customer_action", stripe_payment_intent_id: paymentIntentId || null, failure_reason: reason, updated_at: new Date().toISOString() })
     .eq("id", id)
     .select("*")
     .maybeSingle();

@@ -112,11 +112,50 @@ function createFakeSupabase(opts) {
   };
 }
 
+// --- fake Stripe -----------------------------------------------------------
+// This file's dumpster-rental tests are specifically about the
+// customer-reuse/rollback rules (they predate the payment feature and were
+// originally written against the pre-payment flow) — every scenario they
+// test fails at or after the dumpster_rentals insert, never at capture, so
+// this fake only needs to make paymentIntents.retrieve() return a
+// plausible authorized-but-uncaptured intent (matching whatever
+// idempotencyKey the test's own payload used) and paymentIntents.cancel()
+// a harmless no-op for the rollback path. capture() is never expected to
+// be called by anything in this file.
+const fakeStripeClient = {
+  paymentIntents: {
+    retrieve: function (id) {
+      // Test fixtures always pair paymentIntentId "pi_testN" with
+      // idempotencyKey "test-idem-key-N" (same counter N) — see
+      // validDumpsterPayload() below — so the matching idempotencyKey can
+      // be reconstructed directly from the id, no separate lookup table
+      // needed for this file's narrow scope.
+      const match = /^pi_test(\d+)$/.exec(String(id));
+      const idempotencyKey = match ? "test-idem-key-" + match[1] : "unknown";
+      return Promise.resolve({ id: id, status: "requires_capture", amount: 34900, currency: "usd", customer: "cus_test_" + idempotencyKey, metadata: { idempotencyKey: idempotencyKey, serviceType: "dumpster_rental" } });
+    },
+    update: function () {
+      return Promise.resolve({});
+    },
+    cancel: function () {
+      return Promise.resolve({});
+    },
+    capture: function () {
+      return Promise.reject(new Error("capture() should never be called in this test file's scenarios"));
+    },
+  },
+};
+
 function interceptSupabaseModule() {
   const originalLoad = Module._load;
   Module._load = function (request, parent, isMain) {
     if (request === "@supabase/supabase-js") {
       return { createClient: function () { return currentFakeSupabase; } };
+    }
+    if (request === "stripe") {
+      return function FakeStripe() {
+        return fakeStripeClient;
+      };
     }
     return originalLoad.call(this, request, parent, isMain);
   };
@@ -132,6 +171,7 @@ global.fetch = function () {
 process.env.SUPABASE_URL = "https://mock.supabase.co";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.UPLOAD_TOKEN_SECRET = "mock-upload-token-secret";
+process.env.STRIPE_SECRET_KEY = "sk_test_mock";
 
 const bookHandler = require("../api/book.js");
 const { normalizePhone, normalizeEmail } = require("../api/_lib/customer-identity");
@@ -227,7 +267,7 @@ function validDumpsterPayload(customerOverrides) {
     },
     schedule: { date: FAR_FUTURE_DATE, timeWindow: "w_0800_1000" },
     customer: baseCustomer(customerOverrides),
-    payment: { nonce: "fake-valid-nonce", idempotencyKey: "test-idem-key-" + dumpsterIdempotencyCounter, agreementAccepted: true },
+    payment: { paymentIntentId: "pi_test" + dumpsterIdempotencyCounter, idempotencyKey: "test-idem-key-" + dumpsterIdempotencyCounter, agreementAccepted: true },
   };
 }
 

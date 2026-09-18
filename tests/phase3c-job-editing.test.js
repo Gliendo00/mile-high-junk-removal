@@ -1031,19 +1031,22 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/booking.js"), "utf8");
   const updateCalls = (src.match(/\.update\s*\(/g) || []).length;
   // This stage (Existing Job Editing) itself added exactly one — Edit Job's
-  // PATCH handleUpdate(). Phase 3C Stage 2.5-v2 later added seven more, all
-  // inside the separate ?resource=charges propose/approve workflow:
-  // approved-transition, processing-transition, the initial paid-attempt,
-  // markChargeFailed, markChargeErrorPendingReview (hardening audit), and
-  // the readiness pass's retryUpdate-wrapped full paid-confirmation retry
-  // plus its minimal paid_reconciliation_required fallback write — see
+  // PATCH handleUpdate(). Phase 3C Stage 2.5-v2 (originally built on
+  // Braintree, switched to Stripe before any production rollout) later
+  // added eleven more, all inside the separate ?resource=charges
+  // propose/approve/check-status workflow: approved-transition,
+  // processing-transition, the initial paid-attempt, markChargeFailed,
+  // markChargeErrorPendingReview, markChargeRequiresCustomerAction
+  // (Stripe-specific), the retryUpdate-wrapped full paid-confirmation
+  // retry plus its minimal paid_reconciliation_required fallback write,
+  // and handleCheckStatus's two conditional reconciliation writes — see
   // tests/phase3c-schedule.test.js's own write-audit test, and
-  // tests/phase3c-stage2.5v2-rental-payments.test.js, for that stage's
-  // full accounting) — this test's job is only to confirm THIS stage
-  // didn't silently grow beyond the one call it was reviewed for, not to
-  // re-litigate a later, independently-reviewed stage's count every time
-  // this file runs.
-  assert.strictEqual(updateCalls, 8, "booking.js must have exactly 8 .update( calls (1 Edit Job + 7 Stage 2.5-v2 charges) — anything else needs deliberate review");
+  // tests/phase3c-stage2.5v2-stripe-rental-payments.test.js, for that
+  // stage's full accounting) — this test's job is only to confirm THIS
+  // stage didn't silently grow beyond the one call it was reviewed for,
+  // not to re-litigate a later, independently-reviewed stage's count every
+  // time this file runs.
+  assert.strictEqual(updateCalls, 11, "booking.js must have exactly 11 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges) — anything else needs deliberate review");
 });
 
 test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {
