@@ -23,8 +23,12 @@ document.addEventListener('DOMContentLoaded', function () {
   // Phase 3C Stage 2.5-v2 — display labels for rental_payments.payment_status
   // and rental_additional_charges.status. Display-only, mirroring
   // STATUS_TEXT's own pattern; never written back anywhere from this file.
-  var PAYMENT_STATUS_TEXT = { processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', refunded: 'Refunded' };
-  var CHARGE_STATUS_TEXT = { proposed: 'Proposed', approved: 'Approved', processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided' };
+  // 'error_pending_review' (2026-09-18 hardening audit): the Braintree
+  // call itself failed/timed out with no definitive answer — outcome
+  // unknown, never auto-resolved. Labeled distinctly so this never reads
+  // like an ordinary failure the admin can just retry.
+  var PAYMENT_STATUS_TEXT = { processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', refunded: 'Refunded', error_pending_review: 'Needs Review — Check Braintree' };
+  var CHARGE_STATUS_TEXT = { proposed: 'Proposed', approved: 'Approved', processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', error_pending_review: 'Needs Review — Check Braintree' };
   var CHARGE_TYPE_TEXT = { overweight_tonnage: 'Overweight tonnage', additional_days: 'Additional days', other: 'Other' };
 
   var bookingId = null;
@@ -309,6 +313,10 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('d-payment-dispute-row').style.display = 'block';
         set('d-payment-dispute', data.payment.disputeStatus);
       }
+      if (data.payment.failureReason) {
+        document.getElementById('d-payment-reason-row').style.display = 'block';
+        set('d-payment-reason', data.payment.failureReason);
+      }
     }
     if (booking.serviceType === 'dumpster_rental') {
       document.getElementById('d-charges-section').style.display = 'block';
@@ -467,13 +475,19 @@ document.addEventListener('DOMContentLoaded', function () {
         row.appendChild(disputeLine);
       }
 
-      if (charge.status === 'proposed') {
+      // 'failed' (a clean decline) is retryable — the server allows
+      // re-approving it. 'error_pending_review' (an ambiguous Braintree
+      // outcome) deliberately is NOT — no button shown for it; a human
+      // must resolve it via the Braintree dashboard first (see the server-
+      // side comment in handleApproveCharge for why retrying it here could
+      // double-charge).
+      if (charge.status === 'proposed' || charge.status === 'failed') {
         var approveBtn = document.createElement('button');
         approveBtn.type = 'button';
         approveBtn.className = 'admin-btn admin-btn-outline';
         approveBtn.style.alignSelf = 'flex-start';
         approveBtn.style.marginTop = '4px';
-        approveBtn.textContent = 'Approve & Charge';
+        approveBtn.textContent = charge.status === 'failed' ? 'Retry: Approve & Charge' : 'Approve & Charge';
         approveBtn.addEventListener('click', function () {
           approveCharge(charge.id, approveBtn);
         });

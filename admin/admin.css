@@ -1076,6 +1076,10 @@
 .admin-charge-status-paid { background: #2f6f13; color: #fff; }
 .admin-charge-status-failed { background: #b91c1c; color: #fff; }
 .admin-charge-status-voided { background: #374151; color: #fff; }
+/* Deliberately a visually distinct, attention-getting color from every
+   other status here — an ambiguous Braintree outcome needs a human to
+   check the Braintree dashboard, never a routine retry. */
+.admin-charge-status-error_pending_review { background: #ea580c; color: #fff; }
 
 .admin-charges-list { display: flex; flex-direction: column; gap: 10px; }
 .admin-charge-row {
