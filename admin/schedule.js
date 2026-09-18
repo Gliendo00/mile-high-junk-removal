@@ -65,6 +65,15 @@ document.addEventListener('DOMContentLoaded', function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // "$350" for an exact quote, "$350 – $475" for a range (Phase 3C Stage
+  // 2.5) — never a duplicated value when there's no max.
+  function formatQuotedAmount(min, max) {
+    var minText = formatPrice(min);
+    if (!minText) return null;
+    var maxText = formatPrice(max);
+    return maxText ? minText + ' – ' + maxText : minText;
+  }
+
   // Adds `days` calendar days to a YYYY-MM-DD string — a small local copy of
   // api/admin/bookings.js's own addDaysIso, matching admin/calendar-views.js's
   // identical copy (this project's established convention of a small
@@ -147,7 +156,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var top = el('div', 'admin-card-top');
     var topLeft = el('div', 'admin-card-top-left');
-    topLeft.appendChild(el('span', 'admin-card-when', job.timeWindowLabel || '—'));
+    topLeft.appendChild(el('span', 'admin-card-when', job.timeLabel || '—'));
     top.appendChild(topLeft);
     top.appendChild(el('span', 'admin-status-badge admin-status-' + job.status, job.statusLabel || 'Booked'));
     main.appendChild(top);
@@ -158,7 +167,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (job.serviceAddress && job.serviceAddress.city) serviceCityParts.push(job.serviceAddress.city);
     main.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
 
-    var priceText = formatPrice(job.estimatedPrice);
+    // Actual Collected is the authoritative revenue figure once a job is
+    // completed; otherwise fall back to the Quoted amount (range-aware).
+    // One number, unlabeled, to keep the card compact — never both.
+    var priceText = formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) main.appendChild(el('div', 'admin-schedule-card-price', priceText));
 
     card.appendChild(main);

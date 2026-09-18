@@ -538,7 +538,7 @@ test("admin/calendar-views.js: each job inside a Week day gets its own mini-card
 test("admin/calendar-views.js: a Week job's mini-card has separately-scannable time and client-name elements — time never wraps mid-unit, name ellipsis-truncates instead of wrapping awkwardly", () => {
   const src = read("admin/calendar-views.js");
   const body = src.slice(src.indexOf("function renderWeekOverview"), src.indexOf("function selectWeekDate"));
-  assert.ok(/el\('span', 'admin-week-day-row-job-time', shortTimeLabel\(job\.timeWindowLabel\)\)/.test(body), "the compact mini-card must show only the start time (shortTimeLabel), not the full '8:00 AM – 10:00 AM' range — the full range alone left no room for the client name");
+  assert.ok(/el\('span', 'admin-week-day-row-job-time', shortTimeLabel\(job\.timeLabel\)\)/.test(body), "the compact mini-card must show only the start time (shortTimeLabel), not the full '8:00 AM – 10:00 AM' range — the full range alone left no room for the client name. As of Phase 3C Stage 2.5, job.timeLabel is the unified exact-time-or-window label (see api/_lib/booking-format.js's effectiveTimeLabel) — shortTimeLabel() still only trims a window's range down to its start time and leaves an already-short exact time like '9:30 AM' untouched.");
   assert.ok(/el\('span', 'admin-week-day-row-job-name', name\)/.test(body));
   const css = read("admin/admin.css");
   const timeRule = css.slice(css.indexOf(".admin-week-day-row-job-time {"), css.indexOf("}", css.indexOf(".admin-week-day-row-job-time {")));

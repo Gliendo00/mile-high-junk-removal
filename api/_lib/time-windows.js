@@ -42,4 +42,55 @@ function timeWindowStartHour(id) {
   return def ? def.startHour : null;
 }
 
-module.exports = { TIME_WINDOW_DEFS, timeWindowStartHour };
+// Phase 3C Stage 2.5: bookings.exact_time (a nullable Postgres `time`
+// column, added alongside the bookings_time_mode_exclusive CHECK
+// constraint) gives a job a precise appointment time instead of a window.
+// Supabase/PostgREST round-trips a `time` value as "HH:MM:SS" — but this
+// parses "HH:MM" too (what a bare `<input type="time">.value` submits
+// client-side, and what api/admin/booking.js writes verbatim), so it works
+// on both the write path's raw input and the read path's DB round-trip
+// without needing two different parsers.
+function parseExactTimeMinutes(raw) {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{2}):(\d{2})/.exec(raw.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(min) || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// "09:00:00" / "09:00" -> "9:00 AM", "13:30:00" -> "1:30 PM". Returns null
+// (never a raw/garbled string) when the value can't be parsed — callers fall
+// back to their own "—"/unknown display, same null-for-unrecognized contract
+// as timeWindowStartHour above.
+function formatExactTime(raw) {
+  const totalMinutes = parseExactTimeMinutes(raw);
+  if (totalMinutes === null) return null;
+  const h24 = Math.floor(totalMinutes / 60);
+  const min = totalMinutes % 60;
+  const period = h24 < 12 ? "AM" : "PM";
+  let h12 = h24 % 12;
+  if (h12 === 0) h12 = 12;
+  return h12 + ":" + String(min).padStart(2, "0") + " " + period;
+}
+
+// One appointment-time sort decision, shared by every Schedule range
+// (Today/Yesterday/Tomorrow/Week/Month all funnel through
+// api/admin/bookings.js's fetchScheduleJobs, which calls this once per
+// comparison). A job is expected to have at most one of time_window/
+// exact_time set — enforced at the database level by the
+// bookings_time_mode_exclusive CHECK constraint (Phase 3C Stage 2.5) — but
+// this stays defensive for any malformed/manually-edited row anyway:
+// exact_time wins when both happen to be present, since it's the more
+// precise value, rather than throwing or picking arbitrarily. Returns null
+// (sorts last — see fetchScheduleJobs's comparator) when neither is set or
+// parseable, exactly like timeWindowStartHour's existing null contract.
+function effectiveTimeSortMinutes(timeWindowRaw, exactTimeRaw) {
+  const exactMinutes = parseExactTimeMinutes(exactTimeRaw);
+  if (exactMinutes !== null) return exactMinutes;
+  const hour = timeWindowStartHour(timeWindowRaw);
+  return hour === null ? null : hour * 60;
+}
+
+module.exports = { TIME_WINDOW_DEFS, timeWindowStartHour, formatExactTime, effectiveTimeSortMinutes };

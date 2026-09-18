@@ -44,6 +44,15 @@ document.addEventListener('DOMContentLoaded', function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // "$350" for an exact quote, "$350 – $475" for a range (Phase 3C Stage
+  // 2.5) — never a duplicated value when there's no max.
+  function formatQuotedAmount(min, max) {
+    var minText = formatPrice(min);
+    if (!minText) return null;
+    var maxText = formatPrice(max);
+    return maxText ? minText + ' – ' + maxText : minText;
+  }
+
   // Same digit-only normalization as admin/booking-detail.js's
   // buildTelHref/buildSmsHref — never built from the raw display string.
   function buildTelHref(phone) {
@@ -99,11 +108,11 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-card-service', addrParts.length ? addrParts.join(' · ') : 'No service address on file.'));
 
     var whenParts = [formatDate(b.appointmentDate)];
-    if (b.timeWindowLabel) whenParts.push(b.timeWindowLabel);
+    if (b.timeLabel) whenParts.push(b.timeLabel);
     a.appendChild(el('div', 'admin-card-when', whenParts.join(' · ')));
 
     var footer = el('div', 'admin-card-footer');
-    var priceText = formatPrice(b.finalPrice) || formatPrice(b.estimatedPrice);
+    var priceText = formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
     footer.appendChild(el('span', null, priceText || ''));
     footer.appendChild(el('span', 'admin-card-view', 'View Request →'));
     a.appendChild(footer);

@@ -76,6 +76,15 @@ document.addEventListener('DOMContentLoaded', function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // "$350" for an exact quote, "$350 – $475" for a range (Phase 3C Stage
+  // 2.5) — never a duplicated value when there's no max.
+  function formatQuotedAmount(min, max) {
+    var minText = formatPrice(min);
+    if (!minText) return null;
+    var maxText = formatPrice(max);
+    return maxText ? minText + ' – ' + maxText : minText;
+  }
+
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
@@ -127,14 +136,14 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
 
     var whenParts = [formatDate(b.appointmentDate)];
-    if (b.timeWindowLabel) whenParts.push(b.timeWindowLabel);
+    if (b.timeLabel) whenParts.push(b.timeLabel);
     a.appendChild(el('div', 'admin-card-when', whenParts.join(' · ')));
 
     var footer = el('div', 'admin-card-footer');
     var photos = el('span', 'admin-card-photos');
     photos.appendChild(cameraIcon());
     var photoText = (b.photoCount || 0) + (b.photoCount === 1 ? ' photo' : ' photos');
-    var priceText = formatPrice(b.estimatedPrice);
+    var priceText = formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
     photos.appendChild(document.createTextNode((priceText ? priceText + ' · ' : '') + photoText));
     footer.appendChild(photos);
     footer.appendChild(el('span', 'admin-card-view', 'View Request →'));

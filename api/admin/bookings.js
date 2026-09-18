@@ -8,8 +8,8 @@
 // endpoint, ever.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
-const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus, STATUS_LABELS } = require("../_lib/booking-format");
-const { timeWindowStartHour } = require("../_lib/time-windows");
+const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus, STATUS_LABELS } = require("../_lib/booking-format");
+const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
 const { EXPENSE_CATEGORIES } = require("../_lib/expense-categories");
 
@@ -198,7 +198,7 @@ module.exports = async (req, res) => {
         // sufficient for them.
         let q = supabase
           .from("bookings")
-          .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, service_city, created_at")
+          .select("id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_city, created_at")
           .order("created_at", { ascending: false })
           .range(offset, offset + limit - 1);
         if (statusFilter === "new") q = q.is("status", null);
@@ -246,9 +246,12 @@ module.exports = async (req, res) => {
         appointmentDate: b.appointment_date,
         timeWindow: b.time_window,
         timeWindowLabel: timeWindowLabel(b.time_window),
+        timeLabel: effectiveTimeLabel(b.time_window, b.exact_time),
         status: normalizedStatus(b.status),
         statusLabel: statusLabel(b.status),
         estimatedPrice: b.estimated_price,
+        estimatedPriceMax: b.estimated_price_max,
+        finalPrice: b.final_price,
         createdAt: b.created_at,
         photoCount: photoCountByBooking[b.id] || 0,
         // Job location: the booking's own snapshot is primary; a legacy
@@ -448,7 +451,9 @@ async function handleDay(req, res, supabase, todayIso) {
 async function fetchScheduleJobs(supabase, startDate, endDate) {
   const bookingsRes = await supabase
     .from("bookings")
-    .select("id, service_type, appointment_date, time_window, status, estimated_price, customer_id, service_address, service_city, service_state, service_zip")
+    .select(
+      "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_address, service_city, service_state, service_zip"
+    )
     .in("status", SCHEDULABLE_STATUSES)
     .gte("appointment_date", startDate)
     .lte("appointment_date", endDate);
@@ -483,9 +488,17 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
       appointmentDate: b.appointment_date,
       timeWindow: b.time_window,
       timeWindowLabel: timeWindowLabel(b.time_window),
+      exactTime: b.exact_time,
+      // The one label Schedule cards actually render — exact_time when set,
+      // else the time_window label, else "—". See booking-format.js's
+      // effectiveTimeLabel(); timeWindowLabel above is kept as an additive
+      // field for any caller still reading the raw window-only label.
+      timeLabel: effectiveTimeLabel(b.time_window, b.exact_time),
       status: normalizedStatus(b.status),
       statusLabel: statusLabel(b.status),
       estimatedPrice: b.estimated_price,
+      estimatedPriceMax: b.estimated_price_max,
+      finalPrice: b.final_price,
       customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
       serviceAddress: {
         address: b.service_address || null,
@@ -497,21 +510,23 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
   });
 
   // Chronological order: appointment date first, then time-of-day within
-  // that date via the shared start-hour lookup (api/_lib/time-windows.js)
-  // — never a second, duplicated windows-to-hour map. An unrecognized
-  // time_window (timeWindowStartHour returns null) sorts after every
-  // recognized window on the same date rather than throwing or being
-  // dropped.
+  // that date via the shared effective-minute lookup (api/_lib/time-
+  // windows.js's effectiveTimeSortMinutes) — never a second, duplicated
+  // time-to-minutes map. Handles a mix of exact-time and window jobs on the
+  // same date: an exact-time job sorts by its precise minute, a window job
+  // by its existing start-hour logic, and a legacy/unrecognized/no-time job
+  // (effectiveTimeSortMinutes returns null) sorts after every recognized
+  // time on the same date rather than throwing or being dropped.
   jobs.sort(function (a, b) {
     if (a.appointmentDate !== b.appointmentDate) {
       return a.appointmentDate < b.appointmentDate ? -1 : 1;
     }
-    const aHour = timeWindowStartHour(a.timeWindow);
-    const bHour = timeWindowStartHour(b.timeWindow);
-    if (aHour === null && bHour === null) return 0;
-    if (aHour === null) return 1;
-    if (bHour === null) return -1;
-    return aHour - bHour;
+    const aMinutes = effectiveTimeSortMinutes(a.timeWindow, a.exactTime);
+    const bMinutes = effectiveTimeSortMinutes(b.timeWindow, b.exactTime);
+    if (aMinutes === null && bMinutes === null) return 0;
+    if (aMinutes === null) return 1;
+    if (bMinutes === null) return -1;
+    return aMinutes - bMinutes;
   });
 
   return jobs;

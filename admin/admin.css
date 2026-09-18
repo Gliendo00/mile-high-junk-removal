@@ -779,6 +779,77 @@
 }
 .admin-login-submit { width: 100%; margin-top: 4px; }
 
+/* ------------------------------------------------------------------ */
+/* Phase 3C Stage 2.5: Appointment Time (Exact Time | Time Window) and    */
+/* Quoted Amount (Exact | Range) mode toggles — New/Past/Edit Job. A      */
+/* compact two-button segmented control, not a radio group or a second    */
+/* select, so switching modes on a phone is a single tap. Reuses this      */
+/* app's existing active-pill treatment (dark fill, white text — see       */
+/* .admin-filter-pill.is-active) rather than inventing a new color         */
+/* language for "selected."                                                */
+/* ------------------------------------------------------------------ */
+.admin-segmented {
+  display: flex;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.admin-segmented-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 6px;
+  border: none;
+  background: #fff;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-segmented-btn + .admin-segmented-btn { border-left: 1px solid var(--color-neutral-300, #dcd3c4); }
+.admin-segmented-btn.is-active {
+  background: var(--color-dark, #14150f);
+  color: #fff;
+}
+
+/* Quoted Amount's Exact/Range inputs — one row, "$ [amount]" or
+   "$ [min] to $ [max]", never stacked (keeps the field compact even in
+   Range mode). */
+.admin-quote-inputs { display: flex; align-items: center; gap: 8px; }
+.admin-quote-input-wrap {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 4px;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  background: #fff;
+  box-sizing: border-box;
+}
+.admin-quote-input-wrap:focus-within { outline: 2px solid var(--color-accent-700, #2f6f13); outline-offset: 1px; }
+.admin-quote-dollar { font-weight: 700; color: var(--color-neutral-600, #82796a); flex: 0 0 auto; }
+.admin-quote-input-wrap input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  border: none;
+  padding: 0;
+  font-size: 16px; /* 16px avoids iOS auto-zoom on focus */
+  font-family: var(--font-body);
+  background: transparent;
+  color: var(--color-text, #201e1d);
+}
+.admin-quote-input-wrap input:focus { outline: none; }
+.admin-quote-to { flex: 0 0 auto; font-weight: 700; font-size: 13px; color: var(--color-neutral-600, #82796a); }
+
 .admin-alert {
   font-size: 13.5px;
   padding: 10px 12px;

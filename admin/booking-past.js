@@ -56,6 +56,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var serviceZipInput = document.getElementById('service-zip');
 
   var timeWindowSelect = document.getElementById('time-window');
+  var exactTimeInput = document.getElementById('exact-time');
+  var timeModeToggle = document.getElementById('time-mode-toggle');
   var appointmentDateInput = document.getElementById('appointment-date');
   var actualPriceInput = document.getElementById('actual-price');
   var tipAmountInput = document.getElementById('tip-amount');
@@ -103,6 +105,27 @@ document.addEventListener('DOMContentLoaded', function () {
     opt.value = w.value;
     opt.textContent = w.label;
     timeWindowSelect.appendChild(opt);
+  });
+
+  // Phase 3C Stage 2.5: same "Exact Time | Time Window" toggle as New Job —
+  // see that file's identical comment. Past Job's time stays fully
+  // optional in either mode (mirrors the existing "leave it unknown"
+  // placeholder's behavior).
+  var timeMode = 'window';
+  function setupSegmented(container, onSelect) {
+    var buttons = container.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(buttons, function (b) { b.classList.toggle('is-active', b === btn); });
+        onSelect(btn.getAttribute('data-mode'));
+      });
+    });
+  }
+  setupSegmented(timeModeToggle, function (mode) {
+    timeMode = mode;
+    var isExact = mode === 'exact';
+    exactTimeInput.style.display = isExact ? 'block' : 'none';
+    timeWindowSelect.style.display = isExact ? 'none' : 'block';
   });
 
   var todayIso = denverTodayIso();
@@ -169,7 +192,8 @@ document.addEventListener('DOMContentLoaded', function () {
       customerId: selectedClient.id,
       serviceType: document.getElementById('service-type').value,
       appointmentDate: appointmentDateInput.value,
-      timeWindow: timeWindowSelect.value,
+      timeWindow: timeMode === 'window' ? timeWindowSelect.value : '',
+      exactTime: timeMode === 'exact' ? exactTimeInput.value : '',
       serviceAddress: {
         address: serviceAddressInput.value.trim(),
         city: serviceCityInput.value.trim(),

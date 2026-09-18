@@ -10,7 +10,7 @@
 // allowlisted admin.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
-const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus } = require("../_lib/booking-format");
+const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus } = require("../_lib/booking-format");
 const { normalizePhone, normalizeEmail } = require("../_lib/customer-identity");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,7 +68,7 @@ module.exports = async (req, res) => {
     const bookingsRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, status, estimated_price, final_price, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, service_address, service_city, service_state, service_zip, created_at"
       )
       .eq("customer_id", id)
       .order("created_at", { ascending: false });
@@ -81,9 +81,11 @@ module.exports = async (req, res) => {
       appointmentDate: b.appointment_date,
       timeWindow: b.time_window,
       timeWindowLabel: timeWindowLabel(b.time_window),
+      timeLabel: effectiveTimeLabel(b.time_window, b.exact_time),
       status: normalizedStatus(b.status),
       statusLabel: statusLabel(b.status),
       estimatedPrice: b.estimated_price,
+      estimatedPriceMax: b.estimated_price_max,
       finalPrice: b.final_price,
       createdAt: b.created_at,
       // Historical job location — always this booking's own snapshot first.

@@ -88,6 +88,15 @@ document.addEventListener('DOMContentLoaded', function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // "$350" for an exact quote, "$350 – $475" for a range — never a
+  // duplicated value when there's no max (Phase 3C Stage 2.5).
+  function formatQuotedAmount(min, max) {
+    var minText = formatPrice(min);
+    if (!minText) return null;
+    var maxText = formatPrice(max);
+    return maxText ? minText + ' – ' + maxText : minText;
+  }
+
   // Builds a tel: href from digits only — never from the raw display
   // string — mirroring the same safe-href pattern used server-side in
   // api/book.js's admin notification email.
@@ -167,7 +176,7 @@ document.addEventListener('DOMContentLoaded', function () {
     applyStatusDisplay(booking.status);
 
     var whenParts = [formatDate(booking.appointmentDate)];
-    if (booking.timeWindowLabel) whenParts.push(booking.timeWindowLabel);
+    if (booking.timeLabel && booking.timeLabel !== '—') whenParts.push(booking.timeLabel);
     set('d-when', whenParts.join(' · '));
 
     var serviceCityParts = [booking.serviceLabel || booking.serviceType || ''];
@@ -241,9 +250,9 @@ document.addEventListener('DOMContentLoaded', function () {
     set('d-service', booking.serviceLabel);
     set('d-description', booking.description);
 
-    var estimated = formatPrice(booking.estimatedPrice);
+    var quoted = formatQuotedAmount(booking.estimatedPrice, booking.estimatedPriceMax);
     var final = formatPrice(booking.finalPrice);
-    set('d-estimated-price', estimated || 'Not set yet');
+    set('d-estimated-price', quoted || 'Not set yet');
     set('d-final-price', final || 'Not set yet');
 
     var tip = formatPrice(booking.tipAmount);

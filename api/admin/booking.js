@@ -12,7 +12,7 @@
 // the request is authorized at all.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
-const { serviceLabel, timeWindowLabel, statusLabel, normalizedStatus, SERVICE_LABELS } = require("../_lib/booking-format");
+const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus, SERVICE_LABELS } = require("../_lib/booking-format");
 const { TIME_WINDOW_DEFS } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 
@@ -56,7 +56,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip"
       )
       .eq("id", id)
       .maybeSingle();
@@ -119,8 +119,14 @@ module.exports = async (req, res) => {
         appointmentDate: booking.appointment_date,
         timeWindow: booking.time_window,
         timeWindowLabel: timeWindowLabel(booking.time_window),
+        exactTime: booking.exact_time,
+        // The one label Edit Job/Booking Detail should actually render —
+        // exact_time when set, else the time_window label, else "—". See
+        // api/_lib/booking-format.js's effectiveTimeLabel().
+        timeLabel: effectiveTimeLabel(booking.time_window, booking.exact_time),
         description: booking.description,
         estimatedPrice: booking.estimated_price,
+        estimatedPriceMax: booking.estimated_price_max,
         finalPrice: booking.final_price,
         tipAmount: booking.tip_amount,
         internalNotes: booking.internal_notes,
@@ -176,16 +182,37 @@ module.exports = async (req, res) => {
 // that client — this endpoint never does that itself). Covers two explicit,
 // allowlisted modes:
 //   - "new" (default, Phase 3C Stage 2.1) — "+ New Job": status="booked",
-//     appointment date must be today or later (America/Denver), time window
-//     required, price is a pre-job estimate written to estimated_price.
+//     appointment date must be today or later (America/Denver), an
+//     appointment time is required (either a time_window or an exact_time —
+//     see "Appointment time" below), price is an optional pre-job quote
+//     written to estimated_price (+ an optional estimated_price_max for a
+//     range — see "Quoted amount" below).
 //   - "past" (Phase 3C Stage 2.2) — "+ Past Job": status="completed",
 //     appointment date must be on/after the historical migration floor
-//     (api/_lib/historical-floor.js) and no later than today, time window
-//     optional (a real NULL when unknown, never an invented placeholder),
-//     price is the actual job amount written to final_price, and an
-//     optional tip is written to its own tip_amount column — never merged
-//     into final_price. tipAmount is only ever read in this mode; New Job
-//     has no tip field in its request shape at all.
+//     (api/_lib/historical-floor.js) and no later than today, appointment
+//     time optional (a real NULL when unknown, never an invented
+//     placeholder), price is the actual job amount written to final_price,
+//     and an optional tip is written to its own tip_amount column — never
+//     merged into final_price. tipAmount is only ever read in this mode;
+//     New Job has no tip field in its request shape at all.
+//
+// Appointment time (Phase 3C Stage 2.5) — a job carries at most one of
+// time_window/exact_time, enforced at the database level by the
+// bookings_time_mode_exclusive CHECK constraint. body.exactTime ("HH:MM",
+// what a bare `<input type="time">` submits) and body.timeWindow are
+// mutually exclusive at the request level too: sending both non-empty is
+// rejected outright, before either is validated against its own allowlist.
+// Whichever mode isn't chosen is written as a literal NULL, never left
+// unset/undefined, so a later read can never see a stale value from a
+// previous edit.
+//
+// Quoted amount (Phase 3C Stage 2.5) — estimated_price_max is optional and,
+// when present, requires estimated_price to also be present and strictly
+// greater than it (also enforced at the database level by the
+// bookings_quote_max_requires_min/bookings_quote_max_greater_than_min CHECK
+// constraints) — an exact quote is estimated_price alone with
+// estimated_price_max left NULL, never a duplicated value. New-mode only,
+// same scope as estimated_price itself.
 // `mode` is read once, validated against an explicit allowlist, and never
 // inferred from any other field — so the two very different rule sets below
 // can never be crossed by a crafted request. `status` itself is never read
@@ -265,25 +292,35 @@ async function handleCreate(req, res) {
   }
 
   const timeWindowRaw = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
+  const exactTimeRaw = typeof body.exactTime === "string" ? body.exactTime.trim() : "";
+  if (timeWindowRaw && exactTimeRaw) {
+    res.status(400).json({ error: "Choose either an exact time or a time window, not both." });
+    return;
+  }
   let timeWindow = null;
-  if (isPast) {
-    // Past Job's time is optional — a real NULL, never an invented
-    // placeholder, when the owner doesn't remember it (confirmed nullable
-    // at the database level; see docs/phase-3/stage2-preflight.md). Only
-    // validated against the allowlist when a value was actually submitted.
-    if (timeWindowRaw) {
-      if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
-        res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
-        return;
-      }
-      timeWindow = timeWindowRaw;
+  let exactTime = null;
+  if (exactTimeRaw) {
+    if (!EXACT_TIME_RE.test(exactTimeRaw)) {
+      res.status(400).json({ error: "Please enter a valid time." });
+      return;
     }
-  } else {
+    exactTime = exactTimeRaw;
+  } else if (timeWindowRaw) {
     if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
-      res.status(400).json({ error: "A valid appointment time is required." });
+      res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
       return;
     }
     timeWindow = timeWindowRaw;
+  }
+  if (isPast) {
+    // Past Job's time is optional — a real NULL, never an invented
+    // placeholder, when the owner doesn't remember it (confirmed nullable
+    // at the database level; see docs/phase-3/stage2-preflight.md). Neither
+    // field being present is fine; only checked above when one was actually
+    // submitted.
+  } else if (!timeWindow && !exactTime) {
+    res.status(400).json({ error: "A valid appointment time is required." });
+    return;
   }
 
   const addrIn = body.serviceAddress && typeof body.serviceAddress === "object" && !Array.isArray(body.serviceAddress) ? body.serviceAddress : {};
@@ -312,6 +349,7 @@ async function handleCreate(req, res) {
   const internalNotes = sanitizeText(body.internalNotes, MAX.long) || null;
 
   let estimatedPrice = null;
+  let estimatedPriceMax = null;
   let finalPrice = null;
   let tipAmount = null;
   if (isPast) {
@@ -353,6 +391,29 @@ async function handleCreate(req, res) {
       }
       estimatedPrice = Math.round(n * 100) / 100;
     }
+    // Quote range max (Phase 3C Stage 2.5) — optional, and only meaningful
+    // alongside a minimum. Mirrors the database's own
+    // bookings_quote_max_requires_min / bookings_quote_max_greater_than_min
+    // CHECK constraints at the application layer, so a bad request is
+    // rejected with a clear message rather than surfacing as an opaque
+    // constraint-violation 500 from Supabase.
+    if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
+      if (estimatedPrice === null) {
+        res.status(400).json({ error: "A quote range needs a minimum amount." });
+        return;
+      }
+      const n = Number(body.estimatedPriceMax);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid maximum quote amount." });
+        return;
+      }
+      const rounded = Math.round(n * 100) / 100;
+      if (rounded <= estimatedPrice) {
+        res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
+        return;
+      }
+      estimatedPriceMax = rounded;
+    }
   }
 
   const status = isPast ? "completed" : "booked";
@@ -372,9 +433,11 @@ async function handleCreate(req, res) {
         service_type: serviceType,
         appointment_date: appointmentDate,
         time_window: timeWindow,
+        exact_time: exactTime,
         status: status,
         description: description,
         estimated_price: estimatedPrice,
+        estimated_price_max: estimatedPriceMax,
         final_price: finalPrice,
         tip_amount: tipAmount,
         internal_notes: internalNotes,
@@ -387,7 +450,7 @@ async function handleCreate(req, res) {
         service_zip: serviceZip,
       })
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
       )
       .single();
 
@@ -403,8 +466,11 @@ async function handleCreate(req, res) {
         appointmentDate: created.appointment_date,
         timeWindow: created.time_window,
         timeWindowLabel: timeWindowLabel(created.time_window),
+        exactTime: created.exact_time,
+        timeLabel: effectiveTimeLabel(created.time_window, created.exact_time),
         description: created.description,
         estimatedPrice: created.estimated_price,
+        estimatedPriceMax: created.estimated_price_max,
         finalPrice: created.final_price,
         tipAmount: created.tip_amount,
         internalNotes: created.internal_notes,
@@ -480,14 +546,26 @@ async function handleCreate(req, res) {
 //     valid current/future date, matching New Job's own rule.
 // Changing the date never changes status.
 //
-// Time-window contract mirrors booking.js's create-time rules exactly,
-// keyed off the same current-status read: optional (a real NULL, never an
-// invented placeholder) for a completed job, required and validated against
-// the full VALID_TIME_WINDOWS allowlist otherwise. No exception was needed
-// here beyond that — every existing booking's time_window is either NULL or
-// already one of the allowlisted ids (this project's public booking flow
-// and admin create flow have only ever written one of those), so there is
-// no equivalent "legacy value now out of range" case the way dates have.
+// Appointment-time contract mirrors booking.js's create-time rules exactly,
+// keyed off the same current-status read: optional (neither time_window nor
+// exact_time required — a real NULL/NULL, never an invented placeholder)
+// for a completed job, one of the two required otherwise. Sending both a
+// non-empty timeWindow and a non-empty exactTime is always rejected,
+// regardless of status. Whichever mode isn't chosen is written as an
+// explicit NULL on every save — so switching an existing job from Time
+// Window to Exact Time (or back) always clears the field the new mode isn't
+// using, never leaves a stale value from before the edit. No exception was
+// needed for legacy time_window values beyond what already existed — every
+// existing booking's time_window is either NULL or already one of the
+// allowlisted ids, so there is no equivalent "legacy value now out of
+// range" case the way dates have; exact_time has no legacy values at all
+// (the column is new as of Phase 3C Stage 2.5).
+//
+// Quote range (Phase 3C Stage 2.5): editable only in the same non-completed
+// branch estimated_price itself already is — estimated_price_max follows
+// estimated_price's existing scope exactly, never touched by a completed-
+// mode edit. Same min-required/strictly-greater-than validation as
+// handleCreate above.
 //
 // Concurrency: optimistic, via bookings.updated_at. The client must send
 // back the exact `updatedAt` value it read when Edit Job loaded. The update
@@ -568,6 +646,11 @@ async function handleUpdate(req, res) {
   const internalNotes = sanitizeText(body.internalNotes, MAX.long) || null;
 
   const timeWindowRaw = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
+  const exactTimeRaw = typeof body.exactTime === "string" ? body.exactTime.trim() : "";
+  if (timeWindowRaw && exactTimeRaw) {
+    res.status(400).json({ error: "Choose either an exact time or a time window, not both." });
+    return;
+  }
 
   try {
     const currentRes = await supabase
@@ -603,22 +686,27 @@ async function handleUpdate(req, res) {
       }
     }
 
-    // Time-window rules — mirrors create-time rules exactly (see header).
+    // Appointment-time rules — mirrors create-time rules exactly (see
+    // header). Whichever mode isn't chosen is set to null explicitly below,
+    // never left as whatever the row previously had.
     let timeWindow = null;
-    if (isCompleted) {
-      if (timeWindowRaw) {
-        if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
-          res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
-          return;
-        }
-        timeWindow = timeWindowRaw;
+    let exactTime = null;
+    if (exactTimeRaw) {
+      if (!EXACT_TIME_RE.test(exactTimeRaw)) {
+        res.status(400).json({ error: "Please enter a valid time." });
+        return;
       }
-    } else {
+      exactTime = exactTimeRaw;
+    } else if (timeWindowRaw) {
       if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
-        res.status(400).json({ error: "A valid appointment time is required." });
+        res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
         return;
       }
       timeWindow = timeWindowRaw;
+    }
+    if (!isCompleted && !timeWindow && !exactTime) {
+      res.status(400).json({ error: "A valid appointment time is required." });
+      return;
     }
 
     // Pricing — decided by the CURRENT (just-read, server-side) status, not
@@ -648,15 +736,39 @@ async function handleUpdate(req, res) {
         pricingUpdate.tip_amount = null;
       }
     } else {
+      let estimatedPriceForMaxCheck = null;
       if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
         const n = Number(body.estimatedPrice);
         if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
           res.status(400).json({ error: "Please enter a valid estimated price." });
           return;
         }
-        pricingUpdate.estimated_price = Math.round(n * 100) / 100;
+        estimatedPriceForMaxCheck = Math.round(n * 100) / 100;
+        pricingUpdate.estimated_price = estimatedPriceForMaxCheck;
       } else {
         pricingUpdate.estimated_price = null;
+      }
+      // Quote range max — same rules as handleCreate (see this function's
+      // header comment): optional, requires a minimum, must be strictly
+      // greater than it.
+      if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
+        if (estimatedPriceForMaxCheck === null) {
+          res.status(400).json({ error: "A quote range needs a minimum amount." });
+          return;
+        }
+        const n = Number(body.estimatedPriceMax);
+        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+          res.status(400).json({ error: "Please enter a valid maximum quote amount." });
+          return;
+        }
+        const rounded = Math.round(n * 100) / 100;
+        if (rounded <= estimatedPriceForMaxCheck) {
+          res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
+          return;
+        }
+        pricingUpdate.estimated_price_max = rounded;
+      } else {
+        pricingUpdate.estimated_price_max = null;
       }
     }
 
@@ -665,6 +777,7 @@ async function handleUpdate(req, res) {
         service_type: serviceType,
         appointment_date: appointmentDate,
         time_window: timeWindow,
+        exact_time: exactTime,
         description: description,
         internal_notes: internalNotes,
         service_address: serviceAddress,
@@ -684,7 +797,7 @@ async function handleUpdate(req, res) {
 
     const { data: updated, error } = await updateQuery
       .select(
-        "id, service_type, appointment_date, time_window, status, description, estimated_price, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at, updated_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at, updated_at"
       )
       .maybeSingle();
     if (error) throw error;
@@ -711,8 +824,11 @@ async function handleUpdate(req, res) {
         appointmentDate: updated.appointment_date,
         timeWindow: updated.time_window,
         timeWindowLabel: timeWindowLabel(updated.time_window),
+        exactTime: updated.exact_time,
+        timeLabel: effectiveTimeLabel(updated.time_window, updated.exact_time),
         description: updated.description,
         estimatedPrice: updated.estimated_price,
+        estimatedPriceMax: updated.estimated_price_max,
         finalPrice: updated.final_price,
         tipAmount: updated.tip_amount,
         internalNotes: updated.internal_notes,
@@ -745,6 +861,10 @@ const VALID_TIME_WINDOWS = Object.keys(TIME_WINDOW_DEFS);
 
 const MAX = { address: 200, city: 80, zip: 10, long: 2000 };
 const MAX_PRICE = 999999;
+// What a bare `<input type="time">.value` submits (24-hour "HH:MM", no
+// seconds) — the only shape this endpoint ever accepts from a client for
+// exact_time; Postgres accepts it directly, no ":00" suffix needed.
+const EXACT_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 // Same sanitize helper as api/book.js's own: strip control characters and
 // any "<...>"-shaped text, trim, bound length.

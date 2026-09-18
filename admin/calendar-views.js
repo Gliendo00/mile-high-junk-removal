@@ -83,6 +83,15 @@ window.AdminCalendarViews = (function () {
     return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
+  // "$350" for an exact quote, "$350 – $475" for a range (Phase 3C Stage
+  // 2.5) — never a duplicated value when there's no max.
+  function formatQuotedAmount(min, max) {
+    var minText = formatPrice(min);
+    if (!minText) return null;
+    var maxText = formatPrice(max);
+    return maxText ? minText + ' – ' + maxText : minText;
+  }
+
   // Stage 2.4.2 (second pass): Week's compact per-job mini-card has room
   // for a start time and a client name, not a full "8:00 AM – 10:00 AM"
   // range plus a name — the range alone was already most of the card's
@@ -263,7 +272,7 @@ window.AdminCalendarViews = (function () {
     a.href = '/admin/booking/?id=' + encodeURIComponent(job.id);
 
     var top = el('div', 'admin-daily-job-card-top');
-    top.appendChild(el('span', 'admin-daily-job-card-time', job.timeWindowLabel || '—'));
+    top.appendChild(el('span', 'admin-daily-job-card-time', job.timeLabel || '—'));
     top.appendChild(el('span', 'admin-status-badge admin-status-' + job.status, job.statusLabel || 'Booked'));
     a.appendChild(top);
 
@@ -272,7 +281,9 @@ window.AdminCalendarViews = (function () {
 
     var metaParts = [job.serviceLabel || job.serviceType || '—'];
     if (job.serviceAddress && job.serviceAddress.city) metaParts.push(job.serviceAddress.city);
-    var priceText = formatPrice(job.estimatedPrice);
+    // Same Actual-Collected-first-else-Quoted precedence as
+    // admin/schedule.js's Today/Tomorrow/Yesterday cards.
+    var priceText = formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) metaParts.push(priceText);
     a.appendChild(el('div', 'admin-daily-job-card-meta', metaParts.join(' · ')));
 
@@ -451,7 +462,7 @@ window.AdminCalendarViews = (function () {
         jobs.slice(0, WEEK_ROW_MAX_JOB_LINES).forEach(function (job) {
           var name = (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
           var jobRow = el('div', 'admin-week-day-row-job');
-          jobRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(job.timeWindowLabel)));
+          jobRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(job.timeLabel)));
           jobRow.appendChild(el('span', 'admin-week-day-row-job-name', name));
           jobsList.appendChild(jobRow);
         });

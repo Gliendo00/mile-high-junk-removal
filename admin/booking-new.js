@@ -39,7 +39,48 @@ document.addEventListener('DOMContentLoaded', function () {
   var serviceZipInput = document.getElementById('service-zip');
 
   var timeWindowSelect = document.getElementById('time-window');
+  var exactTimeInput = document.getElementById('exact-time');
+  var timeModeToggle = document.getElementById('time-mode-toggle');
   var appointmentDateInput = document.getElementById('appointment-date');
+
+  var estimatedPriceInput = document.getElementById('estimated-price');
+  var estimatedPriceMaxInput = document.getElementById('estimated-price-max');
+  var quoteModeToggle = document.getElementById('quote-mode-toggle');
+  var quoteMaxWrap = document.getElementById('quote-max-wrap');
+  var quoteToLabel = document.getElementById('quote-to-label');
+
+  // Phase 3C Stage 2.5: "Exact Time | Time Window" and "Exact | Range" are
+  // both simple two-button segmented toggles — see admin.css's
+  // .admin-segmented. Tracked as plain variables (not re-derived from which
+  // element happens to be visible) so submit-time logic is unambiguous even
+  // if a field was filled in, then the mode was switched away from it.
+  var timeMode = 'window';
+  var quoteMode = 'exact';
+
+  function setupSegmented(container, onSelect) {
+    var buttons = container.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(buttons, function (b) { b.classList.toggle('is-active', b === btn); });
+        onSelect(btn.getAttribute('data-mode'));
+      });
+    });
+  }
+
+  setupSegmented(timeModeToggle, function (mode) {
+    timeMode = mode;
+    var isExact = mode === 'exact';
+    exactTimeInput.style.display = isExact ? 'block' : 'none';
+    timeWindowSelect.style.display = isExact ? 'none' : 'block';
+  });
+
+  setupSegmented(quoteModeToggle, function (mode) {
+    quoteMode = mode;
+    var isRange = mode === 'range';
+    quoteToLabel.style.display = isRange ? 'inline' : 'none';
+    quoteMaxWrap.style.display = isRange ? 'flex' : 'none';
+    if (!isRange) estimatedPriceMaxInput.value = '';
+  });
 
   var selectedClient = null;
   var toastTimer = null;
@@ -165,8 +206,23 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
 
-    if (!timeWindowSelect.value) {
+    if (timeMode === 'exact') {
+      if (!exactTimeInput.value) {
+        showError('Please choose an exact time.');
+        return;
+      }
+    } else if (!timeWindowSelect.value) {
       showError('Please select a time window.');
+      return;
+    }
+
+    if (quoteMode === 'range' && !estimatedPriceInput.value.trim()) {
+      showError('A quote range needs a minimum amount.');
+      return;
+    }
+    if (quoteMode === 'range' && estimatedPriceMaxInput.value.trim() &&
+        Number(estimatedPriceMaxInput.value) <= Number(estimatedPriceInput.value)) {
+      showError('The maximum quote amount must be greater than the minimum.');
       return;
     }
 
@@ -174,7 +230,8 @@ document.addEventListener('DOMContentLoaded', function () {
       customerId: selectedClient.id,
       serviceType: document.getElementById('service-type').value,
       appointmentDate: appointmentDateInput.value,
-      timeWindow: timeWindowSelect.value,
+      timeWindow: timeMode === 'window' ? timeWindowSelect.value : '',
+      exactTime: timeMode === 'exact' ? exactTimeInput.value : '',
       serviceAddress: {
         address: serviceAddressInput.value.trim(),
         city: serviceCityInput.value.trim(),
@@ -184,8 +241,12 @@ document.addEventListener('DOMContentLoaded', function () {
       description: document.getElementById('description').value.trim(),
       internalNotes: document.getElementById('internal-notes').value.trim(),
     };
-    var priceRaw = document.getElementById('estimated-price').value.trim();
+    var priceRaw = estimatedPriceInput.value.trim();
     if (priceRaw) body.estimatedPrice = Number(priceRaw);
+    if (quoteMode === 'range') {
+      var maxRaw = estimatedPriceMaxInput.value.trim();
+      if (maxRaw) body.estimatedPriceMax = Number(maxRaw);
+    }
 
     savingInFlight = true;
     saveBtn.disabled = true;

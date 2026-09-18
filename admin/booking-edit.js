@@ -68,7 +68,9 @@ document.addEventListener('DOMContentLoaded', function () {
   var appointmentDateLabel = document.getElementById('appointment-date-label');
   var dateHint = document.getElementById('date-hint');
   var timeWindowSelect = document.getElementById('time-window');
-  var timeWindowLabel = document.getElementById('time-window-label');
+  var exactTimeInput = document.getElementById('exact-time');
+  var timeModeLabelEl = document.getElementById('time-mode-label');
+  var timeModeToggle = document.getElementById('time-mode-toggle');
   var serviceTypeSelect = document.getElementById('service-type');
 
   var serviceAddressInput = document.getElementById('service-address');
@@ -79,6 +81,10 @@ document.addEventListener('DOMContentLoaded', function () {
   var pricingEstimatedRow = document.getElementById('pricing-estimated');
   var pricingCompletedRow = document.getElementById('pricing-completed');
   var estimatedPriceInput = document.getElementById('estimated-price');
+  var estimatedPriceMaxInput = document.getElementById('estimated-price-max');
+  var quoteModeToggle = document.getElementById('quote-mode-toggle');
+  var quoteMaxWrap = document.getElementById('quote-max-wrap');
+  var quoteToLabel = document.getElementById('quote-to-label');
   var actualPriceInput = document.getElementById('actual-price');
   var tipAmountInput = document.getElementById('tip-amount');
   var descriptionInput = document.getElementById('description');
@@ -101,6 +107,44 @@ document.addEventListener('DOMContentLoaded', function () {
   var loadedUpdatedAt = undefined; // the concurrency token captured on load
   var savingInFlight = false;
   var toastTimer = null;
+
+  // Phase 3C Stage 2.5: same "Exact Time | Time Window" and "Exact | Range"
+  // segmented toggles as New Job/Past Job — see admin/booking-new.js's
+  // identical comment. Edit Job additionally initializes each mode from the
+  // loaded booking (see render() below) rather than always defaulting to
+  // the first option, so reopening an exact-time or ranged-quote job shows
+  // it correctly rather than silently switching it back to the other mode.
+  var timeMode = 'window';
+  var quoteMode = 'exact';
+
+  function setupSegmented(container, onSelect) {
+    var buttons = container.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(buttons, function (b) { b.classList.toggle('is-active', b === btn); });
+        onSelect(btn.getAttribute('data-mode'));
+      });
+    });
+  }
+  function setSegmentedActive(container, mode) {
+    var buttons = container.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (b) {
+      b.classList.toggle('is-active', b.getAttribute('data-mode') === mode);
+    });
+  }
+  setupSegmented(timeModeToggle, function (mode) {
+    timeMode = mode;
+    var isExact = mode === 'exact';
+    exactTimeInput.style.display = isExact ? 'block' : 'none';
+    timeWindowSelect.style.display = isExact ? 'none' : 'block';
+  });
+  setupSegmented(quoteModeToggle, function (mode) {
+    quoteMode = mode;
+    var isRange = mode === 'range';
+    quoteToLabel.style.display = isRange ? 'inline' : 'none';
+    quoteMaxWrap.style.display = isRange ? 'flex' : 'none';
+    if (!isRange) estimatedPriceMaxInput.value = '';
+  });
 
   function showError(msg) {
     loadingEl.style.display = 'none';
@@ -190,16 +234,26 @@ document.addEventListener('DOMContentLoaded', function () {
       appointmentDateInput.min = HISTORICAL_FLOOR_ISO;
       appointmentDateInput.max = todayIso;
       dateHint.textContent = 'Completed jobs can be corrected to any date from Jan 1, 2026 through today.';
-      timeWindowLabel.textContent = 'Time (optional)';
+      timeModeLabelEl.textContent = 'Appointment Time (optional)';
     } else {
       appointmentDateLabel.textContent = 'Appointment Date';
       appointmentDateInput.min = todayIso;
       appointmentDateInput.removeAttribute('max');
       dateHint.textContent = 'This job can be moved to another current or future date.';
-      timeWindowLabel.textContent = 'Time Window';
+      timeModeLabelEl.textContent = 'Appointment Time';
     }
     appointmentDateInput.value = booking.appointmentDate || '';
     populateTimeWindowOptions(booking.timeWindow || '');
+
+    // Initial mode: exact time wins if the loaded booking has one (matches
+    // effectiveTimeLabel's own precedence server-side), otherwise Time
+    // Window — never guessed from anything but what this booking actually
+    // has saved.
+    timeMode = booking.exactTime ? 'exact' : 'window';
+    setSegmentedActive(timeModeToggle, timeMode);
+    exactTimeInput.value = booking.exactTime ? booking.exactTime.slice(0, 5) : '';
+    exactTimeInput.style.display = timeMode === 'exact' ? 'block' : 'none';
+    timeWindowSelect.style.display = timeMode === 'exact' ? 'none' : 'block';
 
     serviceTypeSelect.value = booking.serviceType || 'junk_removal';
 
@@ -217,6 +271,13 @@ document.addEventListener('DOMContentLoaded', function () {
       pricingEstimatedRow.style.display = 'block';
       pricingCompletedRow.style.display = 'none';
       estimatedPriceInput.value = booking.estimatedPrice === null || booking.estimatedPrice === undefined ? '' : booking.estimatedPrice;
+      // Range mode only when this booking actually has a max saved — never
+      // guessed, mirrors the exact-time-vs-window init just above.
+      quoteMode = booking.estimatedPriceMax !== null && booking.estimatedPriceMax !== undefined ? 'range' : 'exact';
+      setSegmentedActive(quoteModeToggle, quoteMode);
+      estimatedPriceMaxInput.value = quoteMode === 'range' ? booking.estimatedPriceMax : '';
+      quoteToLabel.style.display = quoteMode === 'range' ? 'inline' : 'none';
+      quoteMaxWrap.style.display = quoteMode === 'range' ? 'flex' : 'none';
     }
 
     descriptionInput.value = booking.description || '';
@@ -235,9 +296,15 @@ document.addEventListener('DOMContentLoaded', function () {
       showError('Please choose a date.');
       return;
     }
-    if (!isCompleted && !timeWindowSelect.value) {
-      showError('Please select a time window.');
-      return;
+    if (!isCompleted) {
+      if (timeMode === 'exact' && !exactTimeInput.value) {
+        showError('Please choose an exact time.');
+        return;
+      }
+      if (timeMode === 'window' && !timeWindowSelect.value) {
+        showError('Please select a time window.');
+        return;
+      }
     }
 
     var body = {
@@ -245,7 +312,8 @@ document.addEventListener('DOMContentLoaded', function () {
       updatedAt: loadedUpdatedAt,
       serviceType: serviceTypeSelect.value,
       appointmentDate: appointmentDateInput.value,
-      timeWindow: timeWindowSelect.value,
+      timeWindow: timeMode === 'window' ? timeWindowSelect.value : '',
+      exactTime: timeMode === 'exact' ? exactTimeInput.value : '',
       serviceAddress: {
         address: serviceAddressInput.value.trim(),
         city: serviceCityInput.value.trim(),
@@ -261,8 +329,18 @@ document.addEventListener('DOMContentLoaded', function () {
       var tipRaw = tipAmountInput.value.trim();
       body.tipAmount = tipRaw ? Number(tipRaw) : '';
     } else {
+      if (quoteMode === 'range' && !estimatedPriceInput.value.trim()) {
+        showError('A quote range needs a minimum amount.');
+        return;
+      }
+      if (quoteMode === 'range' && estimatedPriceMaxInput.value.trim() &&
+          Number(estimatedPriceMaxInput.value) <= Number(estimatedPriceInput.value)) {
+        showError('The maximum quote amount must be greater than the minimum.');
+        return;
+      }
       var estRaw = estimatedPriceInput.value.trim();
       body.estimatedPrice = estRaw ? Number(estRaw) : '';
+      body.estimatedPriceMax = (quoteMode === 'range' && estimatedPriceMaxInput.value.trim()) ? Number(estimatedPriceMaxInput.value) : '';
     }
 
     savingInFlight = true;

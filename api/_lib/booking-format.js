@@ -17,7 +17,7 @@
 // touch api/book.js and book/book.js together, that would be the time to
 // collapse every remaining copy (service labels, status labels) into one.
 
-const { TIME_WINDOW_DEFS } = require("./time-windows");
+const { TIME_WINDOW_DEFS, formatExactTime } = require("./time-windows");
 
 const SERVICE_LABELS = {
   junk_removal: "Junk Removal",
@@ -54,6 +54,18 @@ function timeWindowLabel(raw) {
   return TIME_WINDOW_LABELS[raw] || String(raw);
 }
 
+// Phase 3C Stage 2.5: the one appointment-time label every display surface
+// (Schedule cards, booking detail, Requests, Client history) should use
+// instead of timeWindowLabel() alone, now that a job can carry either a
+// time_window or an exact_time. Same exact-time-wins precedence as
+// api/_lib/time-windows.js's effectiveTimeSortMinutes — see that function's
+// comment for why (the DB constraint makes "both set" impossible for a new
+// row, but this stays defensive for old/malformed data regardless).
+function effectiveTimeLabel(timeWindowRaw, exactTimeRaw) {
+  const exactLabel = formatExactTime(exactTimeRaw);
+  return exactLabel || timeWindowLabel(timeWindowRaw);
+}
+
 // NULL/empty status normalizes to "new" for DISPLAY purposes only — per
 // docs/phase-1/crm-status-plan.md, this is never written back to the
 // database. An unrecognized non-empty value (shouldn't happen given
@@ -75,6 +87,7 @@ module.exports = {
   STATUS_LABELS,
   serviceLabel,
   timeWindowLabel,
+  effectiveTimeLabel,
   normalizedStatus,
   statusLabel,
 };
