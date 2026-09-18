@@ -118,11 +118,29 @@ window.AdminAddressAutocomplete = (function () {
             // library has actually finished initializing, instead of relying
             // on a script.onload timing assumption that this loading mode
             // does not honor.
-            if (window.google && window.google.maps && typeof window.google.maps.importLibrary === "function") {
-              window.google.maps.importLibrary("places").then(resolve, reject);
-            } else {
-              reject(new Error("Google Maps script loaded but google.maps.importLibrary is unavailable"));
-            }
+            //
+            // google.maps.importLibrary itself is ALSO not necessarily defined
+            // the instant onload fires — confirmed live via instrumented
+            // tracing: importLibrary was still undefined at the exact moment
+            // onload fired, and only appeared ~60-90ms later once more of
+            // Google's own internal sub-scripts finished loading. So this
+            // polls briefly for importLibrary to appear rather than assuming
+            // it's ready synchronously here too — the same class of race,
+            // one level deeper.
+            var importLibraryWaitAttempts = 0;
+            var IMPORT_LIBRARY_MAX_WAIT_ATTEMPTS = 100; // ~5s at 50ms apiece
+            (function waitForImportLibrary() {
+              if (window.google && window.google.maps && typeof window.google.maps.importLibrary === "function") {
+                window.google.maps.importLibrary("places").then(resolve, reject);
+                return;
+              }
+              importLibraryWaitAttempts++;
+              if (importLibraryWaitAttempts >= IMPORT_LIBRARY_MAX_WAIT_ATTEMPTS) {
+                reject(new Error("Google Maps script loaded but google.maps.importLibrary never became available"));
+                return;
+              }
+              setTimeout(waitForImportLibrary, 50);
+            })();
           };
           document.head.appendChild(script);
         } catch (err) {

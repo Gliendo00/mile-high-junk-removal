@@ -155,6 +155,20 @@ test("address-autocomplete.js: readiness after script load uses google.maps.impo
   );
 });
 
+test("address-autocomplete.js: waits (polls) for google.maps.importLibrary to actually become a function before calling it, rather than checking it synchronously once at script.onload time — found live on Preview via instrumented tracing: importLibrary was still undefined at the exact moment onload fired (a second, deeper instance of the same loading=async race the first fix addressed), only appearing ~60-90ms later once more of Google's own internal sub-scripts finished loading; a single synchronous check at onload lost this race every time and was silently swallowed", () => {
+  const src = read("admin/address-autocomplete.js");
+  const onloadBlock = src.match(/script\.onload = function \(\) \{[\s\S]*?\n {10}\};/);
+  assert.ok(onloadBlock, "must find the script.onload handler block");
+  assert.ok(
+    /setTimeout\(\s*waitForImportLibrary/.test(onloadBlock[0]),
+    "must retry/poll for google.maps.importLibrary's availability (e.g. via a bounded setTimeout loop) rather than checking it exactly once, synchronously, at onload time"
+  );
+  assert.ok(
+    /importLibraryWaitAttempts\s*>=\s*IMPORT_LIBRARY_MAX_WAIT_ATTEMPTS/.test(onloadBlock[0]) || /MAX_WAIT_ATTEMPTS/.test(onloadBlock[0]),
+    "the poll must be bounded (a max attempt/timeout) so a genuinely broken Google load still rejects and falls back to manual entry, instead of retrying forever"
+  );
+});
+
 test("address-autocomplete.js: every Google call is wrapped so a failure degrades to manual entry, never blocks or disables the input", () => {
   const src = read("admin/address-autocomplete.js");
   assert.ok(!/addressInput\.disabled\s*=\s*true/.test(src), "must never disable the manual input");
