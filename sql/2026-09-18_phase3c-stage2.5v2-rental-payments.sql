@@ -96,8 +96,24 @@ CREATE TABLE IF NOT EXISTS rental_payments (
   -- admin can check the Braintree dashboard for a matching transaction
   -- before anyone takes further action. See
   -- docs/phase-3/stage2.5-rental-payments-v2-hardening-audit.md §6.
+  --
+  -- 'paid_reconciliation_required' (added in the 2026-09-18 readiness
+  -- pass, docs/phase-3/stage2.5-rental-payments-v2-readiness-pass.md §2-3)
+  -- is DIFFERENT from 'error_pending_review': this one means Braintree
+  -- DEFINITELY returned success (we have a real braintree_transaction_id)
+  -- but writing that confirmation to this row failed even after retries —
+  -- a local-persistence gap, not an unknown outcome. api/book.js/
+  -- handleApproveCharge attempt this row's full update up to 3 times with
+  -- short backoff first; only if every attempt fails does the row end up
+  -- here, via a second, minimal fallback write carrying just this status
+  -- and the transaction id (the two fields most likely to fit even if the
+  -- original failure was payload-shaped rather than a total outage). If
+  -- even that fallback write fails, no row in this table reflects the
+  -- charge at all — the Braintree transaction's own orderId (set to this
+  -- booking's id at charge time, independent of anything written here) is
+  -- the last-resort recovery path in that extreme case.
   payment_status text NOT NULL DEFAULT 'processing'
-    CHECK (payment_status IN ('processing', 'paid', 'failed', 'voided', 'refunded', 'error_pending_review')),
+    CHECK (payment_status IN ('processing', 'paid', 'failed', 'voided', 'refunded', 'error_pending_review', 'paid_reconciliation_required')),
   amount_charged numeric(10,2),
   -- Rate-schedule snapshot, frozen at the moment THIS booking was paid —
   -- never re-derived from api/_lib/rental-pricing.js's current constants
@@ -154,8 +170,15 @@ CREATE TABLE IF NOT EXISTS rental_additional_charges (
   -- 'proposed' and 'failed' are retryable) — an ambiguous outcome requires
   -- a human to check Braintree directly, never an automatic retry that
   -- could double-charge.
+  --
+  -- 'paid_reconciliation_required' (added in the 2026-09-18 readiness
+  -- pass) — same distinction as rental_payments' own value: Braintree
+  -- definitely succeeded (a real braintree_transaction_id exists) but the
+  -- final "mark paid" write failed even after retries. Also excluded from
+  -- the retry-eligible approve set for the same double-charge-safety
+  -- reason as 'error_pending_review'.
   status text NOT NULL DEFAULT 'proposed'
-    CHECK (status IN ('proposed', 'approved', 'processing', 'paid', 'failed', 'voided', 'error_pending_review')),
+    CHECK (status IN ('proposed', 'approved', 'processing', 'paid', 'failed', 'voided', 'error_pending_review', 'paid_reconciliation_required')),
   proposed_by text NOT NULL,
   proposed_at timestamptz NOT NULL DEFAULT now(),
   approved_by text,

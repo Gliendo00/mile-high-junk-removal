@@ -17,6 +17,7 @@ const { TIME_WINDOW_DEFS } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getBraintreeGateway } = require("../_lib/braintree-client");
+const { retryUpdate } = require("../_lib/db-retry");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -1197,11 +1198,18 @@ async function handleApproveCharge(req, res, session) {
     // deliberately excluded from the retry-eligible statuses above, so a
     // human must check the Braintree dashboard before anything happens to
     // this charge again.
+    // 2026-09-18 readiness pass — orderId (a standard, Control-Panel-
+    // searchable Braintree field) links this transaction back to both the
+    // charge and its booking, set as part of the SAME request that
+    // creates the charge — durable on Braintree's side regardless of
+    // whether any write below succeeds. Only an internal id, never
+    // customer data.
     let saleResult;
     try {
       saleResult = await gateway.transaction.sale({
         amount: approvedRow.amount.toFixed(2),
         paymentMethodToken: paymentMethodToken,
+        orderId: approvedRow.booking_id + "-charge-" + id,
         options: { submitForSettlement: true },
       });
     } catch (err) {
@@ -1233,35 +1241,76 @@ async function handleApproveCharge(req, res, session) {
       return;
     }
 
+    // 2026-09-18 readiness pass — same bounded retry-then-minimal-fallback
+    // saga step as api/book.js's own post-charge write (see
+    // docs/phase-3/stage2.5-rental-payments-v2-readiness-pass.md §2-3):
+    // the charge has already happened; everything below is best-effort
+    // persistence of that fact, never a condition for the response.
     const { data: paidRow, error: paidErr } = await supabase
       .from("rental_additional_charges")
       .update({ status: "paid", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() })
       .eq("id", id)
       .select("*")
       .maybeSingle();
-    if (paidErr) {
-      // The charge already SUCCEEDED on Braintree's side at this point —
-      // this is a reconciliation problem, never a reason to tell the
-      // admin the charge failed (it didn't; money moved). Logged loudly
-      // with the transaction id so it can be reconciled manually; the
-      // response still reports success since that's the truth of what
-      // happened to the customer's card.
-      console.error(
-        "CRITICAL: Braintree charge succeeded but rental_additional_charges could not be marked paid. chargeId=" +
-          id +
-          " braintreeTransactionId=" +
-          saleResult.transaction.id +
-          ":",
-        paidErr
-      );
+    if (!paidErr && paidRow) {
+      res.status(200).json({ ok: true, charge: serializeCharge(paidRow) });
+      return;
+    }
+
+    // The single-attempt update above failed (or returned no row) —
+    // retry it a couple more times before falling back to a minimal write.
+    const fullConfirmed = await retryUpdate(
+      () => supabase.from("rental_additional_charges").update({ status: "paid", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() }).eq("id", id),
+      [400]
+    );
+    if (fullConfirmed) {
       res.status(200).json({
         ok: true,
         charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", braintreeTransactionId: saleResult.transaction.id }),
-        warning: "Charged successfully, but this page couldn't confirm the record was saved — refresh to verify.",
       });
       return;
     }
-    res.status(200).json({ ok: true, charge: serializeCharge(paidRow) });
+
+    // Every attempt at the full update failed. Minimal fallback write —
+    // just status + transaction id — distinct from "failed" (which the
+    // Approve button would let an admin retry and risk a double charge):
+    // 'paid_reconciliation_required' means Braintree DEFINITELY
+    // succeeded, only the full record couldn't be persisted.
+    const minimalConfirmed = await retryUpdate(
+      () => supabase.from("rental_additional_charges").update({ status: "paid_reconciliation_required", braintree_transaction_id: saleResult.transaction.id, updated_at: new Date().toISOString() }).eq("id", id),
+      [150]
+    );
+    console.error(
+      "CRITICAL: Braintree charge succeeded but rental_additional_charges could not be fully confirmed after retries. " +
+        (minimalConfirmed ? "Minimal fallback write (status + transaction id only) DID succeed — see status='paid_reconciliation_required'. " : "Even the minimal fallback write failed — this charge's record does not reflect it at all. ") +
+        "Search the Braintree dashboard for orderId='" +
+        approvedRow.booking_id +
+        "-charge-" +
+        id +
+        "' to find this transaction. chargeId=" +
+        id +
+        " bookingId=" +
+        approvedRow.booking_id +
+        " braintreeTransactionId=" +
+        saleResult.transaction.id,
+      paidErr
+    );
+    // Reports 'paid_reconciliation_required' here regardless of whether
+    // even the minimal write itself succeeded — that's the true state the
+    // admin needs to act on either way (Braintree charged the customer;
+    // our own record of it is incomplete-to-nonexistent). Telling the
+    // admin "paid" outright here would risk them believing the database
+    // already reflects a state it may not.
+    res.status(200).json({
+      ok: true,
+      charge: Object.assign({}, serializeCharge(approvedRow), {
+        status: "paid_reconciliation_required",
+        braintreeTransactionId: saleResult.transaction.id,
+      }),
+      warning: minimalConfirmed
+        ? "Charged successfully, but the full record couldn't be saved — marked for reconciliation. Refresh to verify."
+        : "Charged successfully, but this charge's record could not be updated at all — search the Braintree dashboard for this transaction to reconcile manually.",
+    });
   } catch (err) {
     console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not process this charge." });

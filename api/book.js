@@ -72,6 +72,7 @@ const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = re
 const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getBraintreeGateway } = require("./_lib/braintree-client");
 const rentalPricing = require("./_lib/rental-pricing");
+const { retryUpdate } = require("./_lib/db-retry");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -544,11 +545,17 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   }
 
   if (existingPayment) {
-    if (existingPayment.payment_status === "paid") {
+    if (existingPayment.payment_status === "paid" || existingPayment.payment_status === "paid_reconciliation_required") {
       // A genuine repeat of an already-successful submit (double-click,
       // browser back/resubmit, a retried fetch) — return the same success
       // shape again rather than re-processing anything. No email is
       // re-sent; that already happened on the original successful attempt.
+      // 'paid_reconciliation_required' is included here deliberately: that
+      // status means Braintree DEFINITELY succeeded (see the sale()
+      // success block below) — the customer genuinely is booked, even
+      // though our own confirmation record is incomplete. That's an admin
+      // reconciliation concern, never a reason to tell the customer
+      // anything other than the truth.
       res.status(200).json(withUploadToken(existingPayment.booking_id, { ok: true, booked: true }));
       return;
     }
@@ -744,11 +751,22 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   //     answer from Braintree (a clean decline or a request-validation
   //     failure) — Braintree is explicitly telling us no money moved, so
   //     rolling back and freeing the slot immediately is correct and safe.
+  // 2026-09-18 readiness pass, §2-3 — orderId is a standard, searchable
+  // Braintree transaction field (Control Panel search + the Search API),
+  // set here as part of the SAME request that creates the charge — so it
+  // exists on the Braintree transaction regardless of anything that
+  // happens afterward, including a total Supabase outage. This is the
+  // last-resort correlation path: if every local write below fails, an
+  // admin can search the Braintree dashboard for orderId = this booking's
+  // id and find the transaction directly. Deliberately just the internal
+  // booking UUID — no name, address, phone, or other customer data ever
+  // reaches Braintree's metadata.
   let saleResult;
   try {
     saleResult = await gateway.transaction.sale({
       amount: amount.toFixed(2),
       paymentMethodNonce: data.payment.nonce,
+      orderId: bookingId,
       options: { submitForSettlement: true, storeInVaultOnSuccess: true },
     });
   } catch (err) {
@@ -779,36 +797,96 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     return;
   }
 
-  // 8. Success — finalize the payment row.
+  // 8. Success — finalize the payment row. The charge has ALREADY
+  // happened at this point — every write below is best-effort persistence
+  // of that fact, never a condition for whether the customer is told
+  // they're booked (see the response at the end of this function, which
+  // is unconditional from here on).
   const txn = saleResult.transaction;
   const methodInfo = extractPaymentMethodInfo(txn);
+
+  // 2026-09-18 readiness pass, §2-3 — a bounded, practical saga step, not
+  // pretended atomicity: retry the full confirmation write a few times
+  // (short backoff — a transient blip is the most likely real-world cause
+  // of this specific write failing) before giving up on it. Wrapped in
+  // try/catch, not just relying on retryUpdate's own internal catch,
+  // because building the update payload itself never throws but this
+  // stays defensive regardless.
+  let confirmed = false;
   try {
-    const { error } = await supabase
-      .from("rental_payments")
-      .update({
-        payment_status: "paid",
-        braintree_transaction_id: txn.id,
-        braintree_customer_id: txn.customer && txn.customer.id ? txn.customer.id : null,
-        braintree_payment_method_token: methodInfo.token,
-        payment_method_summary: methodInfo.summary,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("booking_id", bookingId);
-    if (error) throw error;
+    confirmed = await retryUpdate(
+      () =>
+        supabase
+          .from("rental_payments")
+          .update({
+            payment_status: "paid",
+            braintree_transaction_id: txn.id,
+            braintree_customer_id: txn.customer && txn.customer.id ? txn.customer.id : null,
+            braintree_payment_method_token: methodInfo.token,
+            payment_method_summary: methodInfo.summary,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("booking_id", bookingId),
+      [150, 400]
+    );
   } catch (err) {
-    // The charge already SUCCEEDED on Braintree's side at this point — this
-    // is now a reconciliation problem, never a reason to tell the customer
-    // their booking failed (it didn't; money moved and the slot is
-    // genuinely theirs). Logged loudly for manual admin follow-up rather
-    // than surfaced as an error response.
+    confirmed = false;
+  }
+
+  if (!confirmed) {
+    // Every retry of the full update failed. Fall back to the smallest
+    // possible write — just enough to durably record THAT Braintree
+    // succeeded and WHICH transaction it was — in case the original
+    // failure was shaped by the payload (e.g. one unexpected field) rather
+    // than a total outage. This is deliberately a DIFFERENT status from
+    // "paid": 'paid_reconciliation_required' means "Braintree definitely
+    // succeeded, but the full record could not be persisted" — never
+    // confused with 'error_pending_review' ("outcome unknown"), and never
+    // reachable by any retry/replay path (see the idempotency pre-check
+    // above and rollbackDumpsterBooking, neither of which treat this
+    // status as anything but a dead end requiring a human).
+    let minimalConfirmed = false;
+    try {
+      minimalConfirmed = await retryUpdate(
+        () =>
+          supabase
+            .from("rental_payments")
+            .update({ payment_status: "paid_reconciliation_required", braintree_transaction_id: txn.id, updated_at: new Date().toISOString() })
+            .eq("booking_id", bookingId),
+        [150]
+      );
+    } catch (err) {
+      minimalConfirmed = false;
+    }
+
+    // Whether or not even the minimal write succeeded, this is logged
+    // loudly either way — Vercel logs are a real but last-resort trace;
+    // the durable, database-independent one is the orderId set on the
+    // Braintree transaction itself, above, which exists regardless of
+    // anything that happens from here on.
     console.error(
-      "CRITICAL: Braintree charge succeeded but rental_payments could not be marked paid. bookingId=" + bookingId + " braintreeTransactionId=" + txn.id + ":",
-      err
+      "CRITICAL: Braintree charge succeeded (transaction.sale() success=true) but rental_payments could not be fully confirmed after retries. " +
+        (minimalConfirmed ? "Minimal fallback write (status + transaction id only) DID succeed — see rental_payments.payment_status='paid_reconciliation_required' for this booking. " : "Even the minimal fallback write failed — this booking's payment record does not reflect this charge at all. ") +
+        "Search the Braintree dashboard for orderId='" +
+        bookingId +
+        "' to find this transaction. bookingId=" +
+        bookingId +
+        " braintreeTransactionId=" +
+        txn.id +
+        " amount=" +
+        amount.toFixed(2)
     );
   }
 
   await sendBookingNotificationEmail(data, { amount: amount, transactionId: txn.id, methodSummary: methodInfo.summary });
 
+  // Unconditional success from here regardless of `confirmed` above — the
+  // booking (status: "booked") and the delivery-slot claim both already
+  // existed before Braintree was ever called (step 4), and Braintree has
+  // now definitively confirmed the charge. Telling the customer anything
+  // other than "booked" here would be false, and — per the explicit design
+  // principle this pass confirmed — the browser must never be nudged
+  // toward resubmitting a payment that has already succeeded.
   res.status(200).json(withUploadToken(bookingId, { ok: true, booked: true }));
 }
 

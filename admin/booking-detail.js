@@ -27,8 +27,30 @@ document.addEventListener('DOMContentLoaded', function () {
   // call itself failed/timed out with no definitive answer — outcome
   // unknown, never auto-resolved. Labeled distinctly so this never reads
   // like an ordinary failure the admin can just retry.
-  var PAYMENT_STATUS_TEXT = { processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', refunded: 'Refunded', error_pending_review: 'Needs Review — Check Braintree' };
-  var CHARGE_STATUS_TEXT = { proposed: 'Proposed', approved: 'Approved', processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', error_pending_review: 'Needs Review — Check Braintree' };
+  // 'paid_reconciliation_required' (2026-09-18 readiness pass): Braintree
+  // DEFINITELY succeeded (a transaction id exists) but the full local
+  // record couldn't be confirmed even after retries — distinct from
+  // 'error_pending_review' ("outcome unknown"), which is why the label
+  // says "Paid" up front rather than "Needs Review" first.
+  var PAYMENT_STATUS_TEXT = {
+    processing: 'Processing',
+    paid: 'Paid',
+    failed: 'Failed',
+    voided: 'Voided',
+    refunded: 'Refunded',
+    error_pending_review: 'Needs Review — Check Braintree',
+    paid_reconciliation_required: 'Paid — Record Incomplete, Check Braintree',
+  };
+  var CHARGE_STATUS_TEXT = {
+    proposed: 'Proposed',
+    approved: 'Approved',
+    processing: 'Processing',
+    paid: 'Paid',
+    failed: 'Failed',
+    voided: 'Voided',
+    error_pending_review: 'Needs Review — Check Braintree',
+    paid_reconciliation_required: 'Paid — Record Incomplete, Check Braintree',
+  };
   var CHARGE_TYPE_TEXT = { overweight_tonnage: 'Overweight tonnage', additional_days: 'Additional days', other: 'Other' };
 
   var bookingId = null;
