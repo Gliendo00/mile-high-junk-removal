@@ -9,8 +9,15 @@
 //     prior client-only stage's test file — see tests/phase3c-schedule.test.js's
 //     header) for: the Yesterday tab, the relocated Quick Expense bar, the
 //     Week horizontal layout, the Month grid's top-left date/badge layout,
-//     the day-nav/day-panel previous-next controls, and the address
-//     autocomplete ZIP-preview addendum.
+//     and the day-nav/day-panel previous-next controls;
+//   - a corrective regression guard confirming a mid-task addendum (Google
+//     address-autocomplete previewing each suggestion's ZIP in the
+//     dropdown) was fully removed after owner review — it was outside this
+//     stage's approved Schedule UX scope and added ongoing Google Place
+//     Details cost — and that admin/address-autocomplete.js was restored
+//     byte-identical to the approved Stage 2.4.1 file from production
+//     baseline ee2585f, with the original select-a-suggestion ZIP-population
+//     behavior still intact.
 //
 // Run with:  node tests/phase3c-stage2.4.2-schedule-polish.test.js
 // Exits with a non-zero code if any assertion fails.
@@ -442,48 +449,77 @@ test("admin/calendar-views.js/schedule.js: previous-day navigation never steps b
 });
 
 // =======================================================================
-// 5. Address autocomplete ZIP-preview addendum (mid-task addition: the
-//    owner reported the ZIP isn't visible in the dropdown while searching,
-//    needed to confirm addresses with clients over the phone before an
-//    address is even selected).
+// 5. Address autocomplete: the mid-task "ZIP visible in the dropdown while
+//    searching" addendum was REMOVED after owner review — it was never part
+//    of the approved Schedule UX scope for this stage and added ongoing
+//    Google Place Details cost/complexity for every rendered suggestion,
+//    not just the one actually selected. admin/address-autocomplete.js was
+//    restored to the exact approved Stage 2.4.1 file from production
+//    baseline ee2585f (`git checkout ee2585f -- admin/address-autocomplete.js`,
+//    confirmed byte-identical). These tests both prove the addendum's own
+//    code is gone AND that the original select-a-suggestion ZIP-population
+//    behavior (unrelated to the removed dropdown-preview feature) still
+//    works exactly as it did before this stage touched this file — see
+//    tests/phase3c-stage2.4-address-and-prefill.test.js for that file's own
+//    full pre-existing coverage (fetchFields(['addressComponents']) only,
+//    US+Denver-bias restriction, importLibrary readiness polling, the
+//    input-echo suppression fix, manual-entry fallback on any failure —
+//    all untouched, still passing unmodified).
 // =======================================================================
-test("admin/address-autocomplete.js: each rendered suggestion gets its own ZIP-preview span, hidden until a value is actually available", () => {
+test("admin/address-autocomplete.js: the ZIP-in-dropdown-preview addendum is completely removed — no preview span, no enrichment delay/cache, no per-suggestion Details fan-out", () => {
   const src = read("admin/address-autocomplete.js");
-  assert.ok(/admin-address-autocomplete-item-zip/.test(src));
-  assert.ok(/zipSpan\.setAttribute\("hidden", ""\)/.test(src));
+  assert.ok(!/admin-address-autocomplete-item-zip/.test(src), "the ZIP-preview span class must be gone");
+  assert.ok(!/ZIP_ENRICH_DELAY_MS/.test(src), "the enrichment-delay constant must be gone");
+  assert.ok(!/addressCache/.test(src), "the place-ID-keyed Details cache must be gone");
+  assert.ok(!/fetchMappedPlace/.test(src), "the shared cache-or-fetch helper must be gone");
+  assert.ok(!/renderToken/.test(src), "the per-render staleness token (only needed to guard the removed enrichment fetches) must be gone");
+  assert.ok(!/toEnrich/.test(src), "there must be no per-suggestion enrichment queue left over");
 });
 
-test("admin/address-autocomplete.js: ZIP enrichment is debounced separately from the search itself and bails out if a newer render supersedes it — never fetches Place Details for a suggestion list the owner already typed past", () => {
-  const src = read("admin/address-autocomplete.js");
-  assert.ok(/ZIP_ENRICH_DELAY_MS/.test(src));
-  assert.ok(/renderToken/.test(src));
-  const enrichBlock = src.slice(src.indexOf("if (toEnrich.length)"), src.indexOf("if (toEnrich.length)") + 800);
-  assert.ok(/if \(myToken !== renderToken\) return;/.test(enrichBlock), "the enrichment timer callback must bail out if superseded before it even starts fetching");
+test("admin/address-autocomplete.js: restored to exactly the approved Stage 2.4.1 file (production baseline ee2585f) — content-identical (line-ending-normalized: `git show` returns the raw LF blob, the working tree checks out CRLF under this repo's core.autocrlf=true)", () => {
+  const { execFileSync } = require("child_process");
+  const baseline = execFileSync("git", ["show", "ee2585fc35b5d6153ad5a5fa5eb50c5be4ed18e7:admin/address-autocomplete.js"], { cwd: path.join(__dirname, ".."), encoding: "utf8" });
+  const current = read("admin/address-autocomplete.js");
+  const normalize = (s) => s.replace(/\r\n/g, "\n");
+  assert.strictEqual(normalize(current), normalize(baseline), "admin/address-autocomplete.js must match the ee2585f baseline exactly (content, not just line endings) — any difference means the revert was incomplete or something new leaked in");
 });
 
-test("admin/address-autocomplete.js: a suggestion's Place Details are cached by place ID and reused on click — selecting an already-previewed suggestion must not re-fetch", () => {
+test("admin/address-autocomplete.js: selecting a suggestion still populates street/city/state/ZIP exactly as before — one Place Details fetch (addressComponents only) per selection, applySelection() maps it and fills all four fields", () => {
   const src = read("admin/address-autocomplete.js");
-  assert.ok(/function fetchMappedPlace\(prediction\)/.test(src));
-  assert.ok(/addressCache\[placeId\] = mapped/.test(src));
-  const fetchBody = src.slice(src.indexOf("function fetchMappedPlace"), src.indexOf("function renderSuggestions"));
-  assert.ok(/Object\.prototype\.hasOwnProperty\.call\(addressCache, placeId\)/.test(fetchBody), "must check the cache before ever calling toPlace()/fetchFields() again");
+  assert.ok(/function applySelection\(place\) \{/.test(src), "applySelection() must take the raw Google Place again, not a pre-mapped object");
+  const applySelectionBody = src.slice(src.indexOf("function applySelection("), src.indexOf("function renderSuggestions("));
+  assert.ok(/var mapped = mapAddressComponents\(place\.addressComponents\)/.test(applySelectionBody), "applySelection() must do its own mapAddressComponents() call again");
+  assert.ok(/if \(fields\.zip && mapped\.zip\) fields\.zip\.value = mapped\.zip;/.test(applySelectionBody), "selecting a suggestion must still populate the ZIP field");
+  assert.ok(/if \(fields\.city && mapped\.city\) fields\.city\.value = mapped\.city;/.test(applySelectionBody));
+  assert.ok(/if \(fields\.state && mapped\.state\) fields\.state\.value = mapped\.state;/.test(applySelectionBody));
+
+  const clickBody = src.slice(src.indexOf("btn.addEventListener(\"click\""), src.indexOf("panel.appendChild(btn)"));
+  assert.ok(/prediction\.toPlace\(\)/.test(clickBody));
+  assert.ok(/fetchFields\(\{ fields: \["addressComponents"\] \}\)/.test(clickBody), "the click handler's own Details fetch must request only addressComponents — no unnecessary/costlier field");
+  assert.ok(/\.then\(applySelection\)/.test(clickBody), "the fetched place must be passed straight to applySelection(), no intermediate mapping step");
 });
 
-test("admin/address-autocomplete.js: applySelection() now takes an already-mapped {address,city,state,zip} object directly (shared by the cache-hit and cache-miss paths), not a raw Google Place", () => {
+test("admin/address-autocomplete.js: suggestions render immediately from the lightweight prediction alone (mainText/secondaryText) — the only toPlace()/fetchFields() call is inside the click handler, never a separate eager loop over the rendered list", () => {
   const src = read("admin/address-autocomplete.js");
-  const body = src.slice(src.indexOf("function applySelection("), src.indexOf("function fetchMappedPlace"));
-  assert.ok(/function applySelection\(mapped\) \{/.test(src));
-  assert.ok(!/mapAddressComponents\(place\.addressComponents\)/.test(body), "applySelection() must no longer do its own mapping — that now happens once, in fetchMappedPlace()");
+  const renderBody = src.slice(src.indexOf("function renderSuggestions("), src.indexOf("function runSearch("));
+  // The click handler (which legitimately contains toPlace()/fetchFields(),
+  // since it's defined inside this function) is the ONLY place that text
+  // may appear — strip it out first, then confirm nothing else in
+  // renderSuggestions() touches Place Details.
+  const withoutClickHandler = renderBody.replace(/btn\.addEventListener\("click"[\s\S]*?\}\);/, "");
+  assert.ok(!/toPlace\(\)/.test(withoutClickHandler), "only the click handler may call toPlace() — nothing else in renderSuggestions() should fetch Place Details merely to build the list");
+  assert.ok(!/fetchFields/.test(withoutClickHandler));
+  assert.ok(/toPlace\(\)/.test(renderBody), "sanity check: the click handler's own toPlace() call must still be there (removing this test's exclusion pattern would make it vacuous)");
 });
 
-test("admin/address-autocomplete.js: still requests fields:['addressComponents'] only, even with the new preview fetch — no unnecessary/costlier Place field added", () => {
+test("admin/address-autocomplete.js: lazy Google loading, the panel-reopen suppression fix, and manual-entry fallback are all preserved", () => {
   const src = read("admin/address-autocomplete.js");
-  const matches = src.match(/fetchFields\(\{ fields: \[[^\]]*\] \}\)/g) || [];
-  assert.ok(matches.length >= 1);
-  matches.forEach((m) => assert.ok(/\["addressComponents"\]/.test(m), "every fetchFields() call must request only addressComponents: " + m));
+  assert.ok(/addressInput\.addEventListener\(\s*"focus"/.test(src), "the script/key load must still be deferred to first focus, not page load");
+  assert.ok(/suppressNextInputEvent/.test(src), "the synthetic-input suppression fix (Stage 2.4.1) must still be present");
+  assert.ok(/loadPlacesLibrary\(\)\s*\.catch\(function \(\) \{\}\)/.test(src) || /\.catch\(function \(\) \{\s*\/\//.test(src), "a Google load failure must still fall back to silent manual entry, never block the field");
 });
 
-test("admin/address-autocomplete.js never uses innerHTML/insertAdjacentHTML/document.write, even after the ZIP-preview addendum", () => {
+test("admin/address-autocomplete.js never uses innerHTML/insertAdjacentHTML/document.write", () => {
   const src = read("admin/address-autocomplete.js");
   assert.ok(!/\.innerHTML\s*=/.test(src));
   assert.ok(!/\.insertAdjacentHTML\s*\(/.test(src));

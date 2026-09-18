@@ -99,46 +99,43 @@ Prev/Next month — is unchanged. New `#month-current-wrap`/`#month-current-btn`
 ("Jump to today") mirrors Week's existing "Jump to this week" pattern
 exactly.
 
-## 7. Address autocomplete: ZIP preview (mid-task addendum)
+## 7. Address autocomplete: ZIP preview addendum — added, then REMOVED
 
-Raised by the owner mid-session, separate from the Schedule work above but
-touching the same "already production-verified, don't create unnecessary
-Google work" integration: the ZIP code wasn't visible in the autocomplete
-**dropdown** while searching, only after selecting — reps need to read it
-back to a client on the phone before picking an address. Google's
-lightweight `AutocompleteSuggestion` prediction never carries a ZIP (only a
-Place Details fetch does), so `admin/address-autocomplete.js` now fetches
-Details for each visible suggestion and fills in a "ZIP xxxxx" line once
-resolved. Two deliberate cost controls given this is now up to N
-individually-billable Place Details calls per rendered list, not the one
-session-priced call this component previously made only for the eventually
-selected suggestion:
-- A separate `ZIP_ENRICH_DELAY_MS` (350ms) delay before starting these
-  fetches, cancelled entirely if a newer keystroke's render supersedes the
-  list first — a fast typist is never charged for detail lookups on a
-  suggestion list they typed straight past.
-- A `placeId`-keyed cache (`addressCache`) shared between the preview fetch
-  and the click-to-select handler (refactored into `fetchMappedPlace()`),
-  so a suggestion already previewed is never fetched a second time on
-  selection.
+Raised by the owner mid-session, separate from the Schedule work above:
+the ZIP code wasn't visible in the autocomplete **dropdown** while
+searching, only after selecting. A first pass made `admin/address-autocomplete.js`
+fetch Place Details for every visible suggestion (debounced, cached by
+place ID) to preview each one's ZIP before selection.
 
-`applySelection()` was refactored to take the already-mapped
-`{address, city, state, zip}` object directly (previously it received a raw
-Google `Place` and mapped it itself), since both the cache-hit and
-cache-miss paths now produce that same shape upstream.
+**After owner review, this addendum was reverted in full.** It was never
+part of this stage's approved Schedule UX scope, and it added ongoing,
+per-keystroke Google Place Details cost/complexity (up to N
+individually-billable Details calls per rendered list, versus the one
+session-priced call this component makes only for whichever suggestion
+actually gets selected). `admin/address-autocomplete.js` was restored via
+`git checkout ee2585f -- admin/address-autocomplete.js` and confirmed
+content-identical to the approved Stage 2.4.1 file at production baseline
+`ee2585f` — not just similar, byte-for-byte (test-verified). Current,
+final behavior: typing shows normal Google suggestions from the lightweight
+prediction alone (no Details fetch to build the list); selecting one still
+does exactly one Details fetch (`fields: ["addressComponents"]` only) and
+populates street/city/state/ZIP, same as every prior stage; lazy loading on
+first focus, the panel-reopen suppression fix, and manual-entry fallback on
+any failure are all untouched.
 
 ## Scope discipline
 
 No schema migration. No new serverless function (still 12/12). No SMS/
 revenue/reporting work. No changes to public `/` or `/book/` (confirmed:
 neither references any Schedule/Quick-Expense/day-nav file). Google
-Maps key delivery/security untouched — the ZIP-preview addendum reuses the
-exact same `?view=google-config` key-fetch and `fetchFields` field mask
-(`["addressComponents"]` only) already in place.
+Maps key delivery/security untouched throughout, including during the
+ZIP-preview addendum's brief life and its subsequent full removal.
 
 ## Tests
 
 523/523 passing (496 pre-existing — 2 of Stage 2.4.1's own assertions
 updated in place to match the intentional Quick-Expense-relocation and
-day-panel-arrows changes, not weakened — plus 37 new in
-`tests/phase3c-stage2.4.2-schedule-polish.test.js`).
+day-panel-arrows changes, not weakened — plus 37 in
+`tests/phase3c-stage2.4.2-schedule-polish.test.js`, covering both the
+Schedule polish itself and the ZIP-preview addendum's full removal /
+restored original address-autocomplete behavior).

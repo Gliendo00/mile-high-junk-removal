@@ -38,14 +38,6 @@
 window.AdminAddressAutocomplete = (function () {
   var DEBOUNCE_MS = 220;
   var MIN_CHARS = 4;
-  // Stage 2.4.2 addendum: how long the dropdown waits, after a suggestion
-  // list first renders, before fetching each suggestion's ZIP for preview
-  // (see renderSuggestions()'s toEnrich handling). Deliberately separate
-  // from DEBOUNCE_MS above (which only debounces the autocomplete search
-  // itself) — this second delay avoids paying for a Place Details fetch on
-  // every intermediate keystroke's suggestion list, only the one the owner
-  // actually pauses on.
-  var ZIP_ENRICH_DELAY_MS = 350;
   // Denver-area location bias (not a hard restriction — a legitimate
   // service address well outside this radius must still be selectable, see
   // the stage's explicit "must not prevent legitimate addresses elsewhere"
@@ -213,16 +205,6 @@ window.AdminAddressAutocomplete = (function () {
     var sessionToken = null;
     var currentRequestId = 0;
     var suggestions = []; // the current AutocompleteSuggestion[]
-    // Resolved { address, city, state, zip } per Google place ID (Stage
-    // 2.4.2's "show ZIP in the dropdown" addendum — see renderSuggestions()
-    // below). Google's lightweight autocomplete prediction never includes a
-    // ZIP; only a Place Details fetch does, which is what this cache saves
-    // a second, redundant copy of: once a suggestion's ZIP has been fetched
-    // to preview it in the dropdown, clicking that same suggestion reuses
-    // this cached result instead of fetching Place Details for it again.
-    var addressCache = {};
-    var enrichTimer = null;
-    var renderToken = 0;
     // applySelection() dispatches a synthetic "input" event on addressInput
     // itself so external listeners (a form's own change tracking) see the
     // populated value — but that same event also reaches this component's
@@ -239,8 +221,6 @@ window.AdminAddressAutocomplete = (function () {
       panel.setAttribute("hidden", "");
       while (panel.firstChild) panel.removeChild(panel.firstChild);
       suggestions = [];
-      clearTimeout(enrichTimer);
-      renderToken++; // invalidate any enrichment fetch still pending for the now-closed list
     }
 
     function ensureSessionToken(placesLib) {
@@ -248,8 +228,9 @@ window.AdminAddressAutocomplete = (function () {
       return sessionToken;
     }
 
-    function applySelection(mapped) {
+    function applySelection(place) {
       try {
+        var mapped = mapAddressComponents(place.addressComponents);
         if (mapped.address) addressInput.value = mapped.address;
         if (fields.city && mapped.city) fields.city.value = mapped.city;
         if (fields.state && mapped.state) fields.state.value = mapped.state;
@@ -275,45 +256,12 @@ window.AdminAddressAutocomplete = (function () {
       closePanel();
     }
 
-    // Fetches a suggestion's Place Details once (addressComponents only) and
-    // caches the mapped result by place ID — shared by the ZIP-preview
-    // enrichment below and the click handler, so a suggestion whose ZIP was
-    // already previewed never pays for a second Details fetch on selection.
-    function fetchMappedPlace(prediction) {
-      var placeId = prediction.placeId;
-      if (placeId && Object.prototype.hasOwnProperty.call(addressCache, placeId)) {
-        return Promise.resolve(addressCache[placeId]);
-      }
-      return Promise.resolve(prediction.toPlace())
-        .then(function (place) {
-          return place.fetchFields({ fields: ["addressComponents"] }).then(function () {
-            return place;
-          });
-        })
-        .then(function (place) {
-          var mapped = mapAddressComponents(place.addressComponents);
-          if (placeId) addressCache[placeId] = mapped;
-          return mapped;
-        });
-    }
-
     function renderSuggestions(placesLib, list) {
       while (panel.firstChild) panel.removeChild(panel.firstChild);
-      clearTimeout(enrichTimer);
-      renderToken++;
-      var myToken = renderToken;
-
       if (!list.length) {
         panel.setAttribute("hidden", "");
         return;
       }
-
-      // Suggestions whose ZIP still needs fetching for the preview below —
-      // never re-fetched for one already in addressCache from an earlier
-      // render (e.g. the same candidate reappearing as the owner keeps
-      // typing).
-      var toEnrich = [];
-
       list.forEach(function (suggestion) {
         var prediction = suggestion.placePrediction;
         if (!prediction) return;
@@ -332,32 +280,13 @@ window.AdminAddressAutocomplete = (function () {
           secSpan.textContent = secondaryText;
           btn.appendChild(secSpan);
         }
-
-        // ZIP preview (Stage 2.4.2 addendum) — so a rep can read it back to
-        // a client on the phone before even selecting an address. Google's
-        // lightweight prediction never carries a ZIP (see
-        // mapAddressComponents()'s header), so this starts hidden and fills
-        // in a beat later once the debounced enrichment below actually
-        // fetches it — never blocks the suggestion list itself from
-        // appearing immediately.
-        var zipSpan = document.createElement("span");
-        zipSpan.className = "admin-address-autocomplete-item-zip";
-        zipSpan.setAttribute("hidden", "");
-        btn.appendChild(zipSpan);
-
-        var placeId = prediction.placeId;
-        if (placeId && Object.prototype.hasOwnProperty.call(addressCache, placeId)) {
-          var cached = addressCache[placeId];
-          if (cached.zip) {
-            zipSpan.textContent = "ZIP " + cached.zip;
-            zipSpan.removeAttribute("hidden");
-          }
-        } else {
-          toEnrich.push({ prediction: prediction, span: zipSpan });
-        }
-
         btn.addEventListener("click", function () {
-          fetchMappedPlace(prediction)
+          Promise.resolve(prediction.toPlace())
+            .then(function (place) {
+              return place.fetchFields({ fields: ["addressComponents"] }).then(function () {
+                return place;
+              });
+            })
             .then(applySelection)
             .catch(function (err) {
               console.error("Address autocomplete: failed to fetch place details", err);
@@ -367,31 +296,6 @@ window.AdminAddressAutocomplete = (function () {
         panel.appendChild(btn);
       });
       panel.removeAttribute("hidden");
-
-      // Each preview is a real, individually-billable Google Place Details
-      // call (see fetchMappedPlace()) — not bundled into the one
-      // session-priced Details call this component already makes for
-      // whichever suggestion actually gets selected. Waiting a beat before
-      // starting these, and bailing out entirely if a newer keystroke's
-      // render supersedes this one first, keeps a fast typist from paying
-      // for detail lookups on address lists they never even paused on.
-      if (toEnrich.length) {
-        enrichTimer = setTimeout(function () {
-          if (myToken !== renderToken) return;
-          toEnrich.forEach(function (target) {
-            fetchMappedPlace(target.prediction)
-              .then(function (mapped) {
-                if (myToken !== renderToken || !mapped.zip) return; // superseded, or Google has no ZIP for this place
-                target.span.textContent = "ZIP " + mapped.zip;
-                target.span.removeAttribute("hidden");
-              })
-              .catch(function () {
-                // Leave that one suggestion's ZIP blank — never blocks
-                // selecting it, and never retried automatically.
-              });
-          });
-        }, ZIP_ENRICH_DELAY_MS);
-      }
     }
 
     function runSearch(placesLib, term) {

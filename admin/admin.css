@@ -1551,10 +1551,3 @@
 .admin-address-autocomplete-item:hover { background: var(--admin-tint); }
 .admin-address-autocomplete-item-main { font-weight: 700; font-size: 14px; color: var(--color-text, #201e1d); }
 .admin-address-autocomplete-item-secondary { font-size: 12.5px; color: var(--color-neutral-600, #82796a); }
-/* ZIP preview — fills in a beat after the suggestion itself renders (see
-   address-autocomplete.js's enrichment delay), so it can read aloud-ready
-   to confirm with a client on the phone before the address is even
-   selected. Hidden via the `hidden` attribute (never an empty line) for a
-   suggestion Google has no postal code for. */
-.admin-address-autocomplete-item-zip { font-size: 12.5px; font-weight: 700; color: var(--color-accent-700, #2f6f13); }
-.admin-address-autocomplete-item-zip[hidden] { display: none; }
