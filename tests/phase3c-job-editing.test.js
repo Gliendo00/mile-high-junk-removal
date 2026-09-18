@@ -773,23 +773,33 @@ test("PATCH booking: booked job's Estimated Price updates estimated_price", asyn
   assert.strictEqual(db.bookings[0].estimated_price, 450);
 });
 
-test("PATCH booking: editing a completed job's pricing never touches estimated_price", async () => {
+// Phase 3C Stage 2.5 addendum ("independent financial fields"): Quoted
+// Amount and Actual Job Amount Collected are now both always editable
+// regardless of status — this supersedes the original Stage 2.5 design's
+// status-gated pricing mode. tip_amount is the one field that stays
+// completed-only. See tests/phase3c-stage2.5-quoted-range-exact-time.test.js
+// for the full new regression suite; these two are updated in place (not
+// duplicated) since they're the exact two the old behavior lived in.
+test("PATCH booking: editing a completed job CAN now also update estimated_price (Stage 2.5 addendum — Quoted Amount is no longer status-gated)", async () => {
   adminAuthed();
   const db = freshDb();
   const booking = seedCompletedBooking(db, { estimated_price: 199.99 });
   const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { finalPrice: 300, tipAmount: 30, estimatedPrice: 999 }));
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
-  assert.strictEqual(db.bookings[0].estimated_price, 199.99, "estimated_price must be left exactly as it was — never overwritten by a completed-mode edit, even if estimatedPrice is sent in the body");
+  assert.strictEqual(db.bookings[0].estimated_price, 999, "estimated_price must update — a completed job's quote is no longer locked once the status changes");
+  assert.strictEqual(db.bookings[0].final_price, 300, "final_price still updates independently");
+  assert.strictEqual(db.bookings[0].tip_amount, 30, "tip_amount still updates independently");
 });
 
-test("PATCH booking: editing a booked job's pricing never touches final_price or tip_amount", async () => {
+test("PATCH booking: editing a booked job CAN now also update final_price, but tip_amount stays untouched (Stage 2.5 addendum — Actual Collected is no longer status-gated, Tip stays completed-only)", async () => {
   adminAuthed();
   const db = freshDb();
   const booking = seedBookedBooking(db, { final_price: null, tip_amount: null });
   const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: 500, finalPrice: 999, tipAmount: 999 }));
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
-  assert.strictEqual(db.bookings[0].final_price, null);
-  assert.strictEqual(db.bookings[0].tip_amount, null);
+  assert.strictEqual(db.bookings[0].estimated_price, 500);
+  assert.strictEqual(db.bookings[0].final_price, 999, "final_price must update — a booked job can now record an amount already collected");
+  assert.strictEqual(db.bookings[0].tip_amount, null, "tip_amount must stay untouched — Tip remains completed-only, never broadened to a booked job");
 });
 
 test("PATCH booking: zero is a valid completed-job Actual Job Amount and Tip, stored as real 0 not null", async () => {

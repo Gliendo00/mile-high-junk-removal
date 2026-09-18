@@ -78,14 +78,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var serviceStateInput = document.getElementById('service-state');
   var serviceZipInput = document.getElementById('service-zip');
 
-  var pricingEstimatedRow = document.getElementById('pricing-estimated');
-  var pricingCompletedRow = document.getElementById('pricing-completed');
   var estimatedPriceInput = document.getElementById('estimated-price');
   var estimatedPriceMaxInput = document.getElementById('estimated-price-max');
   var quoteModeToggle = document.getElementById('quote-mode-toggle');
   var quoteMaxWrap = document.getElementById('quote-max-wrap');
   var quoteToLabel = document.getElementById('quote-to-label');
   var actualPriceInput = document.getElementById('actual-price');
+  var pricingTipRow = document.getElementById('pricing-tip');
   var tipAmountInput = document.getElementById('tip-amount');
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
@@ -262,22 +261,27 @@ document.addEventListener('DOMContentLoaded', function () {
     serviceStateInput.value = serviceAddress.state || '';
     serviceZipInput.value = serviceAddress.zip || '';
 
+    // Financial fields (Phase 3C Stage 2.5 addendum): Quoted Amount and
+    // Actual Job Amount Collected are independent concepts, both always
+    // shown/editable here regardless of status — never gated by
+    // completed/booked. Tip stays completed-only.
+    estimatedPriceInput.value = booking.estimatedPrice === null || booking.estimatedPrice === undefined ? '' : booking.estimatedPrice;
+    // Range mode only when this booking actually has a max saved — never
+    // guessed, mirrors the exact-time-vs-window init above.
+    quoteMode = booking.estimatedPriceMax !== null && booking.estimatedPriceMax !== undefined ? 'range' : 'exact';
+    setSegmentedActive(quoteModeToggle, quoteMode);
+    estimatedPriceMaxInput.value = quoteMode === 'range' ? booking.estimatedPriceMax : '';
+    quoteToLabel.style.display = quoteMode === 'range' ? 'inline' : 'none';
+    quoteMaxWrap.style.display = quoteMode === 'range' ? 'flex' : 'none';
+
+    actualPriceInput.value = booking.finalPrice === null || booking.finalPrice === undefined ? '' : booking.finalPrice;
+
     if (isCompleted) {
-      pricingEstimatedRow.style.display = 'none';
-      pricingCompletedRow.style.display = 'flex';
-      actualPriceInput.value = booking.finalPrice === null || booking.finalPrice === undefined ? '' : booking.finalPrice;
+      pricingTipRow.style.display = 'block';
       tipAmountInput.value = booking.tipAmount === null || booking.tipAmount === undefined ? '' : booking.tipAmount;
     } else {
-      pricingEstimatedRow.style.display = 'block';
-      pricingCompletedRow.style.display = 'none';
-      estimatedPriceInput.value = booking.estimatedPrice === null || booking.estimatedPrice === undefined ? '' : booking.estimatedPrice;
-      // Range mode only when this booking actually has a max saved — never
-      // guessed, mirrors the exact-time-vs-window init just above.
-      quoteMode = booking.estimatedPriceMax !== null && booking.estimatedPriceMax !== undefined ? 'range' : 'exact';
-      setSegmentedActive(quoteModeToggle, quoteMode);
-      estimatedPriceMaxInput.value = quoteMode === 'range' ? booking.estimatedPriceMax : '';
-      quoteToLabel.style.display = quoteMode === 'range' ? 'inline' : 'none';
-      quoteMaxWrap.style.display = quoteMode === 'range' ? 'flex' : 'none';
+      pricingTipRow.style.display = 'none';
+      tipAmountInput.value = '';
     }
 
     descriptionInput.value = booking.description || '';
@@ -323,24 +327,29 @@ document.addEventListener('DOMContentLoaded', function () {
       description: descriptionInput.value.trim(),
       internalNotes: internalNotesInput.value.trim(),
     };
+    // Financial fields (Phase 3C Stage 2.5 addendum) — Quoted Amount and
+    // Actual Job Amount Collected are independent and always editable here,
+    // regardless of status; neither is derived from or overwrites the
+    // other. Tip stays completed-only.
+    if (quoteMode === 'range' && !estimatedPriceInput.value.trim()) {
+      showError('A quote range needs a minimum amount.');
+      return;
+    }
+    if (quoteMode === 'range' && estimatedPriceMaxInput.value.trim() &&
+        Number(estimatedPriceMaxInput.value) <= Number(estimatedPriceInput.value)) {
+      showError('The maximum quote amount must be greater than the minimum.');
+      return;
+    }
+    var estRaw = estimatedPriceInput.value.trim();
+    body.estimatedPrice = estRaw ? Number(estRaw) : '';
+    body.estimatedPriceMax = (quoteMode === 'range' && estimatedPriceMaxInput.value.trim()) ? Number(estimatedPriceMaxInput.value) : '';
+
+    var actualRaw = actualPriceInput.value.trim();
+    body.finalPrice = actualRaw ? Number(actualRaw) : '';
+
     if (isCompleted) {
-      var actualRaw = actualPriceInput.value.trim();
-      body.finalPrice = actualRaw ? Number(actualRaw) : '';
       var tipRaw = tipAmountInput.value.trim();
       body.tipAmount = tipRaw ? Number(tipRaw) : '';
-    } else {
-      if (quoteMode === 'range' && !estimatedPriceInput.value.trim()) {
-        showError('A quote range needs a minimum amount.');
-        return;
-      }
-      if (quoteMode === 'range' && estimatedPriceMaxInput.value.trim() &&
-          Number(estimatedPriceMaxInput.value) <= Number(estimatedPriceInput.value)) {
-        showError('The maximum quote amount must be greater than the minimum.');
-        return;
-      }
-      var estRaw = estimatedPriceInput.value.trim();
-      body.estimatedPrice = estRaw ? Number(estRaw) : '';
-      body.estimatedPriceMax = (quoteMode === 'range' && estimatedPriceMaxInput.value.trim()) ? Number(estimatedPriceMaxInput.value) : '';
     }
 
     savingInFlight = true;

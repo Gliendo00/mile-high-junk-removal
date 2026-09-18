@@ -184,17 +184,28 @@ module.exports = async (req, res) => {
 //   - "new" (default, Phase 3C Stage 2.1) — "+ New Job": status="booked",
 //     appointment date must be today or later (America/Denver), an
 //     appointment time is required (either a time_window or an exact_time —
-//     see "Appointment time" below), price is an optional pre-job quote
-//     written to estimated_price (+ an optional estimated_price_max for a
-//     range — see "Quoted amount" below).
+//     see "Appointment time" below).
 //   - "past" (Phase 3C Stage 2.2) — "+ Past Job": status="completed",
 //     appointment date must be on/after the historical migration floor
 //     (api/_lib/historical-floor.js) and no later than today, appointment
 //     time optional (a real NULL when unknown, never an invented
-//     placeholder), price is the actual job amount written to final_price,
-//     and an optional tip is written to its own tip_amount column — never
-//     merged into final_price. tipAmount is only ever read in this mode;
-//     New Job has no tip field in its request shape at all.
+//     placeholder).
+//
+// Financial fields (Phase 3C Stage 2.5, broadened in its "independent
+// financial fields" addendum) — Quoted Amount (estimated_price +
+// estimated_price_max, see "Quoted amount" below) and Actual Job Amount
+// Collected (final_price) are both optional and independently settable in
+// EITHER mode: a New Job can already record what was actually collected
+// (e.g. collected on the spot before the job is ever marked completed) and
+// a Past Job can record what was originally quoted alongside what was
+// actually collected — the three concepts (quote, actual, tip) are always
+// separate columns and this endpoint never copies a value from one into
+// another. tipAmount is the one exception that stays mode-scoped: only ever
+// read in "past" mode. New Job has no tip field in its request shape at
+// all — see the "Tip stays completed-only" finding in this stage's
+// addendum for why this wasn't broadened too (never asked for, and a tip
+// implies money already changed hands, which fits "past" — a historical
+// record — far more naturally than a still-upcoming "new" job).
 //
 // Appointment time (Phase 3C Stage 2.5) — a job carries at most one of
 // time_window/exact_time, enforced at the database level by the
@@ -348,32 +359,68 @@ async function handleCreate(req, res) {
   const description = sanitizeText(body.description, MAX.long) || null;
   const internalNotes = sanitizeText(body.internalNotes, MAX.long) || null;
 
+  // Quoted Amount — independent of mode as of this stage's addendum: a New
+  // Job can be quoted just like before, and a Past Job being backfilled can
+  // now also record what was originally quoted, not just what was
+  // collected. Optional either way.
   let estimatedPrice = null;
   let estimatedPriceMax = null;
+  if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
+    const n = Number(body.estimatedPrice);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid estimated price." });
+      return;
+    }
+    // Matches the confirmed live column type, numeric(10,2) — see
+    // docs/phase-3/stage2-preflight.md.
+    estimatedPrice = Math.round(n * 100) / 100;
+  }
+  // Quote range max — optional, and only meaningful alongside a minimum.
+  // Mirrors the database's own bookings_quote_max_requires_min /
+  // bookings_quote_max_greater_than_min CHECK constraints at the
+  // application layer, so a bad request is rejected with a clear message
+  // rather than surfacing as an opaque constraint-violation 500 from
+  // Supabase.
+  if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
+    if (estimatedPrice === null) {
+      res.status(400).json({ error: "A quote range needs a minimum amount." });
+      return;
+    }
+    const n = Number(body.estimatedPriceMax);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid maximum quote amount." });
+      return;
+    }
+    const rounded = Math.round(n * 100) / 100;
+    if (rounded <= estimatedPrice) {
+      res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
+      return;
+    }
+    estimatedPriceMax = rounded;
+  }
+
+  // Actual Job Amount Collected — also independent of mode: a New Job can
+  // record an amount already collected up front (e.g. before the job is
+  // ever marked completed), and a Past Job records it exactly as before.
+  // Never derived from or compared against estimatedPrice — a separate
+  // column, a separate concept.
   let finalPrice = null;
+  if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
+    const n = Number(body.finalPrice);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid actual job amount." });
+      return;
+    }
+    finalPrice = Math.round(n * 100) / 100;
+  }
+
+  // Tip stays completed-only (deliberately not broadened by this stage's
+  // addendum — never asked for, and a tip implies money already changed
+  // hands, which only "past" jobs represent). Zero is a valid tip
+  // ("!== undefined/null/\"\"" lets 0 through) and is stored as a real 0,
+  // not treated as absent.
   let tipAmount = null;
   if (isPast) {
-    // Historical actual amount — written to final_price, never
-    // estimated_price (that column represents a pre-job quote, which a
-    // backfilled historical job never had in this flow). Optional: some old
-    // records have no recoverable pricing.
-    if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
-      const n = Number(body.finalPrice);
-      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-        res.status(400).json({ error: "Please enter a valid actual job amount." });
-        return;
-      }
-      // Matches the confirmed live column type, numeric(10,2) — see
-      // docs/phase-3/stage2-preflight.md.
-      finalPrice = Math.round(n * 100) / 100;
-    }
-    // Tip is its own value, always separate from final_price — never
-    // combined into the job amount. Only ever read/validated in Past Job
-    // mode: New Job has no tip field in its request shape at all, so a
-    // tipAmount sent alongside mode:"new" (or an omitted mode) is simply
-    // never looked at here, the same way finalPrice is invisible to New Job
-    // above. Zero is a valid tip ("!== undefined/null/\"\"" lets 0 through)
-    // and is stored as a real 0, not treated as absent.
     if (body.tipAmount !== undefined && body.tipAmount !== null && body.tipAmount !== "") {
       const n = Number(body.tipAmount);
       if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
@@ -381,38 +428,6 @@ async function handleCreate(req, res) {
         return;
       }
       tipAmount = Math.round(n * 100) / 100;
-    }
-  } else {
-    if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
-      const n = Number(body.estimatedPrice);
-      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-        res.status(400).json({ error: "Please enter a valid estimated price." });
-        return;
-      }
-      estimatedPrice = Math.round(n * 100) / 100;
-    }
-    // Quote range max (Phase 3C Stage 2.5) — optional, and only meaningful
-    // alongside a minimum. Mirrors the database's own
-    // bookings_quote_max_requires_min / bookings_quote_max_greater_than_min
-    // CHECK constraints at the application layer, so a bad request is
-    // rejected with a clear message rather than surfacing as an opaque
-    // constraint-violation 500 from Supabase.
-    if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
-      if (estimatedPrice === null) {
-        res.status(400).json({ error: "A quote range needs a minimum amount." });
-        return;
-      }
-      const n = Number(body.estimatedPriceMax);
-      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-        res.status(400).json({ error: "Please enter a valid maximum quote amount." });
-        return;
-      }
-      const rounded = Math.round(n * 100) / 100;
-      if (rounded <= estimatedPrice) {
-        res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
-        return;
-      }
-      estimatedPriceMax = rounded;
     }
   }
 
@@ -518,12 +533,27 @@ async function handleCreate(req, res) {
 //     that ever reads it, so it can never become writable no matter what
 //     the request body contains.
 //
-// Pricing mode (which of estimated_price vs final_price+tip_amount is
-// editable) is decided by the CURRENT row's status, read fresh from the
-// database in this same request — never by anything the client claims.
-// This is what makes it structurally impossible for editing one pricing
-// mode to write into the other column: the code path for a given mode
-// simply never reads or writes the other mode's field(s).
+// Financial fields (Phase 3C Stage 2.5, "independent financial fields"
+// addendum) — Quoted Amount (estimated_price/estimated_price_max) and
+// Actual Job Amount Collected (final_price) are both always editable here,
+// regardless of the row's current status: a booked job's quote and a
+// completed job's quote are edited by the exact same code path, and same
+// for Actual Collected. Each is read/validated/written completely
+// independently — editing one never reads, derives from, or nulls the
+// other; the request body is never spread into the update payload (see
+// above), so a value for one column can only ever end up in that column.
+// This is a deliberate change from this stage's original design (which
+// gated estimated_price vs final_price+tip_amount by status) — the owner's
+// explicit workflow requirement is being able to record what was actually
+// collected before a job is ever marked completed, and being able to
+// backfill what a historical job was originally quoted for.
+//
+// tip_amount is the one field that stays status-gated: only readable/
+// writable when the CURRENT row's status (read fresh from the database in
+// this same request, never anything the client claims) is "completed" —
+// still never touched at all for a non-completed job, exactly as before
+// this addendum. See handleCreate's header for why this wasn't broadened
+// too (never asked for; a tip implies money already changed hands).
 //
 // Date-editing contract (see docs/phase-3/job-editing-proposal.md for the
 // full writeup): reusing New Job's/Past Job's create-time date rules
@@ -561,11 +591,9 @@ async function handleCreate(req, res) {
 // range" case the way dates have; exact_time has no legacy values at all
 // (the column is new as of Phase 3C Stage 2.5).
 //
-// Quote range (Phase 3C Stage 2.5): editable only in the same non-completed
-// branch estimated_price itself already is — estimated_price_max follows
-// estimated_price's existing scope exactly, never touched by a completed-
-// mode edit. Same min-required/strictly-greater-than validation as
-// handleCreate above.
+// Quote range: estimated_price_max follows estimated_price's scope exactly
+// (both always editable, per the addendum above). Same min-required/
+// strictly-greater-than validation as handleCreate above.
 //
 // Concurrency: optimistic, via bookings.updated_at. The client must send
 // back the exact `updatedAt` value it read when Edit Job loaded. The update
@@ -709,22 +737,63 @@ async function handleUpdate(req, res) {
       return;
     }
 
-    // Pricing — decided by the CURRENT (just-read, server-side) status, not
-    // anything the client sent. Only one mode's field(s) are ever placed
-    // into the update payload below; the other mode's column is never even
-    // named in this request, so it can never be touched by it.
+    // Financial fields — see this function's header comment for the full
+    // "independent financial fields" contract. Quoted Amount and Actual
+    // Collected are always both processed below, whatever the row's
+    // status; tip_amount is the one field still gated by isCompleted.
     const pricingUpdate = {};
-    if (isCompleted) {
-      if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
-        const n = Number(body.finalPrice);
-        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-          res.status(400).json({ error: "Please enter a valid actual job amount." });
-          return;
-        }
-        pricingUpdate.final_price = Math.round(n * 100) / 100;
-      } else {
-        pricingUpdate.final_price = null;
+
+    let estimatedPriceForMaxCheck = null;
+    if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
+      const n = Number(body.estimatedPrice);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid estimated price." });
+        return;
       }
+      estimatedPriceForMaxCheck = Math.round(n * 100) / 100;
+      pricingUpdate.estimated_price = estimatedPriceForMaxCheck;
+    } else {
+      pricingUpdate.estimated_price = null;
+    }
+    // Quote range max — same rules as handleCreate (see this function's
+    // header comment): optional, requires a minimum, must be strictly
+    // greater than it.
+    if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
+      if (estimatedPriceForMaxCheck === null) {
+        res.status(400).json({ error: "A quote range needs a minimum amount." });
+        return;
+      }
+      const n = Number(body.estimatedPriceMax);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid maximum quote amount." });
+        return;
+      }
+      const rounded = Math.round(n * 100) / 100;
+      if (rounded <= estimatedPriceForMaxCheck) {
+        res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
+        return;
+      }
+      pricingUpdate.estimated_price_max = rounded;
+    } else {
+      pricingUpdate.estimated_price_max = null;
+    }
+
+    if (body.finalPrice !== undefined && body.finalPrice !== null && body.finalPrice !== "") {
+      const n = Number(body.finalPrice);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid actual job amount." });
+        return;
+      }
+      pricingUpdate.final_price = Math.round(n * 100) / 100;
+    } else {
+      pricingUpdate.final_price = null;
+    }
+
+    // Tip stays completed-only — never read/written at all for a
+    // non-completed job, so its existing value (normally null, but this
+    // stays defensive regardless) can never be touched by editing a booked
+    // job's quote or actual amount.
+    if (isCompleted) {
       if (body.tipAmount !== undefined && body.tipAmount !== null && body.tipAmount !== "") {
         const n = Number(body.tipAmount);
         if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
@@ -734,41 +803,6 @@ async function handleUpdate(req, res) {
         pricingUpdate.tip_amount = Math.round(n * 100) / 100;
       } else {
         pricingUpdate.tip_amount = null;
-      }
-    } else {
-      let estimatedPriceForMaxCheck = null;
-      if (body.estimatedPrice !== undefined && body.estimatedPrice !== null && body.estimatedPrice !== "") {
-        const n = Number(body.estimatedPrice);
-        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-          res.status(400).json({ error: "Please enter a valid estimated price." });
-          return;
-        }
-        estimatedPriceForMaxCheck = Math.round(n * 100) / 100;
-        pricingUpdate.estimated_price = estimatedPriceForMaxCheck;
-      } else {
-        pricingUpdate.estimated_price = null;
-      }
-      // Quote range max — same rules as handleCreate (see this function's
-      // header comment): optional, requires a minimum, must be strictly
-      // greater than it.
-      if (body.estimatedPriceMax !== undefined && body.estimatedPriceMax !== null && body.estimatedPriceMax !== "") {
-        if (estimatedPriceForMaxCheck === null) {
-          res.status(400).json({ error: "A quote range needs a minimum amount." });
-          return;
-        }
-        const n = Number(body.estimatedPriceMax);
-        if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
-          res.status(400).json({ error: "Please enter a valid maximum quote amount." });
-          return;
-        }
-        const rounded = Math.round(n * 100) / 100;
-        if (rounded <= estimatedPriceForMaxCheck) {
-          res.status(400).json({ error: "The maximum quote amount must be greater than the minimum." });
-          return;
-        }
-        pricingUpdate.estimated_price_max = rounded;
-      } else {
-        pricingUpdate.estimated_price_max = null;
       }
     }
 

@@ -167,10 +167,17 @@ document.addEventListener('DOMContentLoaded', function () {
     if (job.serviceAddress && job.serviceAddress.city) serviceCityParts.push(job.serviceAddress.city);
     main.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
 
-    // Actual Collected is the authoritative revenue figure once a job is
-    // completed; otherwise fall back to the Quoted amount (range-aware).
+    // Status-aware, not a blind final_price-or-estimated_price fallback
+    // (Phase 3C Stage 2.5 addendum): a completed job's authoritative
+    // revenue figure is Actual Collected (falling back to Quoted only if
+    // no actual amount was ever recorded); a non-completed job always
+    // shows its Quoted amount, even if an Actual Collected amount already
+    // exists on it (recorded early, before the job was marked complete) —
+    // showing that number here would incorrectly read as "already paid."
     // One number, unlabeled, to keep the card compact — never both.
-    var priceText = formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
+    var priceText = job.status === 'completed'
+      ? (formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
+      : formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) main.appendChild(el('div', 'admin-schedule-card-price', priceText));
 
     card.appendChild(main);

@@ -143,7 +143,12 @@ document.addEventListener('DOMContentLoaded', function () {
     var photos = el('span', 'admin-card-photos');
     photos.appendChild(cameraIcon());
     var photoText = (b.photoCount || 0) + (b.photoCount === 1 ? ' photo' : ' photos');
-    var priceText = formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
+    // Status-aware (Phase 3C Stage 2.5 addendum) — see admin/schedule.js's
+    // identical comment: completed prefers Actual Collected, non-completed
+    // always shows Quoted, never implying a not-yet-completed job is paid.
+    var priceText = b.status === 'completed'
+      ? (formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax))
+      : formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
     photos.appendChild(document.createTextNode((priceText ? priceText + ' · ' : '') + photoText));
     footer.appendChild(photos);
     footer.appendChild(el('span', 'admin-card-view', 'View Request →'));

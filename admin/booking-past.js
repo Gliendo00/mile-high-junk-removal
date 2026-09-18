@@ -59,6 +59,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var exactTimeInput = document.getElementById('exact-time');
   var timeModeToggle = document.getElementById('time-mode-toggle');
   var appointmentDateInput = document.getElementById('appointment-date');
+  var estimatedPriceInput = document.getElementById('estimated-price');
+  var estimatedPriceMaxInput = document.getElementById('estimated-price-max');
+  var quoteModeToggle = document.getElementById('quote-mode-toggle');
+  var quoteMaxWrap = document.getElementById('quote-max-wrap');
+  var quoteToLabel = document.getElementById('quote-to-label');
   var actualPriceInput = document.getElementById('actual-price');
   var tipAmountInput = document.getElementById('tip-amount');
   var descriptionInput = document.getElementById('description');
@@ -128,6 +133,19 @@ document.addEventListener('DOMContentLoaded', function () {
     timeWindowSelect.style.display = isExact ? 'none' : 'block';
   });
 
+  // Phase 3C Stage 2.5 addendum: Quoted Amount ("Exact | Range") joins
+  // Actual Job Amount Collected + Tip on Past Job — a historical job can
+  // now record what it was originally quoted alongside what was actually
+  // collected, independently, same as New Job's own toggle.
+  var quoteMode = 'exact';
+  setupSegmented(quoteModeToggle, function (mode) {
+    quoteMode = mode;
+    var isRange = mode === 'range';
+    quoteToLabel.style.display = isRange ? 'inline' : 'none';
+    quoteMaxWrap.style.display = isRange ? 'flex' : 'none';
+    if (!isRange) estimatedPriceMaxInput.value = '';
+  });
+
   var todayIso = denverTodayIso();
   appointmentDateInput.min = HISTORICAL_FLOOR_ISO;
   appointmentDateInput.max = todayIso;
@@ -187,6 +205,16 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
 
+    if (quoteMode === 'range' && !estimatedPriceInput.value.trim()) {
+      showError('A quote range needs a minimum amount.');
+      return;
+    }
+    if (quoteMode === 'range' && estimatedPriceMaxInput.value.trim() &&
+        Number(estimatedPriceMaxInput.value) <= Number(estimatedPriceInput.value)) {
+      showError('The maximum quote amount must be greater than the minimum.');
+      return;
+    }
+
     var body = {
       mode: 'past',
       customerId: selectedClient.id,
@@ -203,6 +231,15 @@ document.addEventListener('DOMContentLoaded', function () {
       description: descriptionInput.value.trim(),
       internalNotes: internalNotesInput.value.trim(),
     };
+    // Quoted Amount, Actual Job Amount Collected, and Tip are three
+    // independent values (Stage 2.5 addendum) — none is derived from or
+    // overwrites another.
+    var quoteRaw = estimatedPriceInput.value.trim();
+    if (quoteRaw) body.estimatedPrice = Number(quoteRaw);
+    if (quoteMode === 'range') {
+      var quoteMaxRaw = estimatedPriceMaxInput.value.trim();
+      if (quoteMaxRaw) body.estimatedPriceMax = Number(quoteMaxRaw);
+    }
     var priceRaw = actualPriceInput.value.trim();
     if (priceRaw) body.finalPrice = Number(priceRaw);
     var tipRaw = tipAmountInput.value.trim();

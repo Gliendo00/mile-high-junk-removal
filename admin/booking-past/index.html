@@ -87,6 +87,25 @@
     </div>
 
     <div class="admin-form-section">
+      <div class="admin-field">
+        <label>Quoted Amount (optional)</label>
+        <div class="admin-segmented" id="quote-mode-toggle">
+          <button type="button" class="admin-segmented-btn is-active" data-mode="exact">Exact</button>
+          <button type="button" class="admin-segmented-btn" data-mode="range">Range</button>
+        </div>
+        <div class="admin-quote-inputs">
+          <div class="admin-quote-input-wrap">
+            <span class="admin-quote-dollar">$</span>
+            <input type="number" id="estimated-price" inputmode="decimal" min="0" step="0.01" placeholder="350">
+          </div>
+          <span class="admin-quote-to" id="quote-to-label" style="display:none">to</span>
+          <div class="admin-quote-input-wrap" id="quote-max-wrap" style="display:none">
+            <span class="admin-quote-dollar">$</span>
+            <input type="number" id="estimated-price-max" inputmode="decimal" min="0" step="0.01" placeholder="475">
+          </div>
+        </div>
+      </div>
+
       <div class="admin-field-row">
         <div class="admin-field">
           <label for="actual-price">Actual Job Amount Collected (optional)</label>

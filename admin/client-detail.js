@@ -112,7 +112,12 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-card-when', whenParts.join(' · ')));
 
     var footer = el('div', 'admin-card-footer');
-    var priceText = formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
+    // Status-aware (Phase 3C Stage 2.5 addendum) — see admin/schedule.js's
+    // identical comment: completed prefers Actual Collected, non-completed
+    // always shows Quoted, never implying a not-yet-completed job is paid.
+    var priceText = b.status === 'completed'
+      ? (formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax))
+      : formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
     footer.appendChild(el('span', null, priceText || ''));
     footer.appendChild(el('span', 'admin-card-view', 'View Request →'));
     a.appendChild(footer);

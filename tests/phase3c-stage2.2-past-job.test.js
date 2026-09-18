@@ -438,9 +438,12 @@ test("POST past job: an invalid (unrecognized) timeWindow is rejected, not silen
 });
 
 // =======================================================================
-// 6. Actual amount -> final_price, never estimated_price
+// 6. Actual amount -> final_price. estimated_price stays null when omitted
+// (not because Past Job is blocked from setting it — see the Stage 2.5
+// addendum test just below, which supersedes this section's original
+// "estimatedPrice is ignored for Past Job" framing).
 // =======================================================================
-test("POST past job: finalPrice is written to final_price; estimated_price stays null", async () => {
+test("POST past job: finalPrice is written to final_price; estimated_price stays null when not sent", async () => {
   adminAuthed();
   const db = freshDb();
   const res = await postBooking(db, AUTH_COOKIE, validPastBody({ finalPrice: 375.5 }));
@@ -462,12 +465,19 @@ test("POST past job: finalPrice is optional — omitting it still creates the jo
   assert.strictEqual(db.bookings[0].final_price, null);
 });
 
-test("POST past job: an estimatedPrice sent alongside mode:past is ignored — never written anywhere", async () => {
+// Phase 3C Stage 2.5 addendum ("independent financial fields"): Past Job
+// can now also record what a historical job was originally quoted for,
+// alongside what was actually collected — this supersedes this file's
+// original "estimatedPrice is ignored for Past Job" test, which asserted
+// the opposite of the now-intended behavior. See
+// tests/phase3c-stage2.5-quoted-range-exact-time.test.js for the full new
+// regression suite.
+test("POST past job: an estimatedPrice sent alongside mode:past IS now written to estimated_price (Stage 2.5 addendum)", async () => {
   adminAuthed();
   const db = freshDb();
   const res = await postBooking(db, AUTH_COOKIE, validPastBody({ estimatedPrice: 999 }));
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
-  assert.strictEqual(db.bookings[0].estimated_price, null, "estimatedPrice must never leak into estimated_price for a past-mode request");
+  assert.strictEqual(db.bookings[0].estimated_price, 999, "Past Job can now record a Quoted Amount independently of Actual Collected/Tip");
 });
 
 test("POST past job: negative finalPrice -> 400, no row created", async () => {

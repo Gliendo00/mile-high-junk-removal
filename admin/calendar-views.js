@@ -281,9 +281,12 @@ window.AdminCalendarViews = (function () {
 
     var metaParts = [job.serviceLabel || job.serviceType || '—'];
     if (job.serviceAddress && job.serviceAddress.city) metaParts.push(job.serviceAddress.city);
-    // Same Actual-Collected-first-else-Quoted precedence as
-    // admin/schedule.js's Today/Tomorrow/Yesterday cards.
-    var priceText = formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
+    // Same status-aware precedence as admin/schedule.js's Today/Tomorrow/
+    // Yesterday cards — completed prefers Actual Collected, non-completed
+    // always shows Quoted (never implies a booked job is already paid).
+    var priceText = job.status === 'completed'
+      ? (formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
+      : formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) metaParts.push(priceText);
     a.appendChild(el('div', 'admin-daily-job-card-meta', metaParts.join(' · ')));
 

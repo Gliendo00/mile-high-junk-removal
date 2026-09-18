@@ -558,13 +558,17 @@ test("POST New Job: estimatedPriceMax less than estimatedPrice -> 400", async ()
   assert.strictEqual(db.bookings.length, 0);
 });
 
-test("POST Past Job: estimatedPriceMax is never read in past mode, even if sent — mirrors estimatedPrice's existing invisibility to Past Job", async () => {
+// Superseded by the "independent financial fields" addendum below (§11) —
+// Past Job now DOES support Quoted Amount, including a range. Kept here
+// (updated, not deleted) since this exact spot in the file is where the
+// old, now-incorrect assumption lived.
+test("POST Past Job: estimatedPrice + estimatedPriceMax ARE now read and written in past mode (Stage 2.5 addendum)", async () => {
   adminAuthed();
   const db = freshDb();
-  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ mode: "past", appointmentDate: TODAY_ISO, timeWindow: "", estimatedPrice: 999999, estimatedPriceMax: 999999 }));
-  assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(db.bookings[0].estimated_price, null);
-  assert.strictEqual(db.bookings[0].estimated_price_max, null);
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ mode: "past", appointmentDate: TODAY_ISO, timeWindow: "", estimatedPrice: 350, estimatedPriceMax: 475 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 350);
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475);
 });
 
 // =======================================================================
@@ -660,14 +664,18 @@ test("PATCH booking (booked): estimatedPriceMax <= estimatedPrice -> 400, row un
   assert.deepStrictEqual(db.bookings[0], before);
 });
 
-test("PATCH booking (completed): editing a completed job's Actual Collected/tip never touches estimated_price_max, even if sent", async () => {
+// Superseded by the "independent financial fields" addendum below (§11) —
+// a completed job's Quoted Amount range IS now editable, alongside Actual
+// Collected, independently. Kept here (updated, not deleted) since this
+// exact spot in the file is where the old, now-incorrect assumption lived.
+test("PATCH booking (completed): estimated_price_max CAN now be set alongside Actual Collected, independently (Stage 2.5 addendum)", async () => {
   adminAuthed();
   const db = freshDb();
-  const booking = seedCompletedBooking(db, { estimated_price_max: null });
-  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPriceMax: 999999, finalPrice: 300 }));
-  assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(db.bookings[0].estimated_price_max, null, "estimated_price_max must be left exactly as it was — never written by a completed-mode edit");
-  assert.strictEqual(db.bookings[0].final_price, 300);
+  const booking = seedCompletedBooking(db, { estimated_price: 350, estimated_price_max: null });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: 350, estimatedPriceMax: 475, finalPrice: 300 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475, "estimated_price_max must now be settable on a completed job");
+  assert.strictEqual(db.bookings[0].final_price, 300, "final_price updates independently, not derived from the quote");
 });
 
 // =======================================================================
@@ -747,11 +755,12 @@ test("admin/booking-new/index.html: has both the Appointment Time and Quoted Amo
   assert.ok(/id="estimated-price-max"/.test(html));
 });
 
-test("admin/booking-past/index.html: has the Appointment Time toggle and the relabeled 'Actual Job Amount Collected' field", () => {
+test("admin/booking-past/index.html: has the Appointment Time toggle, the relabeled 'Actual Job Amount Collected' field, and (as of the Stage 2.5 addendum) the Quoted Amount toggle too", () => {
   const html = readSrc("admin/booking-past/index.html");
   assert.ok(/id="time-mode-toggle"/.test(html));
   assert.ok(/Actual Job Amount Collected/.test(html));
-  assert.ok(!/id="quote-mode-toggle"/.test(html), "Past Job has never had a Quoted Amount field — this stage must not add one");
+  assert.ok(/id="quote-mode-toggle"/.test(html), "Past Job must now also offer a Quoted Amount Exact/Range toggle (independent financial fields addendum)");
+  assert.ok(/id="estimated-price-max"/.test(html));
 });
 
 test("admin/booking-edit/index.html: has both toggles and the relabeled Quoted Amount / Actual Job Amount Collected fields", () => {
@@ -790,6 +799,211 @@ test("deployment: total function-producing files under api/ are still within the
   })(dir);
   assert.ok(total <= 12, "api/ has " + total + " function-producing .js files, exceeding the Vercel Hobby plan's 12-function limit");
   assert.strictEqual(total, 12, "Stage 2.5 adds zero new endpoint files — every change lands inside existing api/admin/booking.js, api/admin/bookings.js, and api/admin/client.js");
+});
+
+// =======================================================================
+// 11. "Independent financial fields" addendum — Quoted Amount, Actual Job
+// Amount Collected, and Tip are three separate columns
+// (estimated_price/estimated_price_max, final_price, tip_amount), always
+// independently readable/writable (Tip staying completed-only — see the
+// finding in api/admin/booking.js's handleCreate header comment for why),
+// never derived from or copying into one another, regardless of a job's
+// status. This section supersedes the original Stage 2.5 status-gated
+// design (the two tests updated in place above, plus the two updated in
+// tests/phase3c-job-editing.test.js and tests/phase3c-stage2.2-past-job.test.js,
+// were this file's/those files' own copies of that now-superseded
+// assumption).
+// =======================================================================
+
+test("POST Past Job: quote + actual + tip can all be created together, as three independent values", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({
+    mode: "past", appointmentDate: TODAY_ISO, timeWindow: "",
+    estimatedPrice: 350, estimatedPriceMax: 475, finalPrice: 425, tipAmount: 20,
+  }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 350);
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475);
+  assert.strictEqual(db.bookings[0].final_price, 425);
+  assert.strictEqual(db.bookings[0].tip_amount, 20);
+});
+
+test("POST Past Job: supports an exact quote (no max)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ mode: "past", appointmentDate: TODAY_ISO, timeWindow: "", estimatedPrice: 350 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 350);
+  assert.strictEqual(db.bookings[0].estimated_price_max, null);
+});
+
+test("POST Past Job: supports a quote range", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ mode: "past", appointmentDate: TODAY_ISO, timeWindow: "", estimatedPrice: 350, estimatedPriceMax: 475 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 350);
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475);
+});
+
+test("POST New Job: quote and actual amount can both be recorded together on a still-upcoming job", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ estimatedPrice: 350, estimatedPriceMax: 475, finalPrice: 400 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].status, "booked");
+  assert.strictEqual(db.bookings[0].estimated_price, 350);
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475);
+  assert.strictEqual(db.bookings[0].final_price, 400, "a booked job can record an amount already collected before it's ever marked completed");
+  assert.strictEqual(db.bookings[0].tip_amount, null, "Tip stays completed-only — never settable from New Job, even implicitly");
+});
+
+test("POST New Job: a tipAmount sent alongside the new quote+actual combination is still silently ignored (Tip stays completed-only)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await createJob(db, AUTH_COOKIE, baseNewJobBody({ estimatedPrice: 350, finalPrice: 400, tipAmount: 50 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].tip_amount, null);
+});
+
+test("PATCH booking (booked): Actual Collected can be changed without changing the Quoted Amount", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedBookedBooking(db, { estimated_price: 350, estimated_price_max: 475, final_price: null });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, {
+    estimatedPrice: 350, estimatedPriceMax: 475, finalPrice: 400,
+  }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].final_price, 400);
+  assert.strictEqual(db.bookings[0].estimated_price, 350, "the quote must be preserved exactly as it was submitted, not cleared or altered by adding an actual amount");
+  assert.strictEqual(db.bookings[0].estimated_price_max, 475);
+});
+
+test("PATCH booking (completed): Quoted Amount can be changed without changing Actual Collected or Tip", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { estimated_price: 350, estimated_price_max: 475, final_price: 425, tip_amount: 20 });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, {
+    estimatedPrice: 400, estimatedPriceMax: 500, finalPrice: 425, tipAmount: 20,
+  }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 400);
+  assert.strictEqual(db.bookings[0].estimated_price_max, 500);
+  assert.strictEqual(db.bookings[0].final_price, 425, "Actual Collected must be preserved exactly as submitted, unaffected by the quote change");
+  assert.strictEqual(db.bookings[0].tip_amount, 20, "Tip must be preserved exactly as submitted, unaffected by the quote change");
+});
+
+test("PATCH booking (booked): editing the quote does not overwrite a previously-recorded Actual Collected amount", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedBookedBooking(db, { estimated_price: 300, final_price: 275 });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: 450, finalPrice: 275 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].estimated_price, 450);
+  assert.strictEqual(db.bookings[0].final_price, 275, "final_price must never be touched by a quote-only conceptual edit — it was resubmitted unchanged, not derived from the new quote");
+});
+
+test("PATCH booking (booked): editing Actual Collected does not overwrite the Quoted Amount", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedBookedBooking(db, { estimated_price: 300, estimated_price_max: null, final_price: null });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: 300, finalPrice: 280 }));
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.bookings[0].final_price, 280);
+  assert.strictEqual(db.bookings[0].estimated_price, 300, "estimated_price must never be touched by an actual-amount-only conceptual edit");
+});
+
+test("PATCH booking (booked): range validation (max must be > min) is still enforced under the new always-editable rule", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedBookedBooking(db, { estimated_price: 300, estimated_price_max: null });
+  const before = Object.assign({}, booking);
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: 300, estimatedPriceMax: 250, finalPrice: 280 }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.deepStrictEqual(db.bookings[0], before, "nothing — including the otherwise-valid finalPrice in the same request — is written when the quote range is invalid");
+});
+
+test("PATCH booking (completed): range validation (max requires a min) is still enforced", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { estimated_price: null, estimated_price_max: null });
+  const res = await patchBooking(db, AUTH_COOKIE, validPatchBody(booking, { estimatedPrice: "", estimatedPriceMax: 475 }));
+  assert.strictEqual(res.statusCode, 400);
+});
+
+test("GET booking: Quoted, Actual Collected, and Tip are all present and independent in the response, for a completed job carrying all three", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedCompletedBooking(db, { estimated_price: 350, estimated_price_max: 475, final_price: 425, tip_amount: 20 });
+  const res = await getBooking(db, AUTH_COOKIE, booking.id);
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.booking.estimatedPrice, 350);
+  assert.strictEqual(res.body.booking.estimatedPriceMax, 475);
+  assert.strictEqual(res.body.booking.finalPrice, 425);
+  assert.strictEqual(res.body.booking.tipAmount, 20);
+});
+
+test("GET booking: a booked (non-completed) job can carry both a Quoted Amount and an Actual Collected amount at once", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const booking = seedBookedBooking(db, { estimated_price: 350, estimated_price_max: 475, final_price: 400 });
+  const res = await getBooking(db, AUTH_COOKIE, booking.id);
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.booking.status, "booked");
+  assert.strictEqual(res.body.booking.estimatedPrice, 350);
+  assert.strictEqual(res.body.booking.finalPrice, 400);
+});
+
+// --- Schedule display semantics: status-aware, never a blind
+// final_price-or-estimated_price fallback. The decision itself is made in
+// the browser (admin/schedule.js, admin/calendar-views.js, admin/dashboard.js,
+// admin/client-detail.js each have their own small formatQuotedAmount()/
+// price-selection logic — this project's established "small duplicated
+// client helper per file" convention, see api/_lib/booking-format.js's
+// header) — checked here both at the API layer (the data those functions
+// need is present and correct) and at the source level (the status check
+// itself is actually there), matching this codebase's existing convention
+// for verifying client-only logic without a browser (e.g. the
+// shortTimeLabel() reimplementation test in
+// tests/phase3c-stage2.4.2-schedule-polish.test.js).
+test("GET schedule: a booked job's payload carries both estimatedPrice/estimatedPriceMax and finalPrice, whatever their values, so the client can apply its own status-aware display rule", async () => {
+  adminAuthed();
+  const db = freshDb();
+  seedBookedBooking(db, { id: "b1", appointment_date: TODAY_ISO, estimated_price: 350, estimated_price_max: 475, final_price: 400 });
+  const res = await getSchedule(db, AUTH_COOKIE, { range: "today" });
+  assert.strictEqual(res.statusCode, 200);
+  const job = res.body.jobs[0];
+  assert.strictEqual(job.status, "booked");
+  assert.strictEqual(job.estimatedPrice, 350);
+  assert.strictEqual(job.estimatedPriceMax, 475);
+  assert.strictEqual(job.finalPrice, 400, "a booked job's already-collected amount still round-trips through the schedule payload — the client, not the API, decides not to lead with it");
+});
+
+[
+  { file: "admin/schedule.js", fn: "renderJobCard" },
+  { file: "admin/calendar-views.js", fn: "renderDailyJobCard" },
+  { file: "admin/dashboard.js", fn: "renderBookingCard" },
+  { file: "admin/client-detail.js", fn: "renderJobCard" },
+].forEach(({ file, fn }) => {
+  test(file + ": " + fn + "() picks the price text with a status === 'completed' check — never a blind finalPrice-or-quoted fallback", () => {
+    const src = readSrc(file);
+    const start = src.indexOf("function " + fn);
+    assert.ok(start !== -1, fn + "() must exist in " + file);
+    const body = src.slice(start, start + 2200);
+    assert.ok(/===\s*'completed'/.test(body), file + "'s " + fn + "() must gate the Actual-Collected-first branch on status === 'completed', not apply it unconditionally");
+    assert.ok(/formatQuotedAmount/.test(body), file + "'s " + fn + "() must be able to fall back to/lead with the range-aware Quoted amount");
+  });
+});
+
+test("Booking Detail (admin/booking-detail.js) formats Quoted, Actual Collected, and Tip completely independently — no status gate, no final_price ?? estimated_price coalescing between them", () => {
+  const src = readSrc("admin/booking-detail.js");
+  // The three rows are set from three independent expressions, none of
+  // which reads a value derived from either of the other two.
+  assert.ok(/formatQuotedAmount\(booking\.estimatedPrice,\s*booking\.estimatedPriceMax\)/.test(src));
+  assert.ok(/formatPrice\(booking\.finalPrice\)/.test(src));
+  assert.ok(/formatPrice\(booking\.tipAmount\)/.test(src));
+  assert.ok(!/booking\.finalPrice\s*\|\|\s*booking\.estimatedPrice|booking\.estimatedPrice\s*\?\?\s*booking\.finalPrice/.test(src), "must never coalesce Actual Collected and Quoted into a single displayed value");
 });
 
 // ---------------------------------------------------------------------

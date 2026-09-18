@@ -108,7 +108,12 @@
     <div class="admin-form-section">
       <div class="admin-form-section-label">Pricing</div>
 
-      <div class="admin-field" id="pricing-estimated" style="display:none">
+      <!-- Phase 3C Stage 2.5 addendum: Quoted Amount and Actual Job Amount
+           Collected are independent financial concepts, both always
+           editable here regardless of the job's status — never gated by
+           completed/booked, never nulling or copying into one another. Tip
+           stays completed-only (see this page's own script's render()). -->
+      <div class="admin-field" id="pricing-quoted">
         <label>Quoted Amount (optional)</label>
         <div class="admin-segmented" id="quote-mode-toggle">
           <button type="button" class="admin-segmented-btn is-active" data-mode="exact">Exact</button>
@@ -127,12 +132,12 @@
         </div>
       </div>
 
-      <div class="admin-field-row" id="pricing-completed" style="display:none">
+      <div class="admin-field-row" id="pricing-actual-tip">
         <div class="admin-field">
           <label for="actual-price">Actual Job Amount Collected (optional)</label>
-          <input type="number" id="actual-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+          <input type="number" id="actual-price" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 400">
         </div>
-        <div class="admin-field">
+        <div class="admin-field" id="pricing-tip" style="display:none">
           <label for="tip-amount">Tip Amount (optional)</label>
           <input type="number" id="tip-amount" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 20">
         </div>

@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var quoteModeToggle = document.getElementById('quote-mode-toggle');
   var quoteMaxWrap = document.getElementById('quote-max-wrap');
   var quoteToLabel = document.getElementById('quote-to-label');
+  var actualPriceInput = document.getElementById('actual-price');
 
   // Phase 3C Stage 2.5: "Exact Time | Time Window" and "Exact | Range" are
   // both simple two-button segmented toggles — see admin.css's
@@ -247,6 +248,11 @@ document.addEventListener('DOMContentLoaded', function () {
       var maxRaw = estimatedPriceMaxInput.value.trim();
       if (maxRaw) body.estimatedPriceMax = Number(maxRaw);
     }
+    // Actual Job Amount Collected — independent of the Quoted Amount above;
+    // optional, for the rare case something was already collected before
+    // this job is ever marked completed (Stage 2.5 addendum).
+    var actualRaw = actualPriceInput.value.trim();
+    if (actualRaw) body.finalPrice = Number(actualRaw);
 
     savingInFlight = true;
     saveBtn.disabled = true;
