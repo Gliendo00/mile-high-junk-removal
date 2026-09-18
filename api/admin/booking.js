@@ -86,7 +86,13 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const [customerRes, dumpsterRes, photosRes] = await Promise.all([
+    // Phase 3C Stage 2.5-v2: rental_payments is queried alongside the other
+    // per-booking side tables — a plain read, no new write surface, so it
+    // doesn't touch the write-audit tests. Only ever present for a
+    // dumpster_rental booking that was booked and paid online; NULL/absent
+    // for every other booking, including an admin-created dumpster rental
+    // (New Job never inserts a rental_payments row).
+    const [customerRes, dumpsterRes, photosRes, paymentRes] = await Promise.all([
       supabase
         .from("customers")
         .select("first_name, last_name, phone, email, address, city, state, zip")
@@ -94,14 +100,21 @@ module.exports = async (req, res) => {
         .maybeSingle(),
       supabase.from("dumpster_rentals").select("delivery_date, pickup_date, material_type, placement_notes").eq("booking_id", id).maybeSingle(),
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
+      supabase
+        .from("rental_payments")
+        .select("payment_status, amount_charged, payment_method_summary, braintree_transaction_id, agreement_version, agreement_accepted_at, dispute_status")
+        .eq("booking_id", id)
+        .maybeSingle(),
     ]);
     if (customerRes.error) throw customerRes.error;
     if (dumpsterRes.error) throw dumpsterRes.error;
     if (photosRes.error) throw photosRes.error;
+    if (paymentRes.error) throw paymentRes.error;
 
     const customer = customerRes.data || null;
     const dumpster = dumpsterRes.data || null;
     const photoRows = photosRes.data || [];
+    const payment = paymentRes.data || null;
 
     // Signed URLs are minted here, after authorization has already
     // succeeded above, scoped to one storage object each, and short-lived —
@@ -184,6 +197,20 @@ module.exports = async (req, res) => {
             pickupDate: dumpster.pickup_date,
             materialType: dumpster.material_type,
             placementNotes: dumpster.placement_notes,
+          }
+        : null,
+      // Never card data — only what Braintree itself already returns as
+      // display-safe (a "Visa ending in 4242"-style summary, its own
+      // transaction id). See sql/2026-09-18_...rental-payments.sql.
+      payment: payment
+        ? {
+            status: payment.payment_status,
+            amountCharged: payment.amount_charged,
+            methodSummary: payment.payment_method_summary,
+            transactionId: payment.braintree_transaction_id,
+            agreementVersion: payment.agreement_version,
+            agreementAcceptedAt: payment.agreement_accepted_at,
+            disputeStatus: payment.dispute_status,
           }
         : null,
       photos: photos,

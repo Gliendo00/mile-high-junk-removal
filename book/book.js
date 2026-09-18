@@ -17,6 +17,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var state = {
     serviceType: null,
     photos: [], // File objects kept in memory until submit; uploaded only after the booking is confirmed.
+    // Phase 3C Stage 2.5-v2 — dumpster_rental only, populated lazily the
+    // first time the payment panel is shown (see showPaymentPanel below).
+    rentalConfig: null, // { braintree: {tokenizationKey}, pricing: {...} } from GET /api/book
+    idempotencyKey: null, // generated once per checkout attempt, reused across any retry
+    dropinInstance: null,
   };
 
   // GA4: booking flow entered. Fires once per page load — not on step
@@ -684,6 +689,15 @@ document.addEventListener('DOMContentLoaded', function () {
   ARRIVAL_WINDOWS.forEach(function (w) { windowLabels[w.id] = w.label; });
 
   function renderReview() {
+    // Reached fresh every time step 6 is entered via Next from step 5 (the
+    // only way in) — always resets to the Review sub-view, never leaves a
+    // stale Payment panel showing from an earlier visit.
+    var paymentPanelEl = document.getElementById('payment-panel');
+    var reviewActionsEl = document.getElementById('review-actions');
+    if (paymentPanelEl) paymentPanelEl.hidden = true;
+    if (reviewActionsEl) reviewActionsEl.style.display = '';
+    submitBtn.textContent = state.serviceType === 'dumpster_rental' ? 'Continue to Payment' : 'Submit Request';
+
     reviewContent.innerHTML = '';
     reviewContent.appendChild(reviewGroup('Service', 1, [['Service', serviceLabels[state.serviceType] || '—']]));
 
@@ -776,13 +790,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // — submit —
   var submitBtn = document.getElementById('submit-booking');
+  var reviewActions = document.getElementById('review-actions');
   var successBox = document.getElementById('wizard-success');
+  var successTitleEl = document.getElementById('wizard-success-title');
+  var successBodyEl = document.getElementById('wizard-success-body');
   var photoUploadStatus = document.getElementById('photo-upload-status');
-  submitBtn.addEventListener('click', function () {
-    clearError();
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Submitting…';
 
+  // Shared by the plain (junk_removal/light_demo) submit below and the
+  // dumpster_rental pay-and-book handler further down — every field here is
+  // common to both request shapes; the payment-specific `payment` object is
+  // added by the caller (handlePayAndBook) only for dumpster_rental.
+  function buildBookingPayload() {
     var jobDetails = { additionalDetails: null };
     if (state.serviceType === 'junk_removal') {
       jobDetails = {
@@ -809,7 +827,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     var timeWindow = state.serviceType === 'dumpster_rental' ? val('dr-window') : val('pref-window');
-    var payload = {
+    return {
       serviceType: state.serviceType,
       hp: val('referral-source'),
       // Elapsed milliseconds since this script loaded, not a timestamp —
@@ -828,6 +846,72 @@ document.addEventListener('DOMContentLoaded', function () {
         zip: val('cust-zip'),
       },
     };
+  }
+
+  // Shared success handling: hides whichever action row was showing (Review
+  // or Payment), shows the success box with the given copy, fires the one
+  // GA4 conversion event both paths report under, and runs the existing
+  // best-effort photo upload — identical for both service-type groups.
+  function finishBookingSuccess(body, successTitle, successBodyText) {
+    reviewActions.style.display = 'none';
+    var paymentActionsEl = document.getElementById('payment-actions');
+    if (paymentActionsEl) paymentActionsEl.style.display = 'none';
+    var paymentPanelEl = document.getElementById('payment-panel');
+    if (paymentPanelEl) paymentPanelEl.hidden = true;
+    reviewContent.style.display = 'none';
+    successTitleEl.textContent = successTitle;
+    successBodyEl.innerHTML = successBodyText; // fixed, developer-authored copy only — never customer input
+    successBox.classList.add('is-visible');
+
+    // GA4: the most important conversion event. Fires exactly once, only
+    // after the backend has confirmed the booking was saved (never on
+    // validation failure, a failed request, or mere submit-click).
+    if (typeof window.gtag === 'function') {
+      window.gtag('event', 'booking_form_completed');
+    }
+
+    var uploadToken = body && body.uploadToken;
+    var photos = state.photos;
+
+    if (!photos.length) return;
+
+    if (!uploadToken) {
+      // Defensive fallback — shouldn't happen once upload is configured,
+      // but the booking must never appear to have failed because of this.
+      photoUploadStatus.textContent = 'Photos could not be uploaded automatically. Please text them to 303-990-1812.';
+      photoUploadStatus.hidden = false;
+      return;
+    }
+
+    photoUploadStatus.hidden = false;
+    photoUploadStatus.textContent = 'Uploading photo 1 of ' + photos.length + '…';
+
+    uploadAllPhotos(uploadToken, photos, function (current, total) {
+      photoUploadStatus.textContent = 'Uploading photo ' + current + ' of ' + total + '…';
+    }).then(function (successCount) {
+      if (successCount === photos.length) {
+        photoUploadStatus.textContent = photos.length === 1 ? '1 of 1 photo uploaded.' : successCount + ' of ' + photos.length + ' photos uploaded.';
+      } else {
+        photoUploadStatus.textContent = successCount + ' of ' + photos.length + ' photos uploaded. The rest didn’t make it — no problem, text them to 303-990-1812 and we’ll add them to your booking.';
+      }
+    });
+  }
+
+  submitBtn.addEventListener('click', function () {
+    // Phase 3C Stage 2.5-v2: dumpster_rental never submits directly from
+    // here — it's a real, paid booking, so Review's Next action instead
+    // reveals the Rental Agreement + Payment panel below. Everything from
+    // here down in this handler is unchanged for junk_removal/light_demo.
+    if (state.serviceType === 'dumpster_rental') {
+      showPaymentPanel();
+      return;
+    }
+
+    clearError();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+
+    var payload = buildBookingPayload();
 
     fetch('/api/book', {
       method: 'POST',
@@ -850,52 +934,219 @@ document.addEventListener('DOMContentLoaded', function () {
           });
       })
       .then(function (body) {
-        // The booking itself is confirmed the moment we get here — everything
-        // below is best-effort photo upload and must never undo that.
-        document.querySelector('.wizard-step[data-step="6"] .wizard-actions').style.display = 'none';
-        reviewContent.style.display = 'none';
-        successBox.classList.add('is-visible');
-
-        // GA4: the most important conversion event. Fires exactly once, only
-        // after the backend has confirmed the booking was saved (never on
-        // validation failure, a failed request, or mere submit-click) — the
-        // submit button also stays disabled from here on, so this branch
-        // can't be re-entered by a second click.
-        if (typeof window.gtag === 'function') {
-          window.gtag('event', 'booking_form_completed');
-        }
-
-        var uploadToken = body && body.uploadToken;
-        var photos = state.photos;
-
-        if (!photos.length) return;
-
-        if (!uploadToken) {
-          // Defensive fallback — shouldn't happen once upload is configured,
-          // but the booking must never appear to have failed because of this.
-          photoUploadStatus.textContent = 'Photos could not be uploaded automatically. Please text them to 303-990-1812.';
-          photoUploadStatus.hidden = false;
-          return;
-        }
-
-        photoUploadStatus.hidden = false;
-        photoUploadStatus.textContent = 'Uploading photo 1 of ' + photos.length + '…';
-
-        uploadAllPhotos(uploadToken, photos, function (current, total) {
-          photoUploadStatus.textContent = 'Uploading photo ' + current + ' of ' + total + '…';
-        }).then(function (successCount) {
-          if (successCount === photos.length) {
-            photoUploadStatus.textContent = photos.length === 1 ? '1 of 1 photo uploaded.' : successCount + ' of ' + photos.length + ' photos uploaded.';
-          } else {
-            photoUploadStatus.textContent = successCount + ' of ' + photos.length + ' photos uploaded. The rest didn’t make it — no problem, text them to 303-990-1812 and we’ll add them to your booking.';
-          }
-        });
+        finishBookingSuccess(
+          body,
+          'Request received!',
+          'Thanks — we’ve got your booking request and will reach out to confirm your appointment. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.'
+        );
       })
       .catch(function (err) {
         showError(err && err.isServerMessage && err.message ? err.message : GENERIC_ERROR);
         submitBtn.disabled = false;
         submitBtn.textContent = 'Submit Request';
       });
+  });
+
+  // — Phase 3C Stage 2.5-v2: dumpster rental — Rental Agreement + Payment —
+  // Reachable only via submitBtn's click handler above, and only when
+  // state.serviceType === 'dumpster_rental'. Reuses buildBookingPayload()/
+  // finishBookingSuccess() from the plain-submit flow above rather than
+  // duplicating that logic.
+  var paymentPanel = document.getElementById('payment-panel');
+  var paymentActions = document.getElementById('payment-actions');
+  var paymentConfigError = document.getElementById('payment-config-error');
+  var dropinContainer = document.getElementById('braintree-dropin-container');
+  var agreementCheckbox = document.getElementById('agreement-checkbox');
+  var payAndBookBtn = document.getElementById('pay-and-book-btn');
+  var paymentBackBtn = document.getElementById('payment-back-btn');
+
+  function newIdempotencyKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    // Fallback for a browser without crypto.randomUUID (older Safari) —
+    // still a UUID-v4-shaped, sufficiently-random string; the server only
+    // requires it be unique per checkout attempt, not cryptographically
+    // unguessable.
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function renderPriceBreakdown(pricing) {
+    var el = document.getElementById('payment-price-breakdown');
+    el.innerHTML = '';
+    var rows = [
+      ['Charged today', '$' + pricing.baseRate.toFixed(2)],
+      ['Included', pricing.includedDays + ' days on site, up to ' + pricing.includedTons + ' tons'],
+      ['If you go over', '$' + pricing.overageTonRate.toFixed(2) + '/ton or $' + pricing.overageDayRate.toFixed(2) + '/day — always reviewed with you first, never charged automatically'],
+    ];
+    rows.forEach(function (pair) {
+      var p = document.createElement('p');
+      p.style.margin = '0 0 8px';
+      var strong = document.createElement('strong');
+      strong.textContent = pair[0] + ': ';
+      p.appendChild(strong);
+      p.appendChild(document.createTextNode(pair[1]));
+      el.appendChild(p);
+    });
+  }
+
+  function showPaymentPanel() {
+    clearError();
+    reviewActions.style.display = 'none';
+    paymentPanel.hidden = false;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (!state.idempotencyKey) state.idempotencyKey = newIdempotencyKey();
+
+    if (state.rentalConfig) {
+      renderPriceBreakdown(state.rentalConfig.pricing);
+      initDropin();
+      return;
+    }
+
+    dropinContainer.textContent = 'Loading payment options…';
+    fetch('/api/book', { method: 'GET' })
+      .then(function (res) {
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (body) {
+        if (!body || !body.ok || !body.braintree || !body.braintree.tokenizationKey) {
+          throw new Error('Rental config unavailable');
+        }
+        state.rentalConfig = body;
+        renderPriceBreakdown(body.pricing);
+        initDropin();
+      })
+      .catch(function () {
+        dropinContainer.textContent = '';
+        paymentConfigError.hidden = false;
+        payAndBookBtn.disabled = true;
+      });
+  }
+
+  function initDropin() {
+    if (typeof braintree === 'undefined' || !braintree.dropin) {
+      dropinContainer.textContent = '';
+      paymentConfigError.hidden = false;
+      payAndBookBtn.disabled = true;
+      return;
+    }
+    if (state.dropinInstance) {
+      // Re-showing the panel after "Back to Review" — tear down the
+      // previous instance rather than stacking a second one in the same
+      // container.
+      state.dropinInstance.teardown(function () {
+        state.dropinInstance = null;
+        createDropin();
+      });
+    } else {
+      createDropin();
+    }
+  }
+
+  function createDropin() {
+    dropinContainer.textContent = '';
+    paymentConfigError.hidden = true;
+    payAndBookBtn.disabled = false;
+    braintree.dropin.create(
+      {
+        authorization: state.rentalConfig.braintree.tokenizationKey,
+        container: '#braintree-dropin-container',
+        // Renders automatically only on browsers Braintree supports it for,
+        // and only if the merchant account has Venmo enabled — otherwise
+        // this option is silently a no-op, no branching needed here.
+        venmo: { allowNewBrowserTab: false },
+      },
+      function (err, instance) {
+        if (err) {
+          console.error('Braintree Drop-in failed to initialize:', err);
+          paymentConfigError.hidden = false;
+          payAndBookBtn.disabled = true;
+          return;
+        }
+        state.dropinInstance = instance;
+      }
+    );
+  }
+
+  paymentBackBtn.addEventListener('click', function () {
+    clearError();
+    paymentPanel.hidden = true;
+    reviewActions.style.display = '';
+  });
+
+  payAndBookBtn.addEventListener('click', function () {
+    clearError();
+
+    if (!agreementCheckbox.checked) {
+      showError('Please check the box to agree to the Rental Agreement before continuing.');
+      agreementCheckbox.focus();
+      return;
+    }
+    if (!state.dropinInstance) {
+      showError('Payment isn’t ready yet — please wait a moment and try again.');
+      return;
+    }
+
+    payAndBookBtn.disabled = true;
+    paymentBackBtn.disabled = true;
+    payAndBookBtn.textContent = 'Processing…';
+
+    state.dropinInstance.requestPaymentMethod(function (err, payload) {
+      if (err) {
+        // Drop-in's own validation covers most cases (e.g. no card entered)
+        // with inline UI already — this is the fallback for whatever it
+        // doesn't catch itself.
+        showError(err.message || 'Please check your payment details and try again.');
+        payAndBookBtn.disabled = false;
+        paymentBackBtn.disabled = false;
+        payAndBookBtn.textContent = 'Pay & Book Now';
+        return;
+      }
+
+      var body = buildBookingPayload();
+      body.payment = {
+        nonce: payload.nonce,
+        idempotencyKey: state.idempotencyKey,
+        agreementAccepted: true,
+      };
+
+      fetch('/api/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+        .then(function (res) {
+          return res
+            .json()
+            .catch(function () {
+              return null;
+            })
+            .then(function (resBody) {
+              if (!res.ok) {
+                var reqErr = new Error(resBody && resBody.error ? resBody.error : GENERIC_ERROR);
+                reqErr.isServerMessage = true;
+                throw reqErr;
+              }
+              return resBody;
+            });
+        })
+        .then(function (resBody) {
+          finishBookingSuccess(
+            resBody,
+            'Your dumpster rental is booked!',
+            'You’re all set — your 15-yard dumpster is booked and your payment has been processed. We’ll see you on your delivery date. Questions? Call or text <a href="tel:3039901812">303-990-1812</a>.'
+          );
+        })
+        .catch(function (err) {
+          showError(err && err.isServerMessage && err.message ? err.message : GENERIC_ERROR);
+          payAndBookBtn.disabled = false;
+          paymentBackBtn.disabled = false;
+          payAndBookBtn.textContent = 'Pay & Book Now';
+        });
+    });
   });
 
   goToStep(1);

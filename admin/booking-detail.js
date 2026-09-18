@@ -20,6 +20,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
   var STATUS_TEXT = window.AdminStatusUI.STATUS_TEXT;
 
+  // Phase 3C Stage 2.5-v2 — display labels for rental_payments.payment_status
+  // and rental_additional_charges.status. Display-only, mirroring
+  // STATUS_TEXT's own pattern; never written back anywhere from this file.
+  var PAYMENT_STATUS_TEXT = { processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided', refunded: 'Refunded' };
+  var CHARGE_STATUS_TEXT = { proposed: 'Proposed', approved: 'Approved', processing: 'Processing', paid: 'Paid', failed: 'Failed', voided: 'Voided' };
+  var CHARGE_TYPE_TEXT = { overweight_tonnage: 'Overweight tonnage', additional_days: 'Additional days', other: 'Other' };
+
   var bookingId = null;
   var currentStatus = 'new';
   var savingInFlight = false;
@@ -51,6 +58,19 @@ document.addEventListener('DOMContentLoaded', function () {
       var d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T00:00:00' : iso);
       if (isNaN(d.getTime())) return iso;
       return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  // Phase 3C Stage 2.5-v2 — a full timestamptz (rental_payments.
+  // agreement_accepted_at), unlike formatDate()'s date-only inputs.
+  function formatDateTime(iso) {
+    if (!iso) return '—';
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
     } catch (e) {
       return iso;
     }
@@ -273,6 +293,28 @@ document.addEventListener('DOMContentLoaded', function () {
       set('d-placement', data.dumpster.placementNotes);
     }
 
+    // Phase 3C Stage 2.5-v2 — Payment (only present for a dumpster rental
+    // that was booked and paid online) + Additional Charges (shown for any
+    // dumpster rental, whether or not it was paid online — approving a
+    // charge on one with no payment method on file just fails cleanly with
+    // a clear reason, handled server-side).
+    if (data.payment) {
+      document.getElementById('d-payment-section').style.display = 'block';
+      set('d-payment-status', PAYMENT_STATUS_TEXT[data.payment.status] || data.payment.status);
+      set('d-payment-amount', formatPrice(data.payment.amountCharged) || '—');
+      set('d-payment-method', data.payment.methodSummary || '—');
+      set('d-payment-txn', data.payment.transactionId || '—');
+      set('d-payment-agreement', data.payment.agreementVersion ? data.payment.agreementVersion + ' · ' + formatDateTime(data.payment.agreementAcceptedAt) : '—');
+      if (data.payment.disputeStatus) {
+        document.getElementById('d-payment-dispute-row').style.display = 'block';
+        set('d-payment-dispute', data.payment.disputeStatus);
+      }
+    }
+    if (booking.serviceType === 'dumpster_rental') {
+      document.getElementById('d-charges-section').style.display = 'block';
+      loadCharges();
+    }
+
     renderPhotos(data.photos);
 
     loadingEl.style.display = 'none';
@@ -338,6 +380,220 @@ document.addEventListener('DOMContentLoaded', function () {
       selected: currentStatus,
       onSelect: saveStatus,
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 3C Stage 2.5-v2 — Additional Charges (propose + approve). Every
+  // amount displayed here comes straight from the server response — this
+  // file never computes or edits a charge amount itself, matching
+  // api/admin/booking.js's own discipline of always recomputing from
+  // api/_lib/rental-pricing.js rather than trusting anything client-side.
+  // ---------------------------------------------------------------------
+  var chargesListEl = document.getElementById('d-charges-list');
+  var chargeTypeEl = document.getElementById('d-charge-type');
+  var chargeQuantityRow = document.getElementById('d-charge-quantity-row');
+  var chargeQuantityLabel = document.getElementById('d-charge-quantity-label');
+  var chargeQuantityEl = document.getElementById('d-charge-quantity');
+  var chargeAmountRow = document.getElementById('d-charge-amount-row');
+  var chargeAmountEl = document.getElementById('d-charge-amount');
+  var chargeDescriptionRow = document.getElementById('d-charge-description-row');
+  var chargeDescriptionEl = document.getElementById('d-charge-description');
+  var chargeProposeBtn = document.getElementById('d-charge-propose-btn');
+  var chargeApproveInFlight = false;
+
+  function updateChargeFormMode() {
+    var isOther = chargeTypeEl.value === 'other';
+    chargeQuantityRow.style.display = isOther ? 'none' : '';
+    chargeAmountRow.style.display = isOther ? '' : 'none';
+    chargeDescriptionRow.style.display = isOther ? '' : 'none';
+    chargeQuantityLabel.textContent = chargeTypeEl.value === 'additional_days' ? 'Extra days beyond the included 5' : 'Tons over the included 2 tons';
+  }
+  chargeTypeEl.addEventListener('change', updateChargeFormMode);
+  updateChargeFormMode();
+
+  function formatChargeQuantity(charge) {
+    if (charge.chargeType === 'overweight_tonnage') return charge.quantity + ' ton' + (charge.quantity === 1 ? '' : 's') + ' over · $' + Number(charge.rate).toFixed(2) + '/ton';
+    if (charge.chargeType === 'additional_days') return charge.quantity + ' extra day' + (charge.quantity === 1 ? '' : 's') + ' · $' + Number(charge.rate).toFixed(2) + '/day';
+    return charge.description || 'Other';
+  }
+
+  function renderCharges(charges) {
+    while (chargesListEl.firstChild) chargesListEl.removeChild(chargesListEl.firstChild);
+    if (!charges.length) {
+      var empty = document.createElement('p');
+      empty.className = 'admin-row-value';
+      empty.style.color = 'var(--color-neutral-600, #82796a)';
+      empty.textContent = 'No additional charges yet.';
+      chargesListEl.appendChild(empty);
+      return;
+    }
+    charges.forEach(function (charge) {
+      var row = document.createElement('div');
+      row.className = 'admin-charge-row';
+
+      var top = document.createElement('div');
+      top.className = 'admin-charge-row-top';
+      var amountEl = document.createElement('span');
+      amountEl.className = 'admin-charge-row-amount';
+      amountEl.textContent = formatPrice(charge.amount) || '$0.00';
+      var badge = document.createElement('span');
+      badge.className = 'admin-status-badge admin-charge-status-' + charge.status;
+      badge.textContent = CHARGE_STATUS_TEXT[charge.status] || charge.status;
+      top.appendChild(amountEl);
+      top.appendChild(badge);
+      row.appendChild(top);
+
+      var typeLine = document.createElement('div');
+      typeLine.className = 'admin-charge-row-meta';
+      typeLine.textContent = (CHARGE_TYPE_TEXT[charge.chargeType] || charge.chargeType) + ' — ' + formatChargeQuantity(charge);
+      row.appendChild(typeLine);
+
+      var metaLine = document.createElement('div');
+      metaLine.className = 'admin-charge-row-meta';
+      metaLine.textContent = 'Proposed by ' + (charge.proposedBy || '—') + ' · ' + formatDateTime(charge.proposedAt);
+      row.appendChild(metaLine);
+
+      if (charge.status === 'failed' && charge.failureReason) {
+        var reasonLine = document.createElement('div');
+        reasonLine.className = 'admin-charge-row-meta';
+        reasonLine.style.color = '#b91c1c';
+        reasonLine.textContent = 'Failed: ' + charge.failureReason;
+        row.appendChild(reasonLine);
+      }
+      if (charge.disputeStatus) {
+        var disputeLine = document.createElement('div');
+        disputeLine.className = 'admin-charge-row-meta';
+        disputeLine.textContent = 'Dispute: ' + charge.disputeStatus;
+        row.appendChild(disputeLine);
+      }
+
+      if (charge.status === 'proposed') {
+        var approveBtn = document.createElement('button');
+        approveBtn.type = 'button';
+        approveBtn.className = 'admin-btn admin-btn-outline';
+        approveBtn.style.alignSelf = 'flex-start';
+        approveBtn.style.marginTop = '4px';
+        approveBtn.textContent = 'Approve & Charge';
+        approveBtn.addEventListener('click', function () {
+          approveCharge(charge.id, approveBtn);
+        });
+        row.appendChild(approveBtn);
+      }
+
+      chargesListEl.appendChild(row);
+    });
+  }
+
+  function loadCharges() {
+    fetch('/api/admin/booking?resource=charges&bookingId=' + encodeURIComponent(bookingId))
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (body) {
+        if (!body) return;
+        if (body.ok) renderCharges(body.charges || []);
+      })
+      .catch(function () {
+        // Non-fatal — the rest of the page (already loaded) stays usable;
+        // the charges list just stays empty rather than blocking anything.
+      });
+  }
+
+  chargeProposeBtn.addEventListener('click', function () {
+    var chargeType = chargeTypeEl.value;
+    var body = { bookingId: bookingId, chargeType: chargeType };
+    if (chargeType === 'other') {
+      var amount = Number(chargeAmountEl.value);
+      if (!chargeAmountEl.value || !Number.isFinite(amount) || amount <= 0) {
+        showToast('Please enter a valid amount.', 'error');
+        return;
+      }
+      if (!chargeDescriptionEl.value.trim()) {
+        showToast('Please describe this charge.', 'error');
+        return;
+      }
+      body.amount = amount;
+      body.description = chargeDescriptionEl.value.trim();
+    } else {
+      var quantity = Number(chargeQuantityEl.value);
+      if (!chargeQuantityEl.value || !Number.isFinite(quantity) || quantity <= 0) {
+        showToast('Please enter a valid quantity.', 'error');
+        return;
+      }
+      body.quantity = quantity;
+    }
+
+    chargeProposeBtn.disabled = true;
+    fetch('/api/admin/booking?resource=charges', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (resBody) {
+            if (!res.ok) throw new Error((resBody && resBody.error) || 'Could not propose this charge.');
+            return resBody;
+          });
+      })
+      .then(function () {
+        chargeQuantityEl.value = '';
+        chargeAmountEl.value = '';
+        chargeDescriptionEl.value = '';
+        showToast('Charge proposed.', 'success');
+        loadCharges();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not propose this charge.', 'error');
+      })
+      .finally(function () {
+        chargeProposeBtn.disabled = false;
+      });
+  });
+
+  function approveCharge(chargeId, btn) {
+    if (chargeApproveInFlight) return;
+    chargeApproveInFlight = true;
+    btn.disabled = true;
+    btn.textContent = 'Processing…';
+
+    fetch('/api/admin/booking?resource=charges', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: chargeId, action: 'approve' }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (resBody) {
+            if (!res.ok) throw new Error((resBody && resBody.error) || 'Could not process this charge.');
+            return resBody;
+          });
+      })
+      .then(function (resBody) {
+        var charge = resBody && resBody.charge;
+        if (charge && charge.status === 'paid') {
+          showToast('Charge approved and processed.', 'success');
+        } else if (charge && charge.status === 'failed') {
+          showToast('Charge declined: ' + (charge.failureReason || 'unknown reason') + '.', 'error');
+        } else {
+          showToast('Charge updated.', 'success');
+        }
+        loadCharges();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not process this charge.', 'error');
+      })
+      .finally(function () {
+        chargeApproveInFlight = false;
+      });
   }
 
   statusTrigger.addEventListener('click', openStatusSheet);

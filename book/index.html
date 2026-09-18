@@ -432,20 +432,61 @@
       </div>
     </section>
 
-    <!-- STEP 6 — REVIEW -->
+    <!-- STEP 6 — REVIEW (dumpster rental gains a Rental Agreement + Payment
+         panel here, in place of the plain Submit action, so the whole flow
+         stays a single numbered step for every service type — see
+         book.js's paymentPanel section for why this is a panel switch
+         within step 6 rather than a new step 7.) -->
     <section class="wizard-step" data-step="6" hidden>
       <h2 style="font-size:20px">Review your request</h2>
       <div id="review-content" style="display:flex;flex-direction:column;gap:14px"></div>
-      <div class="wizard-actions">
+
+      <div class="wizard-actions" id="review-actions">
         <button type="button" class="btn btn-secondary" data-back>Back</button>
         <button type="button" class="btn btn-primary" id="submit-booking">Submit Request</button>
       </div>
+
+      <!-- Dumpster rental only. Hidden and empty until state.serviceType ===
+           'dumpster_rental' and the customer clicks past Review. -->
+      <div id="payment-panel" hidden>
+        <div class="card elev-sm" style="margin-bottom:16px">
+          <div class="card-title">Rental price</div>
+          <div class="card-body" id="payment-price-breakdown"></div>
+        </div>
+
+        <div class="card elev-sm" style="margin-bottom:16px">
+          <div class="card-title">Rental Agreement</div>
+          <div class="card-body" id="rental-agreement-text" style="max-height:240px;overflow-y:auto;font-size:13px;line-height:1.6;border:1px solid var(--color-border,#e3e3e3);border-radius:8px;padding:12px;margin-top:8px">
+            <p><strong>15-Yard Dumpster Rental — Rate &amp; Payment Terms</strong></p>
+            <p>The rental rate is $349.00, which covers delivery, pickup, up to 5 calendar days on site, and up to 2 tons (4,000 lbs) of accepted material. This amount is charged to your payment method today, when your rental is booked.</p>
+            <p>If the material collected exceeds 2 tons, Mile High Junk Removal may charge $90.00 per additional ton. If the dumpster is kept on site beyond 5 calendar days, Mile High Junk Removal may charge $15.00 per additional day. <strong>Mile High Junk Removal will review any such charge and give you the opportunity to discuss it before it is submitted to your payment method — no additional charge happens automatically.</strong></p>
+            <p>By checking the box below and completing this booking, you authorize Mile High Junk Removal to charge the payment method you provide today for the $349.00 base rental, and to charge that same payment method for any additional charge described above, after that charge has been reviewed as described.</p>
+            <p>Placement location, accepted/prohibited materials, and any other site-specific details are confirmed with you directly at delivery. This summary describes the rental rate and payment mechanics only and is not a complete statement of all rental terms; it does not constitute legal advice. Questions about this agreement can be directed to 303-990-1812.</p>
+          </div>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;font-size:14px;cursor:pointer">
+            <input type="checkbox" id="agreement-checkbox" style="margin-top:3px">
+            <span>I have read and agree to the Rental Agreement above, including that Mile High Junk Removal may charge the payment method below for the amounts described (overweight material, extra rental days) after I'm notified and given a chance to review the charge.</span>
+          </label>
+        </div>
+
+        <div class="card elev-sm" style="margin-bottom:16px">
+          <div class="card-title">Payment</div>
+          <p class="field-note" id="payment-config-error" hidden>Online payment isn't available right now. Please call or text <a href="tel:3039901812">303-990-1812</a> to book.</p>
+          <div id="braintree-dropin-container" style="margin-top:10px"></div>
+        </div>
+
+        <div class="wizard-actions" id="payment-actions">
+          <button type="button" class="btn btn-secondary" id="payment-back-btn">Back to Review</button>
+          <button type="button" class="btn btn-primary" id="pay-and-book-btn">Pay &amp; Book Now</button>
+        </div>
+      </div>
+
       <div class="card elev-sm wizard-success" id="wizard-success">
         <div style="display:flex;align-items:center;gap:10px">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent-700)" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12.5 11 15.5 16 9"></path></svg>
-          <div class="card-title">Request received!</div>
+          <div class="card-title" id="wizard-success-title">Request received!</div>
         </div>
-        <p class="card-body">Thanks &mdash; we've got your booking request and will reach out to confirm your appointment. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.</p>
+        <p class="card-body" id="wizard-success-body">Thanks &mdash; we've got your booking request and will reach out to confirm your appointment. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.</p>
         <p class="field-note" id="photo-upload-status" hidden></p>
       </div>
     </section>
@@ -510,6 +551,13 @@
 </footer>
 
 <script src="../nav.js"></script>
+<!-- Braintree Drop-in UI — official hosted script, required by Braintree's
+     own integration model (never self-bundled/npm-packaged for a live
+     payment form). Only exercised for the dumpster_rental service type;
+     loaded unconditionally here since service type isn't known until step
+     1, but book.js never calls into it unless serviceType ===
+     'dumpster_rental'. -->
+<script src="https://js.braintreegateway.com/web/dropin/1.48.0/js/dropin.min.js"></script>
 <script src="book.js"></script>
 </body>
 </html>

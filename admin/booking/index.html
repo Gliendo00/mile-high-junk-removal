@@ -131,6 +131,70 @@
       </div>
     </section>
 
+    <!-- 7b. Payment (Phase 3C Stage 2.5-v2, dumpster rental only, shown only
+         when this booking has a rental_payments record — i.e. it was booked
+         and paid online) -->
+    <section class="admin-section" id="d-payment-section" style="display:none">
+      <h2>Payment</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Status</div>
+        <div class="admin-row-value" id="d-payment-status">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Amount Charged</div>
+        <div class="admin-row-value" id="d-payment-amount">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Payment Method</div>
+        <div class="admin-row-value" id="d-payment-method">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Transaction ID</div>
+        <div class="admin-row-value" id="d-payment-txn">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Agreement Accepted</div>
+        <div class="admin-row-value" id="d-payment-agreement">—</div>
+      </div>
+      <div class="admin-row" id="d-payment-dispute-row" style="display:none">
+        <div class="admin-row-label">Dispute</div>
+        <div class="admin-row-value" id="d-payment-dispute">—</div>
+      </div>
+    </section>
+
+    <!-- 7c. Additional Charges (Phase 3C Stage 2.5-v2, dumpster rental
+         only). A proposed charge here moves no money — only clicking
+         Approve on a proposed row does, and only after this same page
+         calls PATCH ?resource=charges with an explicit admin action. -->
+    <section class="admin-section" id="d-charges-section" style="display:none">
+      <h2>Additional Charges</h2>
+      <div id="d-charges-list" class="admin-charges-list"></div>
+
+      <div class="admin-form-section" style="margin-top:14px">
+        <div class="admin-field">
+          <label for="d-charge-type">Propose a new charge</label>
+          <select id="d-charge-type">
+            <option value="overweight_tonnage">Overweight tonnage ($90.00/ton)</option>
+            <option value="additional_days">Additional days ($15.00/day)</option>
+            <option value="other">Other (flat amount)</option>
+          </select>
+        </div>
+        <div class="admin-field" id="d-charge-quantity-row">
+          <label for="d-charge-quantity" id="d-charge-quantity-label">Tons over the included 2 tons</label>
+          <input type="number" id="d-charge-quantity" inputmode="decimal" min="0" step="0.01" placeholder="1.5">
+        </div>
+        <div class="admin-field" id="d-charge-amount-row" style="display:none">
+          <label for="d-charge-amount">Amount</label>
+          <input type="number" id="d-charge-amount" inputmode="decimal" min="0" step="0.01" placeholder="50.00">
+        </div>
+        <div class="admin-field" id="d-charge-description-row" style="display:none">
+          <label for="d-charge-description">Description</label>
+          <input type="text" id="d-charge-description" maxlength="500" placeholder="What is this charge for?">
+        </div>
+        <button type="button" id="d-charge-propose-btn" class="admin-btn admin-btn-outline">Propose Charge</button>
+      </div>
+    </section>
+
     <!-- 8. Existing internal notes — legacy, read-only -->
     <section class="admin-section admin-section-muted" id="d-notes-section">
       <h2>Internal Notes</h2>

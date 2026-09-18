@@ -900,6 +900,40 @@ test("admin charges: GET lists charges for a booking, newest first", async () =>
   assert.strictEqual(res.body.charges.length, 2);
   assert.strictEqual(res.body.charges[0].id, "rac2");
 });
+test("admin booking detail (GET, no resource param): includes payment info for a booking that was paid online", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, customer_id: "cust-1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
+  db.customers.push({ id: "cust-1", first_name: "Jamie", last_name: "Rivera", phone: "303-555-0100", email: "jamie@example.com" });
+  db.rental_payments.push({
+    id: "rp1",
+    booking_id: BOOKING_ID,
+    payment_status: "paid",
+    amount_charged: 349,
+    payment_method_summary: "Visa ending in 4242",
+    braintree_transaction_id: "txn-9",
+    agreement_version: "2026-09-18",
+    agreement_accepted_at: "2026-09-18T12:00:00Z",
+    dispute_status: null,
+  });
+  const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.payment.status, "paid");
+  assert.strictEqual(res.body.payment.amountCharged, 349);
+  assert.strictEqual(res.body.payment.methodSummary, "Visa ending in 4242");
+  assert.strictEqual(res.body.payment.transactionId, "txn-9");
+});
+test("admin booking detail (GET): payment is null for a booking with no rental_payments row (e.g. an admin-created dumpster rental)", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, customer_id: "cust-1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
+  db.customers.push({ id: "cust-1", first_name: "Jamie", last_name: "Rivera", phone: "303-555-0100", email: "jamie@example.com" });
+  const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.payment, null);
+});
 
 // =======================================================================
 // 11. Existing junk_removal/light_demo behavior is unaffected

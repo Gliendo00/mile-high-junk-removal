@@ -1066,6 +1066,35 @@
 .admin-status-dot-completed { background: #374151; }
 .admin-status-dot-lost { background: #b91c1c; }
 
+/* Phase 3C Stage 2.5-v2 — additional-charge status badges. Reuses
+   .admin-status-badge's base shape; distinct hues from the booking-status
+   set above so the two badge families are never visually confusable next
+   to each other on Booking Detail. */
+.admin-charge-status-proposed { background: #b45309; color: #fff; }
+.admin-charge-status-approved { background: #6d28d9; color: #fff; }
+.admin-charge-status-processing { background: #1d4ed8; color: #fff; }
+.admin-charge-status-paid { background: #2f6f13; color: #fff; }
+.admin-charge-status-failed { background: #b91c1c; color: #fff; }
+.admin-charge-status-voided { background: #374151; color: #fff; }
+
+.admin-charges-list { display: flex; flex-direction: column; gap: 10px; }
+.admin-charge-row {
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.admin-charge-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.admin-charge-row-amount { font-weight: 800; font-size: 15px; }
+.admin-charge-row-meta { font-size: 12px; color: var(--color-neutral-600, #82796a); }
+
 .admin-empty, .admin-loading, .admin-error-banner {
   background: #fff;
   border: 1px dashed var(--color-neutral-300, #dcd3c4);
