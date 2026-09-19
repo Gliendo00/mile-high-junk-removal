@@ -55,6 +55,7 @@
 // raw bytes are read directly from the request stream.
 const { getStripeClient } = require("./_lib/stripe-client");
 const { getServiceClient } = require("./_lib/supabase-admin");
+const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
 
 module.exports.config = { api: { bodyParser: false } };
 
@@ -196,16 +197,43 @@ async function reconcileSucceeded(supabase, intent) {
     })
     .eq("stripe_payment_intent_id", intent.id)
     .not("payment_status", "eq", "paid")
-    .select("id");
+    // Phase 3C Stage 3: booking_id/amount_charged added to this select
+    // purely so the ledger-mirror call below (a real backstop for the case
+    // where this row's synchronous success path in api/book.js ran but its
+    // own mirror call somehow didn't complete) has what it needs, without a
+    // second round-trip. Doesn't change what this update itself does.
+    .select("id, booking_id, amount_charged");
   if (paymentUpdate.error) throw paymentUpdate.error;
-  if (Array.isArray(paymentUpdate.data) && paymentUpdate.data.length > 0) return;
+  if (Array.isArray(paymentUpdate.data) && paymentUpdate.data.length > 0) {
+    const row = paymentUpdate.data[0];
+    // paymentDate omitted deliberately — mirrorStripePaymentToLedger()
+    // defaults it to today in America/Denver, the same convention every
+    // other call site uses explicitly.
+    await mirrorStripePaymentToLedger(supabase, {
+      bookingId: row.booking_id,
+      stripePaymentIntentId: intent.id,
+      amount: row.amount_charged,
+      notes: "Initial dumpster rental payment, confirmed via webhook backstop (auto-recorded from Stripe).",
+    });
+    return;
+  }
 
   const chargeUpdate = await supabase
     .from("rental_additional_charges")
     .update({ status: "paid", stripe_payment_intent_id: intent.id, failure_reason: null, updated_at: new Date().toISOString() })
     .eq("stripe_payment_intent_id", intent.id)
-    .not("status", "eq", "paid");
+    .not("status", "eq", "paid")
+    .select("id, booking_id, amount");
   if (chargeUpdate.error) throw chargeUpdate.error;
+  if (Array.isArray(chargeUpdate.data) && chargeUpdate.data.length > 0) {
+    const row = chargeUpdate.data[0];
+    await mirrorStripePaymentToLedger(supabase, {
+      bookingId: row.booking_id,
+      stripePaymentIntentId: intent.id,
+      amount: row.amount,
+      notes: "Approved additional charge, confirmed via webhook backstop (auto-recorded from Stripe).",
+    });
+  }
 }
 
 async function reconcileFailed(supabase, paymentIntentId, reason) {

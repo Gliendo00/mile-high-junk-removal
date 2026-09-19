@@ -1049,8 +1049,16 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // more still — handleProposeCharge()'s persist of
   // dumpster_rentals.actual_weight_lbs — for the same reason: independently
   // reviewed, not this stage's concern, just accounted for here so this
-  // count doesn't silently drift.
-  assert.strictEqual(updateCalls, 12, "booking.js must have exactly 12 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist) — anything else needs deliberate review");
+  // count doesn't silently drift. Phase 3C Stage 3 (job_payments ledger)
+  // later added exactly one more still — handleVoidJobPayment()'s soft-
+  // delete update, the only write that ledger's PATCH allows — same
+  // "independently reviewed elsewhere" reasoning; see
+  // tests/phase3c-stage3-job-payments.test.js.
+  assert.strictEqual(
+    updateCalls,
+    13,
+    "booking.js must have exactly 13 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void) — anything else needs deliberate review"
+  );
 });
 
 test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {

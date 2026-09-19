@@ -581,6 +581,23 @@ test("navigation: every admin page except login has all three nav tabs (Schedule
   });
 });
 
+test("navigation: Phase 3C Stage 3 — every admin page's nav bar (all 8 pages that have one) gained an Expenses tab", () => {
+  const pages = [
+    "admin/index.html",
+    "admin/requests/index.html",
+    "admin/booking/index.html",
+    "admin/booking-edit/index.html",
+    "admin/booking-new/index.html",
+    "admin/booking-past/index.html",
+    "admin/clients/index.html",
+    "admin/client/index.html",
+  ];
+  pages.forEach((rel) => {
+    const html = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+    assert.ok(html.includes('href="/admin/expenses/"') && html.includes(">Expenses<"), rel + " must link to Expenses");
+  });
+});
+
 test("navigation: login page has no nav tabs (unchanged convention)", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "admin/login/index.html"), "utf8");
   assert.ok(!html.includes("admin-nav-tabs"), "login must not gain a nav bar");
@@ -668,6 +685,14 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // so every ".insert(" for a given file groups before that file's
       // ".update(".)
       "api/admin/booking.js: .insert(",
+      // Phase 3C Stage 3 (job_payments ledger) added exactly one new insert
+      // — handleCreateJobPayment(), a manual cash/Zelle/Venmo/check/card
+      // entry. A Stripe-collected row is NEVER inserted here — those only
+      // come from mirrorStripePaymentToLedger()'s own upsert (a function
+      // call into api/_lib/job-payments-ledger.js, not a literal
+      // ".insert("/".update(" in this file). See
+      // tests/phase3c-stage3-job-payments.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",
@@ -689,6 +714,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // table's own amount > 0 CHECK constraint wouldn't allow it). See
       // docs/phase-3/stage2.5-stripe-rental-payments-migration.md §14.
       "api/admin/booking.js: .update(",
+      // Phase 3C Stage 3 (job_payments ledger) added exactly one new update
+      // — handleVoidJobPayment(), the ONLY write this ledger's PATCH
+      // allows (amount/method/type/booking are never editable once
+      // written). See tests/phase3c-stage3-job-payments.test.js.
+      "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — deliberately, gated behind
@@ -696,6 +726,14 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // reached by any booking-shaped request. See
       // tests/phase3c-stage2.4-expenses.test.js for its full coverage.
       "api/admin/bookings.js: .insert(",
+      // Phase 3C Stage 3 (full Expense Management) added exactly two new
+      // write calls, both inside handlePatchExpense(), both reachable only
+      // via the same resource:"expense" PATCH discriminator — see
+      // tests/phase3a-admin-status-write.test.js's matching comment for the
+      // full explanation, and tests/phase3c-stage3-expenses-management.test.js
+      // for this stage's own coverage.
+      "api/admin/bookings.js: .update(",
+      "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
     ],
     "found: " + JSON.stringify(found)

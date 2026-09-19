@@ -28,6 +28,7 @@
   <a href="/admin/" class="admin-nav-tab">Schedule</a>
   <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
   <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
+  <a href="/admin/expenses/" class="admin-nav-tab">Expenses</a>
 </nav>
 
 <main class="admin-main">
@@ -247,6 +248,51 @@
       <div class="admin-row" id="d-tip-row" style="display:none">
         <div class="admin-row-label">Tip</div>
         <div class="admin-row-value" id="d-tip-amount">—</div>
+      </div>
+    </section>
+
+    <!-- 9b. Payments — Phase 3C Stage 3, the cross-service-type payment
+         ledger (job_payments). Shown for EVERY job, not just dumpster
+         rentals: a card/Stripe row auto-appears here once a rental payment
+         succeeds (see d-job-payments-list rendering — those rows are
+         read-only, never editable/voidable from a plain button click
+         without the confirmation reason prompt every void requires); every
+         other method is recorded manually below. Collected shown here
+         follows the documented final_price compatibility rule: the ledger
+         total once any entry exists, otherwise the Actual Collected amount
+         above unchanged. -->
+    <section class="admin-section" id="d-job-payments-section">
+      <h2>Payments</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Collected</div>
+        <div class="admin-row-value" id="d-collected-revenue">—</div>
+      </div>
+      <div id="d-job-payments-list" class="admin-charges-list"></div>
+
+      <div class="admin-form-section" style="margin-top:14px">
+        <div class="admin-field">
+          <label for="d-payment-method-select">Record a payment</label>
+          <select id="d-payment-method-select">
+            <option value="cash">Cash</option>
+            <option value="zelle">Zelle</option>
+            <option value="venmo">Venmo</option>
+            <option value="check">Check</option>
+          </select>
+          <span class="admin-field-hint">Card/Stripe payments are recorded automatically when collected online — this list is for cash, Zelle, Venmo, and check.</span>
+        </div>
+        <div class="admin-field">
+          <label for="d-payment-amount-input">Amount</label>
+          <input type="number" id="d-payment-amount-input" inputmode="decimal" min="0.01" step="0.01" placeholder="100.00">
+        </div>
+        <div class="admin-field">
+          <label for="d-payment-date-input">Date</label>
+          <input type="date" id="d-payment-date-input">
+        </div>
+        <div class="admin-field">
+          <label for="d-payment-notes-input">Notes (optional)</label>
+          <input type="text" id="d-payment-notes-input" maxlength="500" placeholder="e.g. deposit, balance, partial payment">
+        </div>
+        <button type="button" id="d-payment-add-btn" class="admin-btn admin-btn-outline">Record Payment</button>
       </div>
     </section>
 

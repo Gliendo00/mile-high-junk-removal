@@ -688,6 +688,14 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // new charge). See tests/phase3c-stage2.5v2-stripe-rental-payments.test.js
       // for full coverage.
       "api/admin/booking.js: .insert(",
+      // Phase 3C Stage 3 (job_payments ledger) added exactly one new insert
+      // — handleCreateJobPayment(), a manual cash/Zelle/Venmo/check/card
+      // entry. A Stripe-collected row is NEVER inserted here — those only
+      // ever come from mirrorStripePaymentToLedger()'s own upsert, which
+      // isn't a literal ".insert("/".update(" in THIS file's source since
+      // it's a function call into api/_lib/job-payments-ledger.js. See
+      // tests/phase3c-stage3-job-payments.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
       // api/admin/booking.js's handleUpdate() header comment for why this
@@ -711,12 +719,29 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // sql/2026-09-18_phase3c-stage2.5-actual-weight-lbs.sql and
       // docs/phase-3/stage2.5-stripe-rental-payments-migration.md §14.
       "api/admin/booking.js: .update(",
+      // Phase 3C Stage 3 (job_payments ledger) added exactly one new update
+      // — handleVoidJobPayment(), the ONLY write this ledger's PATCH
+      // allows (amount/method/type/booking are never editable once
+      // written; a correction is void-then-a-new-row, per the owner's
+      // explicit financial-audit requirement). See
+      // tests/phase3c-stage3-job-payments.test.js.
+      "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — gated behind an explicit
       // resource:"expense" discriminator so it can never be reached by any
       // booking-shaped request. See tests/phase3c-stage2.4-expenses.test.js.
       "api/admin/bookings.js: .insert(",
+      // Phase 3C Stage 3 (full Expense Management) added exactly two new
+      // write calls — both inside handlePatchExpense(), both reachable only
+      // via the same resource:"expense" PATCH discriminator: the "void"
+      // action's soft-delete update, and the "update" action's field-edit
+      // update. Neither is a hard delete (service_role is never granted
+      // DELETE on expenses — see the migration SQL); the database trigger
+      // on public.expenses, not this file, is what writes
+      // expense_audit_log. See tests/phase3c-stage3-expenses-management.test.js.
+      "api/admin/bookings.js: .update(",
+      "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
     ],
     "found: " + JSON.stringify(found)

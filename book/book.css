@@ -71,6 +71,17 @@
 @media (max-width: 560px) { .field-grid { grid-template-columns: 1fr; } }
 .field-note { font-size: 12px; opacity: 0.7; margin: 4px 0 0; }
 
+/* — Stripe trust note (Payment card) — deliberately quiet: smaller and
+   lower-contrast than .field-note, never competing with the Pay & Book Now
+   CTA in .wizard-actions right below it. Text-only, no recreated Stripe
+   logo/wordmark. */
+.payment-trust-note {
+  font-size: 12px;
+  color: var(--color-neutral-600);
+  margin: 12px 0 0;
+  text-align: center;
+}
+
 /* — photos (step 3) — */
 .photo-drop {
   border: 1.5px dashed color-mix(in srgb, var(--color-text) 25%, transparent);

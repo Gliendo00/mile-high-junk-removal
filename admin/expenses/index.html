@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Expenses</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <a class="admin-brand" href="/admin/">
+    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </a>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<nav class="admin-nav-tabs" aria-label="Admin sections">
+  <a href="/admin/" class="admin-nav-tab">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
+  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
+  <a href="/admin/expenses/" class="admin-nav-tab is-active" aria-current="page">Expenses</a>
+</nav>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <div class="admin-list-heading">
+    <h1>Expenses</h1>
+    <div class="admin-list-heading-actions">
+      <button type="button" id="add-expense-btn" class="admin-btn admin-btn-primary">+ Add Expense</button>
+    </div>
+  </div>
+
+  <div id="expense-total-summary" class="admin-expense-total-summary">Loading…</div>
+
+  <!-- Filters — Date range, Category, Payment Method, Job, Search. Kept as
+       plain form controls (not the admin-filter-pill dropdown component
+       used elsewhere) since several of these are free text/date inputs,
+       not a small fixed set of pill choices. -->
+  <div class="admin-expense-filters">
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="filter-start-date">From</label>
+        <input type="date" id="filter-start-date" class="admin-expense-filter-input">
+      </div>
+      <div class="admin-field">
+        <label for="filter-end-date">To</label>
+        <input type="date" id="filter-end-date" class="admin-expense-filter-input">
+      </div>
+    </div>
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="filter-category">Category</label>
+        <select id="filter-category" class="admin-expense-filter-input">
+          <option value="">All categories</option>
+        </select>
+      </div>
+      <div class="admin-field">
+        <label for="filter-payment-method">Payment Method</label>
+        <select id="filter-payment-method" class="admin-expense-filter-input">
+          <option value="">All methods</option>
+        </select>
+      </div>
+    </div>
+    <div class="admin-field">
+      <label for="filter-search">Search</label>
+      <input type="search" id="filter-search" class="admin-expense-filter-input" placeholder="Vendor or note" autocomplete="off">
+    </div>
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="filter-sort">Sort by</label>
+        <select id="filter-sort" class="admin-expense-filter-input">
+          <option value="expenseDate">Date</option>
+          <option value="amount">Amount</option>
+          <option value="category">Category</option>
+          <option value="vendor">Vendor</option>
+        </select>
+      </div>
+      <div class="admin-field">
+        <label for="filter-sort-dir">Order</label>
+        <select id="filter-sort-dir" class="admin-expense-filter-input">
+          <option value="desc">Newest / highest first</option>
+          <option value="asc">Oldest / lowest first</option>
+        </select>
+      </div>
+    </div>
+    <label class="admin-expense-voided-toggle">
+      <input type="checkbox" id="filter-include-voided">
+      Show voided expenses
+    </label>
+  </div>
+
+  <div id="loading" class="admin-loading">Loading expenses…</div>
+  <div id="empty" class="admin-empty" style="display:none">No expenses match these filters.</div>
+  <ul id="expense-list" class="admin-booking-list" style="display:none"></ul>
+</main>
+
+<script src="../nav-badge.js"></script>
+<script src="../expenses.js"></script>
+</body>
+</html>

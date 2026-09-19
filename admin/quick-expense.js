@@ -27,21 +27,28 @@ window.AdminQuickExpense = (function () {
   // convention of a small deliberate client-side copy (see
   // api/_lib/historical-floor.js's header) rather than a module shared
   // across runtimes.
+  // Stable DB keys unchanged by the Stage 3 category expansion — only
+  // labels and the "+ More" list grew; see expense-categories.js's header
+  // for why keys are never renamed once persisted.
   var CATEGORY_LABELS = {
     fuel: 'Fuel',
-    dump_fees: 'Dump Fees',
-    meals: 'Meals',
-    repairs_maintenance: 'Repairs/Maintenance',
-    advertising: 'Advertising',
+    dump_fees: 'Dump Fee',
+    labor: 'Labor',
     supplies: 'Supplies',
-    miscellaneous: 'Miscellaneous',
+    repairs_maintenance: 'Equipment / Repair',
+    advertising: 'Advertising / Marketing',
+    subcontractor: 'Subcontractor',
+    vehicle: 'Vehicle',
+    disposal_recycling: 'Disposal / Recycling',
+    meals: 'Meals',
+    miscellaneous: 'Other',
   };
   var QUICK_BUTTONS = [
     { category: 'fuel', label: 'Fuel', icon: '⛽' },
     { category: 'dump_fees', label: 'Dump', icon: '🗑' },
     { category: 'meals', label: 'Meal', icon: '🍔' },
   ];
-  var MORE_CATEGORIES = ['repairs_maintenance', 'advertising', 'supplies', 'miscellaneous'];
+  var MORE_CATEGORIES = ['labor', 'repairs_maintenance', 'advertising', 'subcontractor', 'vehicle', 'disposal_recycling', 'supplies', 'miscellaneous'];
 
   function el(tag, className, text) {
     var node = document.createElement(tag);

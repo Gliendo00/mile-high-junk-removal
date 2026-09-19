@@ -89,6 +89,7 @@ const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
+const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -1156,6 +1157,21 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   // they're booked (see the response at the end of this function, which
   // is unconditional from here on).
   const methodInfo = extractPaymentMethodInfo(captured.payment_method);
+
+  // Phase 3C Stage 3: mirror this collected charge into job_payments, the
+  // cross-service-type ledger — best-effort, never allowed to affect the
+  // response below (see job-payments-ledger.js's header). Placed here,
+  // unconditionally once capture has actually succeeded, rather than after
+  // the rental_payments confirmation write below, since the ledger mirror
+  // documents the real Stripe fact ("money moved"), independent of whether
+  // this booking's own local rental_payments row can be fully persisted.
+  await mirrorStripePaymentToLedger(supabase, {
+    bookingId: bookingId,
+    stripePaymentIntentId: captured.id,
+    amount: amount,
+    paymentDate: denverTodayIso(),
+    notes: "Initial dumpster rental payment (auto-recorded from Stripe).",
+  });
 
   // 2026-09-18 readiness-pass-equivalent reasoning, carried over from the
   // original Braintree design: a bounded, practical saga step, not

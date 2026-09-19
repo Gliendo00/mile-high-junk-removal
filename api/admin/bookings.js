@@ -11,7 +11,8 @@ const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus, STATUS_LABELS } = require("../_lib/booking-format");
 const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
-const { EXPENSE_CATEGORIES } = require("../_lib/expense-categories");
+const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
+const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS } = require("../_lib/job-payments-ledger");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -65,7 +66,14 @@ module.exports = async (req, res) => {
   // first, then branch on req.method, each branch reading only the fields
   // it explicitly names from the body). See handleCreateExpense() for the
   // full validation/write contract.
-  if (req.method === "POST") return handleCreateExpense(req, res);
+  if (req.method === "POST") return handleCreateExpense(req, res, session);
+
+  // Phase 3C Stage 3 (full Expense Management): PATCH edits or voids one
+  // expense row — same `resource: "expense"` discriminator as the POST
+  // above, with an `action` field distinguishing "update" (default) from
+  // "void". Folded into this same file/method for the same 12-function-
+  // budget reason as every other resource here (see this file's header).
+  if (req.method === "PATCH") return handlePatchExpense(req, res, session);
 
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -138,6 +146,22 @@ module.exports = async (req, res) => {
   const expensesView = req.query.view === "expenses";
   if (expensesView) {
     return handleExpensesList(req, res, supabase);
+  }
+
+  // Phase 3C Stage 3: ?view=expense-audit&expenseId=... lists one expense's
+  // full change history (written automatically by the database trigger —
+  // see the migration SQL). Read-only, same folding reasoning as every
+  // other view= mode in this file.
+  if (req.query.view === "expense-audit") {
+    return handleExpenseAuditLog(req, res, supabase);
+  }
+
+  // Phase 3C Stage 3: ?view=job-search&q=... is the small "link to a job"
+  // picker the Expenses page's job-link field uses — searches by customer
+  // name/phone, same multi-field ilike pattern api/admin/clients.js already
+  // established, then returns that customer's recent bookings. Read-only.
+  if (req.query.view === "job-search") {
+    return handleJobSearch(req, res, supabase);
   }
 
   const COUNT_QUERIES = [
@@ -671,11 +695,86 @@ async function handleYear(req, res, supabase, todayIso) {
 // table is missing; nothing else in this file is affected either way.
 // ---------------------------------------------------------------------
 
+const EXPENSE_COLS =
+  "id, expense_date, category, amount, note, vendor, payment_method, booking_id, receipt_reference, voided_at, voided_reason, created_by, updated_by, created_at, updated_at";
+const EXPENSE_VENDOR_MAX = 120;
+const EXPENSE_RECEIPT_REF_MAX = 120;
+const EXPENSE_VOID_REASON_MAX = 300;
+const EXPENSE_SEARCH_MAX_LEN = 60;
+// Same order-of-magnitude reasoning as api/admin/clients.js's own
+// SEARCH_FIELD_LIMIT: a bound on how many candidate rows one ilike() call
+// ever holds in memory, not a hard product limit.
+const EXPENSE_SEARCH_FIELD_LIMIT = 300;
+const EXPENSE_LIST_DEFAULT_LIMIT = 200;
+const EXPENSE_LIST_MAX_LIMIT = 500;
+const EXPENSE_SORT_COLUMNS = { expenseDate: "expense_date", amount: "amount", category: "category", vendor: "vendor", createdAt: "created_at" };
+
+function serializeExpense(e) {
+  return {
+    id: e.id,
+    expenseDate: e.expense_date,
+    category: e.category,
+    categoryLabel: EXPENSE_CATEGORIES[e.category] || e.category,
+    amount: e.amount,
+    note: e.note,
+    vendor: e.vendor,
+    paymentMethod: e.payment_method,
+    bookingId: e.booking_id,
+    receiptReference: e.receipt_reference,
+    voidedAt: e.voided_at,
+    voidedReason: e.voided_reason,
+    isVoided: !!e.voided_at,
+    createdBy: e.created_by,
+    updatedBy: e.updated_by,
+    createdAt: e.created_at,
+    updatedAt: e.updated_at,
+  };
+}
+
+// Attaches a short, display-only label (customer name + appointment date)
+// for every expense row that has a booking_id, via one batched lookup —
+// same batching shape as this file's own main list handler (see
+// customersById above). Never fails the whole response if this enrichment
+// step errors; a linked expense just falls back to showing its bare
+// bookingId in that case.
+async function attachJobLabels(supabase, expenses) {
+  const bookingIds = Array.from(new Set(expenses.map((e) => e.bookingId).filter(Boolean)));
+  if (!bookingIds.length) return expenses;
+  try {
+    const bookingsRes = await supabase.from("bookings").select("id, appointment_date, service_type, customer_id").in("id", bookingIds);
+    if (bookingsRes.error) throw bookingsRes.error;
+    const bookings = bookingsRes.data || [];
+    const customerIds = Array.from(new Set(bookings.map((b) => b.customer_id).filter(Boolean)));
+    const customersById = {};
+    if (customerIds.length) {
+      const custRes = await supabase.from("customers").select("id, first_name, last_name").in("id", customerIds);
+      if (custRes.error) throw custRes.error;
+      (custRes.data || []).forEach((c) => {
+        customersById[c.id] = c;
+      });
+    }
+    const bookingsById = {};
+    bookings.forEach((b) => {
+      const cust = customersById[b.customer_id];
+      const name = cust ? [cust.first_name, cust.last_name].filter(Boolean).join(" ") : "";
+      bookingsById[b.id] = { label: (name || "Job") + " — " + b.appointment_date, appointmentDate: b.appointment_date, serviceLabel: serviceLabel(b.service_type) };
+    });
+    return expenses.map((e) => Object.assign({}, e, { job: e.bookingId ? bookingsById[e.bookingId] || null : null }));
+  } catch (err) {
+    console.error("Admin expenses: job-label enrichment failed (non-fatal):", err && err.stack ? err.stack : err);
+    return expenses;
+  }
+}
+
 // GET ?view=expenses&startDate=...&endDate=... — a bounded date range
-// (normally a single day from the Schedule's selected-day panel, but wide
-// enough — capped at EXPENSES_MAX_RANGE_DAYS — that a future Month/Year
-// expense summary could reuse this exact query shape without a new
-// endpoint). requireAdmin() has already run before this is reached.
+// (the Quick Expense bar's own call is always a single day; the full
+// /admin/expenses/ page passes a wider range, still capped at
+// EXPENSES_MAX_RANGE_DAYS). requireAdmin() has already run before this is
+// reached. Stage 3 additions, all optional: category/paymentMethod/
+// bookingId filters, a vendor+note search, sort, pagination, and
+// includeVoided (voided rows are excluded by default everywhere — the
+// Quick Expense bar's day-sum and the full page's default view should
+// never silently include a corrected-away entry).
 async function handleExpensesList(req, res, supabase) {
   const startDateRaw = typeof req.query.startDate === "string" ? req.query.startDate.trim() : "";
   const endDateRaw = typeof req.query.endDate === "string" ? req.query.endDate.trim() : "";
@@ -693,30 +792,85 @@ async function handleExpensesList(req, res, supabase) {
     return;
   }
 
-  try {
-    const expensesRes = await supabase
-      .from("expenses")
-      .select("id, expense_date, category, amount, note, created_at, updated_at")
-      .gte("expense_date", startDateRaw)
-      .lte("expense_date", endDateRaw)
-      .order("expense_date", { ascending: true })
-      .order("created_at", { ascending: true });
-    if (expensesRes.error) throw expensesRes.error;
+  const categoryRaw = typeof req.query.category === "string" ? req.query.category.trim() : "";
+  const categoryFilter = Object.prototype.hasOwnProperty.call(EXPENSE_CATEGORIES, categoryRaw) ? categoryRaw : "";
 
-    const expenses = (expensesRes.data || []).map(function (e) {
-      return {
-        id: e.id,
-        expenseDate: e.expense_date,
-        category: e.category,
-        categoryLabel: EXPENSE_CATEGORIES[e.category] || e.category,
-        amount: e.amount,
-        note: e.note,
-        createdAt: e.created_at,
-        updatedAt: e.updated_at,
-      };
+  const paymentMethodRaw = typeof req.query.paymentMethod === "string" ? req.query.paymentMethod.trim() : "";
+  const paymentMethodFilter = JOB_PAYMENT_METHODS.indexOf(paymentMethodRaw) !== -1 ? paymentMethodRaw : "";
+
+  const bookingIdFilter = typeof req.query.bookingId === "string" ? req.query.bookingId.trim() : "";
+  const includeVoided = req.query.includeVoided === "1";
+  const search = sanitizeIlikeSearchTerm(typeof req.query.search === "string" ? req.query.search : "");
+
+  const sortKey = Object.prototype.hasOwnProperty.call(EXPENSE_SORT_COLUMNS, req.query.sort) ? req.query.sort : "expenseDate";
+  const sortCol = EXPENSE_SORT_COLUMNS[sortKey];
+  const sortAsc = req.query.sortDir === "asc";
+
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = EXPENSE_LIST_DEFAULT_LIMIT;
+  limit = Math.min(limit, EXPENSE_LIST_MAX_LIMIT);
+  let offset = parseInt(req.query.offset, 10);
+  if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+  function applyCommonFilters(q) {
+    q = q.gte("expense_date", startDateRaw).lte("expense_date", endDateRaw);
+    if (!includeVoided) q = q.is("voided_at", null);
+    if (categoryFilter) q = q.eq("category", categoryFilter);
+    if (paymentMethodFilter) q = q.eq("payment_method", paymentMethodFilter);
+    if (bookingIdFilter) q = q.eq("booking_id", bookingIdFilter);
+    return q;
+  }
+
+  try {
+    let rows;
+    if (search) {
+      // Same bounded, multi-field, merge-in-memory search shape as
+      // api/admin/clients.js — never a single raw .or() filter string (see
+      // that file's own comment for why).
+      const pattern = "%" + search + "%";
+      const [byVendor, byNote] = await Promise.all([
+        applyCommonFilters(supabase.from("expenses").select(EXPENSE_COLS)).ilike("vendor", pattern).limit(EXPENSE_SEARCH_FIELD_LIMIT),
+        applyCommonFilters(supabase.from("expenses").select(EXPENSE_COLS)).ilike("note", pattern).limit(EXPENSE_SEARCH_FIELD_LIMIT),
+      ]);
+      if (byVendor.error) throw byVendor.error;
+      if (byNote.error) throw byNote.error;
+      const merged = new Map();
+      [byVendor, byNote].forEach((r) => (r.data || []).forEach((e) => merged.set(e.id, e)));
+      rows = Array.from(merged.values());
+    } else {
+      const pageRes = await applyCommonFilters(supabase.from("expenses").select(EXPENSE_COLS)).limit(EXPENSE_LIST_MAX_LIMIT);
+      if (pageRes.error) throw pageRes.error;
+      rows = pageRes.data || [];
+    }
+
+    rows.sort(function (a, b) {
+      const av = a[sortCol],
+        bv = b[sortCol];
+      if (av < bv) return sortAsc ? -1 : 1;
+      if (av > bv) return sortAsc ? 1 : -1;
+      // Stable, deterministic tie-break so equal-sort-key rows (e.g. two
+      // expenses on the same date) don't reorder between requests.
+      return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
     });
 
-    res.status(200).json({ ok: true, startDate: startDateRaw, endDate: endDateRaw, expenses: expenses });
+    const total = rows.length;
+    const totalAmount = rows.reduce(function (sum, e) {
+      return sum + (Number(e.amount) || 0);
+    }, 0);
+    const page = rows.slice(offset, offset + limit).map(serializeExpense);
+    const enriched = await attachJobLabels(supabase, page);
+
+    res.status(200).json({
+      ok: true,
+      startDate: startDateRaw,
+      endDate: endDateRaw,
+      expenses: enriched,
+      total: total,
+      totalAmount: Math.round(totalAmount * 100) / 100,
+      limit: limit,
+      offset: offset,
+      hasMore: offset + page.length < total,
+    });
   } catch (err) {
     console.error("Admin expenses list failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load expenses." });
@@ -731,7 +885,7 @@ async function handleExpensesList(req, res, supabase) {
 // validated before being placed into the insert payload — the request body
 // is never spread into it. Never trusts category/date/amount merely because
 // the client supplied them, per the stage's explicit instruction.
-async function handleCreateExpense(req, res) {
+async function handleCreateExpense(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
     console.error("Admin expense create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
@@ -780,6 +934,31 @@ async function handleCreateExpense(req, res) {
   const amount = Math.round(amountNum * 100) / 100;
 
   const note = sanitizeExpenseText(body.note, EXPENSE_NOTE_MAX) || null;
+  const vendor = sanitizeExpenseText(body.vendor, EXPENSE_VENDOR_MAX) || null;
+  const receiptReference = sanitizeExpenseText(body.receiptReference, EXPENSE_RECEIPT_REF_MAX) || null;
+
+  let paymentMethod = null;
+  if (body.paymentMethod !== undefined && body.paymentMethod !== null && body.paymentMethod !== "") {
+    const pm = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+    if (JOB_PAYMENT_METHODS.indexOf(pm) === -1) {
+      res.status(400).json({ error: "Please choose a valid payment method." });
+      return;
+    }
+    paymentMethod = pm;
+  }
+
+  let bookingId = null;
+  if (body.bookingId !== undefined && body.bookingId !== null && body.bookingId !== "") {
+    const bid = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+    if (!bid) {
+      res.status(400).json({ error: "Invalid job link." });
+      return;
+    }
+    // A malformed/nonexistent id is caught by the FK constraint on insert
+    // below (23503), not re-validated here — the DB is the single source
+    // of truth for whether a booking id is real.
+    bookingId = bid;
+  }
 
   try {
     const { data: created, error } = await supabase
@@ -789,29 +968,320 @@ async function handleCreateExpense(req, res) {
         category: category,
         amount: amount,
         note: note,
+        vendor: vendor,
+        payment_method: paymentMethod,
+        booking_id: bookingId,
+        receipt_reference: receiptReference,
+        created_by: (session && session.email) || null,
       })
-      .select("id, expense_date, category, amount, note, created_at, updated_at")
+      .select(EXPENSE_COLS)
       .single();
 
-    if (error || !created) throw error || new Error("Insert returned no row.");
+    if (error) {
+      if (error.code === "23503") {
+        res.status(400).json({ error: "That job could not be found." });
+        return;
+      }
+      throw error;
+    }
+    if (!created) throw new Error("Insert returned no row.");
 
-    res.status(200).json({
-      ok: true,
-      expense: {
-        id: created.id,
-        expenseDate: created.expense_date,
-        category: created.category,
-        categoryLabel: EXPENSE_CATEGORIES[created.category] || created.category,
-        amount: created.amount,
-        note: created.note,
-        createdAt: created.created_at,
-        updatedAt: created.updated_at,
-      },
-    });
+    res.status(200).json({ ok: true, expense: serializeExpense(created) });
   } catch (err) {
     console.error("Admin expense create failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save this expense." });
   }
+}
+
+// PATCH /api/admin/bookings { resource: "expense", id, action, ... } —
+// either "update" (default; edits editable fields on an active expense) or
+// "void" (soft-delete). Both share this one entry point since both are
+// PATCHes to one existing row, mirroring api/admin/booking.js's own
+// resource=charges PATCH (single method, branch on an explicit action
+// field, never inferred).
+//
+// Financial-audit discipline (the owner's explicit requirement): this
+// handler EDITS the row's current fields — it never creates a second
+// competing row for a correction. The full "preserve original, void it,
+// create corrected entry" pattern applies to job_payments (an append-only
+// ledger of discrete transactions), not to expenses (a single evolving
+// record of one cost, e.g. "$68 dump fee" becoming "$76 dump fee" is
+// correcting the SAME expense, not two different financial events). What
+// makes this still safe for financial data is the database trigger (see
+// the migration SQL's §3): every field this handler changes is
+// automatically, unconditionally logged to expense_audit_log — old value,
+// new value, when, by whom — so nothing is silently lost even though the
+// row itself is mutated in place.
+async function handlePatchExpense(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin expense update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const resource = typeof body.resource === "string" ? body.resource.trim() : "";
+  if (resource !== "expense") {
+    res.status(400).json({ error: "Invalid or missing resource." });
+    return;
+  }
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Expense id is required." });
+    return;
+  }
+
+  const action = typeof body.action === "string" ? body.action.trim() : "update";
+  if (action !== "update" && action !== "void") {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase.from("expenses").select(EXPENSE_COLS).eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Expense not found." });
+      return;
+    }
+    if (current.voided_at) {
+      // A voided expense is a closed financial record — neither editable
+      // nor re-voidable. The correction path is a brand-new expense entry,
+      // exactly as the owner specified.
+      res.status(409).json({ error: "This expense has already been voided and can no longer be changed." });
+      return;
+    }
+
+    if (action === "void") {
+      const reason = sanitizeExpenseText(body.reason, EXPENSE_VOID_REASON_MAX);
+      if (!reason) {
+        res.status(400).json({ error: "A reason is required to void an expense." });
+        return;
+      }
+      const { data: voided, error } = await supabase
+        .from("expenses")
+        .update({
+          voided_at: new Date().toISOString(),
+          voided_reason: reason,
+          updated_by: (session && session.email) || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .is("voided_at", null)
+        .select(EXPENSE_COLS)
+        .maybeSingle();
+      if (error) throw error;
+      if (!voided) {
+        // Lost a race with another admin voiding/editing the same row
+        // between the read above and this write.
+        res.status(409).json({ error: "This expense was just changed by someone else. Please refresh and try again." });
+        return;
+      }
+      res.status(200).json({ ok: true, expense: serializeExpense(voided) });
+      return;
+    }
+
+    // action === "update" — every field is optional; only fields actually
+    // present in the body are changed (a partial edit, e.g. "just fix the
+    // amount", never requires resending the whole record). Same
+    // per-field validation as handleCreateExpense above.
+    const update = { updated_by: (session && session.email) || null, updated_at: new Date().toISOString() };
+
+    if (body.expenseDate !== undefined) {
+      const expenseDate = typeof body.expenseDate === "string" ? body.expenseDate.trim() : "";
+      if (!isValidIsoDate(expenseDate)) {
+        res.status(400).json({ error: "A valid expense date is required." });
+        return;
+      }
+      if (expenseDate < HISTORICAL_FLOOR_ISO) {
+        res.status(400).json({ error: "Expense date cannot be before January 1, 2026." });
+        return;
+      }
+      if (expenseDate > denverTodayIso()) {
+        res.status(400).json({ error: "Expense date cannot be in the future." });
+        return;
+      }
+      update.expense_date = expenseDate;
+    }
+
+    if (body.category !== undefined) {
+      const category = typeof body.category === "string" ? body.category.trim() : "";
+      if (!Object.prototype.hasOwnProperty.call(EXPENSE_CATEGORIES, category)) {
+        res.status(400).json({ error: "Please choose a valid expense category." });
+        return;
+      }
+      update.category = category;
+    }
+
+    if (body.amount !== undefined) {
+      const amountNum = Number(body.amount);
+      if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > EXPENSE_MAX_AMOUNT) {
+        res.status(400).json({ error: "Please enter a valid amount." });
+        return;
+      }
+      update.amount = Math.round(amountNum * 100) / 100;
+    }
+
+    if (body.note !== undefined) update.note = sanitizeExpenseText(body.note, EXPENSE_NOTE_MAX) || null;
+    if (body.vendor !== undefined) update.vendor = sanitizeExpenseText(body.vendor, EXPENSE_VENDOR_MAX) || null;
+    if (body.receiptReference !== undefined) update.receipt_reference = sanitizeExpenseText(body.receiptReference, EXPENSE_RECEIPT_REF_MAX) || null;
+
+    if (body.paymentMethod !== undefined) {
+      if (body.paymentMethod === null || body.paymentMethod === "") {
+        update.payment_method = null;
+      } else {
+        const pm = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+        if (JOB_PAYMENT_METHODS.indexOf(pm) === -1) {
+          res.status(400).json({ error: "Please choose a valid payment method." });
+          return;
+        }
+        update.payment_method = pm;
+      }
+    }
+
+    if (body.bookingId !== undefined) {
+      update.booking_id = body.bookingId === null || body.bookingId === "" ? null : String(body.bookingId).trim();
+    }
+
+    const { data: updated, error } = await supabase.from("expenses").update(update).eq("id", id).is("voided_at", null).select(EXPENSE_COLS).maybeSingle();
+    if (error) {
+      if (error.code === "23503") {
+        res.status(400).json({ error: "That job could not be found." });
+        return;
+      }
+      throw error;
+    }
+    if (!updated) {
+      res.status(409).json({ error: "This expense was just changed by someone else. Please refresh and try again." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, expense: serializeExpense(updated) });
+  } catch (err) {
+    console.error("Admin expense update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this expense." });
+  }
+}
+
+// GET ?view=expense-audit&expenseId=... — one expense's full change
+// history, oldest first (a readable timeline). Entirely read-only; every
+// row here was written by the database trigger, never by this handler.
+async function handleExpenseAuditLog(req, res, supabase) {
+  const expenseId = typeof req.query.expenseId === "string" ? req.query.expenseId.trim() : "";
+  if (!expenseId) {
+    res.status(400).json({ error: "expenseId is required." });
+    return;
+  }
+  try {
+    const { data, error } = await supabase
+      .from("expense_audit_log")
+      .select("id, changed_at, changed_by, change_type, field_name, old_value, new_value")
+      .eq("expense_id", expenseId)
+      .order("changed_at", { ascending: true });
+    if (error) throw error;
+    const history = (data || []).map(function (h) {
+      return {
+        id: h.id,
+        changedAt: h.changed_at,
+        changedBy: h.changed_by,
+        changeType: h.change_type,
+        fieldName: h.field_name,
+        fieldLabel: EXPENSE_AUDIT_FIELD_LABELS[h.field_name] || h.field_name,
+        oldValue: h.old_value,
+        newValue: h.new_value,
+      };
+    });
+    res.status(200).json({ ok: true, history: history });
+  } catch (err) {
+    console.error("Admin expense audit log failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load this expense's history." });
+  }
+}
+
+const EXPENSE_AUDIT_FIELD_LABELS = {
+  expense_date: "Date",
+  category: "Category",
+  amount: "Amount",
+  note: "Note",
+  vendor: "Vendor",
+  payment_method: "Payment Method",
+  booking_id: "Linked Job",
+  receipt_reference: "Receipt Reference",
+  voided_reason: "Void Reason",
+};
+
+// GET ?view=job-search&q=... — the small "link to a job" picker the
+// Expenses page's job-link field uses. Searches customers by name/phone
+// (same bounded multi-field ilike pattern as api/admin/clients.js), then
+// returns each match's recent bookings, newest first, capped generously —
+// this is a lightweight picker, not a full booking search.
+async function handleJobSearch(req, res, supabase) {
+  const q = sanitizeIlikeSearchTerm(typeof req.query.q === "string" ? req.query.q : "");
+  if (!q || q.length < 2) {
+    res.status(200).json({ ok: true, jobs: [] });
+    return;
+  }
+  try {
+    const pattern = "%" + q + "%";
+    const cols = "id, first_name, last_name, phone";
+    const [byFirst, byLast, byPhone] = await Promise.all([
+      supabase.from("customers").select(cols).ilike("first_name", pattern).limit(JOB_SEARCH_CUSTOMER_LIMIT),
+      supabase.from("customers").select(cols).ilike("last_name", pattern).limit(JOB_SEARCH_CUSTOMER_LIMIT),
+      supabase.from("customers").select(cols).ilike("phone", pattern).limit(JOB_SEARCH_CUSTOMER_LIMIT),
+    ]);
+    for (const r of [byFirst, byLast, byPhone]) {
+      if (r.error) throw r.error;
+    }
+    const customersById = new Map();
+    [byFirst, byLast, byPhone].forEach((r) => (r.data || []).forEach((c) => customersById.set(c.id, c)));
+    const customerIds = Array.from(customersById.keys());
+    if (!customerIds.length) {
+      res.status(200).json({ ok: true, jobs: [] });
+      return;
+    }
+
+    const bookingsRes = await supabase
+      .from("bookings")
+      .select("id, appointment_date, service_type, customer_id")
+      .in("customer_id", customerIds)
+      .order("appointment_date", { ascending: false })
+      .limit(JOB_SEARCH_RESULT_LIMIT);
+    if (bookingsRes.error) throw bookingsRes.error;
+
+    const jobs = (bookingsRes.data || []).map(function (b) {
+      const cust = customersById.get(b.customer_id);
+      const name = cust ? [cust.first_name, cust.last_name].filter(Boolean).join(" ") : "";
+      return {
+        id: b.id,
+        label: (name || "Job") + " — " + b.appointment_date + " — " + serviceLabel(b.service_type),
+        appointmentDate: b.appointment_date,
+      };
+    });
+    res.status(200).json({ ok: true, jobs: jobs });
+  } catch (err) {
+    console.error("Admin job search failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not search jobs." });
+  }
+}
+const JOB_SEARCH_CUSTOMER_LIMIT = 100;
+const JOB_SEARCH_RESULT_LIMIT = 25;
+
+// Strips control characters, trims, caps length, then escapes ILIKE
+// wildcard characters — same discipline as api/admin/clients.js's own
+// sanitizeSearchTerm(), a small deliberate local copy rather than a shared
+// import (this project's established convention).
+function sanitizeIlikeSearchTerm(value) {
+  if (typeof value !== "string") return "";
+  var stripped = "";
+  for (var i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 31) stripped += value[i];
+  }
+  var capped = stripped.trim().slice(0, EXPENSE_SEARCH_MAX_LEN);
+  return capped.replace(/[\\%_]/g, "\\$&");
 }
 
 // Strip control characters and any "<...>"-shaped text, trim, bound length

@@ -55,6 +55,26 @@ class FakeQueryBuilder {
     this._filters.push((row) => row[field] !== null && row[field] !== undefined && row[field] <= val);
     return this;
   }
+  // Phase 3C Stage 3 additions — is()/ilike()/limit()/maybeSingle()/update()
+  // — needed once handleExpensesList()/handlePatchExpense() started using
+  // them (voided-row exclusion, vendor/note search, bounded page size,
+  // single-row reads/writes). Kept minimal: exactly what those handlers
+  // actually call, mirroring this project's other fake-Supabase test
+  // harnesses (e.g. tests/phase3c-stage2.5v2-stripe-rental-payments.test.js's
+  // FakeQueryBuilder) rather than a full PostgREST reimplementation.
+  is(field, val) {
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    return this;
+  }
+  ilike(field, pattern) {
+    const needle = String(pattern).replace(/^%|%$/g, "").toLowerCase();
+    this._filters.push((row) => typeof row[field] === "string" && row[field].toLowerCase().indexOf(needle) !== -1);
+    return this;
+  }
+  limit(n) {
+    this._limit = n;
+    return this;
+  }
   order(field, opts) {
     this._orders.push({ field: field, ascending: !opts || opts.ascending !== false });
     return this;
@@ -63,8 +83,16 @@ class FakeQueryBuilder {
     this._insertRow = data;
     return this;
   }
+  update(data) {
+    this._updateRow = data;
+    return this;
+  }
   single() {
     this._single = "single";
+    return this._resolve();
+  }
+  maybeSingle() {
+    this._single = "maybeSingle";
     return this._resolve();
   }
   then(resolve, reject) {
@@ -82,6 +110,14 @@ class FakeQueryBuilder {
     }
 
     let filtered = this._rows.filter((row) => this._filters.every((f) => f(row)));
+
+    if (this._updateRow) {
+      filtered.forEach((row) => Object.assign(row, this._updateRow));
+      if (this._single === "maybeSingle") return { data: filtered[0] || null, error: null };
+      if (this._single === "single") return filtered.length ? { data: filtered[0], error: null } : { data: null, error: { message: "no rows" } };
+      return { data: filtered, error: null };
+    }
+
     this._orders.forEach((ord) => {
       filtered = filtered.slice().sort((a, b) => {
         if (a[ord.field] < b[ord.field]) return ord.ascending ? -1 : 1;
@@ -89,6 +125,14 @@ class FakeQueryBuilder {
         return 0;
       });
     });
+    if (this._limit != null) filtered = filtered.slice(0, this._limit);
+
+    if (this._single === "maybeSingle") {
+      return { data: filtered[0] || null, error: null };
+    }
+    if (this._single === "single") {
+      return filtered.length ? { data: filtered[0], error: null } : { data: null, error: { message: "no rows" } };
+    }
     return { data: filtered, error: null };
   }
 }
@@ -246,7 +290,7 @@ test("GET expenses: response items carry categoryLabel derived from the allowlis
   adminAuthed();
   const db = freshDb([{ id: "e1", expense_date: "2026-09-05", category: "dump_fees", amount: 65, note: "North site", created_at: "t", updated_at: "t" }]);
   const res = await getExpenses(db, { startDate: "2026-09-05", endDate: "2026-09-05" });
-  assert.strictEqual(res.body.expenses[0].categoryLabel, "Dump Fees");
+  assert.strictEqual(res.body.expenses[0].categoryLabel, "Dump Fee");
   assert.strictEqual(res.body.expenses[0].note, "North site");
 });
 
@@ -389,11 +433,36 @@ test("PUT/DELETE to bookings.js are still rejected with 405 (Stage 2.4's POST br
 // Static checks: shared category allowlist, migration doc, no stray
 // serverless function added.
 // =======================================================================
-test("api/_lib/expense-categories.js: exactly the seven locked categories, no 'other'", () => {
+test("api/_lib/expense-categories.js: exactly the seven ORIGINAL locked category KEYS are still present, unrenamed (Stage 3 relabeled some display text but never a stable DB key)", () => {
+  const mod = require("../api/_lib/expense-categories.js");
+  const keys = Object.keys(mod.EXPENSE_CATEGORIES);
+  ["fuel", "dump_fees", "meals", "repairs_maintenance", "advertising", "supplies", "miscellaneous"].forEach((k) => {
+    assert.ok(keys.includes(k), "original key '" + k + "' must still exist — persisted staging rows depend on it");
+  });
+  // The stable key "miscellaneous" is unchanged; only Stage 3 relabeled its
+  // display text to "Other" (see that module's header for why the key
+  // itself is never renamed to match).
+  assert.ok(!("other" in mod.EXPENSE_CATEGORIES));
+  assert.strictEqual(mod.EXPENSE_CATEGORIES.miscellaneous, "Other");
+});
+
+test("api/_lib/expense-categories.js: Stage 3 category expansion — exactly eleven categories total, four new keys added", () => {
   const mod = require("../api/_lib/expense-categories.js");
   const keys = Object.keys(mod.EXPENSE_CATEGORIES).sort();
-  assert.deepStrictEqual(keys, ["advertising", "dump_fees", "fuel", "meals", "miscellaneous", "repairs_maintenance", "supplies"]);
-  assert.ok(!("other" in mod.EXPENSE_CATEGORIES));
+  assert.deepStrictEqual(keys, [
+    "advertising",
+    "disposal_recycling",
+    "dump_fees",
+    "fuel",
+    "labor",
+    "meals",
+    "miscellaneous",
+    "repairs_maintenance",
+    "subcontractor",
+    "supplies",
+    "vehicle",
+  ]);
+  assert.deepStrictEqual(mod.ALL_EXPENSE_CATEGORY_KEYS.slice().sort(), keys);
 });
 
 test("docs/phase-3/stage2.4-expenses-migration.md exists and documents the exact CREATE TABLE statement, not executed", () => {

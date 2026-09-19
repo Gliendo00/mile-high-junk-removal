@@ -705,6 +705,19 @@
   color: var(--color-text, #201e1d);
   min-height: 44px;
 }
+/* Phase 3C Stage 3 — a destructive/void action (e.g. "Void Expense",
+   "Void Payment"). Outline-shaped like .admin-btn-outline (never a solid
+   fill — voiding is a considered action, not the page's primary CTA) but
+   in the same red family as .admin-status-lost, so it reads as
+   "careful/irreversible-ish" at a glance without needing a confirm dialog
+   on top of it. */
+.admin-btn-danger {
+  background: #fff;
+  border-color: #b91c1c;
+  color: #b91c1c;
+  min-height: 44px;
+}
+.admin-btn-danger:hover { background: #fdecea; }
 .admin-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Login page */
@@ -1126,6 +1139,12 @@
 }
 .admin-charge-row-amount { font-weight: 800; font-size: 15px; }
 .admin-charge-row-meta { font-size: 12px; color: var(--color-neutral-600, #82796a); }
+/* Phase 3C Stage 3 — a Void button placed inside .admin-charge-row (the
+   job_payments list reuses this row shape). Without this, the row's
+   column-flex layout stretches the button to the full card width by
+   default (align-items: stretch); a void action should read as a small,
+   deliberate control, not a second full-width row. */
+.admin-charge-row > .admin-btn { align-self: flex-start; }
 
 .admin-empty, .admin-loading, .admin-error-banner {
   background: #fff;
@@ -1728,3 +1747,101 @@
 .admin-address-autocomplete-item:hover { background: var(--admin-tint); }
 .admin-address-autocomplete-item-main { font-weight: 700; font-size: 14px; color: var(--color-text, #201e1d); }
 .admin-address-autocomplete-item-secondary { font-size: 12.5px; color: var(--color-neutral-600, #82796a); }
+
+/* ===========================================================================
+   Phase 3C Stage 3 — /admin/expenses/ (full Expense Management page).
+   Reuses this file's existing card/list/badge/sheet vocabulary (.admin-
+   booking-list, .admin-charge-row's shape, .admin-status-badge,
+   .admin-sheet-*) rather than inventing a second visual language — see
+   admin/expenses.js for the markup these classes style.
+   =========================================================================== */
+
+.admin-expense-total-summary {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+
+.admin-expense-filters {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.admin-expense-filters .admin-field:last-child { margin-bottom: 0; }
+.admin-expense-voided-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+/* Expense card — same visual shape as .admin-charge-row (bordered, rounded,
+   stacked rows) but its own class since the two lists can evolve
+   independently. */
+.admin-expense-row {
+  background: #fff;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.admin-expense-row.is-voided {
+  opacity: 0.65;
+  border-style: dashed;
+}
+.admin-expense-category-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--color-neutral-200, #eee7db);
+  color: var(--color-neutral-800, #474238);
+}
+.admin-expense-note {
+  font-size: 13px;
+  color: var(--color-neutral-700, #645c50);
+  white-space: pre-wrap;
+}
+.admin-expense-job-link { font-size: 13px; }
+.admin-expense-job-link a { color: var(--color-accent-700, #2f6f13); font-weight: 700; }
+.admin-expense-void-reason {
+  font-size: 12.5px;
+  color: #b91c1c;
+  font-style: italic;
+}
+.admin-expense-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.admin-expense-actions .admin-btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+
+/* Per-expense financial-audit history (the sheet renderHistoryView() fills) */
+.admin-expense-history-list { display: flex; flex-direction: column; gap: 10px; margin: 10px 0 16px; max-height: 50vh; overflow-y: auto; }
+.admin-expense-history-row {
+  border-left: 3px solid var(--color-neutral-300, #dcd3c4);
+  padding-left: 10px;
+}
+.admin-expense-history-row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 2px;
+}
+.admin-expense-history-desc { font-size: 13.5px; color: var(--color-text, #201e1d); }

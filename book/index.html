@@ -483,6 +483,12 @@
           <div class="card-title">Payment</div>
           <p class="field-note" id="payment-config-error" hidden>Online payment isn't available right now. Please call or text <a href="tel:3039901812">303-990-1812</a> to book.</p>
           <div id="stripe-payment-element-container" style="margin-top:10px"></div>
+          <!-- Stripe trust signal — text-only per explicit instruction (no
+               recreated Stripe logo/wordmark), visually secondary to the
+               Pay & Book Now CTA below. Sits directly under the Payment
+               Element so it reads as "how this exact payment is
+               protected," not a generic site-wide badge. -->
+          <p class="payment-trust-note">🔒 Secure payments powered by Stripe</p>
         </div>
 
         <div class="wizard-actions" id="payment-actions">

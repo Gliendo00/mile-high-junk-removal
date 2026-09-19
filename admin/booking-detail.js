@@ -366,6 +366,8 @@ document.addEventListener('DOMContentLoaded', function () {
       loadCharges();
     }
 
+    renderJobPayments(data);
+
     renderPhotos(data.photos);
 
     loadingEl.style.display = 'none';
@@ -787,6 +789,196 @@ document.addEventListener('DOMContentLoaded', function () {
         chargeCheckStatusInFlight = false;
       });
   }
+
+  // ---------------------------------------------------------------------
+  // Phase 3C Stage 3 — Payments (job_payments, the cross-service-type
+  // ledger). Unlike Additional Charges above (dumpster-rental-only, its
+  // own separate ?resource=charges fetch), job_payments/collectedRevenue
+  // arrive already embedded in the plain booking-detail GET response — see
+  // api/admin/booking.js — so no extra request is needed here, only
+  // rendering. Voiding is the ONLY edit this file ever sends for an
+  // existing row (amount/method/type are immutable once written — see
+  // handleVoidJobPayment()'s own header for why); a correction is void,
+  // then Record Payment again with the right amount/method.
+  // ---------------------------------------------------------------------
+  var jobPaymentsListEl = document.getElementById('d-job-payments-list');
+  var paymentMethodSelectEl = document.getElementById('d-payment-method-select');
+  var paymentAmountEl = document.getElementById('d-payment-amount-input');
+  var paymentDateEl = document.getElementById('d-payment-date-input');
+  var paymentNotesEl = document.getElementById('d-payment-notes-input');
+  var paymentAddBtn = document.getElementById('d-payment-add-btn');
+  var paymentAddInFlight = false;
+  var paymentVoidInFlight = false;
+
+  var JOB_PAYMENT_METHOD_TEXT = { card_stripe: 'Card (Stripe)', cash: 'Cash', zelle: 'Zelle', venmo: 'Venmo', check: 'Check' };
+
+  function renderJobPayments(data) {
+    set('d-collected-revenue', data.collectedRevenue != null ? formatPrice(data.collectedRevenue) : 'Not set yet');
+
+    while (jobPaymentsListEl.firstChild) jobPaymentsListEl.removeChild(jobPaymentsListEl.firstChild);
+    var payments = data.jobPayments || [];
+    if (!payments.length) {
+      var empty = document.createElement('p');
+      empty.className = 'admin-row-value';
+      empty.style.color = 'var(--color-neutral-600, #82796a)';
+      empty.textContent = 'No payments recorded yet.';
+      jobPaymentsListEl.appendChild(empty);
+      return;
+    }
+
+    payments.forEach(function (payment) {
+      var row = document.createElement('div');
+      row.className = 'admin-charge-row';
+
+      var top = document.createElement('div');
+      top.className = 'admin-charge-row-top';
+      var amountEl = document.createElement('span');
+      amountEl.className = 'admin-charge-row-amount';
+      amountEl.textContent = (payment.paymentType === 'refund' ? '− ' : '') + (formatPrice(payment.amount) || '$0.00');
+      top.appendChild(amountEl);
+      var badge = document.createElement('span');
+      badge.className = 'admin-status-badge ' + (payment.isVoided ? 'admin-status-lost' : 'admin-status-completed');
+      badge.textContent = payment.isVoided ? 'VOIDED' : payment.paymentType === 'refund' ? 'Refund' : 'Payment';
+      top.appendChild(badge);
+      row.appendChild(top);
+
+      var metaLine = document.createElement('div');
+      metaLine.className = 'admin-charge-row-meta';
+      var metaParts = [JOB_PAYMENT_METHOD_TEXT[payment.paymentMethod] || payment.paymentMethod, formatDate(payment.paymentDate)];
+      if (payment.stripePaymentIntentId) metaParts.push('Auto-recorded from Stripe');
+      else if (payment.recordedBy) metaParts.push('Recorded by ' + payment.recordedBy);
+      metaLine.textContent = metaParts.join(' · ');
+      row.appendChild(metaLine);
+
+      if (payment.notes) {
+        var notesLine = document.createElement('div');
+        notesLine.className = 'admin-charge-row-meta';
+        notesLine.textContent = payment.notes;
+        row.appendChild(notesLine);
+      }
+      if (payment.isVoided && payment.voidedReason) {
+        var reasonLine = document.createElement('div');
+        reasonLine.className = 'admin-charge-row-meta';
+        reasonLine.style.color = '#b91c1c';
+        reasonLine.textContent = 'Voided: ' + payment.voidedReason;
+        row.appendChild(reasonLine);
+      }
+
+      if (!payment.isVoided) {
+        var voidBtn = document.createElement('button');
+        voidBtn.type = 'button';
+        voidBtn.className = 'admin-btn admin-btn-danger';
+        voidBtn.style.marginTop = '6px';
+        voidBtn.textContent = 'Void';
+        voidBtn.addEventListener('click', function () { voidJobPayment(payment.id, voidBtn); });
+        row.appendChild(voidBtn);
+      }
+
+      jobPaymentsListEl.appendChild(row);
+    });
+  }
+
+  function voidJobPayment(paymentId, btn) {
+    if (paymentVoidInFlight) return;
+    var reason = window.prompt('Reason for voiding this payment (required):');
+    if (reason === null) return; // cancelled
+    reason = reason.trim();
+    if (!reason) {
+      showToast('A reason is required to void a payment.', 'error');
+      return;
+    }
+    paymentVoidInFlight = true;
+    btn.disabled = true;
+    btn.textContent = 'Voiding…';
+
+    fetch('/api/admin/booking?resource=job-payments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: paymentId, reason: reason }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not void this payment.');
+            return body;
+          });
+      })
+      .then(function () {
+        showToast('Payment voided.', 'success');
+        reloadJobPayments();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not void this payment.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Void';
+      })
+      .finally(function () {
+        paymentVoidInFlight = false;
+      });
+  }
+
+  // Re-fetches just the booking-detail GET (which already embeds
+  // jobPayments/collectedRevenue) rather than a separate job-payments
+  // endpoint call, so Collected and the list always stay in sync from one
+  // source of truth after an add/void.
+  function reloadJobPayments() {
+    fetch('/api/admin/booking?id=' + encodeURIComponent(bookingId))
+      .then(function (res) { return res.json().catch(function () { return null; }); })
+      .then(function (body) {
+        if (body && body.ok) renderJobPayments(body);
+      })
+      .catch(function () {});
+  }
+
+  paymentAddBtn.addEventListener('click', function () {
+    if (paymentAddInFlight) return;
+    var amount = Number(paymentAmountEl.value);
+    if (!paymentAmountEl.value || !Number.isFinite(amount) || amount <= 0) {
+      showToast('Please enter a valid amount.', 'error');
+      return;
+    }
+
+    paymentAddInFlight = true;
+    paymentAddBtn.disabled = true;
+    paymentAddBtn.textContent = 'Saving…';
+
+    fetch('/api/admin/booking?resource=job-payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bookingId: bookingId,
+        amount: amount,
+        paymentMethod: paymentMethodSelectEl.value,
+        paymentDate: paymentDateEl.value || undefined,
+        notes: paymentNotesEl.value.trim(),
+      }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not save this payment.');
+            return body;
+          });
+      })
+      .then(function () {
+        showToast('Payment recorded.', 'success');
+        paymentAmountEl.value = '';
+        paymentNotesEl.value = '';
+        reloadJobPayments();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not save this payment.', 'error');
+      })
+      .finally(function () {
+        paymentAddInFlight = false;
+        paymentAddBtn.disabled = false;
+        paymentAddBtn.textContent = 'Record Payment';
+      });
+  });
 
   statusTrigger.addEventListener('click', openStatusSheet);
   statusManageTrigger.addEventListener('click', openStatusSheet);

@@ -106,6 +106,19 @@ class FakeQueryBuilder {
     this._insertPayload = payload;
     return this;
   }
+  // Phase 3C Stage 3: minimal upsert() so job-payments-ledger.js's
+  // mirrorStripePaymentToLedger() (called from three of this suite's real
+  // success paths — the initial capture, handleApprove(), handleCheckStatus())
+  // is exercised for real here rather than silently swallowed by its own
+  // try/catch every time. Only supports what that one caller actually uses:
+  // { onConflict: '<col>', ignoreDuplicates: true } — a no-op insert if a
+  // row with the same value in that column already exists, mirroring
+  // job_payments.stripe_payment_intent_id's real partial UNIQUE index.
+  upsert(payload, opts) {
+    this._upsertPayload = payload;
+    this._upsertOpts = opts || {};
+    return this;
+  }
   update(payload) {
     this._updatePayload = payload;
     return this;
@@ -134,6 +147,18 @@ class FakeQueryBuilder {
       const row = Object.assign({ id: makeId(), created_at: nowIso(), updated_at: nowIso() }, this._insertPayload);
       rows.push(row);
       return this._single ? { data: row, error: null } : { data: [row], error: null };
+    }
+
+    if (this._upsertPayload) {
+      const conflictCol = this._upsertOpts.onConflict;
+      const conflictVal = conflictCol ? this._upsertPayload[conflictCol] : undefined;
+      const existing = conflictCol && conflictVal != null ? rows.find((r) => r[conflictCol] === conflictVal) : null;
+      if (existing && this._upsertOpts.ignoreDuplicates) {
+        return { data: null, error: null };
+      }
+      const row = Object.assign({ id: makeId(), created_at: nowIso(), updated_at: nowIso() }, this._upsertPayload);
+      rows.push(row);
+      return { data: [row], error: null };
     }
 
     let matched = rows.filter(
@@ -948,6 +973,19 @@ test("POST dumpster_rental: successful payment books the rental, captures the au
 
   assert.strictEqual(captureCallLog.length, 1);
   assert.strictEqual(captureCallLog[0].id, payload.payment.paymentIntentId);
+
+  // Phase 3C Stage 3 — the same successful capture also mirrors into
+  // job_payments, the cross-service-type ledger (see
+  // api/_lib/job-payments-ledger.js and tests/phase3c-stage3-job-payments.test.js
+  // for that module's own dedicated coverage). Checked here too since this
+  // is the one fixture in the whole suite that drives api/book.js's real
+  // success path end-to-end with a fully correct payload.
+  assert.strictEqual(db.job_payments.length, 1);
+  assert.strictEqual(db.job_payments[0].booking_id, db.bookings[0].id);
+  assert.strictEqual(db.job_payments[0].amount, 349.0);
+  assert.strictEqual(db.job_payments[0].payment_method, "card_stripe");
+  assert.strictEqual(db.job_payments[0].payment_type, "payment");
+  assert.strictEqual(db.job_payments[0].stripe_payment_intent_id, payload.payment.paymentIntentId);
 });
 test("POST dumpster_rental: notification email includes a Payment section with amount/method/PaymentIntent id", async () => {
   freshDb();

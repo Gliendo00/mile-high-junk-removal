@@ -18,6 +18,7 @@ const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
+const { mirrorStripePaymentToLedger, effectiveRevenue, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -39,6 +40,27 @@ module.exports = async (req, res) => {
     if (req.method === "GET") return handleListCharges(req, res);
     if (req.method === "POST") return handleProposeCharge(req, res, session);
     if (req.method === "PATCH") return handleApproveCharge(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Phase 3C Stage 3: job_payments — the cross-service-type payment ledger
+  // (every service type, not just dumpster rentals). Same folding
+  // reasoning/convention as ?resource=charges above: one more branch on
+  // this existing file, not a new Vercel function. GET lists a booking's
+  // payments (also already included in the plain booking-detail GET
+  // above — this is for refreshing just the Payments panel after an add/
+  // void without re-fetching the whole booking). POST records one MANUAL
+  // payment (cash/Zelle/Venmo/check/card) — a Stripe-collected row is
+  // NEVER created here; those only ever come from mirrorStripePaymentToLedger()
+  // in api/book.js/this file's handleApprove()+handleCheckStatus()/
+  // api/stripe-webhook.js. PATCH voids a payment — the ONLY write this
+  // endpoint allows against an existing row (amount/method/type/booking are
+  // immutable once written; see handleVoidJobPayment()'s header for why).
+  if (req.query.resource === "job-payments") {
+    if (req.method === "GET") return handleListJobPayments(req, res);
+    if (req.method === "POST") return handleCreateJobPayment(req, res, session);
+    if (req.method === "PATCH") return handleVoidJobPayment(req, res, session);
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
@@ -93,7 +115,7 @@ module.exports = async (req, res) => {
     // dumpster_rental booking that was booked and paid online; NULL/absent
     // for every other booking, including an admin-created dumpster rental
     // (New Job never inserts a rental_payments row).
-    const [customerRes, dumpsterRes, photosRes, paymentRes] = await Promise.all([
+    const [customerRes, dumpsterRes, photosRes, paymentRes, jobPaymentsRes] = await Promise.all([
       supabase
         .from("customers")
         .select("first_name, last_name, phone, email, address, city, state, zip")
@@ -111,16 +133,26 @@ module.exports = async (req, res) => {
         .select("payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason, included_tons, overage_ton_rate")
         .eq("booking_id", id)
         .maybeSingle(),
+      // Phase 3C Stage 3 — every job_payments row for this booking, newest
+      // first. Includes voided rows (the UI needs to show the full
+      // financial-audit trail, not just what currently counts), but
+      // effectiveRevenue below only sums the non-voided ones.
+      supabase.from("job_payments").select("id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at").eq("booking_id", id).order("payment_date", { ascending: false }).order("created_at", { ascending: false }),
     ]);
     if (customerRes.error) throw customerRes.error;
     if (dumpsterRes.error) throw dumpsterRes.error;
     if (photosRes.error) throw photosRes.error;
     if (paymentRes.error) throw paymentRes.error;
+    if (jobPaymentsRes.error) throw jobPaymentsRes.error;
 
     const customer = customerRes.data || null;
     const dumpster = dumpsterRes.data || null;
     const photoRows = photosRes.data || [];
     const payment = paymentRes.data || null;
+    const jobPaymentRows = jobPaymentsRes.data || [];
+    const jobPayments = jobPaymentRows.map(serializeJobPayment);
+    const nonVoided = jobPaymentRows.filter((r) => !r.voided_at).map((r) => ({ amount: r.amount, payment_type: r.payment_type }));
+    const revenue = effectiveRevenue(nonVoided, booking.final_price);
 
     // Signed URLs are minted here, after authorization has already
     // succeeded above, scoped to one storage object each, and short-lived —
@@ -246,6 +278,18 @@ module.exports = async (req, res) => {
         overageTonRate: payment && payment.overage_ton_rate != null ? payment.overage_ton_rate : rentalPricing.OVERAGE_TON_RATE,
         isBookingSpecific: !!(payment && payment.overage_ton_rate != null),
       },
+      // Phase 3C Stage 3 — the cross-service-type payment ledger. jobPayments
+      // is every row (voided included, oldest financial-audit trail first
+      // when sorted by the UI); collectedRevenue is the single number the
+      // UI should actually display/use, computed per the documented
+      // final_price compatibility rule (see job-payments-ledger.js's
+      // effectiveRevenue()): the ledger total when this booking has any
+      // non-voided ledger rows, else bookings.final_price unchanged — so no
+      // historical job's revenue silently becomes $0 just because it
+      // predates this stage. tip_amount is untouched by any of this.
+      jobPayments: jobPayments,
+      collectedRevenue: revenue.amount,
+      collectedRevenueSource: revenue.source,
       photos: photos,
     });
   } catch (err) {
@@ -984,6 +1028,232 @@ const MAX_QUANTITY = 999999;
 // becomes a charge, the same spirit as MAX_QUANTITY/MAX_PRICE below.
 const MAX_WEIGHT_LBS = 100000;
 
+const JOB_PAYMENT_NOTES_MAX = 500;
+const JOB_PAYMENT_VOID_REASON_MAX = 300;
+const JOB_PAYMENT_MAX_AMOUNT = 999999;
+
+function serializeJobPayment(row) {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    amount: row.amount,
+    paymentMethod: row.payment_method,
+    paymentType: row.payment_type,
+    paymentDate: row.payment_date,
+    notes: row.notes,
+    stripePaymentIntentId: row.stripe_payment_intent_id,
+    reversesPaymentId: row.reverses_payment_id,
+    voidedAt: row.voided_at,
+    voidedReason: row.voided_reason,
+    isVoided: !!row.voided_at,
+    recordedBy: row.recorded_by,
+    createdAt: row.created_at,
+  };
+}
+
+// GET ?resource=job-payments&bookingId=<uuid> — every payment row for one
+// booking, newest first. Read-only.
+async function handleListJobPayments(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin list job payments failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const bookingId = typeof req.query.bookingId === "string" ? req.query.bookingId.trim() : "";
+  if (!bookingId || !UUID_RE.test(bookingId)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("job_payments")
+      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .eq("booking_id", bookingId)
+      .order("payment_date", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.status(200).json({ ok: true, jobPayments: (data || []).map(serializeJobPayment) });
+  } catch (err) {
+    console.error("Admin list job payments failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load payments." });
+  }
+}
+
+// POST ?resource=job-payments — record one MANUAL payment (cash/Zelle/
+// Venmo/check, or a card payment collected outside Stripe, e.g. in person
+// on a card reader this system doesn't integrate with). `paymentMethod:
+// "card_stripe"` is explicitly rejected here — that value is reserved for
+// rows written exclusively by mirrorStripePaymentToLedger() (see that
+// function's header), never by an admin picking it from a dropdown. This
+// keeps the guarantee absolute: every card_stripe row in this table really
+// did come from a confirmed Stripe collection, never a manual claim.
+//
+// Amount/refund semantics (see the migration SQL's job_payments comment
+// for the full reasoning): amount is ALWAYS a positive number; paymentType
+// ("payment" default, or "refund") is what determines the sign when
+// computing collected revenue. There is no in-place "correct this
+// payment's amount" path — see handleVoidJobPayment() below for how a
+// mistaken entry is fixed (void it, then POST a new corrected row here,
+// optionally with reversesPaymentId pointing at the voided one).
+async function handleCreateJobPayment(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin create job payment failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+  if (!bookingId || !UUID_RE.test(bookingId)) {
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+
+  const paymentMethod = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+  if (paymentMethod === "card_stripe") {
+    res.status(400).json({ error: "Card/Stripe payments are recorded automatically and cannot be entered manually." });
+    return;
+  }
+  if (JOB_PAYMENT_METHODS.indexOf(paymentMethod) === -1) {
+    res.status(400).json({ error: "Please choose a valid payment method." });
+    return;
+  }
+
+  const paymentType = body.paymentType === undefined || body.paymentType === null || body.paymentType === "" ? "payment" : String(body.paymentType).trim();
+  if (JOB_PAYMENT_TYPES.indexOf(paymentType) === -1) {
+    res.status(400).json({ error: "Invalid payment type." });
+    return;
+  }
+
+  if (body.amount === undefined || body.amount === null || body.amount === "") {
+    res.status(400).json({ error: "An amount is required." });
+    return;
+  }
+  const amountNum = Number(body.amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > JOB_PAYMENT_MAX_AMOUNT) {
+    res.status(400).json({ error: "Please enter a valid amount." });
+    return;
+  }
+  const amount = Math.round(amountNum * 100) / 100;
+
+  const todayIso = denverTodayIso();
+  const paymentDateRaw = typeof body.paymentDate === "string" ? body.paymentDate.trim() : "";
+  let paymentDate = todayIso;
+  if (paymentDateRaw) {
+    if (!isValidIsoDate(paymentDateRaw)) {
+      res.status(400).json({ error: "Invalid payment date." });
+      return;
+    }
+    if (paymentDateRaw < HISTORICAL_FLOOR_ISO) {
+      res.status(400).json({ error: "Payment date cannot be before January 1, 2026." });
+      return;
+    }
+    if (paymentDateRaw > todayIso) {
+      res.status(400).json({ error: "Payment date cannot be in the future." });
+      return;
+    }
+    paymentDate = paymentDateRaw;
+  }
+
+  const notes = sanitizeText(body.notes, JOB_PAYMENT_NOTES_MAX) || null;
+
+  let reversesPaymentId = null;
+  if (body.reversesPaymentId !== undefined && body.reversesPaymentId !== null && body.reversesPaymentId !== "") {
+    const rid = typeof body.reversesPaymentId === "string" ? body.reversesPaymentId.trim() : "";
+    if (!rid || !UUID_RE.test(rid)) {
+      res.status(400).json({ error: "Invalid reference to a prior payment." });
+      return;
+    }
+    reversesPaymentId = rid;
+  }
+
+  try {
+    const bookingRes = await supabase.from("bookings").select("id").eq("id", bookingId).maybeSingle();
+    if (bookingRes.error) throw bookingRes.error;
+    if (!bookingRes.data) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    const { data: created, error } = await supabase
+      .from("job_payments")
+      .insert({
+        booking_id: bookingId,
+        amount: amount,
+        payment_method: paymentMethod,
+        payment_type: paymentType,
+        payment_date: paymentDate,
+        notes: notes,
+        reverses_payment_id: reversesPaymentId,
+        recorded_by: (session && session.email) || null,
+      })
+      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .single();
+    if (error) throw error;
+    if (!created) throw new Error("Insert returned no row.");
+
+    res.status(200).json({ ok: true, jobPayment: serializeJobPayment(created) });
+  } catch (err) {
+    console.error("Admin create job payment failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this payment." });
+  }
+}
+
+// PATCH ?resource=job-payments { id, reason } — void one payment row. The
+// ONLY write this ledger's PATCH allows: amount/method/type/booking are
+// never editable once written (append-only, per the owner's explicit
+// financial-audit requirement — see the migration SQL). A wrong entry is
+// corrected by voiding it here, then POSTing a new, correct row (see
+// handleCreateJobPayment above) — never by mutating this row's numbers.
+// service_role's own column-level UPDATE grant enforces this a second way,
+// at the database permission level, independent of this handler.
+async function handleVoidJobPayment(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin void job payment failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "A valid payment id is required." });
+    return;
+  }
+
+  const reason = sanitizeText(body.reason, JOB_PAYMENT_VOID_REASON_MAX);
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to void a payment." });
+    return;
+  }
+
+  try {
+    const { data: voided, error } = await supabase
+      .from("job_payments")
+      .update({ voided_at: new Date().toISOString(), voided_reason: reason, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .is("voided_at", null)
+      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .maybeSingle();
+    if (error) throw error;
+    if (!voided) {
+      res.status(409).json({ error: "This payment was not found, or has already been voided." });
+      return;
+    }
+    res.status(200).json({ ok: true, jobPayment: serializeJobPayment(voided) });
+  } catch (err) {
+    console.error("Admin void job payment failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not void this payment." });
+  }
+}
+
 function serializeCharge(row) {
   return {
     id: row.id,
@@ -1375,6 +1645,21 @@ async function handleApprove(id, res, session) {
     // persistence of that fact, never a condition for the response — same
     // bounded retry-then-minimal-fallback saga step as api/book.js's own
     // post-capture write.
+
+    // Phase 3C Stage 3: mirror this collected charge (overweight tonnage,
+    // extra rental days, or another approved additional charge) into
+    // job_payments — best-effort, unconditional once Stripe has actually
+    // confirmed "succeeded" above, independent of whether the
+    // rental_additional_charges row below can be fully persisted. See
+    // job-payments-ledger.js's header.
+    await mirrorStripePaymentToLedger(supabase, {
+      bookingId: approvedRow.booking_id,
+      stripePaymentIntentId: intent.id,
+      amount: approvedRow.amount,
+      paymentDate: denverTodayIso(),
+      notes: "Approved additional charge (auto-recorded from Stripe).",
+    });
+
     const { data: paidRow, error: paidErr } = await supabase
       .from("rental_additional_charges")
       .update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() })
@@ -1492,6 +1777,20 @@ async function handleCheckStatus(id, res) {
     const intent = await stripe.paymentIntents.retrieve(row.stripe_payment_intent_id);
     let updated = row;
     if (intent.status === "succeeded") {
+      // Phase 3C Stage 3: this is a genuine, independent success-
+      // confirmation point (the customer completed off-session
+      // authentication out-of-band, and this read-only re-fetch just
+      // learned about it) — mirror it into job_payments the same as the
+      // other two synchronous success paths. Idempotent via the unique
+      // index, so this is safe even though handleApprove() may already
+      // have attempted (and failed to confirm) the same PaymentIntent id.
+      await mirrorStripePaymentToLedger(supabase, {
+        bookingId: row.booking_id,
+        stripePaymentIntentId: row.stripe_payment_intent_id,
+        amount: row.amount,
+        paymentDate: denverTodayIso(),
+        notes: "Approved additional charge, confirmed via Check Status (auto-recorded from Stripe).",
+      });
       const { data } = await supabase.from("rental_additional_charges").update({ status: "paid", failure_reason: null, updated_at: new Date().toISOString() }).eq("id", id).select("*").maybeSingle();
       updated = data || updated;
     } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
@@ -1585,6 +1884,20 @@ function sanitizeText(value, maxLen) {
     if (!isControl) stripped += value[i];
   }
   return stripped.replace(/<[^>]*>/g, "").trim().slice(0, maxLen);
+}
+
+// True only for a real calendar date in YYYY-MM-DD form — same small,
+// deliberate local copy as api/admin/bookings.js's own isValidIsoDate()
+// (rejects both a malformed string and a syntactically-shaped but
+// impossible date like "2026-02-30", by round-tripping through Date rather
+// than trusting new Date(...) to reject an out-of-range day on its own —
+// it silently rolls over instead).
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isValidIsoDate(s) {
+  if (typeof s !== "string" || !ISO_DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() + 1 === m && dt.getUTCDate() === d;
 }
 
 // Current date in America/Denver as YYYY-MM-DD — same small, deliberate
