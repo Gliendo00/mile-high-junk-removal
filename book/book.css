@@ -181,6 +181,53 @@
   .booking-map { padding: 20px; }
 }
 
+/* — steps 2–5 (Details/Photos/Date&Time/Your Info): same translucent
+   panel treatment, applied directly to the existing .wizard-step section
+   — no new wrapper needed, since each section already contains exactly
+   its own heading, fields, helper text, upload area/date-time controls,
+   and Back/Next actions. Step 1 keeps its own two-panel treatment above;
+   step 6 (Review) is deliberately excluded — its review cards are already
+   opaque and stay unboxed as a group, see the heading-only treatment
+   below. */
+.wizard-step[data-step="2"],
+.wizard-step[data-step="3"],
+.wizard-step[data-step="4"],
+.wizard-step[data-step="5"] {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 28px 32px;
+}
+@media (max-width: 560px) {
+  .wizard-step[data-step="2"],
+  .wizard-step[data-step="3"],
+  .wizard-step[data-step="4"],
+  .wizard-step[data-step="5"] {
+    padding: 20px;
+  }
+}
+
+/* — review (step 6): existing .review-group/.card elements are already
+   opaque and read fine on their own — no giant panel here, just a small
+   translucent treatment behind the "Review your request" heading itself
+   so it doesn't sit bare on the background image. */
+.review-heading-panel {
+  /* .wizard-step is a flex column with align-items stretch by default, so
+     a flex-item child is always blockified (CSS Flexbox blockification) —
+     inline-block alone would still stretch full width. align-self:
+     flex-start opts this one heading out of that stretch, so it hugs its
+     own text instead. */
+  display: inline-block;
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 8px 18px;
+  margin: 0;
+}
+
 /* — service area map (step 1, below the primary CTA) — */
 .booking-map h3 { font-size: 15px; margin: 0 0 4px; }
 .booking-map p { font-size: 13px; margin: 0 0 14px; }
