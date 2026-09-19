@@ -267,7 +267,7 @@ function validDumpsterPayload(customerOverrides) {
     },
     schedule: { date: FAR_FUTURE_DATE, timeWindow: "w_0800_1000" },
     customer: baseCustomer(customerOverrides),
-    payment: { paymentIntentId: "pi_test" + dumpsterIdempotencyCounter, idempotencyKey: "test-idem-key-" + dumpsterIdempotencyCounter, agreementAccepted: true },
+    payment: { paymentIntentId: "pi_test" + dumpsterIdempotencyCounter, idempotencyKey: "test-idem-key-" + dumpsterIdempotencyCounter, agreementAccepted: true, signatureName: "Test Signer" },
   };
 }
 

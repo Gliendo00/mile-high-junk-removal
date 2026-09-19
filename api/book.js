@@ -25,7 +25,9 @@
 //                    amount_charged, stripe_payment_intent_id, stripe_customer_id,
 //                    stripe_payment_method_id, payment_method_summary,
 //                    dispute_status, agreement_version, agreement_accepted_at,
-//                    created_at, updated_at) — Phase 3C Stage 2.5-v2, dumpster_rental only.
+//                    signature_name, created_at, updated_at) — Phase 3C Stage 2.5-v2,
+//                    dumpster_rental only. signature_name added in the Stage 2.5
+//                    typed-electronic-signature hardening pass.
 //
 // bookings.service_address/service_city/service_state/service_zip are a
 // point-in-time snapshot of where this specific job happens, copied from the
@@ -772,15 +774,26 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       // ambiguous Stripe outcome (see the capture() catch block below) —
       // never silently retried. The customer must call in so a human can
       // confirm what actually happened before anything moves forward.
+      // paymentStatusPending (not retryWithNewPaymentIntent): this
+      // PaymentIntent's own confirmation already succeeded once
+      // client-side to reach this point, so calling stripe.confirmPayment()
+      // on it again would itself risk payment_intent_unexpected_state —
+      // book/book.js must lock the payment UI rather than let the customer
+      // click Pay again, exactly the same as the true capture-ambiguous
+      // case below.
       res.status(409).json({
         error: "There was a problem confirming a previous attempt for this exact request. Please call or text 303-990-1812 so we can sort it out before trying again — this avoids any risk of being charged twice.",
+        paymentStatusPending: true,
       });
       return;
     }
     // "processing" (a genuine concurrent duplicate racing the first
     // request) — any other lingering status shouldn't exist given the
     // rollback discipline below, but is treated identically, defensively.
-    res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again." });
+    // Also paymentStatusPending: the sibling request already confirmed
+    // this same PaymentIntent — this one must never attempt to confirm it
+    // again either.
+    res.status(409).json({ error: "This booking is already being processed. Please wait a moment before trying again.", paymentStatusPending: true });
     return;
   }
 
@@ -821,6 +834,18 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     // expired, was already cancelled/captured, or never actually completed
     // client-side. Never proceed to claim a delivery slot or attempt a
     // capture against an intent that isn't a live, authorized hold.
+    if (intent.status === "canceled") {
+      // The ONE sub-case here that is an explicit, positive confirmation
+      // from Stripe itself that this PaymentIntent is dead and can never
+      // move money — safe to tell the client to mint a fresh one. Every
+      // other status this branch covers (e.g. "succeeded" — money may
+      // already have moved; "requires_action"/"requires_payment_method" —
+      // never completed, but not confirmed dead either) is deliberately
+      // NOT flagged: retryWithNewPaymentIntent must only ever be set from a
+      // positive confirmation, never inferred from "probably fine."
+      res.status(402).json({ error: "Your payment authorization is no longer valid. Please try again.", retryWithNewPaymentIntent: true });
+      return;
+    }
     res.status(402).json({ error: "Your payment could not be confirmed. Please go back to Review and try again." });
     return;
   }
@@ -874,7 +899,9 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       if (error || !customerRow) {
         console.error("Dumpster rental booking failed creating customer:", error);
         await cancelPaymentIntent(stripe, paymentIntentId);
-        res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+        // cancelPaymentIntent was just awaited above — the PaymentIntent is
+        // confirmed dead, safe for the client to mint a fresh one.
+        res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
         return;
       }
       customerId = customerRow.id;
@@ -882,7 +909,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     } catch (err) {
       console.error("Dumpster rental booking failed creating customer:", err);
       await cancelPaymentIntent(stripe, paymentIntentId);
-      res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+      res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
       return;
     }
   }
@@ -933,6 +960,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
         stripe_customer_id: intent.customer || null,
         agreement_version: rentalPricing.RENTAL_AGREEMENT_VERSION,
         agreement_accepted_at: new Date().toISOString(),
+        signature_name: data.payment.signatureName,
       })
       .select("id")
       .single();
@@ -950,7 +978,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     console.error("Dumpster rental booking failed creating rental_payments row:", err);
     if (customerWasCreated) await safeDelete(supabase, "customers", customerId);
     await cancelPaymentIntent(stripe, paymentIntentId);
-    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
     return;
   }
 
@@ -983,7 +1011,10 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     if (error) {
       if (isUniqueViolation(error)) {
         await rollbackDumpsterBooking(supabase, null, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-        res.status(409).json({ error: "That delivery window was just booked by someone else. Please choose a different date or time." });
+        // rollbackDumpsterBooking always cancels this request's own
+        // PaymentIntent (see its own contract comment above) — confirmed
+        // dead, safe for the client to mint a fresh one.
+        res.status(409).json({ error: "That delivery window was just booked by someone else. Please choose a different date or time.", retryWithNewPaymentIntent: true });
         return;
       }
       throw error;
@@ -993,7 +1024,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   } catch (err) {
     console.error("Dumpster rental booking failed creating booking:", err);
     await rollbackDumpsterBooking(supabase, null, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
     return;
   }
 
@@ -1013,7 +1044,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   } catch (err) {
     console.error("Dumpster rental booking failed linking rental_payments to its booking:", err);
     await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
     return;
   }
   try {
@@ -1035,7 +1066,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
   } catch (err) {
     console.error("Dumpster rental booking failed creating dumpster_rentals row:", err);
     await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-    res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
+    res.status(500).json({ error: "Could not submit your booking. Please try again or call us.", retryWithNewPaymentIntent: true });
     return;
   }
 
@@ -1076,7 +1107,10 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       // rolling back and freeing the slot immediately is correct and safe.
       console.error("Dumpster rental booking: payment declined at capture —", err.code, err.message);
       await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-      res.status(402).json({ error: extractDeclineMessage(err) });
+      // A StripeCardError at capture is Stripe's own definitive "no money
+      // moved" answer, and rollbackDumpsterBooking cancels this PaymentIntent
+      // — confirmed dead, safe for the client to mint a fresh one.
+      res.status(402).json({ error: extractDeclineMessage(err), retryWithNewPaymentIntent: true });
       return;
     }
     console.error(
@@ -1092,8 +1126,16 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
       err && err.stack ? err.stack : err
     );
     await markPaymentErrorPendingReview(supabase, bookingId, "Stripe capture request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for PaymentIntent " + paymentIntentId + " before taking any action.");
+    // The one canonical "true" ambiguous-outcome branch: capture may or may
+    // not have actually succeeded on Stripe's side. paymentStatusPending
+    // (never retryWithNewPaymentIntent) tells book/book.js to lock the
+    // payment UI rather than offer any further action on this PaymentIntent
+    // — it has already been confirmed once client-side, so a second
+    // confirmPayment() call against it is itself unsafe regardless of what
+    // capture ultimately did.
     res.status(502).json({
       error: "We couldn't confirm your payment went through. Please do not submit again — call or text 303-990-1812 so we can confirm your charge before booking to avoid being charged twice.",
+      paymentStatusPending: true,
     });
     return;
   }
@@ -1104,7 +1146,7 @@ async function handleDumpsterRentalBooking(res, supabase, data) {
     // treated the same as a definitive decline rather than assumed safe.
     console.error("Dumpster rental booking: capture did not reach 'succeeded' — status=" + (captured && captured.status));
     await rollbackDumpsterBooking(supabase, bookingId, customerId, customerWasCreated, { stripe, paymentIntentId }, idempotencyKey);
-    res.status(402).json({ error: "Your payment could not be completed. Please try again or use a different payment method." });
+    res.status(402).json({ error: "Your payment could not be completed. Please try again or use a different payment method.", retryWithNewPaymentIntent: true });
     return;
   }
 
@@ -1695,6 +1737,14 @@ function validateBooking(body, options) {
       if (paymentIn.agreementAccepted !== true) {
         return { ok: false, error: "You must accept the rental agreement to book online." };
       }
+      // Typed electronic signature — required alongside the agreement
+      // checkbox itself (never a substitute for it). Reuses MAX.name, the
+      // same length cap already applied to customer.firstName/lastName.
+      const signatureName = sanitizeText(paymentIn.signatureName, MAX.name);
+      if (!signatureName) {
+        return { ok: false, error: "Please type your full legal name as your electronic signature." };
+      }
+      payment.signatureName = signatureName;
       const paymentIntentId = sanitizeText(paymentIn.paymentIntentId, MAX.paymentIntentId);
       if (!paymentIntentId || !/^pi_[A-Za-z0-9_]{5,95}$/.test(paymentIntentId)) {
         return { ok: false, error: "Payment information is missing. Please try again." };

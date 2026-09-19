@@ -456,7 +456,7 @@
 
         <div class="card elev-sm" style="margin-bottom:16px">
           <div class="card-title">Rental Agreement</div>
-          <div class="card-body" id="rental-agreement-text" style="max-height:240px;overflow-y:auto;font-size:13px;line-height:1.6;border:1px solid var(--color-border,#e3e3e3);border-radius:8px;padding:12px;margin-top:8px">
+          <div class="card-body" id="rental-agreement-text" style="max-height:240px;overflow-y:auto;font-size:13px;line-height:1.6;border:1px solid var(--color-border,#e3e3e3);border-radius:8px;padding:12px;margin-top:8px;background:#fff;color:#111827">
             <p><strong>15-Yard Dumpster Rental — Rate &amp; Payment Terms</strong></p>
             <p>The rental rate is $349.00, which covers delivery, pickup, up to 5 calendar days on site, and up to 2 tons (4,000 lbs) of accepted material. This amount is charged to your payment method today, when your rental is booked.</p>
             <p>If the material collected exceeds 2 tons, Mile High Junk Removal may charge $90.00 per additional ton. If the dumpster is kept on site beyond 5 calendar days, Mile High Junk Removal may charge $15.00 per additional day. <strong>Mile High Junk Removal will review any such charge and give you the opportunity to discuss it before it is submitted to your payment method — no additional charge happens automatically.</strong></p>
@@ -467,6 +467,12 @@
             <input type="checkbox" id="agreement-checkbox" style="margin-top:3px">
             <span>I have read and agree to the Rental Agreement above, including that Mile High Junk Removal may charge the payment method below for the amounts described (overweight material, extra rental days) after I'm notified and given a chance to review the charge.</span>
           </label>
+
+          <div class="field" style="margin-top:14px">
+            <label for="agreement-signature">Electronic Signature</label>
+            <p class="field-note">By typing my full legal name below, I intend this to serve as my electronic signature.</p>
+            <input class="input" id="agreement-signature" type="text" maxlength="80" placeholder="Full legal name" autocomplete="name" required>
+          </div>
         </div>
 
         <div class="card elev-sm" style="margin-bottom:16px">

@@ -24,6 +24,17 @@ document.addEventListener('DOMContentLoaded', function () {
     stripe: null, // Stripe(publishableKey) instance
     stripeElements: null, // this attempt's Elements instance (tied to one PaymentIntent's clientSecret)
     paymentIntentId: null, // set once handleCreatePaymentIntent's response comes back
+    // Set true once a finalize attempt comes back with an outcome that is
+    // NOT confirmed-dead (retryWithNewPaymentIntent) but WAS already
+    // confirmed client-side (isServerMessage) — meaning stripe.confirmPayment()
+    // already succeeded once against this exact PaymentIntent, so calling it
+    // again could itself throw payment_intent_unexpected_state regardless of
+    // what the server-side outcome ultimately was. Once true, the payment
+    // panel is permanently locked for the rest of this page load — see the
+    // payAndBookBtn catch handler below. The only safe way to try again is a
+    // full page reload (a genuinely new attempt: new idempotencyKey, new
+    // PaymentIntent, nothing shared with the locked one).
+    paymentLocked: false,
   };
 
   // GA4: booking flow entered. Fires once per page load — not on step
@@ -959,6 +970,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var paymentConfigError = document.getElementById('payment-config-error');
   var elementContainer = document.getElementById('stripe-payment-element-container');
   var agreementCheckbox = document.getElementById('agreement-checkbox');
+  var agreementSignatureInput = document.getElementById('agreement-signature');
   var payAndBookBtn = document.getElementById('pay-and-book-btn');
   var paymentBackBtn = document.getElementById('payment-back-btn');
   var paymentElement = null; // this attempt's mounted Stripe Payment Element
@@ -996,6 +1008,11 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function showPaymentPanel() {
+    // Defense in depth: paymentBackBtn is disabled once locked, so there is
+    // no normal UI path back into this function afterward — but never
+    // re-enter it regardless, since doing so would call initPaymentElement()
+    // and reuse the same (already-confirmed, unresolved) idempotencyKey.
+    if (state.paymentLocked) return;
     clearError();
     reviewActions.style.display = 'none';
     paymentPanel.hidden = false;
@@ -1090,11 +1107,20 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   payAndBookBtn.addEventListener('click', function () {
+    // Defense in depth: the button is disabled once locked, so this should
+    // be unreachable in practice — never proceed regardless.
+    if (state.paymentLocked) return;
     clearError();
 
     if (!agreementCheckbox.checked) {
       showError('Please check the box to agree to the Rental Agreement before continuing.');
       agreementCheckbox.focus();
+      return;
+    }
+    var signatureName = agreementSignatureInput.value.trim();
+    if (!signatureName) {
+      showError('Please type your full legal name as your electronic signature before continuing.');
+      agreementSignatureInput.focus();
       return;
     }
     if (!state.stripe || !state.stripeElements) {
@@ -1140,6 +1166,7 @@ document.addEventListener('DOMContentLoaded', function () {
           paymentIntentId: result.paymentIntent.id,
           idempotencyKey: state.idempotencyKey,
           agreementAccepted: true,
+          signatureName: signatureName,
         };
 
         return fetch('/api/book', {
@@ -1157,6 +1184,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!res.ok) {
                   var reqErr = new Error(resBody && resBody.error ? resBody.error : GENERIC_ERROR);
                   reqErr.isServerMessage = true;
+                  // Explicit, machine-readable — set by api/book.js ONLY on
+                  // a response where it has positively confirmed (never
+                  // inferred) that THIS PaymentIntent is dead: it just
+                  // cancelled it itself, or Stripe's own retrieved status
+                  // was already "canceled". Every ambiguous/ unresolved
+                  // outcome (an in-flight concurrent duplicate, a timed-out
+                  // capture call of unknown result, error_pending_review,
+                  // paid_reconciliation_required) omits this flag on
+                  // purpose — see the retryWithNewPaymentIntent branch below.
+                  reqErr.retryWithNewPaymentIntent = !!(resBody && resBody.retryWithNewPaymentIntent === true);
+                  // Explicit, machine-readable — set by api/book.js ONLY on
+                  // the small set of TRUE payment-ambiguous/reconciliation
+                  // outcomes (a capture call that threw with no definitive
+                  // answer, a previous attempt already stuck in that state,
+                  // or a still-in-flight concurrent duplicate). Never both
+                  // this and retryWithNewPaymentIntent at once.
+                  reqErr.paymentStatusPending = !!(resBody && resBody.paymentStatusPending === true);
                   throw reqErr;
                 }
                 return resBody;
@@ -1171,10 +1215,78 @@ document.addEventListener('DOMContentLoaded', function () {
         );
       })
       .catch(function (err) {
-        showError(err && err.isServerMessage && err.message ? err.message : (err && err.message) || GENERIC_ERROR);
-        payAndBookBtn.disabled = false;
-        paymentBackBtn.disabled = false;
+        // A locked-UI outcome always shows this specific, customer-safe
+        // message instead of the server's raw text (still logged/available
+        // via err.message, just not what's shown) — never invented,
+        // wording matches api/book.js's paymentStatusPending contract.
+        var pendingMessage =
+          'Your payment status is being verified. Please do not submit another payment. If your booking is confirmed, we’ll process it automatically. If you need help, call or text 303-990-1812.';
+        showError(err && err.paymentStatusPending ? pendingMessage : err && err.isServerMessage && err.message ? err.message : (err && err.message) || GENERIC_ERROR);
         payAndBookBtn.textContent = 'Pay & Book Now';
+
+        if (err && err.retryWithNewPaymentIntent) {
+          // Set ONLY when api/book.js positively confirmed this exact
+          // PaymentIntent is dead (it just cancelled it, or Stripe's own
+          // retrieved status was already "canceled") — never inferred from
+          // "the server said no." Reusing the same idempotencyKey for a
+          // retry against a confirmed-dead intent would hit Stripe's own
+          // idempotent-response cache on the next paymentIntents.create()
+          // call and hand back that exact same dead PaymentIntent, which
+          // confirmPayment() can never complete
+          // (payment_intent_unexpected_state) — so this specific, confirmed
+          // case needs a fresh PaymentIntent under a fresh idempotency key.
+          paymentBackBtn.disabled = false;
+          state.paymentIntentId = null;
+          state.stripeElements = null;
+          state.idempotencyKey = newIdempotencyKey();
+          if (paymentElement) {
+            paymentElement.unmount();
+            paymentElement = null;
+          }
+          initPaymentElement(); // mints a fresh PaymentIntent + Elements; manages payAndBookBtn.disabled itself
+        } else if (err && err.isServerMessage) {
+          // The finalize POST reached the server and came back with an
+          // outcome that is NOT confirmed-dead — a still-in-flight
+          // concurrent duplicate, a timed-out capture of unknown result
+          // (error_pending_review), or any other non-2xx that didn't
+          // positively confirm cancellation. Critically: by definition,
+          // stripe.confirmPayment() already succeeded once against THIS
+          // PaymentIntent to reach the finalize call at all — its Stripe-side
+          // status could now be requires_capture, succeeded, canceled, or
+          // something else entirely, and calling confirmPayment() on it a
+          // second time can itself throw payment_intent_unexpected_state,
+          // independent of whatever the server-side outcome was (this is
+          // exactly what was observed during staging). So this is NOT the
+          // same as the purely-client-side case below: simply re-enabling
+          // Pay & Book Now here would let the customer trigger that same
+          // failure again. Nor is it safe to mint a fresh PaymentIntent
+          // automatically (see api/book.js's handleDumpsterRentalBooking()
+          // per-branch audit — several of these outcomes may still resolve
+          // to a real charge on their own). The only correct move is to lock
+          // the payment panel for the rest of this page load: disable both
+          // buttons and unmount the Payment Element, so neither a fresh
+          // PaymentIntent nor a second confirmPayment() call is reachable
+          // from here. Starting over requires a full page reload, which is
+          // a genuinely new attempt (new idempotencyKey, new PaymentIntent)
+          // — never a continuation of this stuck one.
+          state.paymentLocked = true;
+          payAndBookBtn.disabled = true;
+          paymentBackBtn.disabled = true;
+          if (paymentElement) {
+            paymentElement.unmount();
+            paymentElement = null;
+          }
+        } else {
+          // Purely client-side rejection — Stripe.js's own inline
+          // validation, or a decline confirmPayment() itself surfaces —
+          // before any server call was ever made (isServerMessage unset).
+          // confirmPayment() never succeeded for this attempt, so the same
+          // PaymentIntent/Elements remain safely retryable: the customer
+          // can just correct their card details and click Pay again,
+          // without losing any progress or waiting on a fresh round trip.
+          paymentBackBtn.disabled = false;
+          payAndBookBtn.disabled = false;
+        }
       });
   });
 

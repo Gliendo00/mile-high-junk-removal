@@ -22,6 +22,8 @@
 
 const Module = require("module");
 const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
 
 // ---------------------------------------------------------------------
 // Fake Supabase
@@ -537,7 +539,7 @@ function validDumpsterPayload(overrides, opts) {
       state: "CO",
       zip: "80202",
     },
-    payment: { paymentIntentId: paymentIntentId, idempotencyKey: idempotencyKey, agreementAccepted: true },
+    payment: { paymentIntentId: paymentIntentId, idempotencyKey: idempotencyKey, agreementAccepted: true, signatureName: "Jamie Rivera" },
   };
   return deepMerge(base, overrides || {});
 }
@@ -753,6 +755,37 @@ test("POST dumpster_rental: agreementAccepted !== true is rejected with 400", as
   assert.strictEqual(res.statusCode, 400);
   assert.ok(/agreement/i.test(res.body.error));
 });
+test("POST dumpster_rental: missing signatureName is rejected with 400, no DB or Stripe calls", async () => {
+  const db = freshDb();
+  resetStripe();
+  const idempotencyKey = freshIdempotencyKey();
+  const intent = seedAuthorizedIntent(idempotencyKey);
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: intent.id, idempotencyKey: idempotencyKey, agreementAccepted: true, signatureName: "" } }, { seedIntent: false });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.ok(/signature/i.test(res.body.error));
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+});
+test("POST dumpster_rental: whitespace-only signatureName is rejected with 400", async () => {
+  freshDb();
+  resetStripe();
+  const idempotencyKey = freshIdempotencyKey();
+  const intent = seedAuthorizedIntent(idempotencyKey);
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: intent.id, idempotencyKey: idempotencyKey, agreementAccepted: true, signatureName: "   " } }, { seedIntent: false });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+  assert.ok(/signature/i.test(res.body.error));
+});
+test("POST dumpster_rental: agreementAccepted true but missing signatureName is still rejected (both are required independently)", async () => {
+  freshDb();
+  resetStripe();
+  const idempotencyKey = freshIdempotencyKey();
+  const intent = seedAuthorizedIntent(idempotencyKey);
+  const payload = validDumpsterPayload({ payment: { paymentIntentId: intent.id, idempotencyKey: idempotencyKey, agreementAccepted: true, signatureName: null } }, { seedIntent: false });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 400);
+});
 test("POST dumpster_rental: malformed idempotencyKey is rejected with 400", async () => {
   freshDb();
   resetStripe();
@@ -778,6 +811,17 @@ test("POST dumpster_rental: a PaymentIntent NOT in requires_capture (e.g. never 
   assert.strictEqual(res.statusCode, 402);
   assert.strictEqual(db.bookings.length, 0);
   assert.strictEqual(captureCallLog.length, 0);
+  assert.ok(!res.body.retryWithNewPaymentIntent, "requires_payment_method is not a confirmed-dead outcome (never captured, never cancelled here) — must never tell the client it's safe to mint a fresh PaymentIntent");
+});
+test("POST dumpster_rental: a PaymentIntent already 'canceled' (confirmed dead by Stripe itself) is rejected with 402 AND explicitly tells the client it's safe to retry with a fresh PaymentIntent", async () => {
+  const db = freshDb();
+  resetStripe();
+  const payload = validDumpsterPayload({}, { intentOverrides: { status: "canceled" } });
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 402);
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+  assert.strictEqual(res.body.retryWithNewPaymentIntent, true, "a 'canceled' status is Stripe's own positive confirmation this PaymentIntent is dead — the one case that must be flagged safe for a fresh retry");
 });
 test("POST dumpster_rental: an amount mismatch between the PaymentIntent and the authoritative rate is rejected with 400", async () => {
   const db = freshDb();
@@ -815,6 +859,7 @@ test("POST dumpster_rental: successful payment books the rental, captures the au
   assert.strictEqual(db.rental_payments[0].payment_method_summary, "Visa ending in 4242");
   assert.strictEqual(db.rental_payments[0].agreement_version, rentalPricing.RENTAL_AGREEMENT_VERSION);
   assert.ok(db.rental_payments[0].agreement_accepted_at);
+  assert.strictEqual(db.rental_payments[0].signature_name, "Jamie Rivera");
 
   assert.strictEqual(captureCallLog.length, 1);
   assert.strictEqual(captureCallLog[0].id, payload.payment.paymentIntentId);
@@ -863,6 +908,7 @@ test("POST dumpster_rental: a definitive decline at capture time rolls back ever
   assert.strictEqual(db.rental_payments.length, 0);
   assert.strictEqual(db.customers.length, 0, "the customer created for this failed attempt must also be rolled back");
   assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId], "the authorization must be released on a definitive decline");
+  assert.strictEqual(res.body.retryWithNewPaymentIntent, true, "a StripeCardError decline is a definitive 'no money moved' answer and this PaymentIntent was just cancelled above — safe to flag for a fresh retry");
 });
 // A THROWN, non-StripeCardError capture failure (network error/timeout) is
 // an AMBIGUOUS outcome — Stripe may have actually captured the charge, and
@@ -886,6 +932,8 @@ test("POST dumpster_rental: an ambiguous Stripe failure (thrown error) preserves
   assert.strictEqual(db.rental_payments[0].payment_status, "error_pending_review");
   assert.ok(/outcome unknown/i.test(db.rental_payments[0].failure_reason));
   assert.strictEqual(cancelCallLog.length, 0, "an ambiguous outcome must never cancel the authorization either — its fate is unknown");
+  assert.ok(!res.body.retryWithNewPaymentIntent, "an ambiguous capture outcome (Stripe may have actually charged the card) must NEVER be flagged safe for a fresh PaymentIntent — that could risk a second charge attempt against an unresolved one");
+  assert.strictEqual(res.body.paymentStatusPending, true, "the true ambiguous-capture case must set paymentStatusPending so the client locks the payment UI instead of re-enabling Pay");
 });
 test("POST dumpster_rental: resubmitting the same idempotency key after an ambiguous failure is blocked (never silently retried, never a second capture)", async () => {
   const db = freshDb();
@@ -903,6 +951,8 @@ test("POST dumpster_rental: resubmitting the same idempotency key after an ambig
   assert.ok(/call or text/i.test(second.body.error));
   assert.strictEqual(captureCallLog.length, 1, "must never capture again for a key stuck in error_pending_review");
   assert.strictEqual(db.bookings.length, 1, "must not create a second booking either");
+  assert.ok(!second.body.retryWithNewPaymentIntent, "error_pending_review is an unresolved/ambiguous outcome — must never be flagged safe for a fresh PaymentIntent");
+  assert.strictEqual(second.body.paymentStatusPending, true, "a resubmit against a row stuck in error_pending_review must set paymentStatusPending so the client locks rather than offers any further action");
 });
 test("POST dumpster_rental: rate-schedule snapshot (base rate, included days/tons, overage rates) is durably stored on rental_payments at booking time", async () => {
   const db = freshDb();
@@ -1021,6 +1071,8 @@ test("POST dumpster_rental: a concurrent duplicate (same idempotency key, still 
   const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
   assert.strictEqual(res.statusCode, 409);
   assert.strictEqual(captureCallLog.length, 0, "a concurrent duplicate must never itself capture");
+  assert.ok(!res.body.retryWithNewPaymentIntent, "a still-processing concurrent duplicate shares the SAME live PaymentIntent as its sibling request — must never be flagged safe for a fresh one, which could abandon an authorization the sibling is about to capture");
+  assert.strictEqual(res.body.paymentStatusPending, true, "a still-in-flight concurrent duplicate must set paymentStatusPending so this request's own client locks its payment UI rather than offering a retry that could hit the sibling's live PaymentIntent");
 });
 
 // =======================================================================
@@ -1039,6 +1091,7 @@ test("POST dumpster_rental: booking the exact same date+time window as an existi
   assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId], "the loser's authorization must be released, not left as a lingering hold");
   assert.strictEqual(db.bookings.length, 1, "only the pre-existing booking should remain — the loser's row and its customer are rolled back");
   assert.strictEqual(db.customers.length, 0);
+  assert.strictEqual(res.body.retryWithNewPaymentIntent, true, "the loser's PaymentIntent was just cancelled above — safe to flag for a fresh retry against a different slot");
 });
 test("POST dumpster_rental: a different time window on the same date is NOT blocked", async () => {
   const db = freshDb();
@@ -1144,6 +1197,31 @@ test("POST dumpster_rental: dumpster_rentals insert failure rolls back the booki
   assert.strictEqual(db.customers.length, 0);
   assert.strictEqual(captureCallLog.length, 0);
   assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId]);
+  assert.strictEqual(res.body.retryWithNewPaymentIntent, true, "the rollback above cancelled this PaymentIntent — safe to flag for a fresh retry");
+});
+test("POST dumpster_rental: customer insert failure cancels the authorization and tells the client it's safe to retry with a fresh PaymentIntent", async () => {
+  const db = freshDb();
+  resetStripe();
+  currentFakeService = {
+    from: function (table) {
+      const builder = new FakeQueryBuilder(table, db);
+      if (table === "customers") {
+        const originalResolve = builder._resolve.bind(builder);
+        builder._resolve = async function () {
+          if (this._insertPayload) return { data: null, error: { message: "mock insert failure for customers" } };
+          return originalResolve();
+        };
+      }
+      return builder;
+    },
+  };
+  const payload = validDumpsterPayload();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: payload }));
+  assert.strictEqual(res.statusCode, 500);
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(captureCallLog.length, 0);
+  assert.deepStrictEqual(cancelCallLog, [payload.payment.paymentIntentId]);
+  assert.strictEqual(res.body.retryWithNewPaymentIntent, true, "a failed customer insert cancels this PaymentIntent directly — safe to flag for a fresh retry");
 });
 
 // =======================================================================
@@ -1702,6 +1780,103 @@ test("POST /api/book: junk_removal booking still succeeds exactly as before, no 
 });
 
 // ---------------------------------------------------------------------
+// =======================================================================
+// 10. book/book.js retry/lock design — static source-pattern verification
+//
+// book/book.js is browser-only client code (Stripe Elements, DOM event
+// listeners) — this project has no DOM/click-simulation or JS-execution
+// test harness for any frontend file (the same disclosed limitation noted
+// in tests/phase3c-schedule.test.js and used by
+// tests/phase3c-stage2.4-address-and-prefill.test.js for the Google
+// Places autocomplete component). Building one from scratch for this fix
+// alone was judged disproportionate. These tests instead use this
+// project's own established fallback for frontend behavior: read the real
+// deployed source and assert directly on it, isolating each of the three
+// mutually-exclusive catch-handler branches by their exact, unique
+// boundary text so an assertion can never accidentally match the wrong
+// branch. Confirmed behaviorally in a live browser session for the
+// error-message/lock-visibility side of this (see the chat transcript);
+// these tests instead guarantee the underlying control flow — which
+// branch touches which state — never silently regresses.
+// =======================================================================
+function readBookJs() {
+  return fs.readFileSync(path.join(__dirname, "..", "book", "book.js"), "utf8");
+}
+// Slices book.js's payAndBookBtn catch handler into its three mutually-
+// exclusive branches using their exact, unique source boundaries.
+function catchBranches() {
+  // book/book.js uses CRLF line endings — every anchor below is a single
+  // line (no embedded \n/\r\n) specifically so this extraction is
+  // line-ending-agnostic.
+  const src = readBookJs();
+  const startA = src.indexOf("if (err && err.retryWithNewPaymentIntent) {");
+  const startLock = src.indexOf("} else if (err && err.isServerMessage) {");
+  const startD = src.indexOf("// Purely client-side rejection");
+  const endD = src.indexOf("});", startD);
+  assert.ok(startA > 0 && startLock > startA && startD > startLock && endD > startD, "expected book.js's payAndBookBtn catch handler to contain exactly the three branches this test suite depends on — if this fails, the source structure changed and these tests need updating, not silently passing");
+  return {
+    freshRetry: src.slice(startA, startLock),
+    locked: src.slice(startLock, startD),
+    clientSideRetryable: src.slice(startD, endD),
+  };
+}
+
+test("book.js source: state.paymentLocked exists and guards both showPaymentPanel() and the payAndBookBtn click handler from re-entering a locked checkout", () => {
+  const src = readBookJs();
+  assert.ok(/paymentLocked:\s*false/.test(src), "state must declare paymentLocked, initially false");
+  assert.ok(/function showPaymentPanel\(\)\s*\{[\s\S]{0,400}if \(state\.paymentLocked\) return;/.test(src), "showPaymentPanel() must refuse to re-enter (and thus re-mint against the same idempotencyKey) once locked");
+  assert.ok(/payAndBookBtn\.addEventListener\('click', function \(\) \{[\s\S]{0,300}if \(state\.paymentLocked\) return;/.test(src), "the click handler must refuse to proceed once locked, independent of the button's disabled attribute");
+});
+
+test("book.js source, branch A (retryWithNewPaymentIntent): mints a fresh PaymentIntent — clears the old one, unmounts the Payment Element, generates a new idempotency key, and calls initPaymentElement() again", () => {
+  const b = catchBranches().freshRetry;
+  assert.ok(/state\.paymentIntentId = null/.test(b), "must clear the dead PaymentIntent id");
+  assert.ok(/state\.stripeElements = null/.test(b), "must clear the dead Elements instance");
+  assert.ok(/state\.idempotencyKey = newIdempotencyKey\(\)/.test(b), "must mint a genuinely NEW idempotency key, never reuse the one tied to the dead PaymentIntent");
+  assert.ok(/paymentElement\.unmount\(\)/.test(b), "must unmount the old Payment Element before mounting a fresh one");
+  assert.ok(/initPaymentElement\(\)/.test(b), "must call initPaymentElement() to create the fresh PaymentIntent and mount a fresh Payment Element");
+  assert.ok(!/state\.paymentLocked = true/.test(b), "a confirmed-dead outcome must never lock the UI — it's the one case where continuing is safe");
+});
+
+test("book.js source, branch B/C (locked/ambiguous — isServerMessage without retryWithNewPaymentIntent): locks the UI and never re-runs confirmPayment or mints a new PaymentIntent", () => {
+  const b = catchBranches().locked;
+  assert.ok(/state\.paymentLocked = true/.test(b), "must set the permanent lock flag");
+  assert.ok(/payAndBookBtn\.disabled = true/.test(b), "must disable Pay & Book Now so confirmPayment() can never be re-invoked against this already-confirmed PaymentIntent");
+  assert.ok(/paymentBackBtn\.disabled = true/.test(b), "must also disable Back to Review — otherwise navigating back and forward again would re-enter showPaymentPanel()/initPaymentElement() and reuse the same tainted idempotencyKey");
+  assert.ok(/paymentElement\.unmount\(\)/.test(b), "must unmount the Payment Element so it cannot be interacted with even if some other path tried");
+  assert.ok(!/initPaymentElement\(\)/.test(b), "must NOT create a fresh PaymentIntent for an unresolved/ambiguous outcome");
+  assert.ok(!/newIdempotencyKey\(\)/.test(b), "must NOT mint a new idempotency key for an unresolved/ambiguous outcome");
+  // Matches only a genuine invocation (`.confirmPayment({` — the real call
+  // signature used once, higher up, to actually confirm the payment) —
+  // deliberately not `.confirmPayment(` alone, since this branch's own
+  // explanatory comments legitimately discuss "confirmPayment()" in prose.
+  assert.ok(!/\.confirmPayment\(\{/.test(b), "must NOT call stripe.confirmPayment() again from within the catch handler itself");
+});
+
+test("book.js source, branch D (purely client-side rejection — isServerMessage unset): remains retryable, same PaymentIntent/Elements preserved, no lock", () => {
+  const b = catchBranches().clientSideRetryable;
+  assert.ok(/payAndBookBtn\.disabled = false/.test(b), "must re-enable Pay & Book Now — confirmPayment() never succeeded for this attempt, so the SAME PaymentIntent remains safely confirmable");
+  assert.ok(/paymentBackBtn\.disabled = false/.test(b), "must re-enable Back to Review");
+  assert.ok(!/state\.paymentLocked = true/.test(b), "must never lock the UI for an ordinary client-side validation/decline — that would block a customer from simply fixing a card typo");
+  assert.ok(!/paymentElement\.unmount\(\)/.test(b), "must NOT unmount the Payment Element — the customer's in-progress card entry must be preserved");
+  assert.ok(!/state\.paymentIntentId = null/.test(b), "must NOT clear the still-live PaymentIntent id");
+  assert.ok(!/state\.idempotencyKey = newIdempotencyKey\(\)/.test(b), "must NOT mint a new idempotency key — this is the same attempt, not a new one");
+});
+
+test("book.js source: the crafted pending-review message is shown only when paymentStatusPending is set, and matches api/book.js's contract wording", () => {
+  const src = readBookJs();
+  assert.ok(/Your payment status is being verified\. Please do not submit another payment\./.test(src), "the customer-safe pending-review message must be present");
+  assert.ok(/err && err\.paymentStatusPending \? pendingMessage/.test(src), "the message must be selected specifically by the paymentStatusPending flag, not inferred from isServerMessage or any generic non-2xx");
+});
+
+test("api/book.js source: paymentStatusPending is set on exactly the three true payment-ambiguous branches, and never alongside retryWithNewPaymentIntent on the same response", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "api", "book.js"), "utf8");
+  const pendingCount = (src.match(/paymentStatusPending: true/g) || []).length;
+  assert.strictEqual(pendingCount, 3, "expected exactly 3 response sites to set paymentStatusPending: true (existing-row error_pending_review, concurrent-duplicate processing, and the ambiguous capture-throw) — if this changes, update this count deliberately, not by accident");
+  const retryCount = (src.match(/retryWithNewPaymentIntent: true/g) || []).length;
+  assert.strictEqual(retryCount, 10, "expected exactly the 10 confirmed-dead response sites audited in this session (customer-insert error/catch, rental_payments-insert catch, bookings-insert unique-violation/catch, rental_payments link-back failure, dumpster_rentals-insert failure, capture decline, captured.status!=='succeeded', and intent.status==='canceled') to set retryWithNewPaymentIntent: true — if this changes, update this count deliberately, not by accident");
+});
+
 async function main() {
   let failed = 0;
   for (const t of registered) {

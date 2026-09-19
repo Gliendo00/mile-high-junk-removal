@@ -1,9 +1,17 @@
 # Phase 3C Stage 2.5-v2 — Dumpster Rental Real Booking + Stripe Payments
 # (Braintree → Stripe migration)
 
-Status: **implementation complete, still not deployed** — no push to `main`,
-no production Supabase migration, no real or sandbox transaction of any
-kind. Performed 2026-09-18, on branch
+Status: **implementation complete, still not deployed to Production** — no
+push to `main`, no Production Supabase migration, no real transaction of
+any kind against Production. **Staging is no longer clean/unmigrated**:
+the Stripe schema migration has been run against the isolated staging
+Supabase project, and one real end-to-end $349 Stripe **Test Mode**
+dumpster booking has been completed against it successfully — see §5.2 for
+the exact current staging state, the service_role permissions gap that
+testing surfaced (and its fix, §5.3), and the one-time `signature_name`
+catch-up staging needs now that the typed-electronic-signature feature has
+been added after that test booking was made (§5.4). Performed 2026-09-18,
+on branch
 `phase-3c/stage2.5-stripe-rental-payments`, created from the exact same
 commit (`a69b12a37114d4e44a1888bf2843a79974a4c3ff`) the Braintree
 implementation branch (`phase-3c/stage2.5-rental-payments-v2`) was at when
@@ -411,14 +419,80 @@ exactly 12 `.func` directories under `.vercel/output/functions/api/`.
   rollback rules — never reaches an actual capture call, so the fake only
   needs `paymentIntents.retrieve`/`update`/`cancel` to work).
 
+### 4a. Later hardening pass (this session) — signature, staging grants, retry fix
+
+Performed after the original implementation above, once staging testing
+(§5.2) had already happened. Still uncommitted, still on this same
+branch, still not pushed.
+
+**Added:**
+- `sql/2026-09-18_phase3c-stage2.5-service-role-grants.sql` — see §5.3.
+- `sql/2026-09-18_phase3c-stage2.5-staging-signature-backfill.sql` — see
+  §5.4. Staging-only; not executed by this session.
+
+**Modified:**
+- `book/index.html` — new "Electronic Signature" field (label, helper
+  text, required text input) directly below the agreement checkbox, same
+  card. The earlier white-background fix on `#rental-agreement-text`
+  (`background:#fff;color:#111827`) is preserved, untouched.
+- `book/book.js` — `pay-and-book-btn` now also requires a non-empty typed
+  signature before proceeding (client-side gate, mirrors the existing
+  agreement-checkbox gate); sends `signatureName` in the finalize payload.
+  Also: the failure-path retry/lock fix, through two corrections (§13.1,
+  §13.3) to its final three-way design — confirmed-dead → fresh
+  PaymentIntent, ambiguous → locked payment panel (new `state.paymentLocked`),
+  purely client-side → unchanged, still retryable.
+- `api/book.js` — `validateBooking()` requires and sanitizes
+  `payment.signatureName` whenever `requirePaymentMethod` is true (finalize
+  only, never at PaymentIntent creation); `handleDumpsterRentalBooking()`'s
+  `rental_payments` insert now writes `signature_name`. Also:
+  `handleDumpsterRentalBooking()` now returns an explicit
+  `retryWithNewPaymentIntent: true` on exactly the 10 failure branches
+  proven to have cancelled/confirmed-dead this request's own PaymentIntent,
+  and a separate `paymentStatusPending: true` on exactly the 3 branches
+  that are a TRUE payment-ambiguous/reconciliation outcome — see §13.2's
+  per-branch audit table and §13.3 for the flag split.
+- `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` — added
+  `signature_name text NOT NULL` to the `rental_payments` `CREATE TABLE`
+  (this file had not yet been run against Production when this column was
+  added — see §5 for why editing it directly, rather than a separate
+  `ALTER TABLE`, was the smallest clean change for a fresh Production
+  install; staging's own catch-up is §5.4, a separate file, since staging
+  already had the table before this column existed).
+- `tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` — default
+  payload now includes a signature; tests for missing/whitespace/null
+  `signatureName` (400) and for `signature_name` persistence on a
+  successful booking; tests asserting `retryWithNewPaymentIntent` AND
+  `paymentStatusPending` across every confirmed-dead/ambiguous failure
+  branch (§13.2/§13.3), plus exact-count checks on both flags; static
+  source-pattern tests against `book/book.js`'s actual catch-handler logic
+  (§13.3). 88 tests in this file now (was 77 before any of this session's
+  work).
+- `tests/phase3b-step4a3-repeat-client-reuse.test.js` — this file's own,
+  separate dumpster-rental payload builder needed `signatureName` added
+  too (see §8) — an unrelated fixture gap the full suite run surfaced, not
+  itself part of the retry/grants/signature work.
+
 ## 5. Database schema changes — clean Stripe schema, not a conversion
 
 Production has **never** received the Braintree-schema migration (it was
 committed but never run against any environment). The committed migration
 for this branch is therefore a clean Stripe schema from the start — see
 `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` for the full
-file, `not run against Production or Staging` by this session. Summary of
-what it adds, and nothing else:
+file.
+
+**Current status, accurately, per environment:**
+- **Production**: has NOT received this migration. No Stripe-schema object
+  (index, table, or grant) exists there. §5.1 is the exact, still-unrun
+  rollout plan for when that happens.
+- **Staging**: HAS received this migration — see §5.2 for the exact
+  current state, §5.3 for a permissions gap staging testing surfaced (and
+  its fix, tracked as its own file rather than left as an undocumented
+  manual step), and §5.4 for the one schema catch-up staging still needs
+  (`signature_name`, added to this file after staging's test booking was
+  already made).
+
+Summary of what the migration file adds, and nothing else:
 
 1. `CREATE UNIQUE INDEX CONCURRENTLY idx_bookings_dumpster_delivery_slot ON
    bookings (appointment_date, time_window) WHERE service_type =
@@ -460,71 +534,127 @@ rollout is simple and requires no conversion step:
    index/columns/constraints exist as expected; optionally exercise the
    delivery-slot collision inside a throwaway transaction that's rolled
    back, never committed).
+5. Run `sql/2026-09-18_phase3c-stage2.5-service-role-grants.sql` — grants
+   `service_role` exactly the CRUD it needs on all five tables this flow
+   touches (`customers`, `bookings`, `dumpster_rentals`, `rental_payments`,
+   `rental_additional_charges`), schema-qualified as `public.*`. Do this
+   as a standard, visible step of the rollout — not an ad hoc manual grant
+   run from memory — see §5.3 for why this step exists at all. This step
+   does **not** touch `anon`/`authenticated` privileges on any of these
+   tables — see §5.3 for why that's deliberately out of scope here.
 
 No data migration, no backfill, no Braintree-schema teardown — this is a
 purely additive migration against the current, unmodified Production
 schema.
 
-### 5.2 Staging cleanup/reset plan — **not executed by this session**
+### 5.2 Staging — what was actually run, and its current state
 
-Per explicit instruction: this section documents the exact steps: it does
-not run any of them.
+**This section is no longer a plan — it is a record of what has actually
+happened against the staging Supabase project.** Staging is **not**
+clean/unmigrated. Do not assume otherwise when working against it.
 
-**Current staging state** (per the owner's own prior setup, described in
-the task brief): an isolated Supabase staging project containing (a) the
-current production `public` schema, copied schema-only, (b) the
-**Braintree** rental-payment migration applied for testing, (c) no real
-production client/booking data, (d) one synthetic staging admin Auth user.
+**What was run, in order:**
+1. The Braintree-schema objects that pre-existed in staging (from earlier
+   Braintree-era testing) were dropped, per the rollback block previously
+   documented in this section (now historical — see git history of this
+   file if that exact block is needed again).
+2. `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` (this
+   branch's Stripe schema) was run against staging in full — the unique
+   delivery-slot index, `rental_payments`, and `rental_additional_charges`
+   all exist there today.
+3. Stripe Test Mode credentials and the Stripe webhook were configured
+   against a Preview deployment pointed at staging Supabase.
+4. **One real end-to-end $349 Stripe Test Mode dumpster booking was
+   completed successfully** — a genuine `paymentIntents.create` →
+   `confirmPayment` → capture round trip against Stripe's Test Mode API,
+   landing a `rental_payments` row with `payment_status: "paid"`.
 
-**What needs to happen, in order, before staging can be used for Stripe
-testing:**
+**Current staging state, precisely:**
+- `rental_payments` and `rental_additional_charges` exist, with the exact
+  shape `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` had
+  **at the time staging was migrated** — which was *before*
+  `signature_name` was added to that file for the typed-electronic-
+  signature feature (this same working tree, later). Staging's
+  `rental_payments` therefore does not yet have that column. See §5.4.
+- That one successful test booking's `rental_payments` row is real data
+  staging now carries forward — it must not be deleted or treated as
+  disposable. See §5.4 for how its schema catch-up handles that row
+  specifically.
+- `bookings`/`customers`/`dumpster_rentals` were never touched by either
+  migration and remain on the Production baseline schema.
+- Staging testing surfaced a `service_role` permissions gap not caught by
+  anything above — see §5.3.
 
-1. **Confirm what the Braintree migration actually added to staging.**
-   Run the read-only introspection query below directly against the
-   staging project (never against Production) to see exactly what exists
-   today:
-   ```sql
-   select table_name, column_name, data_type, is_nullable
-   from information_schema.columns
-   where table_schema = 'public' and table_name in ('rental_payments', 'rental_additional_charges')
-   order by table_name, ordinal_position;
+### 5.3 Permissions gap discovered during staging testing, and its fix
 
-   select indexname, indexdef from pg_indexes
-   where schemaname = 'public' and indexname in ('idx_bookings_dumpster_delivery_slot', 'idx_rental_additional_charges_booking_id');
-   ```
-2. **Drop the Braintree-schema objects from staging** using the exact
-   rollback block already documented at the bottom of the *old* Braintree
-   migration file (`sql/2026-09-18_phase3c-stage2.5v2-rental-payments.sql`
-   — still available on the `phase-3c/stage2.5-rental-payments-v2` branch
-   for reference, since it's removed from this branch):
-   ```sql
-   DROP INDEX CONCURRENTLY IF EXISTS idx_rental_additional_charges_booking_id;
-   DROP TABLE IF EXISTS rental_additional_charges;
-   DROP TABLE IF EXISTS rental_payments;
-   DROP INDEX CONCURRENTLY IF EXISTS idx_bookings_dumpster_delivery_slot;
-   ```
-   This returns staging's `bookings`/`customers`/`dumpster_rentals` tables
-   (never touched by either migration) to the production baseline exactly.
-3. **Apply the new Stripe schema** — run
-   `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` (this
-   branch's file) against staging, same three-step order as §5.1
-   (preflight → unique index alone → the two tables + index together).
-   Staging's preflight query will be a guaranteed no-op (no existing
-   dumpster-rental data to conflict), but running it anyway keeps the
-   staging runbook identical to the Production one.
-4. **Configure Stripe Test Mode credentials** into Vercel's
-   Preview-scoped environment variables (see §7) — staging Supabase +
-   Stripe Test Mode together are what a Preview deployment should use.
-5. **Register the Stripe webhook** pointing at the Preview deployment's
-   `/api/stripe-webhook` URL (Stripe Dashboard → Developers → Webhooks,
-   Test Mode) and copy its signing secret into
-   `STRIPE_WEBHOOK_SECRET` (Preview-scoped).
+The booking/payment flow did not work against staging until `GRANT`
+statements were run by hand, directly in the Supabase SQL editor. That
+got staging working, but left Production dependent on someone repeating
+that exact undocumented step from memory during a future Production
+rollout — precisely the kind of step that gets missed.
 
-**Why this session does not execute any of this**: it requires direct
-Supabase SQL execution against a real (even if non-production) database,
-and the task's own instructions plus this project's standing safety rules
-require the owner to run schema-affecting SQL themselves, the same
-established pattern every prior stage in this project has followed.
+**Root cause**: `service_role` was missing `SELECT`/`INSERT`/`UPDATE`/
+`DELETE` on some or all of the five tables this flow touches (`customers`,
+`bookings`, `dumpster_rentals`, `rental_payments`,
+`rental_additional_charges`). Supabase normally back-fills `service_role`'s
+table privileges via `ALTER DEFAULT PRIVILEGES`, but that default only
+applies to tables created by the exact role it was declared for — when a
+table is created by a different role (e.g. directly in the SQL editor, or
+by a migration run under a different session), that default silently does
+not apply. That is exactly the gap staging hit, and it's a plain grant
+gap, independent of RLS.
+
+**Correction (2026-09-18, after review)**: an earlier draft of this
+write-up, and of the fix file itself, additionally claimed "none of these
+tables have row-level security enabled" and paired the `service_role`
+grant with a `REVOKE ALL ... FROM anon, authenticated` on all five
+tables. Both are wrong/premature and have been removed:
+- Staging testing directly observed that **`public.bookings` has RLS
+  enabled**. The blanket "no RLS anywhere" claim was never actually
+  verified against staging and should not have been stated as fact.
+- Changing `anon`/`authenticated` privileges on `customers`, `bookings`,
+  or `dumpster_rentals` has **not** been proven safe — that needs its own
+  dedicated privilege/RLS audit (what RLS policies exist today on each
+  table, what `anon`/`authenticated` can currently do and why, whether
+  anything already depends on that) before touching that surface at all.
+  That audit has not been done and is out of scope for this Stage 2.5
+  fix.
+
+**Fix, narrowed accordingly**:
+`sql/2026-09-18_phase3c-stage2.5-service-role-grants.sql` — grants
+`service_role` `SELECT, INSERT, UPDATE, DELETE` on exactly the five
+`public.`-qualified tables above. **Does not touch `anon`/`authenticated`
+privileges at all.** Idempotent; safe to run once against staging
+(replacing the ad hoc manual grants with this same tracked state) and as
+§5.1 step 5 during a clean Production install. See that file for the full
+statement, a verification query for the grant, and an *informational*
+query showing each table's actual current RLS-enabled state (not changed
+by this file — for visibility only, so this doesn't happen again).
+
+### 5.4 `signature_name` staging catch-up — plan only, not executed
+
+Staging's `rental_payments` predates the typed-electronic-signature
+feature (§5.2), so it's missing the `signature_name` column that
+`sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` now defines
+as `NOT NULL` from birth. A plain `ADD COLUMN ... NOT NULL` would fail
+outright against staging's one existing `rental_payments` row (no default
+to fill it with).
+
+`sql/2026-09-18_phase3c-stage2.5-staging-signature-backfill.sql` is the
+exact plan for this — **staging-only, three statements (add nullable →
+backfill only NULL rows with an explicit, unmistakably-not-a-real-name
+sentinel string → lock to NOT NULL), never a fabricated legal name for
+that pre-existing row.** See that file for the full statements, the
+reasoning for the sentinel-over-nullable-forever choice, and verification
+queries. Not run by this session — run it manually against staging only,
+never against Production (which gets `signature_name` directly from the
+main `CREATE TABLE`, with nothing to catch up).
+
+**Why none of this is executed by this session**: every statement above
+requires direct Supabase SQL execution against a real (even if
+non-production) database, and this project's standing safety rules
+require the owner to run schema-affecting SQL themselves — the same
+established pattern every prior stage here has followed.
 
 ## 6. Stripe Customer/PaymentMethod strategy
 
@@ -565,8 +695,41 @@ code can enforce or verify.
 
 **All 15 explicitly required scenarios are covered**, plus the full
 existing regression suite, in
-`tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` (77 tests) and
-the rest of the full suite (677 tests total across 19 files):
+`tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` (88 tests) and
+the rest of the full suite (**688 tests total across 19 files, 0 failed**
+— re-run in full again after the §13.3 correction pass; also fixed one
+unrelated fixture gap it surfaced in
+`tests/phase3b-step4a3-repeat-client-reuse.test.js`, whose own separate
+dumpster-rental payload builder needed `signatureName` added, same as
+`validDumpsterPayload` in this file):
+
+**Test-count reconciliation (677 → 680 → 682 → 688)** — four real,
+additive checkpoints, not a discrepancy:
+- **677**: the original Stage 2.5 Stripe-migration checkpoint (§1–§3),
+  before the signature feature or any of this hardening pass existed.
+- **680** (+3): the electronic-signature feature's own validation tests —
+  missing/whitespace/null `signatureName` each rejected with 400 (§4a).
+  `tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` went 77 → 80.
+- **682** (+2): the first retry/idempotency-safety correction's new tests
+  (§13.2) — one asserting `retryWithNewPaymentIntent: true` for a
+  `canceled`-status PaymentIntent (a scenario with no prior test), and one
+  for a customer-insert failure (also previously untested). 80 → 82.
+- **688** (+6): the second correction's tests (§13.3) — the
+  `paymentStatusPending: true`/`retryWithNewPaymentIntent: true`
+  exact-count check, and five static source-pattern tests against
+  `book/book.js`'s actual catch-handler branches (the `paymentLocked`
+  guard, and each of the three mutually-exclusive branches A/locked/D).
+  82 → 88.
+
+Verified nothing was silently lost along the way: `grep -c '^test("'
+tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` returns exactly
+**88**, matching the 88 actually executed — no test is registered but
+skipped, and every file in `tests/*.test.js` (19 files, unchanged count)
+still runs and reports a non-zero test count. The one other file touched
+this pass, `tests/phase3b-step4a3-repeat-client-reuse.test.js`, had its
+fixture corrected but its own test count is unchanged at 14 (no test
+added or removed there — only a missing field added to an existing
+payload builder).
 
 1. Successful $349 booking.
 2. Card decline (at capture time, a `StripeCardError`).
@@ -603,6 +766,34 @@ the rest of the full suite (677 tests total across 19 files):
 All Stripe interaction is faked via the same `Module._load` interception
 convention every other test file in this project already uses — no real
 Stripe account, no real network call, no sandbox transaction of any kind.
+
+**Added in the §4a hardening pass**: missing/whitespace/null
+`signatureName` each rejected with 400 (mirrors the existing
+`agreementAccepted` validation tests); a successful booking persists
+`signature_name` on the `rental_payments` row.
+
+**Added in the §13.2 correction pass**: `retryWithNewPaymentIntent`
+asserted directly on the response body for both sides of the A/B
+distinction — see §13.2's table for the full list of branches now
+covered (a `canceled`-status PaymentIntent and a customer-insert failure
+newly get dedicated tests; the decline, ambiguous-capture, slot-conflict,
+concurrent-duplicate, resubmit-after-ambiguous, `dumpster_rentals`-insert-
+failure, and `requires_payment_method` tests all gained a
+`retryWithNewPaymentIntent` assertion alongside their existing checks).
+
+**Added in the §13.3 correction pass**: `paymentStatusPending` asserted
+on the three true payment-ambiguous branches (existing-row
+`error_pending_review`, concurrent-duplicate `processing`, ambiguous
+capture-throw), plus an exact-count test on both flags in `api/book.js`
+(`paymentStatusPending: true` × 3, `retryWithNewPaymentIntent: true` ×
+10). Plus a new static source-pattern section (§10 in this test file)
+verifying `book/book.js`'s actual catch-handler branches directly —
+`state.paymentLocked`'s existence and its guards on `showPaymentPanel()`/
+the click handler, and each of the three mutually-exclusive branches
+(confirmed-dead resets and remints; locked/ambiguous disables both
+buttons, unmounts the Payment Element, and contains no
+`initPaymentElement()`/`newIdempotencyKey()`/genuine `confirmPayment({`
+call; purely-client-side stays retryable with nothing reset).
 
 ## 9. Build / function count
 
@@ -686,20 +877,252 @@ migration.
    Stripe env vars, if any exist yet, untouched) — per §5.2, this Preview
    should also point at the isolated staging Supabase project (already
    configured per the task brief), never at production Supabase.
-5. Execute the staging cleanup/reset plan in §5.2 (owner-run, not this
-   session).
-6. Push `phase-3c/stage2.5-stripe-rental-payments` to `origin` (requires
-   the owner's own explicit push authorization, same pattern as every
-   prior stage) to trigger a Preview deployment.
-7. Run a first end-to-end Stripe Test Mode checkout against that Preview +
-   staging Supabase, using Stripe's documented test card numbers (e.g.
-   `4242 4242 4242 4242` for a guaranteed success; consult Stripe's current
-   testing reference for decline/`authentication_required` test cards
-   before relying on a specific number, the same "verify before relying on
-   it" discipline the original Braintree readiness pass used for its own
-   test-card guidance).
-8. Only after a real Test Mode checkout, an admin-approved additional
-   charge, and a verified webhook delivery have all been confirmed working
-   end-to-end against staging should Production rollout even be
-   considered — and that remains the owner's own explicit go/no-go
-   decision, not something this document authorizes.
+5. ~~Execute the staging cleanup/reset plan~~ — **done** (owner-run). See
+   §5.2 for the current staging state and §5.3 for a permissions gap that
+   testing surfaced, since fixed as its own tracked migration.
+6. Push `phase-3c/stage2.5-stripe-rental-payments` to `origin` — **still
+   not done**; requires the owner's own explicit push authorization, same
+   pattern as every prior stage.
+7. Run a first end-to-end Stripe Test Mode checkout against staging — **done**:
+   one real $349 booking completed successfully (§5.2). Still worth running
+   Stripe's documented decline/`authentication_required` test cards before
+   relying on those paths, the same "verify before relying on it"
+   discipline the original Braintree readiness pass used for its own
+   test-card guidance.
+8. Only after a real Test Mode checkout (**done**), an admin-approved
+   additional charge, and a verified webhook delivery have all been
+   confirmed working end-to-end against staging should Production rollout
+   even be considered. The additional-charge and webhook-delivery legs are
+   **not yet confirmed** as of this write-up — that, and the final
+   go/no-go, remain the owner's own explicit decision, not something this
+   document authorizes.
+9. Before any Production rollout: apply the schema fixes above against
+   Production in the order §5.1 documents (now including its step 5, the
+   `service_role` grants), so Production never depends on a manual grant
+   run from memory the way staging briefly did.
+
+## 13. Frontend retry/reset fix — a canceled PaymentIntent could not be retried
+
+**Bug, discovered during staging testing**: after a failed booking attempt
+whose PaymentIntent got canceled server-side (e.g. the delivery slot was
+lost to a concurrent booking), clicking "Pay & Book Now" again failed with
+Stripe's `payment_intent_unexpected_state` — the customer had no way to
+recover without reloading the whole page and re-entering everything.
+
+**Root cause**: `book/book.js` generates `state.idempotencyKey` once per
+checkout attempt and deliberately reuses it across a retry — correct and
+necessary so a genuine same-attempt resubmit (e.g. a network hiccup) can
+never double-book or double-charge. The bug: the client kept reusing the
+very same `state.paymentIntentId`/`state.stripeElements`/
+`state.idempotencyKey` for the next click regardless of *why* the previous
+attempt failed. Retrying against a dead PaymentIntent's idempotency key
+calls `stripe.paymentIntents.create()` again with the *same* Stripe
+idempotency key (`"intent:" + idempotencyKey`), which — per Stripe's own
+idempotency-key contract — returns the identical cached (and now dead)
+PaymentIntent object rather than creating a new one. `confirmPayment()`
+against that object is exactly what `payment_intent_unexpected_state`
+means.
+
+### 13.1 First-draft fix — too broad, corrected after review
+
+The first draft of this fix reset and re-minted a PaymentIntent on ANY
+non-2xx finalize response (keyed off the existing `err.isServerMessage`
+flag, set whenever the finalize `POST /api/book` was sent and came back
+non-2xx). That is **too broad** and was corrected: several failure
+branches in `handleDumpsterRentalBooking()` return non-2xx *without* the
+PaymentIntent being confirmed dead — most importantly the AMBIGUOUS
+capture-failure path (§8's `error_pending_review`, where Stripe's own
+capture call timed out with no definitive answer — the charge **may have
+actually succeeded**) and `paid_reconciliation_required` (Stripe
+DEFINITELY captured the charge; only the local confirmation write failed).
+Auto-minting a second PaymentIntent after either of those would risk a
+second live authorization — or worse, a second charge attempt — against a
+request whose outcome isn't known or has already resolved successfully.
+`isServerMessage` alone cannot distinguish "definitely dead, safe to
+replace" from "unresolved, do not touch."
+
+### 13.2 Corrected design — explicit, per-branch server confirmation
+
+**Backend — `api/book.js`, `handleDumpsterRentalBooking()`**: every
+failure response now carries an explicit `retryWithNewPaymentIntent`
+boolean, set to `true` **only** on a response the code has *positively*
+confirmed corresponds to a dead PaymentIntent — never inferred from "the
+server said no." Full branch-by-branch audit, in the order they appear in
+the function:
+
+| Branch | Response | PaymentIntent confirmed dead? | Flag |
+|---|---|---|---|
+| Idempotency lookup DB error | 500 | No — untouched | unset |
+| Existing row: `error_pending_review` (prior ambiguous attempt) | 409 | No — outcome of prior attempt still unknown | unset |
+| Existing row: `processing` (concurrent duplicate) | 409 | No — a sibling request may still need it | unset |
+| Stripe not configured | 500 | No — untouched | unset |
+| `paymentIntents.retrieve()` throws | 400 | No — unknown/possibly transient | unset |
+| `metadata.idempotencyKey` mismatch (foreign/stale PI) | 400 | No — not confirmed, not ours to declare | unset |
+| `intent.status === "canceled"` | 402 | **Yes — Stripe's own positive confirmation** | **`true`** |
+| `intent.status` is anything else non-`requires_capture` (e.g. `succeeded`, `requires_action`) | 402 | No — `succeeded` could mean money already moved; others are incomplete, not dead | unset |
+| Amount mismatch (defensive; "should never happen") | 400 | No — not cancelled by this branch | unset |
+| Customer insert fails | 500 | **Yes — `cancelPaymentIntent()` called directly** | **`true`** |
+| `rental_payments` insert: idempotency race (unique violation) | 409 | No — explicitly NOT cancelled (comment: "the other request may be about to capture it") | unset |
+| `rental_payments` insert: other error | 500 | **Yes — `cancelPaymentIntent()` called** | **`true`** |
+| `bookings` insert: slot conflict (unique violation) | 409 | **Yes — via `rollbackDumpsterBooking()`** | **`true`** |
+| `bookings` insert: other error | 500 | **Yes — via `rollbackDumpsterBooking()`** | **`true`** |
+| `rental_payments` → booking link-back update fails | 500 | **Yes — via `rollbackDumpsterBooking()`** | **`true`** |
+| `dumpster_rentals` insert fails | 500 | **Yes — via `rollbackDumpsterBooking()`** | **`true`** |
+| Capture: `StripeCardError` (definitive decline) | 402 | **Yes — via `rollbackDumpsterBooking()`; Stripe confirms no money moved** | **`true`** |
+| Capture: any other thrown error (ambiguous — network/timeout) | 502 | **No — outcome unknown, may have captured; rows preserved, `error_pending_review`** | **unset** |
+| `captured.status !== "succeeded"` (defensive) | 402 | **Yes — via `rollbackDumpsterBooking()`** | **`true`** |
+
+**Frontend — `book/book.js`**: the finalize POST's error object now
+carries `retryWithNewPaymentIntent` straight from the response body
+(`reqErr.retryWithNewPaymentIntent = !!(resBody && resBody.retryWithNewPaymentIntent === true)`).
+The `.catch()` handler's reset-and-remint logic (null
+`paymentIntentId`/`stripeElements`, unmount the Payment Element, mint a
+new `idempotencyKey`, call `initPaymentElement()` again) now runs **only**
+when that flag is `true` — never merely because the request failed.
+Every ambiguous/unresolved case (concurrent duplicate, `error_pending_review`,
+an amount-mismatch or foreign-PI edge case) instead just re-enables the
+Pay button with the same still-referenced PaymentIntent/idempotencyKey;
+if the customer clicks again, the SAME idempotency key reaches the SAME
+idempotency pre-check at the top of `handleDumpsterRentalBooking()`,
+which is what actually prevents any repeat action from creating a new
+payment attempt — the frontend doesn't need to (and must not) make that
+call itself.
+
+**Deliberately still left untouched**: a purely client-side rejection —
+Stripe.js's own inline validation (e.g. an incomplete card number), or a
+decline `confirmPayment()` itself surfaces before any server call is even
+made — never sets `isServerMessage` at all. See §13.3 for how this stays
+distinct from case B below, which §13.2's own first pass got wrong.
+
+### 13.3 Second correction — re-enabling Pay for an ambiguous outcome was itself unsafe
+
+**Bug in §13.2's own design, caught before approval**: for the ambiguous/
+~unresolved case (`isServerMessage` true, `retryWithNewPaymentIntent`
+false/absent), §13.2 simply re-enabled `payAndBookBtn` and left the same
+PaymentIntent/Elements mounted — reasoning that since no *new* attempt was
+being minted, nothing further was needed. That reasoning missed something
+important: by the time the finalize `POST /api/book` is ever sent,
+`stripe.confirmPayment()` has **already succeeded once** against this
+exact PaymentIntent (that success is the precondition for reaching the
+finalize call at all). Its Stripe-side status from that point on could be
+`requires_capture`, `succeeded`, `canceled`, or something else entirely —
+and calling `confirmPayment()` on it a **second time**, which simply
+re-enabling the button invites, can itself throw
+`payment_intent_unexpected_state` — the exact failure this whole fix
+exists to prevent, just reached one click later. "We didn't mint a new
+PaymentIntent" and "it's safe to let the customer click Pay again" are
+NOT the same guarantee, and §13.2 conflated them.
+
+**Corrected behavior** — `book/book.js`'s catch handler is now a genuine
+three-way branch, not two:
+
+1. **`retryWithNewPaymentIntent: true`** (confirmed dead) — unchanged
+   from §13.2: reset `paymentIntentId`/`stripeElements`, unmount the
+   Payment Element, mint a fresh `idempotencyKey`, call
+   `initPaymentElement()` again. Re-enables `paymentBackBtn` too (a fresh
+   attempt is starting; going back to Review is fine again).
+2. **`isServerMessage` true, `retryWithNewPaymentIntent` NOT true**
+   (ambiguous/unresolved) — **the payment panel is now locked**, not just
+   left as-is:
+   - `state.paymentLocked = true` (new state field; also guards
+     `showPaymentPanel()` and the very top of the click handler itself, so
+     there is no code path — not even "Back to Review" then forward again
+     — that can re-enter `initPaymentElement()` and reuse the same tainted
+     `idempotencyKey`, or re-run `confirmPayment()` against the same
+     PaymentIntent).
+   - `payAndBookBtn.disabled = true` AND `paymentBackBtn.disabled = true`
+     — both, permanently, for the rest of this page load. The only way to
+     try again is a full page reload: a genuinely new attempt, with a new
+     `idempotencyKey` and a new PaymentIntent, sharing nothing with the
+     stuck one.
+   - The mounted Payment Element is unmounted.
+   - The customer sees a dedicated, customer-safe message — **only** when
+     `paymentStatusPending` (below) is also set — instead of a generic
+     "try again": *"Your payment status is being verified. Please do not
+     submit another payment. If your booking is confirmed, we'll process
+     it automatically. If you need help, call or text 303-990-1812."*
+     When `paymentStatusPending` is not set (a non-payment-ambiguous
+     failure, e.g. a stale/foreign PaymentIntent or a config error), the
+     server's own specific message is shown instead — still locked either
+     way, since the danger (a second `confirmPayment()` call) is identical
+     regardless of *why* the outcome wasn't confirmed dead.
+3. **`isServerMessage` not set** (purely client-side — Stripe.js
+   validation, or a decline `confirmPayment()` itself surfaces, before any
+   server call was ever made) — unchanged from §13.2's intent, genuinely
+   preserved this time: `confirmPayment()` never succeeded for this
+   attempt, so the same PaymentIntent/Elements remain safely retryable.
+   Both buttons re-enabled, nothing unmounted, nothing reset.
+
+**New backend flag — `paymentStatusPending: true`** (`api/book.js`,
+alongside `retryWithNewPaymentIntent`, never both on the same response):
+set explicitly on exactly the three TRUE payment-ambiguous/reconciliation
+branches in `handleDumpsterRentalBooking()` — never inferred from a
+generic status code:
+- The idempotency pre-check finding an existing row already stuck at
+  `error_pending_review` (409).
+- The idempotency pre-check finding a still-`processing` concurrent
+  duplicate (409) — a sibling request has this same PaymentIntent live.
+- The capture call itself throwing with no definitive answer (502, the
+  canonical `error_pending_review`-setting branch).
+
+Every other non-confirmed-dead branch (stale/foreign PaymentIntent, a
+config error, a DB read error, a defensive amount mismatch, a non-`canceled`
+non-`requires_capture` intent status) sets neither flag — still locked on
+the frontend (§13.3 point 2 above applies to ALL of them, since the
+`confirmPayment()`-reuse danger is the same), but shown its own existing,
+already-accurate server message rather than the payment-specific pending
+text.
+
+**Preserved, unchanged**: manual capture, the original concurrency
+protections (the `rental_payments`-before-`bookings` insert ordering and
+its unique-constraint race handling), the idempotency-key contract itself,
+and every reconciliation state/path (`error_pending_review`,
+`paid_reconciliation_required`, the webhook's self-healing).
+
+**Tests added** (`tests/phase3c-stage2.5v2-stripe-rental-payments.test.js`,
+88 tests in this file now, up from 82):
+- Backend, response-body assertions extending existing scenarios: all
+  three `paymentStatusPending: true` sites now have a dedicated assertion
+  (existing-row `error_pending_review`, concurrent-duplicate `processing`,
+  ambiguous capture-throw), plus an exact-count check
+  (`paymentStatusPending: true` appears exactly 3 times in `api/book.js`,
+  `retryWithNewPaymentIntent: true` exactly 10 times) so a future edit
+  that silently adds or drops a site fails loudly rather than passing
+  quietly.
+- Frontend, static source-pattern verification against `book/book.js`'s
+  actual deployed source (this project's own established fallback for
+  frontend behavior — see below): the three catch-handler branches are
+  isolated by their exact, unique source boundaries and asserted against
+  directly —
+  - **A** (confirmed dead): resets `paymentIntentId`/`stripeElements`,
+    mints a new `idempotencyKey`, unmounts and re-calls
+    `initPaymentElement()`, never sets `paymentLocked`.
+  - **B** (ambiguous/locked): sets `paymentLocked = true`, disables both
+    buttons, unmounts the Payment Element, and critically does **NOT**
+    contain `initPaymentElement()`, `newIdempotencyKey()`, or a genuine
+    `.confirmPayment({` call anywhere in that branch.
+  - **D** (ordinary client-side, still retryable): re-enables both
+    buttons, never sets `paymentLocked`, never unmounts the Payment
+    Element, never touches `paymentIntentId`/`idempotencyKey`.
+  - `state.paymentLocked` is declared (`false` initially) and guards both
+    `showPaymentPanel()` and the top of the click handler.
+  - The crafted pending-review message is present and gated specifically
+    on `err.paymentStatusPending`.
+
+**Not implemented**: an automated *browser-executed* (DOM/Stripe-mock)
+test for `book/book.js`. This project has no existing test harness that
+executes any frontend file in a JS engine at all — every existing
+frontend-file check elsewhere in this repo (e.g.
+`tests/phase3c-stage2.4-address-and-prefill.test.js`, which explicitly
+notes "there is no DOM/click simulation available in this project's test
+setup") is the same static/regex-based source-pattern verification used
+above, never simulated execution. Building a full Stripe-mock browser
+harness from scratch for one fix was judged disproportionate scope, and
+would itself be new project infrastructure well beyond this fix's size.
+The static tests above guarantee the underlying control flow — which
+branch touches which state, and that the three branches stay mutually
+exclusive — will not silently regress; they were additionally
+cross-checked by: (a) the full per-branch backend audit table in §13.2,
+now backed by response-body assertions; (b) `node --check book/book.js`
+and `api/book.js` (syntax); (c) a live page load with the change applied
+showing zero console errors.

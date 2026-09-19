@@ -21,7 +21,9 @@
 --      constraint).
 --   2. rental_payments — 1:1 with bookings (mirrors dumpster_rentals'
 --      existing booking_id-UNIQUE pattern exactly), the initial-charge +
---      Stripe Customer/PaymentMethod reference record.
+--      Stripe Customer/PaymentMethod reference record, plus the renter's
+--      typed electronic signature (signature_name) captured alongside the
+--      agreement acceptance fields.
 --   3. rental_additional_charges — many per booking, the propose -> approve
 --      -> process workflow for admin-approved overage/extra-day charges.
 --      A row here moving to 'proposed' NEVER calls Stripe — only the
@@ -163,6 +165,15 @@ CREATE TABLE IF NOT EXISTS rental_payments (
   dispute_status text,
   agreement_version text NOT NULL,
   agreement_accepted_at timestamptz NOT NULL,
+  -- Typed electronic signature (the renter's full legal name, as typed)
+  -- captured at the same moment agreement_version/agreement_accepted_at
+  -- are — both are written in the one api/book.js insert that only runs
+  -- once the customer has clicked "Pay & Book Now" with both the
+  -- agreement checkbox checked AND this field non-empty (validateBooking()
+  -- enforces both server-side, not just in the browser). NOT NULL for the
+  -- same reason agreement_version/agreement_accepted_at are: every row in
+  -- this table is created at that single finalize step, never earlier.
+  signature_name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
