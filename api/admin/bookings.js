@@ -853,8 +853,25 @@ async function handleExpensesList(req, res, supabase) {
       return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
     });
 
-    const total = rows.length;
-    const totalAmount = rows.reduce(function (sum, e) {
+    // Staging bug fix (2026-09-19): `total`/`totalAmount` must reflect
+    // ACTIVE (non-voided) expenses only, unconditionally — includeVoided
+    // controls whether voided rows are DISPLAYED (in `expenses` below),
+    // never whether they count toward the period total. The original code
+    // summed/counted `rows` directly, which — once includeVoided=1 pulled
+    // voided rows into `rows` for display — silently let a voided expense
+    // back into the accounting total the moment "Show voided expenses" was
+    // checked, even though the same response correctly labeled that row
+    // VOIDED in the list below it. `nonVoidedRows` is always a strict
+    // subset of `rows` (identical to `rows` itself when includeVoided=0,
+    // since the query already excludes voided rows at the source in that
+    // case — see applyCommonFilters above), so this changes nothing for
+    // the default view; it only fixes the count/sum once voided rows are
+    // ever present in `rows` at all.
+    const nonVoidedRows = rows.filter(function (e) {
+      return !e.voided_at;
+    });
+    const total = nonVoidedRows.length;
+    const totalAmount = nonVoidedRows.reduce(function (sum, e) {
       return sum + (Number(e.amount) || 0);
     }, 0);
     const page = rows.slice(offset, offset + limit).map(serializeExpense);
@@ -869,7 +886,12 @@ async function handleExpensesList(req, res, supabase) {
       totalAmount: Math.round(totalAmount * 100) / 100,
       limit: limit,
       offset: offset,
-      hasMore: offset + page.length < total,
+      // Pagination ("is there another page to load") is deliberately based
+      // on rows.length (every row actually being paged through, voided
+      // included when shown) — not on `total` above, which is now the
+      // active-only accounting count and would under-report how much is
+      // left to page through once voided rows are part of the displayed set.
+      hasMore: offset + page.length < rows.length,
     });
   } catch (err) {
     console.error("Admin expenses list failed:", err && err.stack ? err.stack : err);

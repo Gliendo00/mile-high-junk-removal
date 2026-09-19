@@ -455,6 +455,82 @@ test("GET expenses: includeVoided=1 brings voided rows back, each flagged isVoid
   assert.ok(voidedItem.isVoided);
 });
 
+// Staging bug regression (2026-09-19): the normal (includeVoided=0) view
+// already excluded a voided expense from the total correctly — the bug was
+// specific to the includeVoided=1 view, where a voided row is (correctly)
+// shown in the list but was (incorrectly) ALSO being summed back into
+// totalAmount/total, as if "Show voided expenses" changed what counts as
+// active, not just what's visible. Reproduces the exact reported scenario:
+// create $50 -> edit to $60 -> void -> check totals both with and without
+// includeVoided.
+test("GET expenses: a voided expense NEVER contributes to total/totalAmount, whether or not includeVoided reveals it in the list (Staging bug regression)", async () => {
+  adminAuthed();
+  const db = freshDb();
+
+  const createRes = await req(db, {
+    method: "POST",
+    body: { resource: "expense", expenseDate: "2026-09-15", category: "fuel", amount: 50 },
+  });
+  assert.strictEqual(createRes.statusCode, 200);
+  const expenseId = createRes.body.expense.id;
+
+  const editRes = await req(db, {
+    method: "PATCH",
+    body: { resource: "expense", id: expenseId, amount: 60 },
+  });
+  assert.strictEqual(editRes.statusCode, 200);
+  assert.strictEqual(editRes.body.expense.amount, 60);
+
+  const voidRes = await req(db, {
+    method: "PATCH",
+    body: { resource: "expense", id: expenseId, action: "void", reason: "duplicate entry, entered by mistake" },
+  });
+  assert.strictEqual(voidRes.statusCode, 200);
+  assert.ok(voidRes.body.expense.isVoided);
+
+  // Normal view: voided expense excluded from the list AND from totals.
+  const normalRes = await getExpenses(db, { startDate: "2026-09-01", endDate: "2026-09-30" });
+  assert.deepStrictEqual(normalRes.body.expenses, []);
+  assert.strictEqual(normalRes.body.total, 0);
+  assert.strictEqual(normalRes.body.totalAmount, 0);
+
+  // Show-voided view: the $60 Fuel expense becomes VISIBLE (audit/history),
+  // but must NOT be counted — this is exactly the bug: totals silently
+  // flipped back to $60.00 (1 expense) here before the fix.
+  const voidedVisibleRes = await getExpenses(db, { startDate: "2026-09-01", endDate: "2026-09-30", includeVoided: "1" });
+  assert.strictEqual(voidedVisibleRes.body.expenses.length, 1, "the voided expense must still be listed for audit/history when includeVoided=1");
+  assert.strictEqual(voidedVisibleRes.body.expenses[0].id, expenseId);
+  assert.strictEqual(voidedVisibleRes.body.expenses[0].amount, 60, "the record itself still shows the corrected $60 amount");
+  assert.ok(voidedVisibleRes.body.expenses[0].isVoided);
+  assert.strictEqual(voidedVisibleRes.body.total, 0, "a voided expense must never contribute to the count, even when includeVoided reveals it");
+  assert.strictEqual(voidedVisibleRes.body.totalAmount, 0, "a voided expense must never contribute to the total amount, even when includeVoided reveals it");
+});
+
+test("GET expenses: totals correctly mix active and voided rows — only the active one counts", async () => {
+  adminAuthed();
+  const active = makeExpense({ amount: 25 });
+  const voided = makeExpense({ amount: 60, voided_at: nowIso(), voided_reason: "duplicate" });
+  const db = freshDb({ expenses: [active, voided] });
+
+  const res = await getExpenses(db, { startDate: "2026-09-01", endDate: "2026-09-30", includeVoided: "1" });
+  assert.strictEqual(res.body.expenses.length, 2, "both rows are visible");
+  assert.strictEqual(res.body.total, 1, "only the active row counts");
+  assert.strictEqual(res.body.totalAmount, 25, "only the active row's amount is summed");
+});
+
+test("GET expenses: hasMore pagination still accounts for voided rows when they're part of the displayed (includeVoided=1) set, even though they no longer count toward `total`", async () => {
+  adminAuthed();
+  const rows = [];
+  for (let i = 0; i < 3; i++) rows.push(makeExpense({ amount: 10 + i }));
+  rows.push(makeExpense({ amount: 999, voided_at: nowIso(), voided_reason: "test" }));
+  const db = freshDb({ expenses: rows });
+
+  const res = await getExpenses(db, { startDate: "2026-09-01", endDate: "2026-09-30", includeVoided: "1", limit: "2" });
+  assert.strictEqual(res.body.expenses.length, 2, "page is limited to 2 rows");
+  assert.strictEqual(res.body.total, 3, "total only counts the 3 active rows, not the voided one");
+  assert.strictEqual(res.body.hasMore, true, "hasMore must still reflect the full 4-row matched set (3 active + 1 voided), not just the 3 active ones, or pagination would stop one row too early");
+});
+
 test("GET expenses: category filter narrows results", async () => {
   adminAuthed();
   const fuel = makeExpense({ category: "fuel" });
