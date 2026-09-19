@@ -11,7 +11,13 @@
 // handlers, not through this file — mirrorStripePaymentToLedger() below is
 // exclusively the auto-mirror path for Stripe collections.
 
-const VALID_PAYMENT_METHODS = ["card_stripe", "cash", "zelle", "venmo", "check"];
+// "card_venmo" ("Card (Venmo)") and "other" were added as manual-entry
+// methods after the original five — see
+// sql/2026-09-19_phase3c-job-payments-add-methods.sql, which widens
+// job_payments.payment_method's CHECK constraint to match. "other" requires
+// a description (enforced in handleCreateJobPayment(), not here — this
+// array is only the allowed value list).
+const VALID_PAYMENT_METHODS = ["card_stripe", "cash", "zelle", "venmo", "check", "card_venmo", "other"];
 const VALID_PAYMENT_TYPES = ["payment", "refund"];
 
 // Mirrors one successfully collected Stripe transaction into job_payments.

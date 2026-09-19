@@ -245,10 +245,6 @@
         <div class="admin-row-label">Actual Collected</div>
         <div class="admin-row-value" id="d-final-price">—</div>
       </div>
-      <div class="admin-row" id="d-tip-row" style="display:none">
-        <div class="admin-row-label">Tip</div>
-        <div class="admin-row-value" id="d-tip-amount">—</div>
-      </div>
     </section>
 
     <!-- 9b. Payments — Phase 3C Stage 3, the cross-service-type payment
@@ -260,12 +256,26 @@
          other method is recorded manually below. Collected shown here
          follows the documented final_price compatibility rule: the ledger
          total once any entry exists, otherwise the Actual Collected amount
-         above unchanged. -->
+         above unchanged. Tip (bookings.tip_amount, restored here from the
+         Pricing section) is edited in place via the Edit button — never a
+         job_payments row, and never added to Collected — Total received is
+         simply Collected + Tip, computed for display only. -->
     <section class="admin-section" id="d-job-payments-section">
       <h2>Payments</h2>
       <div class="admin-row">
         <div class="admin-row-label">Collected</div>
         <div class="admin-row-value" id="d-collected-revenue">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Tip</div>
+        <div class="admin-row-value">
+          <span id="d-tip-amount-text">—</span>
+          <button type="button" id="d-tip-edit-btn" class="admin-btn admin-btn-outline" style="display:none;margin-left:10px;padding:2px 10px;min-height:auto;">Edit</button>
+        </div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Total received</div>
+        <div class="admin-row-value" id="d-total-received">—</div>
       </div>
       <div id="d-job-payments-list" class="admin-charges-list"></div>
 
@@ -277,8 +287,10 @@
             <option value="zelle">Zelle</option>
             <option value="venmo">Venmo</option>
             <option value="check">Check</option>
+            <option value="card_venmo">Card (Venmo)</option>
+            <option value="other">Other</option>
           </select>
-          <span class="admin-field-hint">Card/Stripe payments are recorded automatically when collected online — this list is for cash, Zelle, Venmo, and check.</span>
+          <span class="admin-field-hint">Card/Stripe payments are recorded automatically when collected online. Selecting "Other" requires a short note describing the payment.</span>
         </div>
         <div class="admin-field">
           <label for="d-payment-amount-input">Amount</label>
@@ -289,7 +301,7 @@
           <input type="date" id="d-payment-date-input">
         </div>
         <div class="admin-field">
-          <label for="d-payment-notes-input">Notes (optional)</label>
+          <label for="d-payment-notes-input">Notes (required for "Other")</label>
           <input type="text" id="d-payment-notes-input" maxlength="500" placeholder="e.g. deposit, balance, partial payment">
         </div>
         <button type="button" id="d-payment-add-btn" class="admin-btn admin-btn-outline">Record Payment</button>

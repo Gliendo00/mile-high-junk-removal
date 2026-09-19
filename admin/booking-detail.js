@@ -316,14 +316,6 @@ document.addEventListener('DOMContentLoaded', function () {
     set('d-estimated-price', quoted || 'Not set yet');
     set('d-final-price', final || 'Not set yet');
 
-    var tip = formatPrice(booking.tipAmount);
-    if (tip) {
-      document.getElementById('d-tip-row').style.display = 'block';
-      set('d-tip-amount', tip);
-    } else {
-      document.getElementById('d-tip-row').style.display = 'none';
-    }
-
     set('d-notes', booking.internalNotes || 'No internal notes yet.');
 
     if (data.dumpster) {
@@ -810,10 +802,37 @@ document.addEventListener('DOMContentLoaded', function () {
   var paymentAddInFlight = false;
   var paymentVoidInFlight = false;
 
-  var JOB_PAYMENT_METHOD_TEXT = { card_stripe: 'Card (Stripe)', cash: 'Cash', zelle: 'Zelle', venmo: 'Venmo', check: 'Check' };
+  var JOB_PAYMENT_METHOD_TEXT = { card_stripe: 'Card (Stripe)', cash: 'Cash', zelle: 'Zelle', venmo: 'Venmo', check: 'Check', card_venmo: 'Card (Venmo)', other: 'Other' };
+
+  // Tip (bookings.tip_amount) — restored here in the Payments section,
+  // alongside Collected/Total received. Edited in place via window.prompt,
+  // same lightweight pattern voidJobPayment() below already uses for its
+  // one text input, rather than building a dedicated form for a single
+  // field. Never touches job_payments — see handleUpdateTip()'s header in
+  // api/admin/booking.js for why tip stays completely independent of the
+  // ledger. Completed-only, matching the same rule the full Edit Job form
+  // already enforces for this column.
+  var tipAmountTextEl = document.getElementById('d-tip-amount-text');
+  var tipEditBtn = document.getElementById('d-tip-edit-btn');
+  var tipEditInFlight = false;
+  var currentTipAmount = null;
 
   function renderJobPayments(data) {
+    var booking = data.booking || {};
     set('d-collected-revenue', data.collectedRevenue != null ? formatPrice(data.collectedRevenue) : 'Not set yet');
+
+    currentTipAmount = booking.tipAmount != null ? booking.tipAmount : null;
+    var tipText = formatPrice(currentTipAmount);
+    tipAmountTextEl.textContent = tipText || '—';
+    if (currentStatus === 'completed') {
+      tipEditBtn.style.display = '';
+      tipEditBtn.textContent = tipText ? 'Edit' : 'Add Tip';
+    } else {
+      tipEditBtn.style.display = 'none';
+    }
+
+    var totalReceived = data.collectedRevenue != null || currentTipAmount != null ? (data.collectedRevenue || 0) + (currentTipAmount || 0) : null;
+    set('d-total-received', totalReceived != null ? formatPrice(totalReceived) : 'Not set yet');
 
     while (jobPaymentsListEl.firstChild) jobPaymentsListEl.removeChild(jobPaymentsListEl.firstChild);
     var payments = data.jobPayments || [];
@@ -932,11 +951,62 @@ document.addEventListener('DOMContentLoaded', function () {
       .catch(function () {});
   }
 
+  tipEditBtn.addEventListener('click', function () {
+    if (tipEditInFlight) return;
+    var raw = window.prompt('Tip amount (leave blank to clear):', currentTipAmount != null ? String(currentTipAmount) : '');
+    if (raw === null) return; // cancelled
+    raw = raw.trim();
+    var tipAmount;
+    if (raw === '') {
+      tipAmount = '';
+    } else {
+      var n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        showToast('Please enter a valid tip amount.', 'error');
+        return;
+      }
+      tipAmount = n;
+    }
+
+    tipEditInFlight = true;
+    tipEditBtn.disabled = true;
+
+    fetch('/api/admin/booking?resource=tip', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: bookingId, tipAmount: tipAmount }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not save the tip.');
+            return body;
+          });
+      })
+      .then(function () {
+        showToast('Tip saved.', 'success');
+        reloadJobPayments();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not save the tip.', 'error');
+      })
+      .finally(function () {
+        tipEditInFlight = false;
+        tipEditBtn.disabled = false;
+      });
+  });
+
   paymentAddBtn.addEventListener('click', function () {
     if (paymentAddInFlight) return;
     var amount = Number(paymentAmountEl.value);
     if (!paymentAmountEl.value || !Number.isFinite(amount) || amount <= 0) {
       showToast('Please enter a valid amount.', 'error');
+      return;
+    }
+    if (paymentMethodSelectEl.value === 'other' && !paymentNotesEl.value.trim()) {
+      showToast('Please enter a description for this payment.', 'error');
       return;
     }
 

@@ -726,6 +726,11 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // explicit financial-audit requirement). See
       // tests/phase3c-stage3-job-payments.test.js.
       "api/admin/booking.js: .update(",
+      // Tip restore/manual-payment-methods follow-up added exactly one new
+      // update — handleUpdateTip()'s PATCH ?resource=tip, which writes only
+      // bookings.tip_amount (+ updated_at), never a job_payments row. See
+      // tests/phase3c-stage3-job-payments.test.js's Tip test.
+      "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — gated behind an explicit

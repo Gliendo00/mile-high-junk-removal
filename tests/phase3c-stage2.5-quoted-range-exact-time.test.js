@@ -999,10 +999,16 @@ test("GET schedule: a booked job's payload carries both estimatedPrice/estimated
 test("Booking Detail (admin/booking-detail.js) formats Quoted, Actual Collected, and Tip completely independently — no status gate, no final_price ?? estimated_price coalescing between them", () => {
   const src = readSrc("admin/booking-detail.js");
   // The three rows are set from three independent expressions, none of
-  // which reads a value derived from either of the other two.
+  // which reads a value derived from either of the other two. Tip moved
+  // from the Pricing section into the Payments section (restored there
+  // alongside Collected/Total received, with an edit-in-place control) —
+  // it still reads booking.tipAmount directly, via a plain passthrough
+  // local (currentTipAmount), never a value derived from finalPrice or
+  // estimatedPrice.
   assert.ok(/formatQuotedAmount\(booking\.estimatedPrice,\s*booking\.estimatedPriceMax\)/.test(src));
   assert.ok(/formatPrice\(booking\.finalPrice\)/.test(src));
-  assert.ok(/formatPrice\(booking\.tipAmount\)/.test(src));
+  assert.ok(/currentTipAmount\s*=\s*booking\.tipAmount\s*!=\s*null\s*\?\s*booking\.tipAmount\s*:\s*null/.test(src), "Tip must still be sourced directly from booking.tipAmount, independent of finalPrice/estimatedPrice");
+  assert.ok(/formatPrice\(currentTipAmount\)/.test(src));
   assert.ok(!/booking\.finalPrice\s*\|\|\s*booking\.estimatedPrice|booking\.estimatedPrice\s*\?\?\s*booking\.finalPrice/.test(src), "must never coalesce Actual Collected and Quoted into a single displayed value");
 });
 

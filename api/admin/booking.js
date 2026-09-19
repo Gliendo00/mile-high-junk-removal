@@ -65,6 +65,18 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Tip-only edit for the Payments section. Deliberately its own tiny
+  // branch rather than folded into handleUpdate()'s full-form PATCH below —
+  // that endpoint requires the entire booking payload plus its optimistic-
+  // concurrency token, which this single-field edit (triggered inline from
+  // the Payments section, not the full Edit Job form) has no need for. See
+  // handleUpdateTip()'s own header for the rest of the contract.
+  if (req.query.resource === "tip") {
+    if (req.method === "PATCH") return handleUpdateTip(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
   if (req.method === "POST") return handleCreate(req, res);
   if (req.method === "PATCH") return handleUpdate(req, res);
 
@@ -1006,6 +1018,84 @@ async function handleUpdate(req, res) {
   }
 }
 
+// PATCH ?resource=tip { id, tipAmount } — the Payments section's own
+// edit-in-place control for bookings.tip_amount. Writes ONLY tip_amount
+// (+ updated_at) — never final_price/estimated_price or any other bookings
+// column, and never a job_payments row: a tip is not a collected-revenue
+// ledger entry (see job-payments-ledger.js's header for why tip_amount
+// stays completely independent of that ledger — it has never been summed
+// with collected revenue anywhere in this codebase, and this endpoint
+// doesn't change that).
+//
+// Tip stays completed-only, matching handleUpdate()'s identical rule above
+// for the full Edit Job form (see that function's header) — the CURRENT
+// status is read fresh from the database here too, never trusted from the
+// client.
+//
+// No optimistic-concurrency token, unlike handleUpdate()'s full-form PATCH:
+// that token exists to stop one admin's save of many fields from silently
+// clobbering another admin's concurrent edit to a different field. This
+// endpoint only ever writes tip_amount, so there is nothing else it could
+// clobber — "last write wins" on tip_amount alone is the whole risk
+// surface, exactly like this file's own job-payments POST/PATCH endpoints,
+// neither of which use a concurrency token either.
+async function handleUpdateTip(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin update tip failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  let tipAmount = null;
+  if (body.tipAmount !== undefined && body.tipAmount !== null && body.tipAmount !== "") {
+    const n = Number(body.tipAmount);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid tip amount." });
+      return;
+    }
+    tipAmount = Math.round(n * 100) / 100;
+  }
+
+  try {
+    const currentRes = await supabase.from("bookings").select("id, status").eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    if (!currentRes.data) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (currentRes.data.status !== "completed") {
+      res.status(400).json({ error: "Tip can only be recorded for a completed job." });
+      return;
+    }
+
+    const { data: updated, error } = await supabase
+      .from("bookings")
+      .update({ tip_amount: tipAmount, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select("id, tip_amount")
+      .maybeSingle();
+    if (error) throw error;
+    if (!updated) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, tipAmount: updated.tip_amount });
+  } catch (err) {
+    console.error("Admin update tip failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save the tip." });
+  }
+}
+
 // ---------------------------------------------------------------------
 // Phase 3C Stage 2.5-v2 — additional-charge propose/approve/check-status
 // (?resource=charges). See
@@ -1083,8 +1173,9 @@ async function handleListJobPayments(req, res) {
 }
 
 // POST ?resource=job-payments — record one MANUAL payment (cash/Zelle/
-// Venmo/check, or a card payment collected outside Stripe, e.g. in person
-// on a card reader this system doesn't integrate with). `paymentMethod:
+// Venmo/check/card_venmo/other, or a card payment collected outside
+// Stripe, e.g. in person on a card reader this system doesn't integrate
+// with). `paymentMethod:
 // "card_stripe"` is explicitly rejected here — that value is reserved for
 // rows written exclusively by mirrorStripePaymentToLedger() (see that
 // function's header), never by an admin picking it from a dropdown. This
@@ -1161,6 +1252,14 @@ async function handleCreateJobPayment(req, res, session) {
   }
 
   const notes = sanitizeText(body.notes, JOB_PAYMENT_NOTES_MAX) || null;
+  // "other" is deliberately the one manual method that requires a note —
+  // every other method (cash/Zelle/Venmo/check/card_venmo) is already
+  // self-describing; "other" alone tells a future reader nothing about
+  // what was actually collected without one.
+  if (paymentMethod === "other" && !notes) {
+    res.status(400).json({ error: "Please enter a description for this payment." });
+    return;
+  }
 
   let reversesPaymentId = null;
   if (body.reversesPaymentId !== undefined && body.reversesPaymentId !== null && body.reversesPaymentId !== "") {

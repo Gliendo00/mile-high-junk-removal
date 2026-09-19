@@ -268,7 +268,7 @@ test("netCollectedFromLedgerRows: an empty ledger nets to 0", () => {
   assert.strictEqual(netCollectedFromLedgerRows([]), 0);
 });
 test("VALID_PAYMENT_METHODS / VALID_PAYMENT_TYPES are exactly the documented allowlists", () => {
-  assert.deepStrictEqual(VALID_PAYMENT_METHODS.slice().sort(), ["card_stripe", "cash", "check", "venmo", "zelle"]);
+  assert.deepStrictEqual(VALID_PAYMENT_METHODS.slice().sort(), ["card_stripe", "card_venmo", "cash", "check", "other", "venmo", "zelle"]);
   assert.deepStrictEqual(VALID_PAYMENT_TYPES.slice().sort(), ["payment", "refund"]);
 });
 
@@ -501,6 +501,28 @@ test("POST job-payments: a refund entry is accepted and reduces net collected re
   assert.strictEqual(total, 450);
 });
 
+test("POST job-payments: 'card_venmo' is accepted as a manual payment method (added alongside the original five)", async () => {
+  adminAuthed();
+  const booking = makeBooking();
+  const db = freshDb({ bookings: [booking] });
+  const res = await createPayment(db, { bookingId: booking.id, amount: 120, paymentMethod: "card_venmo", paymentDate: "2026-09-10" });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.jobPayment.paymentMethod, "card_venmo");
+});
+
+test("POST job-payments: 'other' requires a description — rejected without notes, accepted with one", async () => {
+  adminAuthed();
+  const booking = makeBooking();
+  const db = freshDb({ bookings: [booking] });
+  const rejected = await createPayment(db, { bookingId: booking.id, amount: 75, paymentMethod: "other" });
+  assert.strictEqual(rejected.statusCode, 400);
+  assert.strictEqual(db.job_payments.length, 0, "no row created when 'other' has no description");
+
+  const accepted = await createPayment(db, { bookingId: booking.id, amount: 75, paymentMethod: "other", notes: "Paid via CashApp" });
+  assert.strictEqual(accepted.statusCode, 200);
+  assert.strictEqual(accepted.body.jobPayment.notes, "Paid via CashApp");
+});
+
 test("PATCH job-payments (void): requires a reason (400)", async () => {
   adminAuthed();
   const booking = makeBooking();
@@ -613,6 +635,37 @@ test("GET booking detail: tip_amount is completely independent of collectedReven
   const res = await req(db, { query: { id: booking.id } });
   assert.strictEqual(res.body.booking.tipAmount, 40);
   assert.strictEqual(res.body.collectedRevenue, 275, "collectedRevenue must never include tip_amount");
+});
+
+// =======================================================================
+// Tip (bookings.tip_amount) — restored admin entry/edit via PATCH ?resource=tip
+// =======================================================================
+test("Tip: PATCH ?resource=tip sets/clears bookings.tip_amount for a completed job, independent of collectedRevenue (Total received = Collected + Tip is display-only, never a job_payments row); rejected for a non-completed job", async () => {
+  adminAuthed();
+  const completed = makeBooking({ status: "completed", final_price: 300, tip_amount: null });
+  const booked = makeBooking({ status: "booked", final_price: null, tip_amount: null });
+  const db = freshDb({ bookings: [completed, booked] });
+
+  // Tip stays completed-only, same rule the full Edit Job form already enforces.
+  const rejectedRes = await req(db, { method: "PATCH", query: { resource: "tip" }, body: { id: booked.id, tipAmount: 20 } });
+  assert.strictEqual(rejectedRes.statusCode, 400);
+
+  const setRes = await req(db, { method: "PATCH", query: { resource: "tip" }, body: { id: completed.id, tipAmount: 40 } });
+  assert.strictEqual(setRes.statusCode, 200);
+  assert.strictEqual(setRes.body.tipAmount, 40);
+
+  const detailRes = await req(db, { query: { id: completed.id } });
+  assert.strictEqual(detailRes.body.booking.tipAmount, 40);
+  assert.strictEqual(detailRes.body.collectedRevenue, 300, "collected must never include the tip");
+  const totalReceived = (detailRes.body.collectedRevenue || 0) + (detailRes.body.booking.tipAmount || 0);
+  assert.strictEqual(totalReceived, 340, "Total received (display-only) is Collected + Tip");
+
+  // Clearing (empty string) nulls it out, never leaves a stale value.
+  const clearRes = await req(db, { method: "PATCH", query: { resource: "tip" }, body: { id: completed.id, tipAmount: "" } });
+  assert.strictEqual(clearRes.statusCode, 200);
+  assert.strictEqual(clearRes.body.tipAmount, null);
+
+  assert.strictEqual(db.job_payments.length, 0, "tip edits must never write to job_payments");
 });
 
 // =======================================================================
