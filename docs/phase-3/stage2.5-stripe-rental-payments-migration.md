@@ -541,11 +541,13 @@ rollout is simple and requires no conversion step:
 5. Run `sql/2026-09-18_phase3c-stage2.5-service-role-grants.sql` — grants
    `service_role` exactly the CRUD it needs on all five tables this flow
    touches (`customers`, `bookings`, `dumpster_rentals`, `rental_payments`,
-   `rental_additional_charges`), schema-qualified as `public.*`. Do this
-   as a standard, visible step of the rollout — not an ad hoc manual grant
-   run from memory — see §5.3 for why this step exists at all. This step
-   does **not** touch `anon`/`authenticated` privileges on any of these
-   tables — see §5.3 for why that's deliberately out of scope here.
+   `rental_additional_charges`), schema-qualified as `public.*`, plus
+   `SELECT, INSERT` on the two Preview-CRM tables (`booking_photos`,
+   `expenses`) a separate staging discovery surfaced — see §5.3 for both.
+   Do this as a standard, visible step of the rollout — not an ad hoc
+   manual grant run from memory. This step does **not** touch
+   `anon`/`authenticated` privileges on any of these tables — see §5.3 for
+   why that's deliberately out of scope here.
 
 No data migration, no backfill, no Braintree-schema teardown — this is a
 purely additive migration against the current, unmodified Production
@@ -635,6 +637,73 @@ statement, a verification query for the grant, and an *informational*
 query showing each table's actual current RLS-enabled state (not changed
 by this file — for visibility only, so this doesn't happen again).
 
+**A second, separate permissions gap** was found while verifying the
+Preview CRM (not the Stripe rental flow itself) against the same staging
+project, in two steps, in this order:
+
+1. **`SELECT` discovered missing.** CRM testing found `service_role`
+   lacked `SELECT` on `public.booking_photos` and `public.expenses` — the
+   CRM's booking-detail photo list and the Daily Quick Expense views both
+   failed until `GRANT SELECT ON public.booking_photos, public.expenses TO
+   service_role` was run by hand against staging. Same root cause as
+   above: both tables predate this Stage 2.5 work and were never created
+   by a role whose `ALTER DEFAULT PRIVILEGES` covers `service_role`.
+2. **`INSERT` then found also required, and separately granted.** A
+   follow-up source audit of every service-role code path
+   (`api/upload-photo.js`'s photo upload, `api/admin/bookings.js`'s Daily
+   Quick Expense create) proved `INSERT` is demonstrably required by
+   current application code on both tables too — `SELECT` alone was
+   insufficient. `GRANT INSERT ON public.booking_photos, public.expenses
+   TO service_role` was then run by hand against staging as its own,
+   subsequent manual step. Staging now has, and has had verified via
+   `information_schema.role_table_grants`, both `SELECT` and `INSERT` on
+   `booking_photos` and `expenses` for `service_role`.
+
+Both manual staging fixes are now tracked together as one piece of code,
+in the same `sql/2026-09-18_phase3c-stage2.5-service-role-grants.sql`
+file (a second `GRANT` statement, clearly separated and commented). It
+grants `SELECT, INSERT` — not more: `UPDATE`/`DELETE` are deliberately not
+granted on either table, since no code path performs either operation
+against `booking_photos` or `expenses`. The same source audit (every
+`.from(...)` call across every file that uses the service-role Supabase
+client) found no other table reads or writes missing a tracked grant —
+the seven tables across both `GRANT` statements in that file are the
+complete set. **Production rollout must apply this file (both
+`GRANT` statements — SELECT/INSERT/UPDATE/DELETE on the five Stripe-flow
+tables, and SELECT/INSERT on `booking_photos`/`expenses`) per §5.1 step 5
+below; staging's two separate manual steps must not be repeated as two
+separate steps in Production — the one file covers both.**
+
+**Sequence/identity audit (no sequence grant needed on either table) —
+directly verified against staging, not inferred.** An earlier pass of
+this audit could only reason from repository conventions: `expenses`'s
+tracked `CREATE TABLE` documents a `uuid` default, but `booking_photos`
+predates this project's migration tracking (created directly in the
+Supabase dashboard in Phase 1, no `CREATE TABLE` in `sql/`), so its actual
+column DDL couldn't be read from the repo at all — that pass could only
+point to the absence of any `SERIAL`/`BIGSERIAL`/`IDENTITY`/`nextval(`
+reference anywhere in the codebase and the app never supplying or reading
+back an `id`, as indirect evidence.
+
+That has since been superseded by a direct query against the staging
+database itself (`information_schema.columns` for `data_type`/`is_identity`
+plus `pg_get_serial_sequence()`), which confirms, as fact rather than
+inference:
+
+| Table | Column | `data_type` | `column_default` | `is_identity` | `pg_get_serial_sequence(...)` |
+|---|---|---|---|---|---|
+| `public.booking_photos` | `id` | `uuid` | `gen_random_uuid()` | `NO` | `NULL` |
+| `public.expenses` | `id` | `uuid` | `gen_random_uuid()` | `NO` | `NULL` |
+
+Neither table is `SERIAL`/`BIGSERIAL`-backed, neither `id` is a
+`GENERATED ... AS IDENTITY` column, and `pg_get_serial_sequence()` —
+Postgres's own canonical way to ask "does this column have an owned
+sequence at all" — returns `NULL` for both, meaning there is no sequence
+object in play to grant `USAGE`/`SELECT` on in the first place.
+**Conclusion, now directly confirmed rather than inferred: no sequence
+privilege is required for either table** — the table-level `SELECT,
+INSERT` grant above is sufficient by itself.
+
 ### 5.4 `signature_name` staging catch-up — plan only, not executed
 
 Staging's `rental_payments` predates the typed-electronic-signature
@@ -699,13 +768,20 @@ code can enforce or verify.
 
 **All 15 explicitly required scenarios are covered**, plus the full
 existing regression suite, in
-`tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` (88 tests) and
-the rest of the full suite (**688 tests total across 19 files, 0 failed**
-— re-run in full again after the §13.3 correction pass; also fixed one
-unrelated fixture gap it surfaced in
-`tests/phase3b-step4a3-repeat-client-reuse.test.js`, whose own separate
-dumpster-rental payload builder needed `signatureName` added, same as
-`validDumpsterPayload` in this file):
+`tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` and the rest of
+the full suite. At the time of the §13.3 correction pass documented
+immediately below, that was **88 tests in this file, 688 tests total
+across 19 files, 0 failed** — also fixed one unrelated fixture gap it
+surfaced in `tests/phase3b-step4a3-repeat-client-reuse.test.js`, whose own
+separate dumpster-rental payload builder needed `signatureName` added,
+same as `validDumpsterPayload` in this file. **That is no longer the
+current total.** The suite has grown since, via later, unrelated additive
+work (the overage-rate/weight-precision changes referenced in §14, and
+this stage's own service-role-grants hardening) not itemized in the
+reconciliation table below, which documents only the §13.3 pass's own
+history. **Current verified total (this session, alongside the
+`booking_photos`/`expenses` grants work): 703 tests across 19 files, 0
+failed.**
 
 **Test-count reconciliation (677 → 680 → 682 → 688)** — four real,
 additive checkpoints, not a discrepancy:

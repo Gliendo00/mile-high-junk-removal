@@ -60,23 +60,50 @@ GRANT SELECT, INSERT, UPDATE, DELETE
   TO service_role;
 
 -- ---------------------------------------------------------------------
+-- service_role: SELECT, INSERT on booking_photos and expenses.
+--
+-- Discovered missing during Stage 2.5 staging verification of the Preview
+-- CRM (not the Stripe rental flow itself) — the CRM's booking-detail and
+-- expenses views failed until `GRANT SELECT ON public.booking_photos,
+-- public.expenses TO service_role` was run by hand against staging. Same
+-- root cause as the block above (§ file header): these two tables were
+-- never created by a role whose ALTER DEFAULT PRIVILEGES covers
+-- service_role, so the grant never back-filled.
+--
+-- INSERT is included, not just SELECT, because a source audit of every
+-- service-role code path (api/upload-photo.js, api/admin/bookings.js,
+-- api/admin/booking.js) found it is demonstrably required:
+--   - api/upload-photo.js inserts into booking_photos when a job photo is
+--     uploaded.
+--   - api/admin/bookings.js inserts into expenses for the Daily Quick
+--     Expense feature.
+-- UPDATE/DELETE are deliberately NOT included on either table — no code
+-- path performs either operation against booking_photos or expenses today.
+-- ---------------------------------------------------------------------
+GRANT SELECT, INSERT
+  ON public.booking_photos,
+     public.expenses
+  TO service_role;
+
+-- ---------------------------------------------------------------------
 -- Verification (re-run any of these any time to re-confirm current state)
 -- ---------------------------------------------------------------------
 -- select grantee, table_name, privilege_type
 -- from information_schema.role_table_grants
 -- where table_schema = 'public'
---   and table_name in ('customers', 'bookings', 'dumpster_rentals', 'rental_payments', 'rental_additional_charges')
+--   and table_name in ('customers', 'bookings', 'dumpster_rentals', 'rental_payments', 'rental_additional_charges', 'booking_photos', 'expenses')
 -- order by table_name, grantee, privilege_type;
--- -- expect: service_role has SELECT/INSERT/UPDATE/DELETE on all five.
+-- -- expect: service_role has SELECT/INSERT/UPDATE/DELETE on the first five,
+-- -- and SELECT/INSERT (only) on booking_photos and expenses.
 --
 -- -- Which of these tables actually have RLS enabled today (informational
 -- -- only — this file does not change RLS on anything). Staging testing
 -- -- directly observed public.bookings has it enabled; this query confirms
--- -- the current state of all five rather than assuming:
+-- -- the current state of all seven rather than assuming:
 -- select relname as table_name, relrowsecurity as rls_enabled, relforcerowsecurity as rls_forced
 -- from pg_class
 -- where relnamespace = 'public'::regnamespace
---   and relname in ('customers', 'bookings', 'dumpster_rentals', 'rental_payments', 'rental_additional_charges')
+--   and relname in ('customers', 'bookings', 'dumpster_rentals', 'rental_payments', 'rental_additional_charges', 'booking_photos', 'expenses')
 -- order by relname;
 
 -- ---------------------------------------------------------------------
@@ -90,4 +117,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 --      public.dumpster_rentals,
 --      public.rental_payments,
 --      public.rental_additional_charges
+--   FROM service_role;
+--
+-- REVOKE SELECT, INSERT
+--   ON public.booking_photos,
+--      public.expenses
 --   FROM service_role;
