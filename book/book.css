@@ -228,6 +228,31 @@
   margin: 0;
 }
 
+/* — secondary/back buttons (Back, Back to Review) — page-scoped override
+   of the shared .btn-secondary class (styles.css: transparent background,
+   dark outline). That transparent look let the Denver background show
+   through here and hurt readability; overridden only on this page (book.css
+   loads after styles.css and only on /book/, so every other page's
+   .btn-secondary is untouched). Every Back/"Back to Review" button in the
+   wizard already shares this one class (`.wizard-actions .btn-secondary`,
+   `#payment-back-btn`), so this single rule covers all of them. Text/border
+   reuse the exact same green as .btn-primary's background (#357019) for
+   brand consistency between the solid and outline button styles; .btn-primary
+   itself (Next, Pay & Book Now) is untouched. */
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.95);
+  color: #357019;
+  border-color: #357019;
+  box-shadow: var(--shadow-sm);
+}
+.btn-secondary:hover,
+.btn-secondary:focus-visible {
+  background: var(--color-accent-100);
+}
+.btn-secondary:active {
+  background: var(--color-accent-200);
+}
+
 /* — service area map (step 1, below the primary CTA) — */
 .booking-map h3 { font-size: 15px; margin: 0 0 4px; }
 .booking-map p { font-size: 13px; margin: 0 0 14px; }
