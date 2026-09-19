@@ -99,11 +99,16 @@ module.exports = async (req, res) => {
         .select("first_name, last_name, phone, email, address, city, state, zip")
         .eq("id", booking.customer_id)
         .maybeSingle(),
-      supabase.from("dumpster_rentals").select("delivery_date, pickup_date, material_type, placement_notes").eq("booking_id", id).maybeSingle(),
+      supabase.from("dumpster_rentals").select("delivery_date, pickup_date, material_type, placement_notes, actual_weight_lbs").eq("booking_id", id).maybeSingle(),
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
       supabase
         .from("rental_payments")
-        .select("payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason")
+        // included_tons/overage_ton_rate added for the 2026-09-18-v2
+        // pricing update — the admin UI needs THIS booking's own locked-in
+        // rate/included weight to show/use it correctly when proposing an
+        // overweight charge (see handleProposeCharge() below), rather than
+        // silently assuming the current global rate applies.
+        .select("payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason, included_tons, overage_ton_rate")
         .eq("booking_id", id)
         .maybeSingle(),
     ]);
@@ -198,6 +203,11 @@ module.exports = async (req, res) => {
             pickupDate: dumpster.pickup_date,
             materialType: dumpster.material_type,
             placementNotes: dumpster.placement_notes,
+            // 2026-09-18-v2 pricing update — the real post-disposal scale
+            // weight, once known; null until an admin records it (see
+            // handleProposeCharge() below). Independent of whether it ever
+            // results in an overage charge.
+            actualWeightLbs: dumpster.actual_weight_lbs,
           }
         : null,
       // Never card data — only what Stripe itself already returns as
@@ -213,8 +223,29 @@ module.exports = async (req, res) => {
             agreementAcceptedAt: payment.agreement_accepted_at,
             disputeStatus: payment.dispute_status,
             failureReason: payment.failure_reason,
+            // This booking's own locked-in rate schedule — see
+            // handleProposeCharge() below for why the admin UI must use
+            // these, never the current global rentalPricing constants,
+            // when this booking has its own rental_payments row.
+            includedTons: payment.included_tons,
+            overageTonRate: payment.overage_ton_rate,
           }
         : null,
+      // 2026-09-18-v2 pricing update — the exact rate schedule an overweight
+      // charge on THIS booking would use, computed with the identical
+      // fallback rule handleProposeCharge() itself applies (this booking's
+      // own rental_payments snapshot when it has one, else the current
+      // global rentalPricing constants). Lets the admin UI show/preview the
+      // real applicable rate — e.g. an older $90/ton booking vs. a current
+      // $125/ton one — without a second network call, and without ever
+      // guessing at a rate the server itself wouldn't actually use.
+      // isBookingSpecific makes that fallback explicit rather than letting
+      // the UI (or an admin) assume every rate shown is booking-specific.
+      rentalPricingContext: {
+        includedTons: payment && payment.included_tons != null ? payment.included_tons : rentalPricing.INCLUDED_TONS,
+        overageTonRate: payment && payment.overage_ton_rate != null ? payment.overage_ton_rate : rentalPricing.OVERAGE_TON_RATE,
+        isBookingSpecific: !!(payment && payment.overage_ton_rate != null),
+      },
       photos: photos,
     });
   } catch (err) {
@@ -948,6 +979,10 @@ async function handleUpdate(req, res) {
 
 const CHARGE_TYPES = ["overweight_tonnage", "additional_days", "other"];
 const MAX_QUANTITY = 999999;
+// A generous sanity bound on a scale-weight reading (100,000 lbs), not a
+// real physical limit — just enough to reject an obvious typo before it
+// becomes a charge, the same spirit as MAX_QUANTITY/MAX_PRICE below.
+const MAX_WEIGHT_LBS = 100000;
 
 function serializeCharge(row) {
   return {
@@ -998,12 +1033,14 @@ async function handleListCharges(req, res) {
 }
 
 // POST ?resource=charges — propose a new additional charge. Moves no
-// money: writes exactly one rental_additional_charges row with
-// status: "proposed". `quantity`/`chargeType` (or, for "other", a raw
-// `amount`) are the only fields ever read from the body — never a
-// client-submitted `amount` for the two rate-based types, and never a
-// client-submitted `rate` at all; both are always computed here from
-// api/_lib/rental-pricing.js's current rates and snapshotted onto the row.
+// money: writes at most one rental_additional_charges row with
+// status: "proposed". `chargeType` plus `quantity` (additional_days),
+// `amount` (other), or `actualWeightLbs` (overweight_tonnage, since the
+// 2026-09-18-v2 pricing update — see below) are the only fields ever read
+// from the body — never a client-submitted `amount` for the two
+// rate-based types, and never a client-submitted `rate` at all; both are
+// always computed here from api/_lib/rental-pricing.js's current rates (or
+// this booking's own locked-in ones) and snapshotted onto the row.
 async function handleProposeCharge(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -1048,16 +1085,21 @@ async function handleProposeCharge(req, res, session) {
     // current global rate only when this booking has no rental_payments
     // row of its own to read from (e.g. an admin-created dumpster rental
     // that was never paid online, which locked in no rate schedule) —
-    // there is nothing else to fall back to in that case.
+    // there is nothing else to fall back to in that case. included_tons is
+    // read the same way, added for the 2026-09-18-v2 pricing update (see
+    // overweight_tonnage below) — a booking's own included weight must be
+    // used for its own overage math too, not just its own rate.
     let bookingRate = null;
+    let bookingIncludedTons = null;
     const bookingPricingRes = await supabase
       .from("rental_payments")
-      .select("overage_ton_rate, overage_day_rate")
+      .select("overage_ton_rate, overage_day_rate, included_tons")
       .eq("booking_id", bookingId)
       .maybeSingle();
     if (bookingPricingRes.error) throw bookingPricingRes.error;
     if (bookingPricingRes.data) {
       bookingRate = { overweight_tonnage: bookingPricingRes.data.overage_ton_rate, additional_days: bookingPricingRes.data.overage_day_rate };
+      bookingIncludedTons = bookingPricingRes.data.included_tons;
     }
 
     let quantity = null;
@@ -1072,6 +1114,50 @@ async function handleProposeCharge(req, res, session) {
       amount = rentalPricing.round2(n);
       if (!description) {
         res.status(400).json({ error: "Please describe this charge." });
+        return;
+      }
+    } else if (chargeType === "overweight_tonnage") {
+      // 2026-09-18-v2 pricing update: replaces the old manually-typed
+      // "tons over" quantity with the actual scale weight in whole
+      // pounds — see api/_lib/rental-pricing.js's overweightCharge() for
+      // the proration formula (never rounds the weight up; rounds only
+      // the final dollar amount).
+      const w = Number(body.actualWeightLbs);
+      if (!Number.isInteger(w) || w < 0 || w > MAX_WEIGHT_LBS) {
+        res.status(400).json({ error: "Please enter a valid actual scale weight, in whole pounds." });
+        return;
+      }
+
+      // Persist the scale weight on the rental itself UNCONDITIONALLY —
+      // a deliberate data-collection step (see
+      // sql/2026-09-18_phase3c-stage2.5-actual-weight-lbs.sql), independent
+      // of whether this weight results in an overage charge at all. Never
+      // blocked by, and never rolled back alongside, the charge-creation
+      // logic below.
+      const weightUpdateRes = await supabase.from("dumpster_rentals").update({ actual_weight_lbs: w }).eq("booking_id", bookingId);
+      if (weightUpdateRes.error) throw weightUpdateRes.error;
+
+      const includedTons = bookingIncludedTons != null ? Number(bookingIncludedTons) : rentalPricing.INCLUDED_TONS;
+      rate = (bookingRate && bookingRate.overweight_tonnage != null ? Number(bookingRate.overweight_tonnage) : null) || rentalPricing.overageRate("overweight_tonnage");
+      const computed = rentalPricing.overweightCharge(w, includedTons, rate);
+      quantity = computed.quantityTons;
+      amount = computed.amount;
+
+      if (amount <= 0) {
+        // At or under the included weight — nothing to charge.
+        // rental_additional_charges.amount has a CHECK (amount > 0), so a
+        // zero-amount row can never be inserted (and shouldn't be — this
+        // is a legitimate, common outcome during the data-collection
+        // window, not an error). The scale weight is already saved above;
+        // tell the admin that plainly rather than proposing a charge.
+        res.status(200).json({
+          ok: true,
+          charge: null,
+          weightRecorded: true,
+          actualWeightLbs: w,
+          includedLbs: computed.includedLbs,
+          overweightLbs: 0,
+        });
         return;
       }
     } else {
@@ -1101,7 +1187,7 @@ async function handleProposeCharge(req, res, session) {
       .single();
     if (error || !created) throw error || new Error("Insert returned no row.");
 
-    res.status(200).json({ ok: true, charge: serializeCharge(created) });
+    res.status(200).json({ ok: true, charge: serializeCharge(created), weightRecorded: chargeType === "overweight_tonnage" });
   } catch (err) {
     console.error("Admin propose charge failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not propose this charge." });

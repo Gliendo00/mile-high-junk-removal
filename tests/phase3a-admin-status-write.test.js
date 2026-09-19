@@ -704,6 +704,13 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // 2026-09-18-v2 pricing update added exactly one new write call —
+      // handleProposeCharge()'s unconditional persist of
+      // dumpster_rentals.actual_weight_lbs, independent of whether the
+      // computed overage ends up being charged. See
+      // sql/2026-09-18_phase3c-stage2.5-actual-weight-lbs.sql and
+      // docs/phase-3/stage2.5-stripe-rental-payments-migration.md §14.
+      "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — gated behind an explicit

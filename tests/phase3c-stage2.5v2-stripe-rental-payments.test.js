@@ -581,10 +581,95 @@ test("rental-pricing: base rental amount is the flat $349 rate", () => {
   assert.strictEqual(rentalPricing.baseRentalAmount(), 349.0);
 });
 test("rental-pricing: overageRate returns the correct per-unit rate for each charge type", () => {
-  assert.strictEqual(rentalPricing.overageRate("overweight_tonnage"), 90.0);
+  assert.strictEqual(rentalPricing.overageRate("overweight_tonnage"), 125.0);
   assert.strictEqual(rentalPricing.overageRate("additional_days"), 15.0);
   assert.strictEqual(rentalPricing.overageRate("other"), null);
   assert.strictEqual(rentalPricing.overageRate("bogus"), null);
+});
+// 2026-09-18-v2 pricing update — overweightCharge() is the one formula
+// every overweight-billing amount in this codebase now derives from
+// (api/admin/booking.js's handleProposeCharge()). Exact-value coverage for
+// every example the pricing decision explicitly required, plus the
+// invariants that decision explicitly called out: never rounded up to a
+// whole/partial ton, and rounding happens exactly once, on the final
+// dollar amount.
+test("rental-pricing: overweightCharge matches every required example exactly, at $125/ton (2 tons/4000lb included)", () => {
+  const cases = [
+    [4000, 0.0],
+    [4240, 15.0],
+    [4500, 31.25],
+    [5000, 62.5],
+    [6000, 125.0],
+  ];
+  cases.forEach(([lbs, expectedAmount]) => {
+    const r = rentalPricing.overweightCharge(lbs, 2, 125.0);
+    assert.strictEqual(r.amount, expectedAmount, lbs + " lbs must charge $" + expectedAmount.toFixed(2));
+  });
+});
+test("rental-pricing: overweightCharge below the included weight is exactly $0, never negative", () => {
+  assert.strictEqual(rentalPricing.overweightCharge(4000, 2, 125.0).amount, 0);
+  assert.strictEqual(rentalPricing.overweightCharge(3500, 2, 125.0).amount, 0, "under the included weight must never go negative");
+  assert.strictEqual(rentalPricing.overweightCharge(0, 2, 125.0).amount, 0);
+});
+test("rental-pricing: overweightCharge honors a booking's own historical rate/included tons, independent of this module's current constants", () => {
+  // An older booking locked in at $90/ton with the old 2-ton/4000lb
+  // included amount, read exactly as api/admin/booking.js would pass them
+  // in (this booking's own rental_payments.included_tons/overage_ton_rate)
+  // — must produce the OLD $90/ton math even though OVERAGE_TON_RATE is
+  // now 125 in this same module.
+  const r = rentalPricing.overweightCharge(4240, 2, 90.0);
+  assert.strictEqual(r.amount, 10.8, "240 lbs over * ($90/2000) = $10.80 at the OLD rate, not the new $125 one");
+  assert.notStrictEqual(rentalPricing.OVERAGE_TON_RATE, 90.0, "sanity check: the global constant really has moved on to $125");
+});
+test("rental-pricing: overweightCharge never rounds the weight up to a whole or partial ton — only the final dollar amount is rounded", () => {
+  // 1 lb over is nowhere near a 20lb (0.01-ton) increment, but
+  // quantityTons no longer collapses to a misleading 0.00 for it — see the
+  // dedicated numeric(10,4)-precision test below. `amount` must reflect
+  // the true, un-rounded pound-for-pound charge either way — proving it's
+  // derived from overweightLbs directly, never from quantityTons.
+  const r = rentalPricing.overweightCharge(4001, 2, 125.0);
+  assert.strictEqual(r.overweightLbs, 1);
+  assert.strictEqual(r.quantityTons, 0.0005);
+  assert.strictEqual(r.amount, 0.06, "amount must still reflect the true fractional-cent charge (1 * 0.0625 = 0.0625, rounded once to 0.06), never derived from quantityTons");
+});
+test("rental-pricing: overweightCharge's quantityTons is stored at numeric(10,4) precision — a small overage no longer collapses to a misleading '0.00 tons' next to a real charge", () => {
+  // rental_additional_charges.quantity is numeric(10,4) specifically so
+  // overweightLbs/2000 stores losslessly for ANY integer overweightLbs
+  // (2000 = 2^4*5^3, so that division always terminates in exactly 4
+  // decimal places, never more) -- confirmed for a spread of pound values,
+  // including ones the old numeric(10,2)/round2 precision would have
+  // zeroed out entirely.
+  const cases = [
+    [1, 0.0005],
+    [3, 0.0015],
+    [7, 0.0035],
+    [19, 0.0095], // the largest value the OLD (10,2) precision would have rounded to 0.00
+    [20, 0.01], // the smallest value the old precision could already represent
+    [240, 0.12],
+    [1999, 0.9995],
+  ];
+  cases.forEach(([overLbs, expectedTons]) => {
+    const r = rentalPricing.overweightCharge(4000 + overLbs, 2, 125.0);
+    assert.strictEqual(r.quantityTons, expectedTons, overLbs + " lbs over must store as exactly " + expectedTons + " tons");
+    assert.notStrictEqual(r.quantityTons, 0, overLbs + " lbs over is a real overage and must never display as 0 tons");
+  });
+});
+test("rental-pricing: round4 exists as a dedicated helper, distinct from round2, and round-trips overweightLbs/2000 exactly for the full valid weight range", () => {
+  assert.strictEqual(typeof rentalPricing.round4, "function");
+  assert.strictEqual(rentalPricing.round4(10.12345), 10.1235);
+  // Every integer overweightLbs from 0 up to the admin UI's own
+  // MAX_WEIGHT_LBS sanity bound (100000, api/admin/booking.js) must
+  // round-trip back to the exact same pound figure once multiplied by
+  // 2000 and rounded to the nearest whole pound — proving no precision is
+  // silently lost anywhere in this range, not just at the few examples
+  // spot-checked above.
+  for (let lbs = 0; lbs <= 100000; lbs += 997) {
+    const tons = rentalPricing.round4(lbs / 2000);
+    assert.strictEqual(Math.round(tons * 2000), lbs, lbs + " lbs must round-trip exactly through quantityTons");
+  }
+});
+test("rental-pricing: RENTAL_AGREEMENT_VERSION is the new, unique 2026-09-18-v2 string", () => {
+  assert.strictEqual(rentalPricing.RENTAL_AGREEMENT_VERSION, "2026-09-18-v2");
 });
 test("rental-pricing: round2 rounds to the nearest cent", () => {
   // 1.005 is deliberately avoided here — it isn't exactly representable in
@@ -648,7 +733,7 @@ test("GET /api/book: returns publishable key, pricing, agreement version", async
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.stripe.publishableKey, "pk_test_mock");
   assert.strictEqual(res.body.pricing.baseRate, 349.0);
-  assert.strictEqual(res.body.pricing.overageTonRate, 90.0);
+  assert.strictEqual(res.body.pricing.overageTonRate, 125.0);
   assert.strictEqual(res.body.pricing.overageDayRate, 15.0);
   assert.strictEqual(res.body.agreementVersion, rentalPricing.RENTAL_AGREEMENT_VERSION);
   assert.ok(Array.isArray(res.body.takenDeliverySlots));
@@ -965,6 +1050,16 @@ test("POST dumpster_rental: rate-schedule snapshot (base rate, included days/ton
   assert.strictEqual(rp.included_tons, rentalPricing.INCLUDED_TONS);
   assert.strictEqual(rp.overage_ton_rate, rentalPricing.OVERAGE_TON_RATE);
   assert.strictEqual(rp.overage_day_rate, rentalPricing.OVERAGE_DAY_RATE);
+});
+test("POST dumpster_rental: 2026-09-18-v2 — a brand-new booking snapshots the current $125/ton rate and the new agreement version explicitly (not just 'whatever the constant happens to be')", async () => {
+  const db = freshDb();
+  resetStripe();
+  const res = await run(bookHandler, makeReq({ method: "POST", body: validDumpsterPayload() }));
+  assert.strictEqual(res.statusCode, 200);
+  const rp = db.rental_payments[0];
+  assert.strictEqual(rp.overage_ton_rate, 125.0);
+  assert.strictEqual(rp.included_tons, 2);
+  assert.strictEqual(rp.agreement_version, "2026-09-18-v2");
 });
 test("POST dumpster_rental: if every attempt at the full 'mark paid' write fails, a minimal fallback write still records paid_reconciliation_required + the PaymentIntent id — the customer still gets a booked response either way", async () => {
   const db = freshDb();
@@ -1349,23 +1444,28 @@ test("admin charges: no admin session -> 401, no DB or Stripe calls", async () =
   assert.strictEqual(res.statusCode, 401);
   assert.strictEqual(confirmChargeCallLog.length, 0);
 });
-test("admin charges: proposing an overweight_tonnage charge computes amount from the current rate and never calls Stripe", async () => {
+test("admin charges: proposing an overweight_tonnage charge computes amount from the current rate/included weight (actual scale weight, not a manually typed tons quantity) and never calls Stripe", async () => {
   const db = freshDb();
   resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  db.dumpster_rentals.push({ id: "dr1", booking_id: BOOKING_ID, material_type: "General", actual_weight_lbs: null });
 
+  // No rental_payments row -> global INCLUDED_TONS (2, 4000 lbs) and
+  // OVERAGE_TON_RATE (125). actualWeightLbs 7000 -> overweightLbs 3000 ->
+  // quantityTons 1.5 -> amount = 1.5 * 125 = 187.5.
   const res = await run(
     bookingHandler,
-    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", quantity: 1.5 } })
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 7000 } })
   );
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.status, "proposed");
-  assert.strictEqual(res.body.charge.quantity, 1.5);
-  assert.strictEqual(res.body.charge.rate, 90.0);
-  assert.strictEqual(res.body.charge.amount, 135.0);
+  assert.strictEqual(res.body.charge.quantity, 1.5, "quantity stays expressed in fractional TONS, not pounds");
+  assert.strictEqual(res.body.charge.rate, 125.0);
+  assert.strictEqual(res.body.charge.amount, 187.5);
   assert.strictEqual(confirmChargeCallLog.length, 0, "a proposal must never move money");
+  assert.strictEqual(db.dumpster_rentals[0].actual_weight_lbs, 7000, "the actual scale weight must be persisted on the rental itself");
 });
 test("admin charges: proposing an additional_days charge computes amount from the day rate", async () => {
   const db = freshDb();
@@ -1649,35 +1749,126 @@ test("admin charges: metadata links the PaymentIntent back to the booking and ch
   await run(bookingHandler, makeReq({ method: "PATCH", query: { resource: "charges" }, cookie: adminCookie(), body: { id: CHARGE_ID, action: "approve" } }));
   assert.deepStrictEqual(confirmChargeCallLog[0].params.metadata, { bookingId: BOOKING_ID, chargeId: CHARGE_ID });
 });
-test("admin charges: proposing overweight_tonnage uses THIS booking's own locked-in rate, not the current global rate, when they differ", async () => {
+test("admin charges: proposing overweight_tonnage uses THIS booking's own locked-in rate AND included weight, not the current global config, when they differ", async () => {
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
-  // Simulates a booking paid under an OLD rate schedule, before a global
-  // pricing change to $120/ton (rentalPricing.OVERAGE_TON_RATE is still
-  // $90 in the current global config — this row's own $75 must win).
-  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, overage_ton_rate: 75, overage_day_rate: 10 });
+  // Simulates a booking paid under an OLD rate schedule, before the
+  // 2026-09-18-v2 pricing change (rentalPricing.OVERAGE_TON_RATE is
+  // $125 in the current global config — this row's own $75 must win).
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, overage_ton_rate: 75, overage_day_rate: 10, included_tons: 2 });
 
+  // includedLbs = 2*2000 = 4000; actualWeightLbs 8000 -> overweightLbs 4000
+  // -> quantityTons 2 -> amount = 2 * 75 = 150 (this booking's own rate).
   const res = await run(
     bookingHandler,
-    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", quantity: 2 } })
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 8000 } })
   );
   assert.strictEqual(res.statusCode, 200);
-  assert.strictEqual(res.body.charge.rate, 75, "must use this booking's own locked-in rate, not the current global $90 rate");
+  assert.strictEqual(res.body.charge.rate, 75, "must use this booking's own locked-in rate, not the current global $125 rate");
+  assert.strictEqual(res.body.charge.quantity, 2);
   assert.strictEqual(res.body.charge.amount, 150);
 });
-test("admin charges: proposing on a booking with no rental_payments row of its own falls back to the current global rate", async () => {
+test("admin charges: proposing on a booking with no rental_payments row of its own falls back to the current global rate and included weight", async () => {
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  // No rental_payments row at all -> falls back to the global
+  // INCLUDED_TONS (2, i.e. 4000 lbs) and OVERAGE_TON_RATE (125).
+  // actualWeightLbs 6000 -> overweightLbs 2000 -> quantityTons 1 -> $125.
   const res = await run(
     bookingHandler,
-    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", quantity: 1 } })
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 6000 } })
   );
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.rate, rentalPricing.OVERAGE_TON_RATE);
+  assert.strictEqual(res.body.charge.quantity, 1);
+  assert.strictEqual(res.body.charge.amount, rentalPricing.OVERAGE_TON_RATE);
+});
+test("admin charges: an OLD rental booked at $90/ton still charges $90/ton after the global rate has moved on to $125 — the exact historical-pricing guarantee this pricing update depends on", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  // A real historical booking, snapshotted before the 2026-09-18-v2
+  // pricing update: $90/ton, 2 tons (4000 lbs) included.
+  db.rental_payments.push({ id: "rp-old", booking_id: BOOKING_ID, overage_ton_rate: 90, included_tons: 2 });
+
+  // actualWeightLbs 4240 -> overweightLbs 240 -> quantityTons 0.12 ->
+  // amount = 240 * (90/2000) = $10.80 -- the OLD rate's math, even though
+  // rentalPricing.OVERAGE_TON_RATE is 125 right now.
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 4240 } })
+  );
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.rate, 90, "an old $90/ton booking must never be silently recalculated at the new $125/ton rate");
+  assert.strictEqual(res.body.charge.amount, 10.8);
+  assert.notStrictEqual(rentalPricing.OVERAGE_TON_RATE, 90, "sanity check: the global constant really is $125 right now, proving this booking's own snapshot — not the global default — is what won");
+});
+test("admin charges: actual scale weight at or under the included amount is recorded on the rental but creates NO charge row (rental_additional_charges.amount has its own CHECK (amount > 0))", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  db.dumpster_rentals.push({ id: "dr1", booking_id: BOOKING_ID, material_type: "General", actual_weight_lbs: null });
+
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 3800 } })
+  );
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.ok, true);
+  assert.strictEqual(res.body.charge, null, "must not fabricate a charge object when nothing was actually charged");
+  assert.strictEqual(res.body.weightRecorded, true);
+  assert.strictEqual(res.body.overweightLbs, 0);
+  assert.strictEqual(db.rental_additional_charges.length, 0, "a $0 overage must never become a rental_additional_charges row");
+  assert.strictEqual(db.dumpster_rentals[0].actual_weight_lbs, 3800, "the scale weight is still recorded even though it produced no charge — the data-collection requirement is independent of pricing");
+});
+test("admin charges: exactly at the included weight (4000 lbs, 2 tons) also records the weight with no charge — the boundary case", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  db.dumpster_rentals.push({ id: "dr1", booking_id: BOOKING_ID, material_type: "General", actual_weight_lbs: null });
+
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 4000 } })
+  );
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge, null);
+  assert.strictEqual(res.body.overweightLbs, 0);
+  assert.strictEqual(db.rental_additional_charges.length, 0);
+  assert.strictEqual(db.dumpster_rentals[0].actual_weight_lbs, 4000);
+});
+test("admin charges: a fractional/non-integer actual scale weight is rejected with 400, no charge, no weight recorded", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  db.dumpster_rentals.push({ id: "dr1", booking_id: BOOKING_ID, material_type: "General", actual_weight_lbs: null });
+
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 4500.5 } })
+  );
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.rental_additional_charges.length, 0);
+  assert.strictEqual(db.dumpster_rentals[0].actual_weight_lbs, null, "an invalid submission must never touch the stored weight");
+});
+test("admin charges: a negative actual scale weight is rejected with 400", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  const res = await run(
+    bookingHandler,
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: -1 } })
+  );
+  assert.strictEqual(res.statusCode, 400);
 });
 test("admin charges: approving a booking with no payment method on file fails cleanly without calling Stripe", async () => {
   const db = freshDb();
@@ -1734,6 +1925,27 @@ test("admin booking detail (GET): payment is null for a booking with no rental_p
   const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.payment, null);
+  // 2026-09-18-v2 pricing update — even with no rental_payments row at all,
+  // the admin UI must still see an explicit applicable rate/included
+  // weight (the global fallback), and know plainly that it IS the
+  // fallback, not this booking's own locked value.
+  assert.deepStrictEqual(res.body.rentalPricingContext, { includedTons: rentalPricing.INCLUDED_TONS, overageTonRate: rentalPricing.OVERAGE_TON_RATE, isBookingSpecific: false });
+});
+test("admin booking detail (GET): 2026-09-18-v2 — surfaces THIS booking's own locked-in rate/included weight as rentalPricingContext, explicitly marked booking-specific, and actualWeightLbs from dumpster_rentals", async () => {
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  configureAdminAuth();
+  db.bookings.push({ id: BOOKING_ID, customer_id: "cust-1", service_type: "dumpster_rental", status: "booked", appointment_date: FAR_FUTURE_DATE, time_window: "w_0800_1000" });
+  db.customers.push({ id: "cust-1", first_name: "Jamie", last_name: "Rivera", phone: "303-555-0100", email: "jamie@example.com" });
+  db.rental_payments.push({ id: "rp1", booking_id: BOOKING_ID, payment_status: "paid", included_tons: 2, overage_ton_rate: 90 });
+  db.dumpster_rentals.push({ id: "dr1", booking_id: BOOKING_ID, material_type: "General", actual_weight_lbs: 4240 });
+
+  const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.rentalPricingContext, { includedTons: 2, overageTonRate: 90, isBookingSpecific: true });
+  assert.strictEqual(res.body.dumpster.actualWeightLbs, 4240);
+  assert.strictEqual(res.body.payment.includedTons, 2);
+  assert.strictEqual(res.body.payment.overageTonRate, 90);
 });
 test("admin booking detail (GET): exposes failureReason for a payment stuck in error_pending_review, so the admin sees why without opening Stripe first", async () => {
   const db = freshDb();
@@ -1875,6 +2087,17 @@ test("api/book.js source: paymentStatusPending is set on exactly the three true 
   assert.strictEqual(pendingCount, 3, "expected exactly 3 response sites to set paymentStatusPending: true (existing-row error_pending_review, concurrent-duplicate processing, and the ambiguous capture-throw) — if this changes, update this count deliberately, not by accident");
   const retryCount = (src.match(/retryWithNewPaymentIntent: true/g) || []).length;
   assert.strictEqual(retryCount, 10, "expected exactly the 10 confirmed-dead response sites audited in this session (customer-insert error/catch, rental_payments-insert catch, bookings-insert unique-violation/catch, rental_payments link-back failure, dumpster_rentals-insert failure, capture decline, captured.status!=='succeeded', and intent.status==='canceled') to set retryWithNewPaymentIntent: true — if this changes, update this count deliberately, not by accident");
+});
+
+test("admin/booking-detail.js source: overweight charge display is pounds-first (quantity * 2000, rounded to the nearest whole pound), not a bare tons figure that could misread as a near-zero charge", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
+  const startFn = src.indexOf("function formatChargeQuantity(charge) {");
+  const endFn = src.indexOf("\n  }", startFn);
+  assert.ok(startFn > 0 && endFn > startFn, "expected to find formatChargeQuantity() to isolate its overweight_tonnage branch");
+  const fnBody = src.slice(startFn, endFn);
+  assert.ok(/Math\.round\(Number\(charge\.quantity\) \* 2000\)/.test(fnBody), "must derive the displayed pounds figure directly from quantity * 2000 (exact for the numeric(10,4) column — see overweightCharge()'s own round4 comment), not a separately hand-typed conversion");
+  assert.ok(/lbs \+ ' lb'/.test(fnBody), "must show pounds as the primary, human-readable figure");
+  assert.ok(/charge\.quantity \+ ' tons/.test(fnBody), "must still show the underlying stored tons value too, for cross-reference against the raw database record");
 });
 
 async function main() {

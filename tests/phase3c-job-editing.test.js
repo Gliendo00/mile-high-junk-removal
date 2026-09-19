@@ -1045,8 +1045,12 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // stage's full accounting) — this test's job is only to confirm THIS
   // stage didn't silently grow beyond the one call it was reviewed for,
   // not to re-litigate a later, independently-reviewed stage's count every
-  // time this file runs.
-  assert.strictEqual(updateCalls, 11, "booking.js must have exactly 11 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges) — anything else needs deliberate review");
+  // time this file runs. The 2026-09-18-v2 pricing update later added one
+  // more still — handleProposeCharge()'s persist of
+  // dumpster_rentals.actual_weight_lbs — for the same reason: independently
+  // reviewed, not this stage's concern, just accounted for here so this
+  // count doesn't silently drift.
+  assert.strictEqual(updateCalls, 12, "booking.js must have exactly 12 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist) — anything else needs deliberate review");
 });
 
 test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {

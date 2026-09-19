@@ -178,14 +178,42 @@
         <div class="admin-field">
           <label for="d-charge-type">Propose a new charge</label>
           <select id="d-charge-type">
-            <option value="overweight_tonnage">Overweight tonnage ($90.00/ton)</option>
+            <!-- No rate shown here — overweight tonnage's rate is this
+                 specific booking's own locked-in value (could be an older
+                 $90/ton booking or a current $125/ton one), shown in the
+                 calculated-context panel below once a weight is entered,
+                 never a single hardcoded figure in this static list. -->
+            <option value="overweight_tonnage">Overweight tonnage</option>
             <option value="additional_days">Additional days ($15.00/day)</option>
             <option value="other">Other (flat amount)</option>
           </select>
         </div>
         <div class="admin-field" id="d-charge-quantity-row">
-          <label for="d-charge-quantity" id="d-charge-quantity-label">Tons over the included 2 tons</label>
+          <label for="d-charge-quantity" id="d-charge-quantity-label">Extra days beyond the included 5</label>
           <input type="number" id="d-charge-quantity" inputmode="decimal" min="0" step="0.01" placeholder="1.5">
+        </div>
+        <div class="admin-field" id="d-charge-weight-row" style="display:none">
+          <label for="d-charge-weight">Actual scale weight (lbs)</label>
+          <input type="number" id="d-charge-weight" inputmode="numeric" min="0" step="1" placeholder="4500">
+          <span class="admin-field-hint">The real post-disposal scale weight — recorded on this rental either way, even if it's at or under the included weight.</span>
+          <div class="admin-charge-weight-context" id="d-charge-weight-context" style="display:none">
+            <div class="admin-row">
+              <div class="admin-row-label">Included weight</div>
+              <div class="admin-row-value" id="d-charge-weight-included">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Pounds overweight</div>
+              <div class="admin-row-value" id="d-charge-weight-over">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">This booking's locked-in rate</div>
+              <div class="admin-row-value" id="d-charge-weight-rate">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Calculated charge</div>
+              <div class="admin-row-value" id="d-charge-weight-amount">—</div>
+            </div>
+          </div>
         </div>
         <div class="admin-field" id="d-charge-amount-row" style="display:none">
           <label for="d-charge-amount">Amount</label>

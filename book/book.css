@@ -164,3 +164,29 @@
 .map-embed { width: 100%; height: 320px; border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm); }
 .map-embed iframe { width: 100%; height: 100%; display: block; border: 0; }
 @media (max-width: 560px) { .map-embed { height: 260px; } }
+
+/* — outer page background (visual only) — a Denver skyline / Rockies
+   image behind the whole booking flow, this page only (book.css loads
+   after ../styles.css, so this cascades over that shared body rule
+   without touching it — every other page keeps its plain --color-bg).
+   Every wizard/review card (.card, including the white Rental Agreement
+   card and the still-green Payment card) already has its own opaque
+   background, untouched here, so none of them turn transparent. */
+body {
+  background-color: var(--color-bg); /* same fallback as ../styles.css, shown before the image loads or if it fails */
+  background-image: url('../images/denver-skyline-mountains-booking-bg.webp');
+  background-repeat: no-repeat;
+  /* Skyline/mountains sit in the image's upper portion, with a soft green
+     fade below — anchoring to the top keeps that detail visible near the
+     header instead of being cropped off on short/narrow viewports. */
+  background-position: center top;
+  background-size: cover; /* fills the viewport without stretching or distorting the image */
+}
+@media (min-width: 768px) {
+  /* Fixed only on tablet/desktop — background-attachment: fixed forces
+     the browser to repaint the full background on every scroll frame,
+     which is a well-known jank/battery cost on mobile browsers (notably
+     iOS Safari); left at its default (scroll) below 768px for that
+     reason, since mobile is exactly where that cost hurts most. */
+  body { background-attachment: fixed; }
+}

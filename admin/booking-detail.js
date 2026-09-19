@@ -63,6 +63,15 @@ document.addEventListener('DOMContentLoaded', function () {
   var currentStatus = 'new';
   var savingInFlight = false;
   var toastTimer = null;
+  // 2026-09-18-v2 pricing update — this booking's own applicable overweight
+  // rate schedule (data.rentalPricingContext, already resolved server-side
+  // with the exact same booking-rate-first/global-fallback rule
+  // api/admin/booking.js's handleProposeCharge() itself uses) and its
+  // already-recorded actual scale weight, if any. Populated in render();
+  // read by the weight-context live preview below. Never used to compute
+  // the real charge — that's always recomputed server-side.
+  var currentPricingContext = null;
+  var currentActualWeightLbs = null;
 
   function showError(msg) {
     loadingEl.style.display = 'none';
@@ -323,7 +332,13 @@ document.addEventListener('DOMContentLoaded', function () {
       set('d-pickup-date', formatDate(data.dumpster.pickupDate));
       set('d-material', data.dumpster.materialType);
       set('d-placement', data.dumpster.placementNotes);
+      currentActualWeightLbs = data.dumpster.actualWeightLbs != null ? data.dumpster.actualWeightLbs : null;
     }
+    currentPricingContext = data.rentalPricingContext || null;
+    if (chargeWeightEl && currentActualWeightLbs != null && !chargeWeightEl.value) {
+      chargeWeightEl.value = currentActualWeightLbs;
+    }
+    updateWeightContext();
 
     // Phase 3C Stage 2.5-v2 — Payment (only present for a dumpster rental
     // that was booked and paid online) + Additional Charges (shown for any
@@ -430,6 +445,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var chargeQuantityRow = document.getElementById('d-charge-quantity-row');
   var chargeQuantityLabel = document.getElementById('d-charge-quantity-label');
   var chargeQuantityEl = document.getElementById('d-charge-quantity');
+  var chargeWeightRow = document.getElementById('d-charge-weight-row');
+  var chargeWeightEl = document.getElementById('d-charge-weight');
+  var chargeWeightContext = document.getElementById('d-charge-weight-context');
+  var chargeWeightIncludedEl = document.getElementById('d-charge-weight-included');
+  var chargeWeightOverEl = document.getElementById('d-charge-weight-over');
+  var chargeWeightRateEl = document.getElementById('d-charge-weight-rate');
+  var chargeWeightAmountEl = document.getElementById('d-charge-weight-amount');
   var chargeAmountRow = document.getElementById('d-charge-amount-row');
   var chargeAmountEl = document.getElementById('d-charge-amount');
   var chargeDescriptionRow = document.getElementById('d-charge-description-row');
@@ -439,17 +461,63 @@ document.addEventListener('DOMContentLoaded', function () {
   var chargeCheckStatusInFlight = false;
 
   function updateChargeFormMode() {
-    var isOther = chargeTypeEl.value === 'other';
-    chargeQuantityRow.style.display = isOther ? 'none' : '';
+    var type = chargeTypeEl.value;
+    var isOther = type === 'other';
+    var isWeight = type === 'overweight_tonnage';
+    chargeQuantityRow.style.display = !isOther && !isWeight ? '' : 'none';
+    chargeWeightRow.style.display = isWeight ? '' : 'none';
     chargeAmountRow.style.display = isOther ? '' : 'none';
     chargeDescriptionRow.style.display = isOther ? '' : 'none';
-    chargeQuantityLabel.textContent = chargeTypeEl.value === 'additional_days' ? 'Extra days beyond the included 5' : 'Tons over the included 2 tons';
+    chargeQuantityLabel.textContent = 'Extra days beyond the included 5';
+    if (isWeight) updateWeightContext();
   }
+
+  // 2026-09-18-v2 pricing update — live preview only, mirroring
+  // api/_lib/rental-pricing.js's overweightCharge() formula exactly
+  // (max(0, actualLbs - includedTons*2000) * (rate/2000), rounded only at
+  // the very end). The REAL charge is always recomputed server-side in
+  // handleProposeCharge() from the same booking's own rentalPricingContext
+  // — this function only ever informs what the admin sees before
+  // submitting, never what actually gets charged.
+  function updateWeightContext() {
+    if (!chargeWeightEl || chargeTypeEl.value !== 'overweight_tonnage') return;
+    var raw = chargeWeightEl.value;
+    if (raw === '' || !currentPricingContext) {
+      chargeWeightContext.style.display = 'none';
+      return;
+    }
+    var actualLbs = Number(raw);
+    if (!Number.isFinite(actualLbs) || actualLbs < 0) {
+      chargeWeightContext.style.display = 'none';
+      return;
+    }
+    var includedTons = Number(currentPricingContext.includedTons);
+    var rate = Number(currentPricingContext.overageTonRate);
+    var includedLbs = includedTons * 2000;
+    var overweightLbs = Math.max(0, Math.round(actualLbs) - includedLbs);
+    var amount = Math.round(overweightLbs * (rate / 2000) * 100) / 100;
+
+    chargeWeightContext.style.display = '';
+    chargeWeightIncludedEl.textContent = includedLbs.toLocaleString() + ' lbs';
+    chargeWeightOverEl.textContent = overweightLbs.toLocaleString() + ' lbs';
+    chargeWeightRateEl.textContent = '$' + rate.toFixed(2) + '/ton' + (currentPricingContext.isBookingSpecific ? ' (this booking’s locked-in rate)' : ' (current rate — no rate locked in for this booking)');
+    chargeWeightAmountEl.textContent = amount > 0 ? formatPrice(amount) : '$0.00 — no overage charge';
+  }
+  chargeWeightEl.addEventListener('input', updateWeightContext);
   chargeTypeEl.addEventListener('change', updateChargeFormMode);
   updateChargeFormMode();
 
   function formatChargeQuantity(charge) {
-    if (charge.chargeType === 'overweight_tonnage') return charge.quantity + ' ton' + (charge.quantity === 1 ? '' : 's') + ' over · $' + Number(charge.rate).toFixed(2) + '/ton';
+    if (charge.chargeType === 'overweight_tonnage') {
+      // Pounds-first display: quantity (tons) is stored at numeric(10,4)
+      // precision specifically so this round-trip is exact for any
+      // integer overweightLbs (see api/_lib/rental-pricing.js's
+      // overweightCharge()) — a small overage now reads as "1 lb over
+      // (0.0005 tons)" instead of a bare, easy-to-misread "0.0005 tons
+      // over", which was the whole point of widening this column.
+      var lbs = Math.round(Number(charge.quantity) * 2000);
+      return lbs + ' lb' + (lbs === 1 ? '' : 's') + ' over (' + charge.quantity + ' tons) · $' + Number(charge.rate).toFixed(2) + '/ton';
+    }
     if (charge.chargeType === 'additional_days') return charge.quantity + ' extra day' + (charge.quantity === 1 ? '' : 's') + ' · $' + Number(charge.rate).toFixed(2) + '/day';
     return charge.description || 'Other';
   }
@@ -576,6 +644,17 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       body.amount = amount;
       body.description = chargeDescriptionEl.value.trim();
+    } else if (chargeType === 'overweight_tonnage') {
+      // 2026-09-18-v2 pricing update — actual scale weight, not a manually
+      // computed tons-over quantity. The server independently recomputes
+      // and persists this; the live preview above is display-only.
+      var weightRaw = chargeWeightEl.value;
+      var weightLbs = Number(weightRaw);
+      if (!weightRaw || !Number.isInteger(weightLbs) || weightLbs < 0) {
+        showToast('Please enter a valid actual scale weight, in whole pounds.', 'error');
+        return;
+      }
+      body.actualWeightLbs = weightLbs;
     } else {
       var quantity = Number(chargeQuantityEl.value);
       if (!chargeQuantityEl.value || !Number.isFinite(quantity) || quantity <= 0) {
@@ -600,11 +679,22 @@ document.addEventListener('DOMContentLoaded', function () {
             return resBody;
           });
       })
-      .then(function () {
+      .then(function (resBody) {
         chargeQuantityEl.value = '';
         chargeAmountEl.value = '';
         chargeDescriptionEl.value = '';
-        showToast('Charge proposed.', 'success');
+        if (resBody && resBody.weightRecorded) {
+          currentActualWeightLbs = resBody.actualWeightLbs != null ? resBody.actualWeightLbs : Number(chargeWeightEl.value);
+        }
+        if (resBody && resBody.charge === null && resBody.weightRecorded) {
+          // Weight at or under the included amount — nothing was charged,
+          // only recorded. rental_additional_charges never gets a $0 row
+          // (its own CHECK (amount > 0) wouldn't allow one), so this is a
+          // normal, non-error outcome, not a failed charge attempt.
+          showToast('Scale weight recorded — at or under the included weight, so no overage charge.', 'success');
+        } else {
+          showToast(chargeType === 'overweight_tonnage' ? 'Scale weight recorded and overage charge proposed.' : 'Charge proposed.', 'success');
+        }
         loadCharges();
       })
       .catch(function (err) {

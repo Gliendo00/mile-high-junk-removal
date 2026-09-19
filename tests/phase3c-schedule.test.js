@@ -681,6 +681,14 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // 2026-09-18-v2 pricing update added exactly one new write call —
+      // handleProposeCharge()'s unconditional persist of
+      // dumpster_rentals.actual_weight_lbs, independent of whether the
+      // computed overage ends up being charged (a $0 overage is recorded
+      // but never inserted as a rental_additional_charges row — that
+      // table's own amount > 0 CHECK constraint wouldn't allow it). See
+      // docs/phase-3/stage2.5-stripe-rental-payments-migration.md §14.
+      "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — deliberately, gated behind

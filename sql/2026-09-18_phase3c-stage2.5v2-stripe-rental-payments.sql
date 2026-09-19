@@ -191,7 +191,23 @@ CREATE TABLE IF NOT EXISTS rental_additional_charges (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   booking_id uuid NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
   charge_type text NOT NULL CHECK (charge_type IN ('overweight_tonnage', 'additional_days', 'other')),
-  quantity numeric(10,2),
+  -- numeric(10,4), not (10,2) — a 2026-09-18-v2 pricing-update correction.
+  -- overweight_tonnage's quantity is overweightLbs/2000 (see
+  -- api/_lib/rental-pricing.js's overweightCharge()); since 2000 = 2^4*5^3,
+  -- that division always terminates in exactly 4 decimal places for any
+  -- integer overweightLbs, never more. At (10,2), a small overage (e.g.
+  -- 1 lb -> 0.0005 tons) rounded down to a misleading "0.00" next to a
+  -- real, nonzero dollar amount -- the money was always correct (amount is
+  -- computed directly from raw pounds, never from this column), but the
+  -- stored record read as internally inconsistent. additional_days' own
+  -- quantity (a plain day count, unaffected by any of this) still gets
+  -- round2'd in code; a wider column accepts that unchanged, since extra
+  -- available decimal places never alter what an already-2-decimal value
+  -- means. See docs/phase-3/stage2.5-stripe-rental-payments-migration.md
+  -- for the full write-up, and sql/2026-09-18_phase3c-stage2.5-quantity-precision.sql
+  -- for staging's own catch-up (this table already exists there at the
+  -- old (10,2) precision).
+  quantity numeric(10,4),
   rate numeric(10,2),
   amount numeric(10,2) NOT NULL CHECK (amount > 0),
   description text,

@@ -1,0 +1,89 @@
+-- Phase 3C Stage 2.5 — STAGING-ONLY catch-up: widen
+-- rental_additional_charges.quantity from numeric(10,2) to numeric(10,4).
+--
+-- NOT FOR PRODUCTION. Production has not received
+-- sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql at all yet
+-- — when it does, rental_additional_charges is created there with
+-- quantity numeric(10,4) already built in (see that file), so this
+-- catch-up file has nothing to do on Production and should never be run
+-- there.
+--
+-- Why: overweight_tonnage's quantity is overweightLbs/2000 (see
+-- api/_lib/rental-pricing.js's overweightCharge()). Since 2000 = 2^4*5^3,
+-- that division always terminates in exactly 4 decimal places for any
+-- integer overweightLbs — never more, never a repeating decimal. At the
+-- original (10,2) precision, a small overage (e.g. 1 lb over -> 0.0005
+-- tons) rounded down to a misleading "0.00" stored next to a real,
+-- nonzero dollar amount. The MONEY was always correct — `amount` is
+-- computed directly from raw actual_weight_lbs, never from this column —
+-- but the stored record itself read as internally inconsistent (a $0.06
+-- charge with an apparent "0 tons over" behind it).
+--
+-- This is a pure precision WIDENING, not a reinterpretation:
+--   - Lossless for every existing row. A value like 1.50 under
+--     numeric(10,2) is the exact same value, 1.5000, under numeric(10,4)
+--     — more available decimal places never change what an already-stored
+--     number means.
+--   - No backfill needed, no sentinel value, no NOT NULL concern (the
+--     column was and remains nullable either way).
+--   - additional_days' own quantity (a plain day count, computed entirely
+--     separately in api/admin/booking.js) is completely unaffected — it
+--     still gets round2'd in application code before every insert; a
+--     wider column simply has unused extra decimal places available for
+--     those rows, nothing more.
+--
+-- Plan only. Nothing in this file has been executed. Run it manually
+-- against the STAGING Supabase project only, the same established
+-- convention every prior migration in this project has followed. Never
+-- run this against Production.
+
+-- ---------------------------------------------------------------------
+-- 0. PREFLIGHT — read-only. Confirms the column's current type before
+--    changing anything, and (informationally) shows any existing
+--    overweight_tonnage rows whose stored quantity is already 0.00 despite
+--    a nonzero amount — exactly the rows this change stops from
+--    recurring going forward. Existing rows like this are NOT rewritten
+--    by this migration (see step 1's own note) — this is purely
+--    informational, to know what's already there.
+-- ---------------------------------------------------------------------
+-- select column_name, data_type, numeric_precision, numeric_scale
+-- from information_schema.columns
+-- where table_schema = 'public' and table_name = 'rental_additional_charges'
+--   and column_name = 'quantity';
+--
+-- select id, booking_id, quantity, rate, amount, created_at
+-- from rental_additional_charges
+-- where charge_type = 'overweight_tonnage' and quantity = 0 and amount > 0
+-- order by created_at;
+
+-- ---------------------------------------------------------------------
+-- 1. Widen the column. Existing values are preserved exactly (e.g. 90.00
+--    -> 90.0000) — this does NOT retroactively recompute or "fix" any
+--    already-stored quantity that was already rounded to 0.00 under the
+--    old precision; those historical rows keep the exact quantity value
+--    they were written with, same as every other historical-pricing
+--    guarantee in this project. Only NEW rows, going forward, benefit
+--    from the added precision.
+-- ---------------------------------------------------------------------
+ALTER TABLE rental_additional_charges
+  ALTER COLUMN quantity TYPE numeric(10,4);
+
+-- ---------------------------------------------------------------------
+-- Verification (re-run any of these any time to re-confirm current state)
+-- ---------------------------------------------------------------------
+-- select column_name, data_type, numeric_precision, numeric_scale
+-- from information_schema.columns
+-- where table_schema = 'public' and table_name = 'rental_additional_charges'
+--   and column_name = 'quantity';  -- expect numeric_scale = 4
+--
+-- -- Existing rows' values must be unchanged (only their available
+-- -- precision grew):
+-- select id, quantity from rental_additional_charges order by created_at;
+
+-- ---------------------------------------------------------------------
+-- Rollback (reference only — not executed as part of this file). Safe:
+-- narrowing back to (10,2) would only affect rows written after this
+-- migration that actually used the extra precision (rounds them back
+-- down, same as before this change existed).
+-- ---------------------------------------------------------------------
+-- ALTER TABLE rental_additional_charges ALTER COLUMN quantity TYPE numeric(10,2);

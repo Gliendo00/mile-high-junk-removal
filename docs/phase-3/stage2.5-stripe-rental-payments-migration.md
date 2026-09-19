@@ -25,7 +25,11 @@ since they described Braintree-specific behavior this branch no longer has.
 
 Nothing about the underlying business requirements changed: 15-yard
 dumpster, $349 base / 5 days included / 2 tons included / $90 per extra
-ton / $15 per extra day, online checkout is a real booking (not a lead),
+ton / $15 per extra day (the overweight rate stated here reflects what was
+true at the time of this Braintree->Stripe migration; it was raised to
+$125/ton, and made genuinely prorated to actual scale weight, on
+2026-09-18 — see §14, a later, separate change), online checkout is a real
+booking (not a lead),
 exactly one delivery per (date, time window), vault the payment method for
 later admin-approved charges, never auto-charge an overage without
 explicit approval, coherent state handling for every failure/retry/
@@ -1126,3 +1130,143 @@ cross-checked by: (a) the full per-branch backend audit table in §13.2,
 now backed by response-body assertions; (b) `node --check book/book.js`
 and `api/book.js` (syntax); (c) a live page load with the change applied
 showing zero console errors.
+
+## 14. 2026-09-18-v2 pricing update — $90/ton -> $125/ton, genuinely prorated
+
+**Decision**: overweight billing rate raised from $90/ton to $125/ton
+($0.0625/lb), and — unlike before — actually computed from the real scale
+weight rather than an admin manually typing a "tons over" quantity they
+computed themselves. Driven by a deliberate data-collection window: the
+owner wants 1-2 weeks of real `actual_weight_lbs` data before reconsidering
+the $349 base rate. A full audit preceded this change (see the session
+transcript for the complete file-by-file findings) confirming the
+historical-rate protection below already existed and needed no schema
+change of its own.
+
+**Schema — one new column**:
+`sql/2026-09-18_phase3c-stage2.5-actual-weight-lbs.sql` adds
+`dumpster_rentals.actual_weight_lbs integer`, nullable, `CHECK
+(actual_weight_lbs IS NULL OR actual_weight_lbs >= 0)`. Not required at
+booking time (`api/book.js` is unchanged — scale weight is only known
+after disposal); recorded later, whenever an admin proposes an overweight
+charge (or even when one isn't warranted — see below).
+
+**Formula** (`api/_lib/rental-pricing.js`'s new `overweightCharge()`):
+```
+includedLbs   = includedTons * 2000
+overweightLbs = max(0, actualWeightLbs - includedLbs)
+quantityTons  = round2(overweightLbs / 2000)   -- display/storage only
+amount        = round2(overweightLbs * (tonRate / 2000))  -- the ONLY rounding step
+```
+`amount` is always derived from the unrounded `overweightLbs`, never from
+the already-rounded `quantityTons` — so a sub-20lb overage (which would
+round `quantityTons` down to `0.00`) still charges its true fractional-
+cent amount rather than silently vanishing. No `Math.ceil`/whole-ton
+rounding exists anywhere in this path. Verified exactly against every
+required example: 4000lb->$0.00, 4240lb->$15.00, 4500lb->$31.25,
+5000lb->$62.50, 6000lb->$125.00.
+
+**Historical-rate protection — unchanged, already existed**: confirmed by
+the pre-implementation audit and unchanged by this work.
+`handleProposeCharge()` (`api/admin/booking.js`) reads this booking's own
+`rental_payments.included_tons`/`overage_ton_rate` first, and only falls
+back to the current global `rentalPricing.INCLUDED_TONS`/`OVERAGE_TON_RATE`
+constants when a booking has no `rental_payments` row of its own (an
+admin-created rental never paid online). A booking made under the old
+$90/ton rate keeps charging $90/ton forever; only new bookings ever
+snapshot $125. This fallback is now also surfaced explicitly to the admin
+UI via the booking-detail GET response's new `rentalPricingContext` field
+(`includedTons`, `overageTonRate`, `isBookingSpecific`) — computed with
+the identical fallback rule, so the admin sees the true applicable rate
+(and whether it's this booking's own locked value or the global default)
+before proposing a charge, never a guess.
+
+**`rental_additional_charges.amount > 0` CHECK constraint — a real
+consequence of "always allow recording weight, even under the included
+amount"**: a weight at or under the included 4,000 lbs computes to a $0
+overage, which this table's existing CHECK constraint would reject as an
+INSERT outright (correctly — a $0 charge should never exist as a row).
+`handleProposeCharge()` therefore persists `actual_weight_lbs` onto
+`dumpster_rentals` unconditionally, first, then only inserts a
+`rental_additional_charges` row when the computed `amount > 0`; otherwise
+it responds `{ ok: true, charge: null, weightRecorded: true, ... }` — a
+normal, non-error outcome, not a failed charge attempt.
+
+**Admin UX**: the "Tons over the included 2 tons" manual quantity input is
+replaced, for `overweight_tonnage` only, with an "Actual scale weight
+(lbs)" input plus a live-computed context panel (included weight, pounds
+overweight, this booking's own locked-in rate, calculated charge) —
+`admin/booking-detail.js`'s `updateWeightContext()`, a display-only mirror
+of the server formula; the real charge is always recomputed server-side,
+never trusted from this preview. The charge-type dropdown's previously
+hardcoded `"Overweight tonnage ($90.00/ton)"` label (a genuine stale/
+duplicate pricing source the audit flagged) is now just `"Overweight
+tonnage"` — the rate is booking-specific and belongs in the context panel,
+never a single hardcoded figure in a static list. `additional_days`
+(manual quantity, unchanged) and `other` (flat amount, unchanged) are
+untouched.
+
+**Agreement wording + version**: `book/index.html`'s Rental Agreement text
+now states $125.00/ton, prorated to actual scale weight, with the
+$0.0625/lb equivalent spelled out, and explicitly "never rounded up to a
+full ton." The existing review-before-charge sentence (Mile High Junk
+Removal reviews any such charge before it's submitted) is unchanged.
+`RENTAL_AGREEMENT_VERSION` bumped `"2026-09-18"` -> `"2026-09-18-v2"` — a
+customer who already accepted the old wording keeps that exact version
+string on their `rental_payments.agreement_version` row forever, per this
+constant's own long-standing documented purpose (§1 comment in
+`api/_lib/rental-pricing.js`).
+
+**Public website / SEO**: every literal `$90` found by the audit was
+updated to `$125` (with "prorated"/"never rounded up to a full ton"
+wording added where it was missing) across `pricing.html`,
+`dumpster-rental.html`, `services.html`, and
+`blog-dumpster-rental-vs-junk-removal.html` — 8 locations total, including
+3 separately-duplicated JSON-LD FAQ blocks that had no build-time
+connection to their matching visible-FAQ HTML (a genuine duplicate-source
+risk the audit specifically flagged; each pair was updated by hand,
+individually, since no shared template exists to update once).
+`book/book.js`'s price-breakdown line (`pricing.overageTonRate` from `GET
+/api/book`) was already dynamic and needed no code change — it now simply
+renders $125.00/ton automatically.
+
+**Tests**: `tests/phase3c-stage2.5v2-stripe-rental-payments.test.js` —
+updated the 3 assertions tied directly to the live `OVERAGE_TON_RATE`
+constant (was `90.0`, now `125.0`) and the stale "$90"/"$120" comment and
+assertion-message text in the historical-rate-override test; left
+untouched every fixture that uses `90` as an arbitrary, self-contained
+value unrelated to the live constant (~15 `rental_additional_charges`
+seed rows testing the approve/decline/reconciliation state machine, a
+generic `round2()` sanity check, and the dynamic
+`rp.overage_ton_rate === rentalPricing.OVERAGE_TON_RATE` snapshot
+assertion). Added: exact-value tests for all five required examples;
+below-included (0 lbs over -> $0, no charge row created); an old $90
+rental proposing a new charge still uses $90 (extending the existing
+override test); a new rental snapshots $125; `quantity` stays expressed
+in fractional tons; `actual_weight_lbs` persists on `dumpster_rentals`
+independent of whether a charge was created; no whole-ton rounding
+(confirmed via a sub-20lb-overage case); money rounded only at the final
+step; and `agreement_version` is stamped `"2026-09-18-v2"` on a new
+booking's `rental_payments` row.
+
+### 14a. Correction — `quantity`'s numeric(10,2) precision produced a misleading (not incorrect) record
+
+**Issue caught before staging**: §14's original `quantityTons: round2(overweightLbs / 2000)` stored the tons-equivalent at 2 decimal places — 20lb granularity. A small overage (e.g. 1 lb over) rounded down to a stored `0.00`, sitting next to a real, nonzero `amount` (the money was always correct — `amount` is derived directly from `overweightLbs`, never from `quantityTons` — but the record itself read as internally inconsistent: "0 tons over, $0.06 charged").
+
+**Root cause, confirmed by audit**: `rental_additional_charges.quantity numeric(10,2)` is a genuine schema precision limit, not a JS rounding choice — Postgres itself would silently round any inserted value to 2 decimals regardless of what precision the application computed. A real fix required widening the column.
+
+**Fix — `numeric(10,4)`, not wider**: `overweightLbs / 2000` always terminates in *exactly* 4 decimal places for any integer `overweightLbs` (2000 = 2^4×5^3, so its prime factorization needs at most max(4,3) = 4 decimal digits — confirmed by a round-trip test across the full valid weight range, every 997 lbs from 0 to 100,000). 4 decimals is therefore precisely enough to store this losslessly, no more. New `round4()` helper in `api/_lib/rental-pricing.js`, used only for `overweightCharge()`'s `quantityTons` — `amount` still rounds with `round2`, unchanged, still computed directly from raw pounds.
+
+**`additional_days` is untouched**: its own quantity (a plain day count) still gets `round2`'d in `api/admin/booking.js`, in a completely separate code branch. A wider column doesn't change what an already-2-decimal value means — 1.50 under `numeric(10,4)` is 1.5000, the same value.
+
+**Historical rows are untouched**: widening a column's scale is lossless for every existing value (more available decimal places never reinterprets a number) and needs no backfill — confirmed in the migration file itself.
+
+**Schema changes**:
+- `sql/2026-09-18_phase3c-stage2.5v2-stripe-rental-payments.sql` — `quantity numeric(10,2)` → `numeric(10,4)` in the not-yet-run-against-Production `CREATE TABLE` (same rationale as editing this file directly for `signature_name` earlier: nothing to migrate on Production yet, so editing the not-yet-run definition is the smallest clean change).
+- **New**, staging-only, **not executed**: `sql/2026-09-18_phase3c-stage2.5-quantity-precision.sql` — `ALTER TABLE rental_additional_charges ALTER COLUMN quantity TYPE numeric(10,4);`. Staging already has this table at the old precision (from the original Stripe migration run there); this is its catch-up, exactly analogous to the earlier `signature_name` staging backfill file.
+
+**Admin display**: `admin/booking-detail.js`'s `formatChargeQuantity()` now shows pounds first for `overweight_tonnage` — `"1 lb over (0.0005 tons) · $125.00/ton"` instead of a bare tons figure — derived as `Math.round(quantity * 2000)`, exact for any value this column can now store.
+
+**Agreement wording**: `book/index.html`'s overweight paragraph gained the one missing required clause — *"...never rounded up to a full ton, with the final overweight charge rounded only to the nearest cent."* The other four required points ($125/ton, $0.0625/lb, prorated to actual scale weight, never rounded up to a full ton) were already present from §14. `RENTAL_AGREEMENT_VERSION` was **not** bumped again — `"2026-09-18-v2"` has never been shown to or accepted by any real customer (nothing has been pushed or deployed since it was set), so refining its wording before first release doesn't create the historical-reinterpretation risk this version string exists to prevent; it will only need bumping again if this text changes *after* a real acceptance exists under it.
+
+**Tests**: `overweightCharge` exact-precision coverage across representative pound values (including 19 lbs — the largest value the old (10,2) precision would have zeroed out — and 20 lbs, the smallest value it could already represent) plus a full round-trip sweep (every 997 lbs, 0 to 100,000) proving no precision loss anywhere in the valid range; a dedicated `round4` unit test; and a static source-pattern test confirming the admin display's pounds-first derivation. The one existing test whose expected value changed (`4001` lbs → `quantityTons`) was updated from the old, now-inaccurate `0` to the correct `0.0005`.

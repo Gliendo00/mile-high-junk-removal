@@ -779,6 +779,22 @@
 }
 .admin-login-submit { width: 100%; margin-top: 4px; }
 
+/* 2026-09-18-v2 pricing update — live calculated context (included weight,
+   pounds overweight, this booking's own locked-in rate, calculated charge)
+   shown while an admin types an actual scale weight, before proposing an
+   overweight charge. Reuses .admin-row/-label/-value (same pattern as the
+   Payment/Pricing sections elsewhere on this page) inside a bordered box so
+   it reads as a preview, not yet-submitted data. */
+.admin-charge-weight-context {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 10px;
+  background: var(--color-neutral-100, #f9f4ed);
+}
+.admin-charge-weight-context .admin-row { margin-bottom: 10px; }
+.admin-charge-weight-context .admin-row:last-child { margin-bottom: 0; }
+
 /* ------------------------------------------------------------------ */
 /* Phase 3C Stage 2.5: Appointment Time (Exact Time | Time Window) and    */
 /* Quoted Amount (Exact | Range) mode toggles — New/Past/Edit Job. A      */
