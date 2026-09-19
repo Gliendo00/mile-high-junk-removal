@@ -188,20 +188,22 @@
 
 <main id="main">
   <section class="wrap wizard-wrap" style="padding-block:var(--section-pad)">
-    <p class="eyebrow" style="color:var(--color-accent-700)">Book online</p>
-    <h1 style="font-size:34px;margin-bottom:8px">Get your job on the schedule</h1>
-    <p class="text-muted" style="margin-bottom:32px">Tell us about the job, pick a preferred date, and we'll confirm your appointment by phone or text.</p>
+    <div class="booking-hero-panel">
+      <p class="eyebrow" style="color:var(--color-accent-700)">Book online</p>
+      <h1 style="font-size:34px;margin-bottom:8px">Get your job on the schedule</h1>
+      <p class="text-muted" style="margin-bottom:32px">Tell us about the job, pick a preferred date, and we'll confirm your appointment by phone or text.</p>
 
-    <ol class="wizard-steps" id="wizard-steps">
-      <li data-step="1" class="is-active"><span>Service</span></li>
-      <li data-step="2"><span>Details</span></li>
-      <li data-step="3"><span>Photos</span></li>
-      <li data-step="4"><span>Date &amp; Time</span></li>
-      <li data-step="5"><span>Your Info</span></li>
-      <li data-step="6"><span>Review</span></li>
-    </ol>
+      <ol class="wizard-steps" id="wizard-steps">
+        <li data-step="1" class="is-active"><span>Service</span></li>
+        <li data-step="2"><span>Details</span></li>
+        <li data-step="3"><span>Photos</span></li>
+        <li data-step="4"><span>Date &amp; Time</span></li>
+        <li data-step="5"><span>Your Info</span></li>
+        <li data-step="6"><span>Review</span></li>
+      </ol>
 
-    <div class="wizard-error" id="wizard-error" role="alert"></div>
+      <div class="wizard-error" id="wizard-error" role="alert"></div>
+    </div>
 
     <!-- Spam honeypot: invisible to real visitors, left for automated form
          fillers. Positioned off-screen rather than display:none so it still
@@ -213,33 +215,35 @@
 
     <!-- STEP 1 — CHOOSE SERVICE -->
     <section class="wizard-step" data-step="1">
-      <h2 style="font-size:20px">How can we best serve you?</h2>
-      <div class="service-options">
-        <div class="service-option">
-          <input type="radio" name="serviceType" id="service-junk_removal" value="junk_removal">
-          <label for="service-junk_removal">
-            <div class="service-title">Junk Removal</div>
-            <p class="service-desc">Furniture, appliances, cleanouts &mdash; we haul it away.</p>
-          </label>
+      <div class="booking-service-panel">
+        <h2 style="font-size:20px">How can we best serve you?</h2>
+        <div class="service-options">
+          <div class="service-option">
+            <input type="radio" name="serviceType" id="service-junk_removal" value="junk_removal">
+            <label for="service-junk_removal">
+              <div class="service-title">Junk Removal</div>
+              <p class="service-desc">Furniture, appliances, cleanouts &mdash; we haul it away.</p>
+            </label>
+          </div>
+          <div class="service-option">
+            <input type="radio" name="serviceType" id="service-dumpster_rental" value="dumpster_rental">
+            <label for="service-dumpster_rental">
+              <div class="service-title">15-Yard Dumpster Rental</div>
+              <p class="service-desc">A dumpster dropped at your property for your project.</p>
+            </label>
+          </div>
+          <div class="service-option">
+            <input type="radio" name="serviceType" id="service-light_demo" value="light_demo">
+            <label for="service-light_demo">
+              <div class="service-title">Light Demo</div>
+              <p class="service-desc">Sheds, decks, fences, interior teardown &mdash; small demo jobs.</p>
+            </label>
+          </div>
         </div>
-        <div class="service-option">
-          <input type="radio" name="serviceType" id="service-dumpster_rental" value="dumpster_rental">
-          <label for="service-dumpster_rental">
-            <div class="service-title">15-Yard Dumpster Rental</div>
-            <p class="service-desc">A dumpster dropped at your property for your project.</p>
-          </label>
+        <div class="wizard-actions">
+          <span></span>
+          <button type="button" class="btn btn-primary" data-next>Next</button>
         </div>
-        <div class="service-option">
-          <input type="radio" name="serviceType" id="service-light_demo" value="light_demo">
-          <label for="service-light_demo">
-            <div class="service-title">Light Demo</div>
-            <p class="service-desc">Sheds, decks, fences, interior teardown &mdash; small demo jobs.</p>
-          </label>
-        </div>
-      </div>
-      <div class="wizard-actions">
-        <span></span>
-        <button type="button" class="btn btn-primary" data-next>Next</button>
       </div>
 
       <div class="booking-map">
