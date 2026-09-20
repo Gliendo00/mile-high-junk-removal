@@ -627,6 +627,16 @@
   overflow: hidden;
   margin-bottom: 16px;
 }
+/* Same guard this file already uses for every other class that sets
+   `display` directly on an element also toggled via the `hidden` attribute
+   (.admin-sheet-overlay[hidden], .admin-typeahead-panel[hidden], etc.) —
+   without it, this class's own `display: flex` (an author-stylesheet rule)
+   wins over the browser's built-in `[hidden] { display: none; }` UA rule,
+   leaving the strip visibly rendered (with stale numbers) on Year even
+   though admin/schedule-financials.js's hide() correctly sets
+   container.hidden = true. Found live on Staging during Stage 4 smoke
+   testing, 2026-09-19. */
+.admin-schedule-financials[hidden] { display: none; }
 .admin-financial-card {
   flex: 1 1 0;
   min-width: 0;
