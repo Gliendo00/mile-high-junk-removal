@@ -608,14 +608,17 @@
 .admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
 /* ------------------------------------------------------------------ */
-/* Schedule financial counters — Phase 3C Stage 4, redesigned into ONE     */
-/* compact status strip (not four standalone dashboard cards) per the      */
-/* owner's second follow-up request: ~52px tall, one row of four equal     */
-/* color segments separated by a thin line, never a tall card grid.        */
-/* Presentation only — admin/schedule-financials.js's calculation logic    */
-/* is untouched. Falls back to a compact 2x2 grid only below 480px, where  */
-/* four segments can no longer stay readable in one row. Hidden entirely   */
-/* on Year (see admin/calendar-views.js's hideFinancials()).               */
+/* Schedule financial counters — Phase 3C Stage 4, third pass per the      */
+/* owner's explicit request: ALWAYS a single row of four equal segments,   */
+/* even at ~375px — no 2-column fallback at all (the previous pass's       */
+/* @media (max-width: 479px) grid fallback was removed outright, not just  */
+/* tweaked). Each segment stacks two tight lines (label, then value)       */
+/* instead of sitting side by side, which is what makes a single row fit   */
+/* at phone width. Presentation only — admin/schedule-financials.js's      */
+/* calculation logic is untouched, and this intentionally does not touch   */
+/* the separate "Could not load the schedule" error-banner styling.        */
+/* Hidden entirely on Year (see admin/calendar-views.js's                  */
+/* hideFinancials()).                                                      */
 /* ------------------------------------------------------------------ */
 .admin-schedule-financials {
   display: flex;
@@ -626,30 +629,46 @@
 .admin-financial-card {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 52px;
+  min-height: 48px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 0 8px;
-  white-space: nowrap;
+  gap: 1px;
+  padding: 4px 3px;
+  line-height: 1.15;
 }
 .admin-financial-card:not(:last-child) {
   border-right: 1px solid rgba(255, 255, 255, 0.28);
 }
-.admin-financial-label {
-  font-size: 11px;
+/* Two label variants, same styling — CSS shows exactly one via the
+   min-width media query below, never both at once. Kept as separate
+   elements (not a single relabeled span) so no JS is involved in the
+   swap and admin/schedule-financials.js never needs to know about it. */
+.admin-financial-label-full,
+.admin-financial-label-short {
+  font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-financial-label-full { display: none; }
+.admin-financial-label-short { display: block; }
+@media (min-width: 480px) {
+  .admin-financial-label-full { display: block; }
+  .admin-financial-label-short { display: none; }
 }
 .admin-financial-value {
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 800;
   color: #fff;
   min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -662,21 +681,6 @@
 /* Net turns red only once it actually goes negative (Revenue < Expenses) —
    toggled in JS via admin/schedule-financials.js's render(). */
 .admin-financial-net.is-negative { background: #b91c1c; }
-
-/* Below this, four segments can't stay readable in one row — fall back to
-   a compact 2x2 grid (still one rounded strip, ~48px per row, never the
-   large standalone cards this replaced). The :not(:last-child) rule above
-   is reset here (same specificity, later in the cascade) so only the
-   left-column segments (odd) keep a right divider and only the top row
-   (first two) gets a bottom divider — a real 2x2 grid of dividers, not the
-   single-row pattern. */
-@media (max-width: 479px) {
-  .admin-schedule-financials { display: grid; grid-template-columns: repeat(2, 1fr); }
-  .admin-financial-card { min-height: 48px; }
-  .admin-financial-card:not(:last-child) { border-right: none; }
-  .admin-financial-card:nth-child(odd) { border-right: 1px solid rgba(255, 255, 255, 0.28); }
-  .admin-financial-card:nth-child(-n+2) { border-bottom: 1px solid rgba(255, 255, 255, 0.28); }
-}
 
 .admin-schedule-day-heading {
   font-family: var(--font-body);
