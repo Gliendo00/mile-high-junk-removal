@@ -1161,6 +1161,18 @@ test("admin/booking-detail.js: wires the Edit Job link to /admin/booking-edit/?i
   assert.ok(/d-edit-job-link['"]\)\.href = '\/admin\/booking-edit\/\?id=' \+ encodeURIComponent\(booking\.id\)/.test(src));
 });
 
+// Phase 3C Stage 4 follow-up: applyStatusDisplay()'s fallback list on this
+// read-only page (no status picker here — see this file's header) must
+// recognize 'rental_out' too, or a rental job currently in that status
+// silently mis-displays as "New" (wrong color, wrong label) the moment
+// someone opens Edit Job for it.
+test("admin/booking-edit.js: applyStatusDisplay() recognizes 'rental_out' (not silently coerced to 'new')", () => {
+  const src = readNormalized("admin/booking-edit.js");
+  const fnBody = src.slice(src.indexOf("function applyStatusDisplay"), src.indexOf("function render(data)"));
+  assert.ok(/'rental_out'/.test(fnBody), "the known-statuses list inside applyStatusDisplay() must include 'rental_out'");
+  assert.ok(/Rental Out/.test(fnBody), "'rental_out' must render the label 'Rental Out', not a naive title-cased 'Rental_out'");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

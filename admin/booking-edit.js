@@ -203,10 +203,16 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function applyStatusDisplay(status) {
-    var known = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
+    // Phase 3C Stage 4: 'rental_out' must be included here too — this is a
+    // read-only status mirror (see this file's header: no status picker on
+    // this page), but without it a rental job currently "Rental Out" would
+    // silently fall back to displaying "New" on Edit Job.
+    var known = ['new', 'contacted', 'quoted', 'booked', 'rental_out', 'completed', 'lost'];
     var key = known.indexOf(status) !== -1 ? status : 'new';
     statusBadge.className = 'admin-status-badge admin-status-' + key;
-    statusBadge.textContent = key.charAt(0).toUpperCase() + key.slice(1);
+    // 'rental_out' needs its own label ("Rental Out") since naive title-
+    // casing of the key would otherwise render the literal "Rental_out".
+    statusBadge.textContent = key === 'rental_out' ? 'Rental Out' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
   function render(data) {

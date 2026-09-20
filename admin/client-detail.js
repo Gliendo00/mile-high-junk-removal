@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var detailEl = document.getElementById('detail');
   var logoutBtn = document.getElementById('logout-btn');
 
-  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
+  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'rental_out', 'completed', 'lost'];
 
   function showError(msg) {
     loadingEl.style.display = 'none';

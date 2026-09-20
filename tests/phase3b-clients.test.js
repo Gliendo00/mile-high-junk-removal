@@ -607,6 +607,18 @@ test("admin client JS (Clients section) never uses innerHTML/insertAdjacentHTML/
   });
 });
 
+// Phase 3C Stage 4 follow-up: renderJobCard()'s STATUS_CLASSES fallback
+// list must include 'rental_out', or a rental job in that status gets the
+// wrong accent color/badge class (silently coerced to 'new') on a client's
+// job history list here — the label itself (b.statusLabel, server-supplied)
+// was already correct; only the class lookup was missing this value.
+test("admin/client-detail.js: STATUS_CLASSES includes 'rental_out' (job history accent color isn't coerced to 'new')", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin/client-detail.js"), "utf8");
+  const match = src.match(/var STATUS_CLASSES = \[[^\]]*\]/);
+  assert.ok(match, "STATUS_CLASSES must be defined");
+  assert.ok(/'rental_out'/.test(match[0]), "STATUS_CLASSES must include 'rental_out'");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

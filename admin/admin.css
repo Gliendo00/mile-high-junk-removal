@@ -878,13 +878,21 @@ button.admin-financial-card:focus-visible {
 .admin-btn-danger:hover { background: #fdecea; }
 .admin-btn:disabled { opacity: 0.6; cursor: default; }
 
-/* Login page */
+/* Login page — background image scoped to this one wrapper only (the login
+   screen's own full-viewport container) so no other admin page is touched;
+   .admin-body's plain tint background keeps doing that job everywhere
+   else. The dark image already has a dark-on-dark center, and the overlay
+   below darkens it further, so the white .admin-login-card keeps full
+   contrast regardless of which part of the image sits behind it. */
 .admin-login-wrap {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
+  background:
+    linear-gradient(rgba(10, 12, 8, 0.55), rgba(10, 12, 8, 0.55)),
+    url("../images/admin-login-bg.jpg") center center / cover no-repeat;
 }
 .admin-login-card {
   width: 100%;
