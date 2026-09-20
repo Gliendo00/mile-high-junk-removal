@@ -25,7 +25,18 @@
 -- bookings_status_check and recreates it with the exact same six
 -- previously-allowed values plus "rental_out" — nothing else about the
 -- constraint, column, table, or any other constraint/trigger/index is
--- touched.
+-- touched. The DROP and ADD are wrapped in one explicit transaction
+-- (BEGIN/COMMIT) so a failure recreating the constraint (a typo, a
+-- permissions issue, an unexpected legacy status value already in the
+-- table) rolls back the DROP too — bookings.status is never left
+-- momentarily unconstrained.
+--
+-- The DROP deliberately does NOT use IF EXISTS: the owner positively
+-- confirmed bookings_status_check exists in Staging by name (2026-09-19),
+-- so this migration should fail loudly if that expected constraint is
+-- ever missing in whatever environment it's run against, rather than
+-- silently proceeding to create a same-named replacement based on an
+-- assumption that turned out to be wrong for that environment.
 --
 -- What this does NOT do: it does not restrict "rental_out" to
 -- service_type = 'dumpster_rental' bookings. That restriction is
@@ -53,7 +64,7 @@
 
 -- =======================================================================
 -- PREFLIGHT — run this FIRST, by itself. Read-only. Confirms the
--- constraint's current exact name/definition before the ALTER below
+-- constraint's current exact name/definition before the transaction below
 -- assumes it — same convention as
 -- sql/2026-09-19_phase3c-job-payments-add-methods.sql's identical preflight.
 -- =======================================================================
@@ -64,14 +75,43 @@
 --   and pg_get_constraintdef(oid) ilike '%status%';
 
 -- =======================================================================
--- MIGRATION
+-- PREFLIGHT (optional) — read-only. Confirms there are no unexpected
+-- legacy status values already sitting in the table before the allowlist
+-- below is narrowed/recreated — every value returned here other than NULL
+-- ("new") must already be one of contacted/quoted/booked/completed/lost,
+-- or the migration's own CHECK will reject it and the transaction will
+-- roll back (see the BEGIN/COMMIT note above).
 -- =======================================================================
+-- select status, count(*) as row_count
+-- from public.bookings
+-- group by status
+-- order by status;
+
+-- =======================================================================
+-- MIGRATION — wrapped in one transaction: if recreating the constraint
+-- fails for any reason, the DROP is rolled back too, so bookings.status is
+-- never left without this constraint. The DROP has no IF EXISTS on
+-- purpose — see the header comment above for why this should fail loudly
+-- rather than silently assume.
+-- =======================================================================
+BEGIN;
+
 ALTER TABLE public.bookings
-  DROP CONSTRAINT IF EXISTS bookings_status_check;
+  DROP CONSTRAINT bookings_status_check;
 
 ALTER TABLE public.bookings
   ADD CONSTRAINT bookings_status_check
-  CHECK (status IN ('new', 'contacted', 'quoted', 'booked', 'rental_out', 'completed', 'lost'));
+  CHECK (status IN (
+    'new',
+    'contacted',
+    'quoted',
+    'booked',
+    'rental_out',
+    'completed',
+    'lost'
+  ));
+
+COMMIT;
 
 -- =======================================================================
 -- Verification (re-run any time to re-confirm current state)
