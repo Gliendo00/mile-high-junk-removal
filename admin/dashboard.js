@@ -21,10 +21,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var offset = 0;
   var loadedAny = false;
-  var currentFilter = ''; // '' = All. Otherwise one of the six status keys.
+  var currentFilter = ''; // '' = All. Otherwise one of the seven status keys.
   var requestSeq = 0; // guards against an in-flight request resolving after a newer filter change
 
-  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
+  // 'rental_out' isn't in MORE_STATUSES above (Requests is the sales/lead
+  // pipeline; Rental Out is an operational Schedule state, not a filter a
+  // lead-triage workflow needs its own pill/menu entry for) but a rental job
+  // can still appear in the unfiltered "All" list, so its accent color still
+  // needs a real class here rather than silently falling back to 'new'.
+  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'rental_out', 'completed', 'lost'];
 
   function showError(msg) {
     errorBanner.textContent = msg;

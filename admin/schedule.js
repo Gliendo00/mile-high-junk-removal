@@ -279,9 +279,11 @@ document.addEventListener('DOMContentLoaded', function () {
       render([]);
       emptyEl.textContent = 'No historical records before January 1, 2026.';
       window.AdminQuickExpense.hideBar();
+      window.AdminScheduleFinancials.hide();
     } else {
       render(body.jobs || []);
       window.AdminQuickExpense.showBar(activeDateIso);
+      window.AdminScheduleFinancials.show(activeDateIso, activeDateIso, body.jobs || []);
     }
   }
 
@@ -301,6 +303,7 @@ document.addEventListener('DOMContentLoaded', function () {
     loadingEl.style.display = 'block';
     clearError();
     window.AdminQuickExpense.hideBar();
+    window.AdminScheduleFinancials.hide();
     return seq;
   }
 

@@ -8,8 +8,14 @@
 // makes a network call itself. All rendering uses textContent/DOM
 // construction (no innerHTML), matching the rest of /admin.
 window.AdminStatusUI = (function () {
-  var STATUS_ORDER = ["new", "contacted", "quoted", "booked", "completed", "lost"];
-  var STATUS_TEXT = { new: "New", contacted: "Contacted", quoted: "Quoted", booked: "Booked", completed: "Completed", lost: "Lost" };
+  // Phase 3C Stage 4: "rental_out" added between "booked" and "completed" —
+  // dumpster-rental-only (see admin/booking-detail.js's openStatusSheet(),
+  // which filters this default list down to STATUS_ORDER minus "rental_out"
+  // for any non-rental job before ever passing `values` here); this module
+  // itself has no service_type awareness, it just renders whatever list
+  // it's given.
+  var STATUS_ORDER = ["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
+  var STATUS_TEXT = { new: "New", contacted: "Contacted", quoted: "Quoted", booked: "Booked", rental_out: "Rental Out", completed: "Completed", lost: "Lost" };
 
   var overlay = null;
   var sheet = null;

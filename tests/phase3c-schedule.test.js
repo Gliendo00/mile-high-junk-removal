@@ -373,7 +373,7 @@ test("GET schedule: never leaks the service-role key or anon key", async () => {
 // =======================================================================
 // 2. Which bookings appear: status/date architecture (no second status field)
 // =======================================================================
-test("GET schedule: only 'booked' and 'completed' bookings ever appear — new/contacted/quoted/lost never do, even with a matching date", async () => {
+test("GET schedule: only 'booked', 'rental_out', and 'completed' bookings ever appear — new/contacted/quoted/lost never do, even with a matching date", async () => {
   adminAuthed();
   const db = freshDb([
     booking({ id: "1", status: null, appointment_date: TODAY }), // NULL = "new"
@@ -382,11 +382,15 @@ test("GET schedule: only 'booked' and 'completed' bookings ever appear — new/c
     booking({ id: "4", status: "lost", appointment_date: TODAY }),
     booking({ id: "5", status: "booked", appointment_date: TODAY }),
     booking({ id: "6", status: "completed", appointment_date: TODAY }),
+    // Phase 3C Stage 4: rental_out is a dumpster rental delivered and
+    // currently at the client's property — still an active job on the
+    // schedule, same as booked.
+    booking({ id: "7", status: "rental_out", appointment_date: TODAY, service_type: "dumpster_rental" }),
   ]);
   const res = await getSchedule(db, "mhjr_admin_at=at-good", { range: "today" });
   assert.strictEqual(res.statusCode, 200);
   const ids = res.body.jobs.map((j) => j.id).sort();
-  assert.deepStrictEqual(ids, ["5", "6"]);
+  assert.deepStrictEqual(ids, ["5", "6", "7"]);
 });
 
 // =======================================================================
@@ -516,6 +520,28 @@ test("GET bookings?countsOnly=1: counts only NULL-status ('new') bookings, match
   const res = await getCountsOnly(db, "mhjr_admin_at=at-good");
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.summary.new, 2);
+});
+
+// Phase 3C Stage 4 regression guard: "new" was originally derived as
+// total minus exactly five known non-new statuses (contacted/quoted/
+// booked/completed/lost). Adding "rental_out" without also subtracting it
+// here would have silently counted every Rental Out booking as a "new"
+// lead, inflating the Requests-page badge (admin/nav-badge.js) — a real bug
+// found while implementing this stage, fixed in api/admin/bookings.js's
+// COUNT_QUERIES/knownNonNew, and asserted directly here so it can never
+// silently reappear.
+test("GET bookings?countsOnly=1: a 'rental_out' booking is NOT counted as 'new' — it has its own summary.rentalOut count instead", async () => {
+  adminAuthed();
+  const db = freshDb([
+    booking({ id: "1", status: null }), // the only real "new" booking
+    booking({ id: "2", status: "rental_out", service_type: "dumpster_rental" }),
+    booking({ id: "3", status: "booked" }),
+    booking({ id: "4", status: "completed" }),
+  ]);
+  const res = await getCountsOnly(db, "mhjr_admin_at=at-good");
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.summary.new, 1, "the rental_out booking must not fall into the derived 'new' count");
+  assert.strictEqual(res.body.summary.rentalOut, 1);
 });
 
 test("GET bookings?countsOnly=1: zero new bookings returns summary.new === 0 — the client hides the badge on this exact value (verified by code review of admin/nav-badge.js; no DOM simulation in this offline harness, same limitation noted in tests/phase3a-admin-status-write.test.js for its double-tap guard)", async () => {
@@ -776,6 +802,72 @@ test("deployment: total function-producing files under api/ stay within the Verc
   }
   const total = countApiFunctionFiles(path.join(__dirname, "..", "api"));
   assert.ok(total <= 12, "api/ has " + total + " function-producing .js files, exceeding the Vercel Hobby plan's 12-function limit — consolidate a new endpoint into an existing file (see api/admin/bookings.js's countsOnly mode for the pattern) or upgrade the Vercel plan before deploying");
+});
+
+// =======================================================================
+// 8. Schedule financial counters (Phase 3C Stage 4) — same static-analysis
+// approach as tests/phase3c-client-typeahead.test.js: this project's test
+// setup has no DOM/jsdom harness (see that file's own header), so the
+// client-side amount rules and wiring are verified by inspecting the actual
+// source text rather than executing it.
+// =======================================================================
+function readSrc(relPath) {
+  return fs.readFileSync(path.join(__dirname, "..", relPath), "utf8").replace(/\r\n/g, "\n");
+}
+
+test("admin/schedule-financials.js: Revenue counts 'completed' jobs only, preferring finalPrice and falling back to estimatedPrice only when finalPrice is null", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  assert.ok(/job\.status === 'completed'/.test(src));
+  assert.ok(/Number\(job\.finalPrice\)/.test(src));
+  assert.ok(/Number\.isFinite\(final\) \? final : Number\(job\.estimatedPrice\)/.test(src), "must fall back to estimatedPrice only when finalPrice isn't a finite number");
+});
+
+test("admin/schedule-financials.js: Booked counts 'booked' + 'rental_out' jobs using estimatedPrice, never estimatedPriceMax", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  assert.ok(/job\.status === 'booked' \|\| job\.status === 'rental_out'/.test(src));
+  // The header comment mentions estimatedPriceMax by name (explaining why
+  // it's excluded) — this checks the actual code never reads job.
+  // estimatedPriceMax, not that the string never appears anywhere at all.
+  assert.ok(!/job\.estimatedPriceMax/.test(src), "estimatedPriceMax must never be read in these counters, per the locked amount rules");
+});
+
+test("admin/schedule-financials.js: Net is Revenue minus Expenses — Booked is never part of the subtraction", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  assert.ok(/var net = revenue - expenses;/.test(src));
+});
+
+test("admin/schedule-financials.js: Expenses is fetched from the existing ?view=expenses endpoint for the exact visible range, not a new endpoint", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  assert.ok(/\/api\/admin\/bookings\?view=expenses&startDate=/.test(src));
+});
+
+test("admin/index.html: the financial-counters container exists, is hidden by default, and schedule-financials.js loads before schedule.js", () => {
+  const html = readSrc("admin/index.html");
+  assert.ok(html.includes('id="schedule-financials"'));
+  assert.ok(/id="schedule-financials"[^>]*hidden/.test(html), "must start hidden — Today/Tomorrow/etc. show it once real data loads, never before");
+  const financialsScriptIdx = html.indexOf('src="schedule-financials.js"');
+  const scheduleScriptIdx = html.indexOf('src="schedule.js"');
+  assert.ok(financialsScriptIdx !== -1 && scheduleScriptIdx !== -1 && financialsScriptIdx < scheduleScriptIdx);
+});
+
+test("admin/schedule.js: shows the financial counters for Today/Tomorrow/Yesterday/day-nav with the same single-day range, and hides them while a new day is loading or before the historical floor", () => {
+  const src = readSrc("admin/schedule.js");
+  assert.ok(/window\.AdminScheduleFinancials\.show\(activeDateIso, activeDateIso, body\.jobs \|\| \[\]\)/.test(src));
+  assert.ok(/window\.AdminScheduleFinancials\.hide\(\)/.test(src));
+});
+
+test("admin/calendar-views.js: shows the financial counters for Week/Month using the exact loaded range, and Year only ever hides them, never shows", () => {
+  const src = readSrc("admin/calendar-views.js");
+  assert.ok(/showFinancialsFor\(body\.weekStart, body\.weekEnd, body\.jobs\)/.test(src), "Week must pass its own loaded weekStart/weekEnd/jobs");
+  assert.ok(/showFinancialsFor\(body\.startDate, body\.endDate, body\.jobs\)/.test(src), "Month must pass its own loaded startDate/endDate/jobs");
+
+  // Year: hideFinancials() is fine anywhere; showFinancialsFor(...) must
+  // never appear inside the Year section (from the "Year —" section header
+  // down to the end of the file, where loadYear()/renderYearGrid() live).
+  const yearSectionIdx = src.indexOf("// Year — navigation only");
+  assert.ok(yearSectionIdx !== -1, "expected the existing Year section header comment to still be present");
+  const yearSection = src.slice(yearSectionIdx);
+  assert.ok(!/showFinancialsFor\(/.test(yearSection), "Year must never call showFinancialsFor — it carries no revenue/expense data (see api/admin/bookings.js's handleYear())");
 });
 
 // ---------------------------------------------------------------------

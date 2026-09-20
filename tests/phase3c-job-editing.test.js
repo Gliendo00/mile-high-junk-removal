@@ -1067,7 +1067,11 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
 test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/booking-status.js"), "utf8");
   assert.ok(/the ONE intentional write capability/.test(src), "must still be the same file — not consolidated or retired");
-  assert.ok(/const ALLOWED_STATUSES = \["new", "contacted", "quoted", "booked", "completed", "lost"\];/.test(src));
+  // Phase 3C Stage 4 added "rental_out" here (a real, deliberate change to
+  // this exact file, made in a later stage than the one this test guards) —
+  // this regex was updated to match; the Job Editing stage itself still
+  // never touched this file.
+  assert.ok(/const ALLOWED_STATUSES = \["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"\];/.test(src));
 });
 
 // =======================================================================

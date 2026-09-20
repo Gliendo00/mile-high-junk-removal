@@ -41,6 +41,11 @@ const STATUS_LABELS = {
   contacted: "Contacted",
   quoted: "Quoted",
   booked: "Booked",
+  // Phase 3C Stage 4: dumpster-rental-only lifecycle step between "booked"
+  // and "completed" — a rental that has been delivered and is currently at
+  // the client's property. See api/admin/booking-status.js for the
+  // service_type-based restriction that keeps this off non-rental jobs.
+  rental_out: "Rental Out",
   completed: "Completed",
   lost: "Lost",
 };

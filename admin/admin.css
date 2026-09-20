@@ -607,6 +607,55 @@
 }
 .admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
+/* ------------------------------------------------------------------ */
+/* Schedule financial counters — Phase 3C Stage 4. Four small neutral/    */
+/* white cards (never fully-saturated color fills) directly under the     */
+/* Schedule range tabs, above #quick-expense-bar — restrained colored     */
+/* accents/numbers only, deliberately not a finance-dashboard treatment.  */
+/* Two columns on a narrow phone, four across once there's room. Hidden   */
+/* entirely on Year (see admin/calendar-views.js's hideFinancials()).     */
+/* ------------------------------------------------------------------ */
+.admin-schedule-financials {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+@media (min-width: 560px) {
+  .admin-schedule-financials { grid-template-columns: repeat(4, 1fr); }
+}
+.admin-financial-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-left: 3px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.admin-financial-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-financial-value { font-size: 17px; font-weight: 800; color: var(--color-text, #201e1d); }
+
+.admin-financial-revenue { border-left-color: var(--color-accent-700, #2f6f13); }
+.admin-financial-revenue .admin-financial-value { color: var(--color-accent-700, #2f6f13); }
+.admin-financial-booked { border-left-color: #1d4ed8; }
+.admin-financial-booked .admin-financial-value { color: #1d4ed8; }
+.admin-financial-expenses { border-left-color: #b91c1c; }
+.admin-financial-expenses .admin-financial-value { color: #b91c1c; }
+.admin-financial-net { border-left-color: var(--color-accent-700, #2f6f13); }
+.admin-financial-net .admin-financial-value { color: var(--color-accent-700, #2f6f13); }
+/* Net turns red only once it actually goes negative (Revenue < Expenses) —
+   toggled in JS via admin/schedule-financials.js's render(). */
+.admin-financial-net.is-negative { border-left-color: #b91c1c; }
+.admin-financial-net.is-negative .admin-financial-value { color: #b91c1c; }
+
 .admin-schedule-day-heading {
   font-family: var(--font-body);
   font-weight: 800;
@@ -1078,6 +1127,10 @@
 .admin-status-contacted { background: #b45309; color: #fff; }
 .admin-status-quoted { background: #6d28d9; color: #fff; }
 .admin-status-booked { background: #1d4ed8; color: #fff; }
+/* Phase 3C Stage 4 — a distinct, more vivid orange than .admin-status-
+   contacted's muted amber-brown (#b45309), so an active rental reads as its
+   own state at a glance rather than looking like a lead-pipeline status. */
+.admin-status-rental_out { background: #ea580c; color: #fff; }
 .admin-status-completed { background: #374151; color: #fff; }
 .admin-status-lost { background: #b91c1c; color: #fff; }
 
@@ -1085,6 +1138,7 @@
 .admin-card-accent-contacted { border-left-color: #b45309; }
 .admin-card-accent-quoted { border-left-color: #6d28d9; }
 .admin-card-accent-booked { border-left-color: #1d4ed8; }
+.admin-card-accent-rental_out { border-left-color: #ea580c; }
 .admin-card-accent-completed { border-left-color: #374151; }
 .admin-card-accent-lost { border-left-color: #b91c1c; }
 
@@ -1092,6 +1146,7 @@
 .admin-status-dot-contacted { background: #b45309; }
 .admin-status-dot-quoted { background: #6d28d9; }
 .admin-status-dot-booked { background: #1d4ed8; }
+.admin-status-dot-rental_out { background: #ea580c; }
 .admin-status-dot-completed { background: #374151; }
 .admin-status-dot-lost { background: #b91c1c; }
 

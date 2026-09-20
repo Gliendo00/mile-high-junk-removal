@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var statusManageBadge = document.getElementById('d-status-manage-badge');
   var statusManageLabel = document.getElementById('d-status-manage-label');
 
-  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'completed', 'lost'];
+  var STATUS_CLASSES = ['new', 'contacted', 'quoted', 'booked', 'rental_out', 'completed', 'lost'];
   var STATUS_TEXT = window.AdminStatusUI.STATUS_TEXT;
 
   // Phase 3C Stage 2.5-v2 — display labels for rental_payments.payment_status
@@ -61,6 +61,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var bookingId = null;
   var currentStatus = 'new';
+  // Phase 3C Stage 4: gates 'rental_out' out of the status picker for any
+  // job that isn't a dumpster rental (see openStatusSheet() below) — set
+  // from the loaded booking's own serviceType in render(), never guessed.
+  var currentServiceType = null;
   var savingInFlight = false;
   var toastTimer = null;
   // 2026-09-18-v2 pricing update — this booking's own applicable overweight
@@ -220,6 +224,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var customer = data.customer;
     var serviceAddress = data.serviceAddress || null;
     bookingId = booking.id;
+    currentServiceType = booking.serviceType;
 
     var name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') : '';
     set('d-name', name || 'Unknown client');
@@ -420,8 +425,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function openStatusSheet() {
     if (savingInFlight) return;
+    // 'rental_out' only makes sense for a dumpster rental — the owner
+    // explicitly asked that a junk-removal/light-demo job never accidentally
+    // land there. Reuses the booking's own already-loaded serviceType rather
+    // than a second field/lookup. The server (api/admin/booking-status.js)
+    // re-checks this independently regardless of what the picker offers.
+    var values = window.AdminStatusUI.STATUS_ORDER.filter(function (key) {
+      return key !== 'rental_out' || currentServiceType === 'dumpster_rental';
+    });
     window.AdminStatusUI.open({
       title: 'Change status',
+      values: values,
       selected: currentStatus,
       onSelect: saveStatus,
     });

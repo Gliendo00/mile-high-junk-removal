@@ -446,6 +446,55 @@ test("PATCH booking-status: any state -> Lost", async () => {
   assert.strictEqual(res.body.status, "lost");
 });
 
+// Phase 3C Stage 4: "rental_out" only ever makes sense for a dumpster
+// rental job — the owner explicitly asked that a junk-removal/light-demo
+// job can never accidentally end up in this status. Enforced here by
+// checking the booking's own existing service_type before the write —
+// see api/admin/booking-status.js's RENTAL_ONLY_STATUS/RENTAL_SERVICE_TYPE.
+test("PATCH booking-status: Booked -> Rental Out is allowed for a dumpster rental job", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.bookings[1].status = "booked"; // OTHER_ID is service_type: "dumpster_rental"
+  const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: OTHER_ID, status: "rental_out" });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.status, "rental_out");
+  assert.strictEqual(db.bookings[1].status, "rental_out");
+});
+
+test("PATCH booking-status: Rental Out -> Completed is allowed (the rental lifecycle's final step)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.bookings[1].status = "rental_out";
+  const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: OTHER_ID, status: "completed" });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.status, "completed");
+});
+
+test("PATCH booking-status: rental_out is REJECTED (400) for a non-rental job, and the row is never written", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.bookings[0].status = "booked"; // REAL_ID is service_type: "junk_removal"
+  const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: REAL_ID, status: "rental_out" });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(res.body.error, "Rental Out can only be set on a dumpster rental job.");
+  assert.strictEqual(db.bookings[0].status, "booked", "the row must be completely unchanged after a rejected write");
+});
+
+test("PATCH booking-status: rental_out on a nonexistent booking id -> 404 (not-found takes precedence over the service_type check)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: NONEXISTENT_ID, status: "rental_out" });
+  assert.strictEqual(res.statusCode, 404);
+});
+
+test("PATCH booking-status: rental_out is a valid ALLOWED_STATUSES value in general (not just for the rental fixture above)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.bookings[1].status = "booked";
+  const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: OTHER_ID, status: "rental_out" });
+  assert.notStrictEqual(res.statusCode, 400, "rental_out itself must not be treated as an unknown/invalid status string");
+});
+
 test("PATCH booking-status: Lost -> New is allowed (no transition is enforced yet)", async () => {
   adminAuthed();
   const db = freshDb(); // OTHER_ID starts as "lost"

@@ -237,6 +237,18 @@ window.AdminCalendarViews = (function () {
     if (window.AdminQuickExpense) window.AdminQuickExpense.hideBar();
   }
 
+  // Phase 3C Stage 4: Revenue/Booked/Expenses/Net counters for whichever
+  // range is currently loaded — Week/Month only, never Year (see
+  // admin/schedule-financials.js's header for why). Guarded the same way
+  // showQuickExpenseFor()/hideQuickExpense() are, in case this script ever
+  // loads on a page without admin/schedule-financials.js.
+  function showFinancialsFor(startDate, endDate, jobs) {
+    if (window.AdminScheduleFinancials) window.AdminScheduleFinancials.show(startDate, endDate, jobs);
+  }
+  function hideFinancials() {
+    if (window.AdminScheduleFinancials) window.AdminScheduleFinancials.hide();
+  }
+
   function showWeek() {
     ensureDom();
     hideAllViews();
@@ -259,6 +271,7 @@ window.AdminCalendarViews = (function () {
     yearView.hidden = false;
     setActiveRangeTab('year');
     hideQuickExpense();
+    hideFinancials();
     loadYear();
   }
 
@@ -385,6 +398,7 @@ window.AdminCalendarViews = (function () {
     weekLoading.style.display = 'block';
     weekCurrentWrap.style.display = 'none';
     hideQuickExpense();
+    hideFinancials();
 
     var seq = ++weekRequestSeq;
     var url = '/api/admin/bookings?view=schedule&range=week';
@@ -413,6 +427,7 @@ window.AdminCalendarViews = (function () {
         weekRangeLabel.textContent = formatMonthDay(body.weekStart) + ' – ' + formatMonthDay(body.weekEnd);
         weekCurrentWrap.style.display = body.isCurrentWeek ? 'none' : 'block';
         renderWeekOverview(body.weekStart);
+        showFinancialsFor(body.weekStart, body.weekEnd, body.jobs);
         if (selectAfterLoad) {
           selectWeekDate(selectAfterLoad);
         } else if (todayIso >= body.weekStart && todayIso <= body.weekEnd) {
@@ -524,6 +539,7 @@ window.AdminCalendarViews = (function () {
     monthError.style.display = 'none';
     monthLoading.style.display = 'block';
     hideQuickExpense();
+    hideFinancials();
 
     var seq = ++monthRequestSeq;
     fetch('/api/admin/bookings?view=schedule&range=month&year=' + state.monthYear + '&month=' + state.monthMonth)
@@ -546,6 +562,7 @@ window.AdminCalendarViews = (function () {
         state.monthJobsByDate = groupJobsByDate(body.jobs);
         monthCurrentWrap.style.display = (body.year === todayParts[0] && body.month === todayParts[1]) ? 'none' : 'block';
         renderMonthGrid(body);
+        showFinancialsFor(body.startDate, body.endDate, body.jobs);
         if (selectAfterLoad && Number(selectAfterLoad.slice(0, 4)) === body.year && Number(selectAfterLoad.slice(5, 7)) === body.month) {
           selectMonthDate(selectAfterLoad);
         } else if (body.year === todayParts[0] && body.month === todayParts[1]) {

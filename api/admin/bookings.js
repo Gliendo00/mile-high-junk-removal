@@ -21,11 +21,15 @@ const MAX_LIMIT = 200;
 // in this file rather than its own api/admin/schedule.js — see the
 // countsOnly comment just below for why (the Vercel Hobby plan's 12
 // Serverless Function limit). Which bookings are "on the schedule": exactly
-// those whose status is booked or completed — the sales/lead lifecycle
-// (new/contacted/quoted) has no confirmed appointment yet, and lost fell
-// through, so neither belongs on an operational schedule. No second
-// operational-status field is introduced for this.
-const SCHEDULABLE_STATUSES = ["booked", "completed"];
+// those whose status is booked, rental_out, or completed — the sales/lead
+// lifecycle (new/contacted/quoted) has no confirmed appointment yet, and
+// lost fell through, so neither belongs on an operational schedule. No
+// second operational-status field is introduced for this.
+// Phase 3C Stage 4: "rental_out" (a dumpster rental delivered and currently
+// at the client's property) added — still an active job on the schedule,
+// same as "booked", just further along the rental lifecycle
+// (booked -> rental_out -> completed).
+const SCHEDULABLE_STATUSES = ["booked", "rental_out", "completed"];
 // Phase 3C Stage 2.4: "week" became a navigable calendar week (see
 // handleSchedule below) rather than the Stage 1 rolling 7-day window: the
 // week starts on Sunday and moves with an explicit ?weekStart= param, but
@@ -164,23 +168,31 @@ module.exports = async (req, res) => {
     return handleJobSearch(req, res, supabase);
   }
 
+  // Phase 3C Stage 4: "rental_out" is counted here too, and folded into
+  // knownNonNew below, specifically so it can never inflate the derived
+  // "new" lead count the Requests-page badge (admin/nav-badge.js) shows —
+  // a real bug found while adding this status: "new" was originally
+  // total minus exactly five known statuses, and a rental_out booking would
+  // have silently fallen through into that subtraction's blind spot.
   const COUNT_QUERIES = [
     supabase.from("bookings").select("id", { count: "exact", head: true }),
     supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "contacted"),
     supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "quoted"),
     supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "booked"),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "rental_out"),
     supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed"),
     supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "lost"),
   ];
 
   if (countsOnly) {
     try {
-      const [totalRes, contactedRes, quotedRes, bookedRes, completedRes, lostRes] = await Promise.all(COUNT_QUERIES);
-      for (const r of [totalRes, contactedRes, quotedRes, bookedRes, completedRes, lostRes]) {
+      const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes] = await Promise.all(COUNT_QUERIES);
+      for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes]) {
         if (r.error) throw r.error;
       }
       const total = totalRes.count || 0;
-      const knownNonNew = (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
+      const knownNonNew =
+        (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (rentalOutRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
       const newCount = Math.max(0, total - knownNonNew);
       res.status(200).json({
         ok: true,
@@ -190,6 +202,7 @@ module.exports = async (req, res) => {
           contacted: contactedRes.count || 0,
           quoted: quotedRes.count || 0,
           booked: bookedRes.count || 0,
+          rentalOut: rentalOutRes.count || 0,
           completed: completedRes.count || 0,
           lost: lostRes.count || 0,
         },
@@ -210,16 +223,16 @@ module.exports = async (req, res) => {
     // "new" is then derived as total minus every known non-new status,
     // which is correct however NULL/empty status is actually represented
     // in the database.
-    const [totalRes, contactedRes, quotedRes, bookedRes, completedRes, lostRes, pageRes] = await Promise.all([
+    const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes] = await Promise.all([
       ...COUNT_QUERIES,
       (function () {
         // "new" isn't a stored value (see docs/phase-1/crm-status-plan.md) —
         // every booking created so far has left status NULL, and nothing in
         // this codebase has ever written the literal string "new". Filtering
         // by NULL therefore matches every row the rest of this endpoint
-        // already counts as "new". The other five values are stored
-        // verbatim by api/admin/booking-status.js, so a plain .eq() is
-        // sufficient for them.
+        // already counts as "new". The other statuses are stored verbatim
+        // by api/admin/booking-status.js, so a plain .eq() is sufficient
+        // for them.
         let q = supabase
           .from("bookings")
           .select("id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_city, created_at")
@@ -231,7 +244,7 @@ module.exports = async (req, res) => {
       })(),
     ]);
 
-    for (const r of [totalRes, contactedRes, quotedRes, bookedRes, completedRes, lostRes, pageRes]) {
+    for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes]) {
       if (r.error) throw r.error;
     }
 
@@ -287,15 +300,27 @@ module.exports = async (req, res) => {
     });
 
     const total = totalRes.count || 0;
-    const knownNonNew = (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
+    const knownNonNew =
+      (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (rentalOutRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
     const newCount = Math.max(0, total - knownNonNew);
 
     // Pagination ("hasMore") must be judged against the count of whatever
     // set is actually being paged through — the global total when no
     // filter is applied, or the matching status's own count when one is.
     // Every value here was already computed above for the summary, so this
-    // needs no extra query.
-    const countsByStatus = { new: newCount, contacted: contactedRes.count || 0, quoted: quotedRes.count || 0, booked: bookedRes.count || 0, completed: completedRes.count || 0, lost: lostRes.count || 0 };
+    // needs no extra query. Keyed by the raw status string (rental_out),
+    // matching how statusFilter itself is stored — unlike the summary JSON
+    // below, which uses rentalOut for consistency with this file's other
+    // camelCase field names.
+    const countsByStatus = {
+      new: newCount,
+      contacted: contactedRes.count || 0,
+      quoted: quotedRes.count || 0,
+      booked: bookedRes.count || 0,
+      rental_out: rentalOutRes.count || 0,
+      completed: completedRes.count || 0,
+      lost: lostRes.count || 0,
+    };
     const filteredTotal = statusFilter ? countsByStatus[statusFilter] : total;
 
     res.status(200).json({
@@ -306,6 +331,7 @@ module.exports = async (req, res) => {
         contacted: contactedRes.count || 0,
         quoted: quotedRes.count || 0,
         booked: bookedRes.count || 0,
+        rentalOut: rentalOutRes.count || 0,
         completed: completedRes.count || 0,
         lost: lostRes.count || 0,
       },
