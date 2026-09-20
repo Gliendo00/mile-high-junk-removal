@@ -608,33 +608,34 @@
 .admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
 /* ------------------------------------------------------------------ */
-/* Schedule financial counters — Phase 3C Stage 4, restyled to a compact  */
-/* solid-color-fill strip per the owner's explicit follow-up request       */
-/* (presentation only — admin/schedule-financials.js's calculation logic   */
-/* is untouched). Label + value stay on one line per card ("REVENUE       */
-/* $100"); white text throughout for contrast against every fill color.   */
-/* Two columns on a narrow phone, four across once there's room. Hidden    */
-/* entirely on Year (see admin/calendar-views.js's hideFinancials()).      */
+/* Schedule financial counters — Phase 3C Stage 4, redesigned into ONE     */
+/* compact status strip (not four standalone dashboard cards) per the      */
+/* owner's second follow-up request: ~52px tall, one row of four equal     */
+/* color segments separated by a thin line, never a tall card grid.        */
+/* Presentation only — admin/schedule-financials.js's calculation logic    */
+/* is untouched. Falls back to a compact 2x2 grid only below 480px, where  */
+/* four segments can no longer stay readable in one row. Hidden entirely   */
+/* on Year (see admin/calendar-views.js's hideFinancials()).               */
 /* ------------------------------------------------------------------ */
 .admin-schedule-financials {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  display: flex;
+  border-radius: 12px;
+  overflow: hidden;
   margin-bottom: 16px;
 }
-@media (min-width: 560px) {
-  .admin-schedule-financials { grid-template-columns: repeat(4, 1fr); }
-}
 .admin-financial-card {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  flex-wrap: nowrap;
-  gap: 6px;
+  flex: 1 1 0;
   min-width: 0;
-  border-radius: 12px;
-  padding: 10px 10px;
-  overflow: hidden;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.admin-financial-card:not(:last-child) {
+  border-right: 1px solid rgba(255, 255, 255, 0.28);
 }
 .admin-financial-label {
   font-size: 11px;
@@ -645,9 +646,10 @@
   white-space: nowrap;
 }
 .admin-financial-value {
-  font-size: 18px;
+  font-size: 13.5px;
   font-weight: 800;
   color: #fff;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -660,6 +662,21 @@
 /* Net turns red only once it actually goes negative (Revenue < Expenses) —
    toggled in JS via admin/schedule-financials.js's render(). */
 .admin-financial-net.is-negative { background: #b91c1c; }
+
+/* Below this, four segments can't stay readable in one row — fall back to
+   a compact 2x2 grid (still one rounded strip, ~48px per row, never the
+   large standalone cards this replaced). The :not(:last-child) rule above
+   is reset here (same specificity, later in the cascade) so only the
+   left-column segments (odd) keep a right divider and only the top row
+   (first two) gets a bottom divider — a real 2x2 grid of dividers, not the
+   single-row pattern. */
+@media (max-width: 479px) {
+  .admin-schedule-financials { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .admin-financial-card { min-height: 48px; }
+  .admin-financial-card:not(:last-child) { border-right: none; }
+  .admin-financial-card:nth-child(odd) { border-right: 1px solid rgba(255, 255, 255, 0.28); }
+  .admin-financial-card:nth-child(-n+2) { border-bottom: 1px solid rgba(255, 255, 255, 0.28); }
+}
 
 .admin-schedule-day-heading {
   font-family: var(--font-body);
