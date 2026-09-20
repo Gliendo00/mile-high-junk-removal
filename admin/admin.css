@@ -608,12 +608,13 @@
 .admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
 /* ------------------------------------------------------------------ */
-/* Schedule financial counters — Phase 3C Stage 4. Four small neutral/    */
-/* white cards (never fully-saturated color fills) directly under the     */
-/* Schedule range tabs, above #quick-expense-bar — restrained colored     */
-/* accents/numbers only, deliberately not a finance-dashboard treatment.  */
-/* Two columns on a narrow phone, four across once there's room. Hidden   */
-/* entirely on Year (see admin/calendar-views.js's hideFinancials()).     */
+/* Schedule financial counters — Phase 3C Stage 4, restyled to a compact  */
+/* solid-color-fill strip per the owner's explicit follow-up request       */
+/* (presentation only — admin/schedule-financials.js's calculation logic   */
+/* is untouched). Label + value stay on one line per card ("REVENUE       */
+/* $100"); white text throughout for contrast against every fill color.   */
+/* Two columns on a narrow phone, four across once there's room. Hidden    */
+/* entirely on Year (see admin/calendar-views.js's hideFinancials()).      */
 /* ------------------------------------------------------------------ */
 .admin-schedule-financials {
   display: grid;
@@ -625,36 +626,40 @@
   .admin-schedule-financials { grid-template-columns: repeat(4, 1fr); }
 }
 .admin-financial-card {
-  background: #fff;
-  border: 1px solid var(--color-neutral-200, #eee7db);
-  border-left: 3px solid var(--color-neutral-300, #dcd3c4);
-  border-radius: 12px;
-  padding: 10px 12px;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  border-radius: 12px;
+  padding: 10px 10px;
+  overflow: hidden;
 }
 .admin-financial-label {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  color: var(--color-neutral-600, #82796a);
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
 }
-.admin-financial-value { font-size: 17px; font-weight: 800; color: var(--color-text, #201e1d); }
+.admin-financial-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-.admin-financial-revenue { border-left-color: var(--color-accent-700, #2f6f13); }
-.admin-financial-revenue .admin-financial-value { color: var(--color-accent-700, #2f6f13); }
-.admin-financial-booked { border-left-color: #1d4ed8; }
-.admin-financial-booked .admin-financial-value { color: #1d4ed8; }
-.admin-financial-expenses { border-left-color: #b91c1c; }
-.admin-financial-expenses .admin-financial-value { color: #b91c1c; }
-.admin-financial-net { border-left-color: var(--color-accent-700, #2f6f13); }
-.admin-financial-net .admin-financial-value { color: var(--color-accent-700, #2f6f13); }
+.admin-financial-revenue { background: var(--color-accent-700, #2f6f13); }
+.admin-financial-booked { background: #1d4ed8; }
+.admin-financial-expenses { background: #b91c1c; }
+.admin-financial-net { background: var(--color-accent-700, #2f6f13); }
 /* Net turns red only once it actually goes negative (Revenue < Expenses) —
    toggled in JS via admin/schedule-financials.js's render(). */
-.admin-financial-net.is-negative { border-left-color: #b91c1c; }
-.admin-financial-net.is-negative .admin-financial-value { color: #b91c1c; }
+.admin-financial-net.is-negative { background: #b91c1c; }
 
 .admin-schedule-day-heading {
   font-family: var(--font-body);
