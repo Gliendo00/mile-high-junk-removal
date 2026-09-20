@@ -22,6 +22,7 @@ const Module = require("module");
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 // ---------------------------------------------------------------------
 // Fake Supabase: query builder (phase3a's, plus .gte()/.lte())
@@ -815,11 +816,114 @@ function readSrc(relPath) {
   return fs.readFileSync(path.join(__dirname, "..", relPath), "utf8").replace(/\r\n/g, "\n");
 }
 
-test("admin/schedule-financials.js: Revenue counts 'completed' jobs only, preferring finalPrice and falling back to estimatedPrice only when finalPrice is null", () => {
+test("admin/schedule-financials.js: Revenue counts 'completed' jobs only, checking for a missing finalPrice on the raw value before ever calling Number() on it", () => {
   const src = readSrc("admin/schedule-financials.js");
   assert.ok(/job\.status === 'completed'/.test(src));
-  assert.ok(/Number\(job\.finalPrice\)/.test(src));
-  assert.ok(/Number\.isFinite\(final\) \? final : Number\(job\.estimatedPrice\)/.test(src), "must fall back to estimatedPrice only when finalPrice isn't a finite number");
+  // The exact bug this guards against: Number(null) === 0, and 0 is
+  // finite, so checking Number.isFinite() on the ALREADY-COERCED value
+  // can never distinguish "a real $0 final price" from "no final price
+  // was ever set" — this shipped once already (found live on Staging,
+  // 2026-09-19) and silently dropped a completed job's estimatedPrice
+  // fallback entirely. The fix must check the raw value first.
+  assert.ok(
+    /job\.finalPrice !== null[\s\S]{0,40}job\.finalPrice !== undefined[\s\S]{0,40}job\.finalPrice !== ''/.test(src),
+    "must check the RAW job.finalPrice for null/undefined/'' before ever coercing it with Number()"
+  );
+  assert.ok(!/Number\.isFinite\(final\)/.test(src), "the old coerced-value isFinite check that caused the bug must be gone, not just supplemented");
+});
+
+// ---------------------------------------------------------------------
+// Real behavioral regression tests for the Completed-Revenue fallback bug
+// (found live on Staging, 2026-09-19, fixed same day) — a plain source-text
+// check can prove the code's SHAPE but not its BEHAVIOR for the exact edge
+// case that broke (finalPrice: null coercing to a "finite" 0). This project
+// has no jsdom/DOM harness (see tests/phase3c-client-typeahead.test.js's
+// header), so this loads the real, unmodified admin/schedule-financials.js
+// source into a vm context with a minimal stub document/fetch — enough for
+// show() to run its synchronous computeFromJobs()+render() path — and reads
+// back the actual rendered text, the same way a browser would show it.
+// ---------------------------------------------------------------------
+function makeFakeFinancialsDom() {
+  const els = {};
+  function makeEl() {
+    const classes = new Set();
+    return {
+      textContent: "",
+      hidden: false,
+      classList: {
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+        toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+        contains: (c) => classes.has(c),
+      },
+    };
+  }
+  ["schedule-financials", "financial-revenue-value", "financial-booked-value", "financial-expenses-value", "financial-net-value", "financial-net-card"].forEach((id) => {
+    els[id] = makeEl();
+  });
+  return { els, document: { getElementById: (id) => els[id] || null } };
+}
+
+// Renders one job through the real admin/schedule-financials.js and returns
+// the Revenue/Booked text it actually produced. The expenses fetch is
+// stubbed to resolve to $0 — irrelevant here since Revenue/Booked render
+// synchronously, before that fetch ever resolves (see show()'s own
+// comment), so this never needs to await it.
+function renderJobsWithRealFinancialsScript(jobs) {
+  const src = readSrc("admin/schedule-financials.js");
+  const fakeDom = makeFakeFinancialsDom();
+  const sandbox = {
+    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ totalAmount: 0 }) }),
+    document: fakeDom.document,
+    console,
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: "admin/schedule-financials.js" });
+  sandbox.AdminScheduleFinancials.show("2026-01-01", "2026-01-01", jobs);
+  return { revenue: fakeDom.els["financial-revenue-value"].textContent, booked: fakeDom.els["financial-booked-value"].textContent };
+}
+
+test("Completed-Revenue regression: finalPrice=null, estimatedPrice=300 -> Revenue = $300.00 (the exact bug found live on Staging)", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: null, estimatedPrice: 300, estimatedPriceMax: 999999 }]);
+  assert.strictEqual(result.revenue, "$300.00");
+});
+
+test("Completed-Revenue regression: finalPrice=undefined, estimatedPrice=300 -> Revenue = $300.00", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: undefined, estimatedPrice: 300, estimatedPriceMax: 999999 }]);
+  assert.strictEqual(result.revenue, "$300.00");
+});
+
+test("Completed-Revenue regression: finalPrice='' (empty string), estimatedPrice=300 -> Revenue = $300.00", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: "", estimatedPrice: 300, estimatedPriceMax: 999999 }]);
+  assert.strictEqual(result.revenue, "$300.00");
+});
+
+test("Completed-Revenue regression: finalPrice=0 (a REAL zero-dollar final price), estimatedPrice=300 -> Revenue = $0.00, never falls back", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: 0, estimatedPrice: 300, estimatedPriceMax: 999999 }]);
+  assert.strictEqual(result.revenue, "$0.00");
+});
+
+test("Completed-Revenue regression: finalPrice=425, estimatedPrice=300 -> Revenue = $425.00 (finalPrice wins whenever it's actually set)", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: 425, estimatedPrice: 300, estimatedPriceMax: 999999 }]);
+  assert.strictEqual(result.revenue, "$425.00");
+});
+
+test("Completed-Revenue regression: estimatedPriceMax never affects Revenue in any of the above cases (already asserted per-case via a deliberately wild 999999 value)", () => {
+  // Belt-and-suspenders: same null-finalPrice case as the first regression
+  // test above, but with estimatedPriceMax completely absent instead of a
+  // wild number, to rule out any code path keying off its mere presence.
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: null, estimatedPrice: 300 }]);
+  assert.strictEqual(result.revenue, "$300.00");
+});
+
+test("Booked/Rental Out regression sanity check: unaffected by the Completed-Revenue fix — still summed by estimatedPrice, ignoring estimatedPriceMax", () => {
+  const result = renderJobsWithRealFinancialsScript([
+    { status: "booked", finalPrice: null, estimatedPrice: 200, estimatedPriceMax: 999999 },
+    { status: "rental_out", finalPrice: null, estimatedPrice: 150, estimatedPriceMax: 999999 },
+  ]);
+  assert.strictEqual(result.booked, "$350.00");
+  assert.strictEqual(result.revenue, "$0.00");
 });
 
 test("admin/schedule-financials.js: Booked counts 'booked' + 'rental_out' jobs using estimatedPrice, never estimatedPriceMax", () => {

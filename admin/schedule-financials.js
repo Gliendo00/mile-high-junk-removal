@@ -60,8 +60,16 @@ window.AdminScheduleFinancials = (function () {
     var booked = 0;
     (jobs || []).forEach(function (job) {
       if (job.status === 'completed') {
-        var final = Number(job.finalPrice);
-        revenue += Number.isFinite(final) ? final : Number(job.estimatedPrice) || 0;
+        // Check for "missing" on the RAW value before ever calling Number()
+        // on it — Number(null) === 0, and 0 is finite, so a naive
+        // Number.isFinite() check on the coerced value can't tell "a real
+        // $0 final price" apart from "no final price was ever set" (a real
+        // bug this exact file shipped with once already — see
+        // tests/phase3c-schedule.test.js's regression tests for this). A
+        // real 0 must stay 0, never fall back to estimatedPrice.
+        var hasFinal = job.finalPrice !== null && job.finalPrice !== undefined && job.finalPrice !== '';
+        var amount = Number(hasFinal ? job.finalPrice : job.estimatedPrice);
+        revenue += Number.isFinite(amount) ? amount : 0;
       } else if (job.status === 'booked' || job.status === 'rental_out') {
         booked += Number(job.estimatedPrice) || 0;
       }
