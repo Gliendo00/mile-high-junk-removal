@@ -59,30 +59,26 @@
        carries no revenue/expense data at all.
 
        Always a single 4-across row, even at ~375px — see admin.css's own
-       header comment on .admin-schedule-financials for why there is no
-       2-column fallback here. Each segment carries both a full and an
-       abbreviated label (CSS shows exactly one via a min-width media
-       query, matching whichever fits the segment at the current width);
-       admin/schedule-financials.js only ever writes the *-value spans. -->
+       header comment on .admin-schedule-financials. Full label text at
+       every width (the owner explicitly rejected a REV/EXP-style mobile
+       abbreviation — admin.css instead shrinks the label font-size on very
+       narrow screens); admin/schedule-financials.js only ever writes the
+       *-value spans. -->
   <div id="schedule-financials" class="admin-schedule-financials" hidden>
     <div class="admin-financial-card admin-financial-revenue">
-      <span class="admin-financial-label-full">Revenue</span>
-      <span class="admin-financial-label-short">REV</span>
+      <span class="admin-financial-label">Revenue</span>
       <span class="admin-financial-value" id="financial-revenue-value">—</span>
     </div>
     <div class="admin-financial-card admin-financial-booked">
-      <span class="admin-financial-label-full">Booked</span>
-      <span class="admin-financial-label-short">BOOKED</span>
+      <span class="admin-financial-label">Booked</span>
       <span class="admin-financial-value" id="financial-booked-value">—</span>
     </div>
     <div class="admin-financial-card admin-financial-expenses">
-      <span class="admin-financial-label-full">Expenses</span>
-      <span class="admin-financial-label-short">EXP</span>
+      <span class="admin-financial-label">Expenses</span>
       <span class="admin-financial-value" id="financial-expenses-value">—</span>
     </div>
     <div class="admin-financial-card admin-financial-net" id="financial-net-card">
-      <span class="admin-financial-label-full">Net</span>
-      <span class="admin-financial-label-short">NET</span>
+      <span class="admin-financial-label">Net</span>
       <span class="admin-financial-value" id="financial-net-value">—</span>
     </div>
   </div>

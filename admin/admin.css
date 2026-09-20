@@ -608,17 +608,18 @@
 .admin-field-required-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--color-neutral-800, #474238); }
 
 /* ------------------------------------------------------------------ */
-/* Schedule financial counters — Phase 3C Stage 4, third pass per the      */
-/* owner's explicit request: ALWAYS a single row of four equal segments,   */
-/* even at ~375px — no 2-column fallback at all (the previous pass's       */
-/* @media (max-width: 479px) grid fallback was removed outright, not just  */
-/* tweaked). Each segment stacks two tight lines (label, then value)       */
-/* instead of sitting side by side, which is what makes a single row fit   */
-/* at phone width. Presentation only — admin/schedule-financials.js's      */
-/* calculation logic is untouched, and this intentionally does not touch   */
-/* the separate "Could not load the schedule" error-banner styling.        */
-/* Hidden entirely on Year (see admin/calendar-views.js's                  */
-/* hideFinancials()).                                                      */
+/* Schedule financial counters — Phase 3C Stage 4, fourth pass: full label  */
+/* words (Revenue/Booked/Expenses/Net) at every width — the owner           */
+/* explicitly rejected the REV/EXP-style mobile abbreviation from the       */
+/* previous pass as unprofessional-looking, even though there was room     */
+/* for it. Still ALWAYS a single row of four equal segments, even at        */
+/* ~375px (no 2-column fallback); each segment stacks two tight lines       */
+/* (label, then value). The label shrinks its font-size on very narrow      */
+/* screens instead of abbreviating the word. Presentation only —            */
+/* admin/schedule-financials.js's calculation logic is untouched, and       */
+/* this intentionally does not touch the separate "Could not load the       */
+/* schedule" error-banner styling. Hidden entirely on Year (see             */
+/* admin/calendar-views.js's hideFinancials()).                             */
 /* ------------------------------------------------------------------ */
 .admin-schedule-financials {
   display: flex;
@@ -641,12 +642,7 @@
 .admin-financial-card:not(:last-child) {
   border-right: 1px solid rgba(255, 255, 255, 0.28);
 }
-/* Two label variants, same styling — CSS shows exactly one via the
-   min-width media query below, never both at once. Kept as separate
-   elements (not a single relabeled span) so no JS is involved in the
-   swap and admin/schedule-financials.js never needs to know about it. */
-.admin-financial-label-full,
-.admin-financial-label-short {
+.admin-financial-label {
   font-size: 9.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -657,11 +653,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.admin-financial-label-full { display: none; }
-.admin-financial-label-short { display: block; }
-@media (min-width: 480px) {
-  .admin-financial-label-full { display: block; }
-  .admin-financial-label-short { display: none; }
+/* Full words ("Expenses" is the longest) need a touch less room on a very
+   narrow phone than the mid-width size above — shrink the label only,
+   never abbreviate it. */
+@media (max-width: 359px) {
+  .admin-financial-label { font-size: 8.5px; }
 }
 .admin-financial-value {
   font-size: 12.5px;
