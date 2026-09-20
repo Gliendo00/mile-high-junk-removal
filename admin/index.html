@@ -63,20 +63,27 @@
        every width (the owner explicitly rejected a REV/EXP-style mobile
        abbreviation — admin.css instead shrinks the label font-size on very
        narrow screens); admin/schedule-financials.js only ever writes the
-       *-value spans. -->
+       *-value spans.
+
+       Revenue/Booked/Expenses are real <button> elements (native focus/
+       Enter/Space activation, no extra ARIA needed) that open a compact
+       breakdown sheet for the exact same visible range — see
+       admin/schedule-financials.js's openRevenueBreakdown()/
+       openBookedBreakdown()/openExpensesBreakdown(). Net stays a plain,
+       non-interactive <div> per explicit instruction. -->
   <div id="schedule-financials" class="admin-schedule-financials" hidden>
-    <div class="admin-financial-card admin-financial-revenue">
+    <button type="button" class="admin-financial-card admin-financial-revenue" id="financial-revenue-card" aria-haspopup="dialog">
       <span class="admin-financial-label">Revenue</span>
       <span class="admin-financial-value" id="financial-revenue-value">—</span>
-    </div>
-    <div class="admin-financial-card admin-financial-booked">
+    </button>
+    <button type="button" class="admin-financial-card admin-financial-booked" id="financial-booked-card" aria-haspopup="dialog">
       <span class="admin-financial-label">Booked</span>
       <span class="admin-financial-value" id="financial-booked-value">—</span>
-    </div>
-    <div class="admin-financial-card admin-financial-expenses">
+    </button>
+    <button type="button" class="admin-financial-card admin-financial-expenses" id="financial-expenses-card" aria-haspopup="dialog">
       <span class="admin-financial-label">Expenses</span>
       <span class="admin-financial-value" id="financial-expenses-value">—</span>
-    </div>
+    </button>
     <div class="admin-financial-card admin-financial-net" id="financial-net-card">
       <span class="admin-financial-label">Net</span>
       <span class="admin-financial-value" id="financial-net-value">—</span>

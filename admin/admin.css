@@ -688,6 +688,83 @@
    toggled in JS via admin/schedule-financials.js's render(). */
 .admin-financial-net.is-negative { background: #b91c1c; }
 
+/* Stage 4 drill-down addendum — Revenue/Booked/Expenses are real <button>
+   elements (admin/index.html); Net stays a plain <div> and is deliberately
+   untouched by this tag-qualified selector, so it stays non-interactive
+   with zero visual change. Resets are pure UA-button-default removals —
+   they don't change how these already looked as divs, only add the
+   pointer/hover/active/focus affordance for the new click behavior. */
+button.admin-financial-card {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+button.admin-financial-card:hover { filter: brightness(1.08); }
+button.admin-financial-card:active { filter: brightness(0.9); }
+button.admin-financial-card:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+
+/* Stage 4 drill-down sheet content — reuses .admin-sheet-overlay/
+   .admin-sheet/.admin-sheet-title/.admin-sheet-cancel/.admin-empty as-is
+   (see admin/schedule-financials.js's openBreakdownSheet()); these are just
+   the row/list/total styles specific to this one breakdown's content. */
+.admin-financial-breakdown-range {
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+  padding: 0 12px 10px;
+  margin-top: -4px;
+}
+.admin-financial-breakdown-list { display: flex; flex-direction: column; }
+.admin-financial-breakdown-row {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-financial-breakdown-row:last-child { border-bottom: none; }
+.admin-financial-breakdown-row-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.admin-financial-breakdown-row-name {
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--color-text, #201e1d);
+}
+.admin-financial-breakdown-row-amount {
+  font-weight: 800;
+  font-size: 14.5px;
+  color: var(--color-accent-700, #2f6f13);
+  white-space: nowrap;
+}
+.admin-financial-breakdown-row-meta {
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+  margin-top: 2px;
+}
+.admin-financial-breakdown-row-note {
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+  margin-top: 2px;
+  font-style: italic;
+}
+.admin-financial-breakdown-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--color-text, #201e1d);
+}
+
 .admin-schedule-day-heading {
   font-family: var(--font-body);
   font-weight: 800;

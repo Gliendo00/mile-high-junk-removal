@@ -974,6 +974,363 @@ test("admin/calendar-views.js: shows the financial counters for Week/Month using
   assert.ok(!/showFinancialsFor\(/.test(yearSection), "Year must never call showFinancialsFor — it carries no revenue/expense data (see api/admin/bookings.js's handleYear())");
 });
 
+// =======================================================================
+// 9. Stage 4 drill-down: Revenue/Booked/Expenses click-to-open breakdown
+// sheets (admin/schedule-financials.js). The same vm technique as section
+// 8's Completed-Revenue regression tests, extended with a fuller fake DOM
+// (createElement/appendChild/classList/addEventListener/click) so a real
+// click on the real button can be simulated and the sheet's actual
+// rendered rows read back — proving behavior, not just source shape.
+// =======================================================================
+function makeFakeElement(tag) {
+  const listeners = {};
+  // classSet backs BOTH .className (a plain string assignment, the pattern
+  // this project's el() helper always uses) and .classList (used directly
+  // for a couple of toggle() calls) — a real DOM element keeps those two
+  // in sync automatically; this stub must too, or a class set via
+  // `node.className = '...'` (the common case) would be invisible to a
+  // later `classList.contains(...)` check, exactly the kind of silent stub
+  // bug this project's own lesson (verify real behavior, not shape) warns
+  // against reintroducing.
+  const classSet = new Set();
+  const node = {
+    tagName: String(tag || "div").toUpperCase(),
+    textContent: "",
+    type: "",
+    disabled: false,
+    hidden: false,
+    children: [],
+    parentNode: null,
+    attrs: {},
+    classList: {
+      add: (c) => classSet.add(c),
+      remove: (c) => classSet.delete(c),
+      toggle(c, on) {
+        if (on === undefined) {
+          if (classSet.has(c)) classSet.delete(c);
+          else classSet.add(c);
+        } else if (on) classSet.add(c);
+        else classSet.delete(c);
+      },
+      contains: (c) => classSet.has(c),
+    },
+    setAttribute(name, val) {
+      this.attrs[name] = val;
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
+    },
+    hasAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, name);
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
+    },
+    appendChild(child) {
+      child.parentNode = node;
+      node.children.push(child);
+      return child;
+    },
+    removeChild(child) {
+      const idx = node.children.indexOf(child);
+      if (idx !== -1) node.children.splice(idx, 1);
+      child.parentNode = null;
+      return child;
+    },
+    get firstChild() {
+      return node.children[0] || null;
+    },
+    addEventListener(type, fn) {
+      listeners[type] = listeners[type] || [];
+      listeners[type].push(fn);
+    },
+    dispatchEvent(evt) {
+      (listeners[evt.type] || []).forEach((fn) => fn(evt));
+      return true;
+    },
+    click() {
+      this.dispatchEvent({ type: "click", target: this });
+    },
+    // Only what admin/schedule-financials.js itself actually needs — a
+    // plain depth-first walk matching a bare ".classname" selector. Not a
+    // general CSS engine; this file's own queries are all this simple.
+    querySelector(selector) {
+      const cls = selector.replace(/^\./, "");
+      function walk(n) {
+        for (const child of n.children) {
+          if (child.classList && child.classList.contains(cls)) return child;
+          const found = walk(child);
+          if (found) return found;
+        }
+        return null;
+      }
+      return walk(this);
+    },
+  };
+  Object.defineProperty(node, "className", {
+    get: () => Array.from(classSet).join(" "),
+    set(val) {
+      classSet.clear();
+      String(val || "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .forEach((c) => classSet.add(c));
+    },
+    enumerable: true,
+  });
+  return node;
+}
+
+// Builds a full fake `document` (schedule-financials.js's real, unmodified
+// source runs against this unchanged) with real getElementById wiring for
+// every id the strip's markup declares, plus a working createElement/body
+// pair so the sheet overlay this file builds at runtime is a real (fake)
+// DOM subtree, not a stub.
+function makeFullFakeFinancialsDom() {
+  const els = {};
+  ["schedule-financials", "financial-revenue-value", "financial-booked-value", "financial-expenses-value", "financial-net-value", "financial-net-card"].forEach((id) => {
+    els[id] = makeFakeElement("div");
+  });
+  ["financial-revenue-card", "financial-booked-card", "financial-expenses-card"].forEach((id) => {
+    els[id] = makeFakeElement("button");
+  });
+  const documentListeners = {};
+  const body = makeFakeElement("body");
+  const document = {
+    getElementById: (id) => els[id] || null,
+    createElement: (tag) => makeFakeElement(tag),
+    body,
+    addEventListener(type, fn) {
+      documentListeners[type] = documentListeners[type] || [];
+      documentListeners[type].push(fn);
+    },
+    dispatchKeydown(key) {
+      (documentListeners.keydown || []).forEach((fn) => fn({ key }));
+    },
+  };
+  return { els, body, document };
+}
+
+// Loads the real, unmodified admin/schedule-financials.js into a vm context
+// against the fuller fake DOM above and calls show() with the given
+// jobs/expenses. expensesBody defaults to an empty, successfully-loaded
+// list (never null) so Expenses-breakdown tests exercise the real loaded
+// path, not the "could not load" fallback — pass expensesBody: null to
+// test that fallback specifically.
+function mountRealFinancialsScript(jobs, expensesBody) {
+  const src = readSrc("admin/schedule-financials.js");
+  const fakeDom = makeFullFakeFinancialsDom();
+  const body = expensesBody === undefined ? { totalAmount: 0, expenses: [] } : expensesBody;
+  const sandbox = {
+    fetch: () => (body === null ? Promise.resolve({ ok: false }) : Promise.resolve({ ok: true, json: () => Promise.resolve(body) })),
+    document: fakeDom.document,
+    console,
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: "admin/schedule-financials.js" });
+  sandbox.AdminScheduleFinancials.show("2026-09-13", "2026-09-19", jobs);
+  return { api: sandbox.AdminScheduleFinancials, els: fakeDom.els, body: fakeDom.body, document: fakeDom.document };
+}
+
+// Walks the sheet a click just opened and pulls out every
+// .admin-financial-breakdown-row-name/-amount pair plus the total line, in
+// document order — the same information a real screen would show.
+function readOpenSheet(fakeBody) {
+  const overlay = fakeBody.querySelector("admin-sheet-overlay");
+  if (!overlay) return null;
+  if (overlay.hasAttribute("hidden")) return { open: false };
+  const sheet = overlay.children[0];
+  function collectByClass(node, cls, out) {
+    for (const child of node.children) {
+      if (child.classList.contains(cls)) out.push(child);
+      collectByClass(child, cls, out);
+    }
+    return out;
+  }
+  const title = collectByClass(sheet, "admin-sheet-title", [])[0];
+  const rangeEl = collectByClass(sheet, "admin-financial-breakdown-range", [])[0];
+  const rows = collectByClass(sheet, "admin-financial-breakdown-row", []).map((row) => {
+    const name = collectByClass(row, "admin-financial-breakdown-row-name", [])[0];
+    const amount = collectByClass(row, "admin-financial-breakdown-row-amount", [])[0];
+    const meta = collectByClass(row, "admin-financial-breakdown-row-meta", [])[0];
+    const note = collectByClass(row, "admin-financial-breakdown-row-note", [])[0];
+    return { name: name && name.textContent, amount: amount && amount.textContent, meta: meta && meta.textContent, note: note && note.textContent };
+  });
+  const emptyEl = collectByClass(sheet, "admin-empty", [])[0];
+  const totalEl = collectByClass(sheet, "admin-financial-breakdown-total", [])[0];
+  return {
+    open: true,
+    title: title && title.textContent,
+    range: rangeEl && rangeEl.textContent,
+    rows,
+    emptyText: emptyEl && emptyEl.textContent,
+    totalText: totalEl ? totalEl.children.map((c) => c.textContent).join(" ") : null,
+  };
+}
+
+const REVENUE_TEST_JOBS = [
+  { id: "r1", status: "completed", finalPrice: 100, estimatedPrice: 90, estimatedPriceMax: 500, appointmentDate: "2026-09-19", serviceLabel: "Junk Removal", customer: { firstName: "Alice", lastName: "Smith" } },
+  { id: "r2", status: "completed", finalPrice: null, estimatedPrice: 300, appointmentDate: "2026-09-18", serviceLabel: "15-Yard Dumpster Rental", customer: { firstName: "Bob", lastName: "Jones" } },
+  { id: "r3", status: "booked", finalPrice: null, estimatedPrice: 200, appointmentDate: "2026-09-19", serviceLabel: "Junk Removal", statusLabel: "Booked", customer: { firstName: "Carla", lastName: "Diaz" } },
+  { id: "r4", status: "rental_out", finalPrice: null, estimatedPrice: 150, appointmentDate: "2026-09-20", serviceLabel: "15-Yard Dumpster Rental", statusLabel: "Rental Out", customer: null },
+];
+
+test("Drill-down: clicking Revenue opens a sheet listing only completed jobs, using the same amount as the counter, reconciling to it exactly", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-revenue-card"].click();
+  const sheetState = readOpenSheet(mounted.body);
+  assert.ok(sheetState.open, "clicking Revenue must open the sheet");
+  assert.strictEqual(sheetState.title, "Revenue");
+  assert.strictEqual(sheetState.rows.length, 2, "only the two completed jobs (r1, r2) belong in the Revenue breakdown");
+  assert.strictEqual(sheetState.rows[0].name, "Alice Smith");
+  assert.strictEqual(sheetState.rows[0].amount, "$100.00");
+  assert.strictEqual(sheetState.rows[1].name, "Bob Jones");
+  assert.strictEqual(sheetState.rows[1].amount, "$300.00", "Bob's row must show the estimatedPrice fallback, matching the counter");
+  assert.strictEqual(sheetState.totalText, "Total Revenue $400.00", "the sum of the two rows must exactly equal what the Revenue counter itself shows");
+});
+
+test("Drill-down: clicking Booked opens a sheet listing booked + rental_out jobs (never completed), reconciling to the counter", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-booked-card"].click();
+  const sheetState = readOpenSheet(mounted.body);
+  assert.strictEqual(sheetState.title, "Booked");
+  assert.strictEqual(sheetState.rows.length, 2, "r3 (booked) and r4 (rental_out) only");
+  assert.strictEqual(sheetState.rows[0].name, "Carla Diaz");
+  assert.strictEqual(sheetState.rows[0].amount, "$200.00");
+  assert.ok(sheetState.rows[0].meta.indexOf("Booked") !== -1, "status must be shown in the row");
+  assert.strictEqual(sheetState.rows[1].name, "Unknown client", "a job with no customer must fall back exactly like the schedule cards do");
+  assert.strictEqual(sheetState.rows[1].amount, "$150.00");
+  assert.ok(sheetState.rows[1].meta.indexOf("Rental Out") !== -1);
+  assert.strictEqual(sheetState.totalText, "Total Booked $350.00");
+});
+
+test("Drill-down: Revenue/Booked breakdown rows never reference estimatedPriceMax even though one test job carries a wild value for it", () => {
+  // REVENUE_TEST_JOBS's r1 deliberately carries estimatedPriceMax: 500 — if
+  // any row/amount ever picked it up, r1's Revenue row would not read
+  // exactly $100.00 (its real finalPrice).
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-revenue-card"].click();
+  const sheetState = readOpenSheet(mounted.body);
+  assert.strictEqual(sheetState.rows[0].amount, "$100.00");
+});
+
+test("Drill-down: clicking Expenses lists the real expense rows and shows the endpoint's own totalAmount as the total — not a client-side re-sum of the rows", () => {
+  const mounted = mountRealFinancialsScript([], {
+    totalAmount: 117.5,
+    expenses: [
+      { id: "e1", category: "fuel", categoryLabel: "Fuel", amount: 42.5, expenseDate: "2026-09-19", note: null, vendor: "Shell" },
+      { id: "e2", category: "dump_fees", categoryLabel: "Dump Fee", amount: 75, expenseDate: "2026-09-17", note: "Weekend surcharge", vendor: null },
+    ],
+  });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["financial-expenses-card"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.strictEqual(sheetState.title, "Expenses");
+      assert.strictEqual(sheetState.rows.length, 2);
+      assert.strictEqual(sheetState.rows[0].name, "Fuel");
+      assert.strictEqual(sheetState.rows[0].amount, "$42.50");
+      assert.ok(sheetState.rows[0].meta.indexOf("Shell") !== -1, "vendor must show when present");
+      assert.strictEqual(sheetState.rows[1].name, "Dump Fee");
+      assert.strictEqual(sheetState.rows[1].note, "Weekend surcharge", "note must show when present");
+      assert.strictEqual(sheetState.totalText, "Total Expenses $117.50");
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: clicking Expenses before the expenses fetch resolves shows a calm 'not loaded yet' state, never a wrong $0 total presented as real", () => {
+  const mounted = mountRealFinancialsScript([], null); // fetch never resolves ok
+  mounted.els["financial-expenses-card"].click();
+  const sheetState = readOpenSheet(mounted.body);
+  assert.strictEqual(sheetState.title, "Expenses");
+  assert.strictEqual(sheetState.rows.length, 0);
+  assert.ok(sheetState.emptyText && sheetState.emptyText.indexOf("Could not load") !== -1);
+});
+
+test("Drill-down: closing the sheet (Close button) leaves it hidden and clears its content — the exact same Schedule state underneath is untouched", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-revenue-card"].click();
+  assert.ok(readOpenSheet(mounted.body).open);
+  const overlay = mounted.body.querySelector("admin-sheet-overlay");
+  const sheet = overlay.children[0];
+  const closeBtn = sheet.children[sheet.children.length - 1];
+  assert.strictEqual(closeBtn.textContent, "Close");
+  closeBtn.click();
+  assert.strictEqual(overlay.hasAttribute("hidden"), true);
+  assert.strictEqual(sheet.children.length, 0, "the sheet's content is cleared on close, never left stale for the next open");
+  // The counters themselves were never touched by opening/closing the sheet.
+  assert.strictEqual(mounted.els["financial-revenue-value"].textContent, "$400.00");
+});
+
+test("Drill-down: pressing Escape closes the sheet", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-booked-card"].click();
+  assert.ok(readOpenSheet(mounted.body).open);
+  mounted.document.dispatchKeydown("Escape");
+  const overlay = mounted.body.querySelector("admin-sheet-overlay");
+  assert.strictEqual(overlay.hasAttribute("hidden"), true);
+});
+
+test("Drill-down: switching to a new range (a new show() call) closes any open breakdown sheet rather than leaving stale data visible", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-revenue-card"].click();
+  assert.ok(readOpenSheet(mounted.body).open);
+  mounted.api.show("2026-09-20", "2026-09-20", []);
+  const overlay = mounted.body.querySelector("admin-sheet-overlay");
+  assert.strictEqual(overlay.hasAttribute("hidden"), true, "a new show() must close any breakdown left open from the previous range");
+});
+
+test("Drill-down: hide() (Year view) also closes any open breakdown sheet", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  mounted.els["financial-booked-card"].click();
+  assert.ok(readOpenSheet(mounted.body).open);
+  mounted.api.hide();
+  const overlay = mounted.body.querySelector("admin-sheet-overlay");
+  assert.strictEqual(overlay.hasAttribute("hidden"), true);
+});
+
+test("Drill-down: Net has no click wiring at all — admin/index.html keeps it a plain <div>, and admin/schedule-financials.js never attaches a click handler to financial-net-card", () => {
+  const html = readSrc("admin/index.html");
+  assert.ok(/<div class="admin-financial-card admin-financial-net" id="financial-net-card">/.test(html), "Net must stay a plain, non-interactive <div>");
+  assert.ok(!/<button[^>]*id="financial-net-card"/.test(html), "Net must never become a <button>");
+  const jsSrc = readSrc("admin/schedule-financials.js");
+  assert.ok(!/financial-net-card['"]\)\.addEventListener/.test(jsSrc), "no click handler may ever be attached to the Net card");
+});
+
+test("Drill-down: Revenue/Booked/Expenses are real <button> elements in admin/index.html (native keyboard activation, no custom key handling needed)", () => {
+  const html = readSrc("admin/index.html");
+  ["financial-revenue-card", "financial-booked-card", "financial-expenses-card"].forEach((id) => {
+    const re = new RegExp('<button type="button" class="admin-financial-card [a-z-]+" id="' + id + '"');
+    assert.ok(re.test(html), id + " must be a real <button type=\"button\">");
+  });
+});
+
+test("admin/admin.css: the three clickable cards get pointer/hover/active/focus-visible styling, scoped so Net (a plain <div>) is never affected", () => {
+  const css = readSrc("admin/admin.css");
+  assert.ok(/button\.admin-financial-card\s*\{[^}]*cursor:\s*pointer/.test(css), "must be tag-qualified (button.admin-financial-card), never a bare .admin-financial-card cursor rule that would also apply to the Net div");
+  assert.ok(/button\.admin-financial-card:hover/.test(css));
+  assert.ok(/button\.admin-financial-card:active/.test(css));
+  assert.ok(/button\.admin-financial-card:focus-visible/.test(css));
+});
+
+test("admin/schedule-financials.js: completedRevenueAmount() and bookedJobAmount() are each defined exactly once and used by both the counter and the breakdown builder — the counter and its drill-down can never disagree", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  const completedDefs = (src.match(/function completedRevenueAmount\(/g) || []).length;
+  const bookedDefs = (src.match(/function bookedJobAmount\(/g) || []).length;
+  assert.strictEqual(completedDefs, 1);
+  assert.strictEqual(bookedDefs, 1);
+  // Called from computeFromJobs() (the counter) AND buildRevenueRows()/
+  // buildBookedRows() (the breakdown) — at least 3 call sites total (1
+  // definition + >=2 callers) for each, proving genuine reuse rather than
+  // two separate copies of the same formula.
+  const completedCalls = (src.match(/completedRevenueAmount\(job\)/g) || []).length;
+  const bookedCalls = (src.match(/bookedJobAmount\(job\)/g) || []).length;
+  assert.ok(completedCalls >= 2, "completedRevenueAmount(job) must be called from both computeFromJobs() and buildRevenueRows()");
+  assert.ok(bookedCalls >= 2, "bookedJobAmount(job) must be called from both computeFromJobs() and buildBookedRows()");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];
