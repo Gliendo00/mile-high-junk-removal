@@ -143,7 +143,7 @@ window.AdminClientPicker = (function () {
       createBtn.disabled = true;
       createBtn.textContent = "Creating…";
 
-      fetch("/api/admin/client", {
+      adminFetch("/api/admin/client", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -414,7 +414,7 @@ window.AdminClientPicker = (function () {
       var controller = new AbortController();
       currentAbortController = controller;
       var url = "/api/admin/clients?limit=" + SEARCH_LIMIT + "&search=" + encodeURIComponent(term);
-      fetch(url, { signal: controller.signal })
+      adminFetch(url, { signal: controller.signal })
         .then(function (res) {
           if (res.status === 401) {
             window.location.href = "/admin/login/";

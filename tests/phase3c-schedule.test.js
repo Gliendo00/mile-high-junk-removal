@@ -877,6 +877,14 @@ function renderJobsWithRealFinancialsScript(jobs) {
     document: fakeDom.document,
     console,
   };
+  // Batch 1 (auth reliability): admin/schedule-financials.js now calls the
+  // shared adminFetch() from admin/admin-fetch.js (loaded before it via a
+  // <script> tag in the real page) instead of bare fetch() — see that
+  // file's own header for why. adminFetch()'s retry-on-401 behavior is
+  // covered separately in tests/phase3c-admin-session-reliability.test.js;
+  // here, a plain passthrough to the same fetch stub is all this file's own
+  // Revenue/Booked/Expenses logic needs.
+  sandbox.adminFetch = sandbox.fetch;
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: "admin/schedule-financials.js" });
@@ -1126,6 +1134,10 @@ function mountRealFinancialsScript(jobs, expensesBody) {
     document: fakeDom.document,
     console,
   };
+  // See the matching comment in renderJobsWithRealFinancialsScript() above:
+  // admin/schedule-financials.js calls the shared adminFetch() now, aliased
+  // here to the same fetch stub.
+  sandbox.adminFetch = sandbox.fetch;
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: "admin/schedule-financials.js" });

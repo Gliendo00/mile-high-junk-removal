@@ -191,7 +191,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var url = '/api/admin/bookings?limit=' + PAGE_SIZE + '&offset=' + offset;
     if (currentFilter) url += '&status=' + encodeURIComponent(currentFilter);
 
-    return fetch(url)
+    return adminFetch(url)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';

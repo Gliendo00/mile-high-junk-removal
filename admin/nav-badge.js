@@ -18,11 +18,20 @@
 // primary data fetch already handles an expired session by redirecting to
 // login. Uses the `hidden` attribute (never a "0" left visible) so a count
 // of zero is genuinely absent, not just visually quiet.
+//
+// Uses admin-fetch.js's adminFetch() (loaded before this file on every
+// page) rather than plain fetch(): this script's request fires on every
+// single admin page alongside that page's own primary fetch, making the two
+// the most common concurrent pair in the app — see admin-fetch.js's header
+// for the refresh-token race that pairing can trigger. Routing this request
+// through adminFetch also registers it in that shared in-flight registry,
+// which is what lets a genuinely concurrent primary-fetch 401 wait for
+// *this* request specifically before retrying.
 document.addEventListener('DOMContentLoaded', function () {
   var badge = document.getElementById('nav-badge-requests');
   if (!badge) return;
 
-  fetch('/api/admin/bookings?countsOnly=1')
+  adminFetch('/api/admin/bookings?countsOnly=1')
     .then(function (res) {
       if (!res.ok) return null;
       return res.json().catch(function () { return null; });

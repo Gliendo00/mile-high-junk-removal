@@ -341,11 +341,14 @@ window.AdminScheduleFinancials = (function () {
     // resolves — never blocked on it.
     render(totals.revenue, totals.booked, null);
 
-    fetch('/api/admin/bookings?view=expenses&startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate))
+    adminFetch('/api/admin/bookings?view=expenses&startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate))
       .then(function (res) {
         // A 401 here just means Expenses/Net stay unknown for this render —
         // the page's own primary data fetch already owns redirecting to
-        // /admin/login/, so this doesn't duplicate that.
+        // /admin/login/, so this doesn't duplicate that. adminFetch() (see
+        // admin-fetch.js) already absorbs a same-page refresh-token race on
+        // its own, so this still resolves most of the time even when it
+        // raced admin/schedule.js's own fetch or nav-badge.js's.
         if (!res.ok) return null;
         return res.json().catch(function () { return null; });
       })

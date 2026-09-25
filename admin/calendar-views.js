@@ -404,7 +404,7 @@ window.AdminCalendarViews = (function () {
     var url = '/api/admin/bookings?view=schedule&range=week';
     if (weekStartOverride) url += '&weekStart=' + encodeURIComponent(weekStartOverride);
 
-    fetch(url)
+    adminFetch(url)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';
@@ -542,7 +542,7 @@ window.AdminCalendarViews = (function () {
     hideFinancials();
 
     var seq = ++monthRequestSeq;
-    fetch('/api/admin/bookings?view=schedule&range=month&year=' + state.monthYear + '&month=' + state.monthMonth)
+    adminFetch('/api/admin/bookings?view=schedule&range=month&year=' + state.monthYear + '&month=' + state.monthMonth)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';
@@ -675,7 +675,7 @@ window.AdminCalendarViews = (function () {
     yearLoading.style.display = 'block';
 
     var seq = ++yearRequestSeq;
-    fetch('/api/admin/bookings?view=schedule&range=year&year=' + state.yearYear)
+    adminFetch('/api/admin/bookings?view=schedule&range=year&year=' + state.yearYear)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';

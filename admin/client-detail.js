@@ -191,7 +191,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return;
   }
 
-  fetch('/api/admin/client?id=' + encodeURIComponent(id))
+  adminFetch('/api/admin/client?id=' + encodeURIComponent(id))
     .then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';

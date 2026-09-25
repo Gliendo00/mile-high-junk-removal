@@ -91,7 +91,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var url = '/api/admin/clients?limit=' + PAGE_SIZE + '&offset=' + offset;
     if (currentSearch) url += '&search=' + encodeURIComponent(currentSearch);
 
-    return fetch(url)
+    return adminFetch(url)
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';

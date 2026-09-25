@@ -381,7 +381,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusLabelEl.textContent = 'Saving to ' + targetLabel + '…';
     statusManageTrigger.disabled = true;
 
-    fetch('/api/admin/booking-status', {
+    adminFetch('/api/admin/booking-status', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: bookingId, status: newStatus }),
@@ -619,7 +619,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function loadCharges() {
-    fetch('/api/admin/booking?resource=charges&bookingId=' + encodeURIComponent(bookingId))
+    adminFetch('/api/admin/booking?resource=charges&bookingId=' + encodeURIComponent(bookingId))
       .then(function (res) {
         if (res.status === 401) {
           window.location.href = '/admin/login/';
@@ -673,7 +673,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     chargeProposeBtn.disabled = true;
-    fetch('/api/admin/booking?resource=charges', {
+    adminFetch('/api/admin/booking?resource=charges', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -719,7 +719,7 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.disabled = true;
     btn.textContent = 'Processing…';
 
-    fetch('/api/admin/booking?resource=charges', {
+    adminFetch('/api/admin/booking?resource=charges', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: chargeId, action: 'approve' }),
@@ -763,7 +763,7 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.disabled = true;
     btn.textContent = 'Checking…';
 
-    fetch('/api/admin/booking?resource=charges', {
+    adminFetch('/api/admin/booking?resource=charges', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: chargeId, action: 'check-status' }),
@@ -924,7 +924,7 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.disabled = true;
     btn.textContent = 'Voiding…';
 
-    fetch('/api/admin/booking?resource=job-payments', {
+    adminFetch('/api/admin/booking?resource=job-payments', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: paymentId, reason: reason }),
@@ -957,7 +957,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // endpoint call, so Collected and the list always stay in sync from one
   // source of truth after an add/void.
   function reloadJobPayments() {
-    fetch('/api/admin/booking?id=' + encodeURIComponent(bookingId))
+    adminFetch('/api/admin/booking?id=' + encodeURIComponent(bookingId))
       .then(function (res) { return res.json().catch(function () { return null; }); })
       .then(function (body) {
         if (body && body.ok) renderJobPayments(body);
@@ -985,7 +985,7 @@ document.addEventListener('DOMContentLoaded', function () {
     tipEditInFlight = true;
     tipEditBtn.disabled = true;
 
-    fetch('/api/admin/booking?resource=tip', {
+    adminFetch('/api/admin/booking?resource=tip', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: bookingId, tipAmount: tipAmount }),
@@ -1028,7 +1028,7 @@ document.addEventListener('DOMContentLoaded', function () {
     paymentAddBtn.disabled = true;
     paymentAddBtn.textContent = 'Saving…';
 
-    fetch('/api/admin/booking?resource=job-payments', {
+    adminFetch('/api/admin/booking?resource=job-payments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1073,7 +1073,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return;
   }
 
-  fetch('/api/admin/booking?id=' + encodeURIComponent(id))
+  adminFetch('/api/admin/booking?id=' + encodeURIComponent(id))
     .then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';

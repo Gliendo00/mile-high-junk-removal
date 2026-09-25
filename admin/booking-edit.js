@@ -363,7 +363,7 @@ document.addEventListener('DOMContentLoaded', function () {
     cancelBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
 
-    fetch('/api/admin/booking', {
+    adminFetch('/api/admin/booking', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -409,7 +409,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return;
   }
 
-  fetch('/api/admin/booking?id=' + encodeURIComponent(id))
+  adminFetch('/api/admin/booking?id=' + encodeURIComponent(id))
     .then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';

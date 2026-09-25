@@ -258,7 +258,7 @@ document.addEventListener('DOMContentLoaded', function () {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
 
-    fetch('/api/admin/booking', {
+    adminFetch('/api/admin/booking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -307,7 +307,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // used. Reuses the existing countsOnly summary endpoint purely to verify
   // auth — it returns aggregate counts only, never client/booking records,
   // and needs no new endpoint (see the Vercel function-count constraint).
-  fetch('/api/admin/bookings?countsOnly=1')
+  adminFetch('/api/admin/bookings?countsOnly=1')
     .then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';

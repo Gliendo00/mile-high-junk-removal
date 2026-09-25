@@ -249,7 +249,7 @@ document.addEventListener('DOMContentLoaded', function () {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
 
-    fetch('/api/admin/booking', {
+    adminFetch('/api/admin/booking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -317,7 +317,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // expired/absent session is caught here via the existing countsOnly
   // summary endpoint (aggregate counts only, never client/booking records)
   // rather than only surfacing later when the picker or Save is used.
-  fetch('/api/admin/bookings?countsOnly=1')
+  adminFetch('/api/admin/bookings?countsOnly=1')
     .then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';

@@ -221,7 +221,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       debounceTimer = setTimeout(function () {
-        fetch('/api/admin/bookings?view=job-search&q=' + encodeURIComponent(q))
+        adminFetch('/api/admin/bookings?view=job-search&q=' + encodeURIComponent(q))
           .then(function (res) {
             if (handleAuthRedirect(res)) return null;
             return res.json().catch(function () { return null; });
@@ -374,7 +374,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
-      fetch('/api/admin/bookings', {
+      adminFetch('/api/admin/bookings', {
         method: isEdit ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -442,7 +442,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       voidBtn.disabled = true;
       voidBtn.textContent = 'Voiding…';
-      fetch('/api/admin/bookings', {
+      adminFetch('/api/admin/bookings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resource: 'expense', id: expense.id, action: 'void', reason: reason }),
@@ -486,7 +486,7 @@ document.addEventListener('DOMContentLoaded', function () {
     cancelBtn.addEventListener('click', closeSheet);
     sheet.appendChild(cancelBtn);
 
-    fetch('/api/admin/bookings?view=expense-audit&expenseId=' + encodeURIComponent(expense.id))
+    adminFetch('/api/admin/bookings?view=expense-audit&expenseId=' + encodeURIComponent(expense.id))
       .then(function (res) {
         if (handleAuthRedirect(res)) return null;
         return res
@@ -642,7 +642,7 @@ document.addEventListener('DOMContentLoaded', function () {
     emptyEl.style.display = 'none';
     listEl.style.display = 'none';
 
-    fetch('/api/admin/bookings?' + buildQuery())
+    adminFetch('/api/admin/bookings?' + buildQuery())
       .then(function (res) {
         if (handleAuthRedirect(res)) return null;
         return res

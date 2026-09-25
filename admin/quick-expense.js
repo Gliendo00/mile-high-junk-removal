@@ -179,7 +179,7 @@ window.AdminQuickExpense = (function () {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
 
-      fetch('/api/admin/bookings', {
+      adminFetch('/api/admin/bookings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -309,7 +309,7 @@ window.AdminQuickExpense = (function () {
 
     function loadAndRender() {
       noteEl.style.display = 'none';
-      fetch('/api/admin/bookings?view=expenses&startDate=' + encodeURIComponent(dateIso) + '&endDate=' + encodeURIComponent(dateIso))
+      adminFetch('/api/admin/bookings?view=expenses&startDate=' + encodeURIComponent(dateIso) + '&endDate=' + encodeURIComponent(dateIso))
         .then(function (res) {
           if (res.status === 401) {
             window.location.href = '/admin/login/';

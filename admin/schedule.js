@@ -312,7 +312,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // comment in that file (Vercel Hobby plan's 12-Serverless-Function
   // limit; docs/phase-3/vercel-function-limit.md).
   function fetchDay(url, fallbackErrorMsg) {
-    return fetch(url).then(function (res) {
+    return adminFetch(url).then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login/';
         return null;
