@@ -28,17 +28,32 @@
 //     either way.
 //   ADMIN_ALLOWED_EMAILS — comma-separated list of the only email addresses
 //     allowed to use the admin portal.
-const { getAnonClient, isAllowedAdminEmail, setSessionCookies, clearSessionCookies, parseCookies, ACCESS_COOKIE, REFRESH_COOKIE } = require("../_lib/admin-auth");
+const { getAnonClient, isAllowedAdminEmail, setSessionCookies, clearSessionCookies, parseCookies, requireAdmin, ACCESS_COOKIE, REFRESH_COOKIE } = require("../_lib/admin-auth");
 
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
+
+  const action = typeof req.query.action === "string" ? req.query.action : "login";
+
+  // Batch 1 (auth reliability): the only read-only, GET-eligible action —
+  // "do I already have a valid/restorable session?" — used by the login
+  // page (admin/login.js) so it never shows the login form to someone who's
+  // still authenticated (e.g. the page was restored from bfcache by the
+  // browser's Back button). Every other action here is a POST-only session
+  // mutation (login/logout), unchanged.
+  if (action === "session") {
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    return handleSession(req, res);
+  }
 
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
-  const action = typeof req.query.action === "string" ? req.query.action : "login";
   if (action === "logout") return handleLogout(req, res);
   if (action === "login") return handleLogin(req, res);
 
@@ -95,6 +110,20 @@ async function handleLogin(req, res) {
 
   setSessionCookies(req, res, result.data.session);
   res.status(200).json({ ok: true });
+}
+
+// Batch 1 (auth reliability): "am I already logged in?" for the login page
+// only. Deliberately just a thin wrapper around the exact same
+// requireAdmin() every other /api/admin/* route already uses — no new
+// verification/refresh logic. requireAdmin() itself sends the 401 (and, on
+// the way there, silently rotates the cookies if a valid refresh token
+// mints a fresh access token) when there's no valid session, so the two
+// outcomes here are just "requireAdmin already responded" vs. "it didn't,
+// so say so."
+async function handleSession(req, res) {
+  const session = await requireAdmin(req, res);
+  if (!session) return; // requireAdmin already sent 401
+  res.status(200).json({ authenticated: true });
 }
 
 // Formerly api/admin/logout.js. Does two things, both required: asks
