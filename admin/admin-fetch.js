@@ -47,21 +47,48 @@
 (function () {
   var inFlight = [];
 
+  // Not a retry-timing guess (see this file's header) — a circuit breaker
+  // for the one thing settlement-based waiting can't bound on its own:
+  // fetch() has no built-in timeout, so a sibling stuck on a genuinely
+  // stalled connection (dead wifi, a black-holed connection) would never
+  // settle, and waitForSiblings() would then wait forever, hanging the
+  // retry — and with it, the caller's own .then() — indefinitely. This
+  // only ever matters in that pathological case: in the normal case
+  // (everything here since Batch 1 shipped), every sibling settles in well
+  // under a second and this deadline is never reached, so it changes
+  // nothing about the exact, settlement-driven retry timing described
+  // above. If it IS reached, the retry just proceeds with whatever cookie
+  // currently exists — exactly as if that hung sibling had never been
+  // in flight at all.
+  var SIBLING_WAIT_TIMEOUT_MS = 5000;
+
   function untrack(promise) {
     var idx = inFlight.indexOf(promise);
     if (idx !== -1) inFlight.splice(idx, 1);
   }
 
   // Resolves once every OTHER currently-tracked adminFetch() call has
-  // settled, however it settled — this never itself rejects.
+  // settled, however it settled, or once SIBLING_WAIT_TIMEOUT_MS elapses —
+  // whichever comes first. Never itself rejects. Always clears the deadline
+  // timer before returning — a no-op if it already fired, but required so a
+  // sibling that settles well within the normal case doesn't leave a
+  // 5-second timer sitting around doing nothing.
   function waitForSiblings(exclude) {
     var others = inFlight.filter(function (p) { return p !== exclude; });
     if (!others.length) return Promise.resolve();
-    return Promise.all(
+    var timerId;
+    var deadline = new Promise(function (resolve) {
+      timerId = setTimeout(resolve, SIBLING_WAIT_TIMEOUT_MS);
+    });
+    var settled = Promise.all(
       others.map(function (p) {
         return p.then(function () {}, function () {});
       })
     );
+    return Promise.race([settled, deadline]).then(function (result) {
+      clearTimeout(timerId);
+      return result;
+    });
   }
 
   function fire(url, options) {
