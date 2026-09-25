@@ -223,4 +223,11 @@ document.addEventListener('DOMContentLoaded', function () {
         window.location.href = '/admin/login/';
       });
   });
+
+  // A back-navigation restored from bfcache can show a stale client record
+  // — force a clean reload, same reasoning as admin/dashboard.js and
+  // admin/schedule.js.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) window.location.reload();
+  });
 });

@@ -1105,4 +1105,12 @@ document.addEventListener('DOMContentLoaded', function () {
         window.location.href = '/admin/login/';
       });
   });
+
+  // A back-navigation restored from bfcache can show a stale booking (e.g.
+  // after changing its status here, tapping Back to Schedule, then Forward
+  // again) — force a clean reload, same reasoning as admin/dashboard.js and
+  // admin/schedule.js.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) window.location.reload();
+  });
 });

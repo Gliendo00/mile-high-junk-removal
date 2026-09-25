@@ -321,4 +321,11 @@ document.addEventListener('DOMContentLoaded', function () {
       loadingEl.style.display = 'none';
       showError('Could not verify your session. Please refresh the page.');
     });
+
+  // A back-navigation restored from bfcache can show a stale/half-filled
+  // form (e.g. after saving and tapping Back) — force a clean reload, same
+  // reasoning as admin/dashboard.js and admin/schedule.js.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) window.location.reload();
+  });
 });
