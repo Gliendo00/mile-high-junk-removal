@@ -330,7 +330,11 @@ document.addEventListener('DOMContentLoaded', function () {
     if (data.dumpster) {
       document.getElementById('d-dumpster-section').style.display = 'block';
       set('d-delivery-date', formatDate(data.dumpster.deliveryDate));
-      set('d-pickup-date', formatDate(data.dumpster.pickupDate));
+      // Batch 2C — a manually-overridden pickup date is called out so it's
+      // never mistaken for the plain delivery+5 default (see
+      // api/admin/booking.js's handleUpdate() header for the full
+      // auto-vs-manual contract).
+      set('d-pickup-date', formatDate(data.dumpster.pickupDate) + (data.dumpster.pickupDateIsManual ? ' (manually set)' : ''));
       set('d-material', data.dumpster.materialType);
       set('d-placement', data.dumpster.placementNotes);
       currentActualWeightLbs = data.dumpster.actualWeightLbs != null ? data.dumpster.actualWeightLbs : null;

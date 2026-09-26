@@ -43,6 +43,22 @@ document.addEventListener('DOMContentLoaded', function () {
   var timeModeToggle = document.getElementById('time-mode-toggle');
   var appointmentDateInput = document.getElementById('appointment-date');
 
+  // Batch 2C — dumpster rental fields, shown only when Service Type is
+  // Dumpster Rental. Appointment Date above doubles as the delivery date
+  // (see api/admin/booking.js's handleCreate() header) — there is
+  // deliberately no separate Delivery Date field here.
+  var serviceTypeSelect = document.getElementById('service-type');
+  var dumpsterSection = document.getElementById('dumpster-fields-section');
+  var pickupDateInput = document.getElementById('pickup-date');
+  var materialTypeInput = document.getElementById('material-type');
+  var placementNotesInput = document.getElementById('placement-notes');
+
+  function updateDumpsterVisibility() {
+    dumpsterSection.style.display = serviceTypeSelect.value === 'dumpster_rental' ? 'block' : 'none';
+  }
+  serviceTypeSelect.addEventListener('change', updateDumpsterVisibility);
+  updateDumpsterVisibility();
+
   var estimatedPriceInput = document.getElementById('estimated-price');
   var estimatedPriceMaxInput = document.getElementById('estimated-price-max');
   var quoteModeToggle = document.getElementById('quote-mode-toggle');
@@ -127,6 +143,15 @@ document.addEventListener('DOMContentLoaded', function () {
   var todayIso = denverTodayIso();
   appointmentDateInput.value = todayIso;
   appointmentDateInput.min = todayIso;
+
+  // Pickup can never be before delivery (the Appointment Date field) —
+  // kept in sync client-side as a convenience; the server independently
+  // re-validates this regardless.
+  function syncPickupDateMin() {
+    pickupDateInput.min = appointmentDateInput.value;
+  }
+  appointmentDateInput.addEventListener('change', syncPickupDateMin);
+  syncPickupDateMin();
 
   // Date-aware entry (Phase 3C Stage 2.4): a Month/Year calendar day's
   // "+ New Job" link may carry ?date=YYYY-MM-DD so the form opens with that
@@ -253,6 +278,18 @@ document.addEventListener('DOMContentLoaded', function () {
     // this job is ever marked completed (Stage 2.5 addendum).
     var actualRaw = actualPriceInput.value.trim();
     if (actualRaw) body.finalPrice = Number(actualRaw);
+
+    // Batch 2C — dumpster rental fields. pickupDate is sent only if the
+    // admin actually filled it in; left blank, the server defaults it to
+    // delivery + 5 calendar days (see api/admin/booking.js's handleCreate()).
+    if (body.serviceType === 'dumpster_rental') {
+      var pickupDateRaw = pickupDateInput.value.trim();
+      if (pickupDateRaw) body.pickupDate = pickupDateRaw;
+      var materialTypeRaw = materialTypeInput.value.trim();
+      if (materialTypeRaw) body.materialType = materialTypeRaw;
+      var placementNotesRaw = placementNotesInput.value.trim();
+      if (placementNotesRaw) body.placementNotes = placementNotesRaw;
+    }
 
     savingInFlight = true;
     saveBtn.disabled = true;

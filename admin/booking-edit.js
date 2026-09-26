@@ -89,6 +89,41 @@ document.addEventListener('DOMContentLoaded', function () {
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
 
+  // Batch 2C — dumpster rental fields, shown only when Service Type is
+  // Dumpster Rental. Appointment Date above doubles as the delivery date
+  // (see api/admin/booking.js's handleUpdate() header) — there is
+  // deliberately no separate Delivery Date field here.
+  var dumpsterSection = document.getElementById('dumpster-fields-section');
+  var pickupDateInput = document.getElementById('pickup-date');
+  var pickupDateHint = document.getElementById('pickup-date-hint');
+  var materialTypeInput = document.getElementById('material-type');
+  var placementNotesInput = document.getElementById('placement-notes');
+
+  // Sticky manual-override tracking (see api/admin/booking.js's
+  // handleUpdate() header for the full contract): once this booking's
+  // pickup date is manual — whether loaded that way, or the admin edits
+  // the field during THIS session — every save from here on sends
+  // pickupDateManual: true, so a later delivery-date change (on this save
+  // or a future one) never silently recomputes it again.
+  var loadedPickupDateIsManual = false;
+  var pickupTouchedThisSession = false;
+  pickupDateInput.addEventListener('input', function () {
+    pickupTouchedThisSession = true;
+    pickupDateHint.textContent = 'Manually set — will not shift if the delivery date changes.';
+  });
+
+  function updateDumpsterVisibility() {
+    dumpsterSection.style.display = serviceTypeSelect.value === 'dumpster_rental' ? 'block' : 'none';
+  }
+  serviceTypeSelect.addEventListener('change', updateDumpsterVisibility);
+
+  // Pickup can never be before delivery (the Appointment Date field) —
+  // kept in sync client-side as a convenience; the server independently
+  // re-validates this regardless.
+  appointmentDateInput.addEventListener('change', function () {
+    pickupDateInput.min = appointmentDateInput.value;
+  });
+
   // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
   // additive; see admin/booking-new.js's identical comment for the full
   // fallback contract when Google isn't configured or fails to load.
@@ -248,6 +283,7 @@ document.addEventListener('DOMContentLoaded', function () {
       timeModeLabelEl.textContent = 'Appointment Time';
     }
     appointmentDateInput.value = booking.appointmentDate || '';
+    pickupDateInput.min = appointmentDateInput.value;
     populateTimeWindowOptions(booking.timeWindow || '');
 
     // Initial mode: exact time wins if the loaded booking has one (matches
@@ -261,6 +297,23 @@ document.addEventListener('DOMContentLoaded', function () {
     timeWindowSelect.style.display = timeMode === 'exact' ? 'none' : 'block';
 
     serviceTypeSelect.value = booking.serviceType || 'junk_removal';
+    updateDumpsterVisibility();
+
+    // Batch 2C — dumpster rental fields. data.dumpster is only ever present
+    // for a booking that already has a dumpster_rentals row; a job whose
+    // service type just got changed TO dumpster_rental on this page (before
+    // ever being saved) has none yet, so these simply start blank/derived —
+    // exactly matching handleUpdate()'s own upsert-creates-a-row-if-missing
+    // behavior once saved.
+    var dumpster = data.dumpster || null;
+    loadedPickupDateIsManual = !!(dumpster && dumpster.pickupDateIsManual);
+    pickupTouchedThisSession = false;
+    pickupDateInput.value = dumpster ? dumpster.pickupDate || '' : '';
+    materialTypeInput.value = dumpster ? dumpster.materialType || '' : '';
+    placementNotesInput.value = dumpster ? dumpster.placementNotes || '' : '';
+    pickupDateHint.textContent = loadedPickupDateIsManual
+      ? 'Manually set — will not shift if the delivery date changes.'
+      : 'Currently auto-set to 5 days after the delivery date. Change it here to override.';
 
     serviceAddressInput.value = serviceAddress.address || '';
     serviceCityInput.value = serviceAddress.city || '';
@@ -356,6 +409,23 @@ document.addEventListener('DOMContentLoaded', function () {
     if (isCompleted) {
       var tipRaw = tipAmountInput.value.trim();
       body.tipAmount = tipRaw ? Number(tipRaw) : '';
+    }
+
+    // Batch 2C — dumpster rental fields. See the pickupTouchedThisSession
+    // comment above: pickupDateManual is sticky — once true (loaded that
+    // way, or the admin just edited the field), it stays true on every
+    // save from here on, so a delivery-date change alone can never
+    // silently recompute a pickup date the admin deliberately set.
+    if (serviceTypeSelect.value === 'dumpster_rental') {
+      var pickupDateIsManual = loadedPickupDateIsManual || pickupTouchedThisSession;
+      if (pickupDateIsManual && !pickupDateInput.value) {
+        showError('Please choose a pickup date.');
+        return;
+      }
+      body.pickupDateManual = pickupDateIsManual;
+      if (pickupDateIsManual) body.pickupDate = pickupDateInput.value;
+      body.materialType = materialTypeInput.value.trim();
+      body.placementNotes = placementNotesInput.value.trim();
     }
 
     savingInFlight = true;
