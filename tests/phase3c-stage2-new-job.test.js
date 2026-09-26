@@ -573,11 +573,16 @@ test("GET /api/admin/client (no id) still behaves exactly as before -> 400, unaf
   assert.strictEqual(res.statusCode, 400);
 });
 
-test("POST client: PATCH is rejected with 405 (never became a generic update endpoint)", async () => {
+// PATCH is now a legitimate method here (Batch 2D — Edit Client and
+// Archive/Restore Client, see tests/phase3c-client-edit-archive.test.js
+// for full coverage). This guard now checks a genuinely unsupported method
+// instead, preserving the original spirit: client.js must never become a
+// generic "any method does anything" endpoint.
+test("POST client: an unsupported method (DELETE) is rejected with 405", async () => {
   adminAuthed();
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
-  const res = await run(clientHandler, makeReq({ method: "PATCH", cookie: AUTH_COOKIE, query: { id: EXISTING_CUSTOMER_ID } }));
+  const res = await run(clientHandler, makeReq({ method: "DELETE", cookie: AUTH_COOKIE, query: { id: EXISTING_CUSTOMER_ID } }));
   assert.strictEqual(res.statusCode, 405);
 });
 

@@ -807,6 +807,16 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls â
       "api/admin/bookings.js: .update(",
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
+      // Batch 2D added exactly one new insert â€” writeCustomerAuditLog(),
+      // shared by ?action=archive and ?action=restore. See
+      // tests/phase3c-client-edit-archive.test.js.
+      "api/admin/client.js: .insert(",
+      // Batch 2D added exactly three new updates: handleEditAction() (Edit
+      // Client) and handleArchiveAction()'s 'archive'/'restore' branches.
+      // See tests/phase3c-client-edit-archive.test.js.
+      "api/admin/client.js: .update(",
+      "api/admin/client.js: .update(",
+      "api/admin/client.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );

@@ -20,6 +20,11 @@ module.exports = async (req, res) => {
   if (!session) return;
 
   if (req.method === "POST") return handleCreate(req, res);
+  // Batch 2D — edit and archive/restore, both PATCH, discriminated by an
+  // `action` field in the body (default "edit") — same shape as
+  // api/admin/bookings.js's handlePatchExpense() rather than a query-param
+  // resource, since this file has only ever had one resource (customers).
+  if (req.method === "PATCH") return handlePatch(req, res, session);
 
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -49,7 +54,9 @@ module.exports = async (req, res) => {
   try {
     const customerRes = await supabase
       .from("customers")
-      .select("id, first_name, last_name, phone, email, address, city, state, zip, created_at")
+      .select(
+        "id, first_name, last_name, phone, email, address, city, state, zip, created_at, updated_at, updated_by, archived_at, archived_reason, archived_note, archived_by"
+      )
       .eq("id", id)
       .maybeSingle();
     if (customerRes.error) throw customerRes.error;
@@ -115,6 +122,12 @@ module.exports = async (req, res) => {
         state: customer.state,
         zip: customer.zip,
         createdAt: customer.created_at,
+        updatedAt: customer.updated_at,
+        updatedBy: customer.updated_by,
+        archivedAt: customer.archived_at,
+        archivedReason: customer.archived_reason,
+        archivedNote: customer.archived_note,
+        archivedBy: customer.archived_by,
       },
       bookings: bookings,
     });
@@ -311,6 +324,263 @@ async function handleCreate(req, res) {
 
 function summarizeMatch(c) {
   return { id: c.id, firstName: c.first_name, lastName: c.last_name, phone: c.phone, email: c.email, city: c.city };
+}
+
+// ---------------------------------------------------------------------
+// Batch 2D — Edit Client (?action=edit, the default) and Archive/Restore
+// Client (?action=archive|restore). See
+// sql/2026-09-26_phase3c-stage5-archive-review-rental-client.sql for the
+// full schema design.
+// ---------------------------------------------------------------------
+
+async function handlePatch(req, res, session) {
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const action = typeof body.action === "string" ? body.action.trim() : "edit";
+  if (action === "archive" || action === "restore") return handleArchiveAction(req, res, session, body, action);
+  if (action === "edit") return handleEditAction(req, res, session, body);
+  res.status(400).json({ error: "Invalid action." });
+}
+
+// PATCH { action: 'edit' (default), id, firstName, lastName, phone, email,
+// address, city, state, zip } — the same field set and validation
+// (sanitizeText/isValidPhone/isValidEmail/MAX below) as handleCreate()
+// above, reused rather than duplicated. Never accepts or writes
+// customer_id-adjacent or booking-specific fields — a client's existing
+// bookings stay linked to the exact same customer_id by construction,
+// since nothing here ever touches the bookings table at all. Recomputes
+// phone_normalized/email_normalized whenever phone/email change, same
+// invariant handleCreate() already maintains, so duplicate-detection on a
+// future client creation keeps working correctly against this edited row.
+async function handleEditAction(req, res, session, body) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin client edit failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Client not found." });
+    return;
+  }
+
+  const firstName = sanitizeText(body.firstName, MAX.name);
+  if (!firstName) {
+    res.status(400).json({ error: "First name is required." });
+    return;
+  }
+  const lastName = sanitizeText(body.lastName, MAX.name) || null;
+
+  const phoneInput = sanitizeText(body.phone, MAX.phone);
+  if (phoneInput && !isValidPhone(phoneInput)) {
+    res.status(400).json({ error: "Please enter a valid phone number." });
+    return;
+  }
+  const phone = phoneInput || null;
+
+  const emailInput = sanitizeText(body.email, MAX.email);
+  if (emailInput && !isValidEmail(emailInput)) {
+    res.status(400).json({ error: "Please enter a valid email address." });
+    return;
+  }
+  const email = emailInput || null;
+
+  const address = sanitizeText(body.address, MAX.address) || null;
+  const city = sanitizeText(body.city, MAX.city) || null;
+  const stateInput = sanitizeText(body.state, 40).toUpperCase();
+  if (stateInput && !/^[A-Z]{2}$/.test(stateInput)) {
+    res.status(400).json({ error: "Please enter a valid 2-letter state." });
+    return;
+  }
+  const state = stateInput || null;
+  const zipInput = sanitizeText(body.zip, MAX.zip);
+  if (zipInput && !/^\d{5}(-\d{4})?$/.test(zipInput)) {
+    res.status(400).json({ error: "Please enter a valid ZIP code." });
+    return;
+  }
+  const zip = zipInput || null;
+
+  const phoneNorm = phone ? normalizePhone(phone) : null;
+  const emailNorm = email ? normalizeEmail(email) : null;
+
+  try {
+    const { data: updated, error } = await supabase
+      .from("customers")
+      .update({
+        first_name: firstName,
+        last_name: lastName,
+        phone: phone,
+        email: email,
+        address: address,
+        city: city,
+        state: state,
+        zip: zip,
+        phone_normalized: phoneNorm,
+        email_normalized: emailNorm,
+        updated_at: new Date().toISOString(),
+        updated_by: session.email,
+      })
+      .eq("id", id)
+      .select("id, first_name, last_name, phone, email, address, city, state, zip, created_at, updated_at, updated_by")
+      .maybeSingle();
+    if (error) throw error;
+    if (!updated) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      client: {
+        id: updated.id,
+        firstName: updated.first_name,
+        lastName: updated.last_name,
+        phone: updated.phone,
+        email: updated.email,
+        address: updated.address,
+        city: updated.city,
+        state: updated.state,
+        zip: updated.zip,
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at,
+        updatedBy: updated.updated_by,
+      },
+    });
+  } catch (err) {
+    console.error("Admin client edit failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save changes." });
+  }
+}
+
+const ARCHIVE_REASONS = ["duplicate_client", "test_spam", "requested_removal", "entered_by_mistake", "other"];
+
+// Same reasoning as api/admin/booking.js's writeBookingAuditLog(): an
+// application-level write (not a trigger — this is administrative state,
+// not financial data), run AFTER the customers update that made the event
+// true, with a small immutable summary snapshot so the row stays readable
+// even after customer_id later goes NULL (a hard customer delete — see
+// docs/phase-3/database-schema-updates.md — has no code path in this repo
+// today, but the FK is designed to survive one regardless).
+async function writeCustomerAuditLog(supabase, customer, customerId, eventType, reason, note, changedBy) {
+  const summary = [customer.first_name, customer.last_name].filter(Boolean).join(" ") + (customer.phone ? " — " + customer.phone : "") || "Unknown client";
+  const { error } = await supabase.from("customer_audit_log").insert({
+    customer_id: customerId,
+    customer_id_snapshot: customerId,
+    customer_summary_snapshot: summary,
+    event_type: eventType,
+    reason: reason || null,
+    note: note || null,
+    changed_by: changedBy || null,
+  });
+  if (error) throw error;
+}
+
+// PATCH { action: 'archive'|'restore', id, reason?, note? }. Archive/
+// restore is a visibility flag only — this handler touches customers and
+// customer_audit_log alone, never bookings/job_payments/dumpster_rentals/
+// expenses, so a client's existing job history is structurally untouched
+// by construction. Archiving never touches that client's existing
+// bookings either — they keep displaying this client's information via
+// the same GET this file already serves (unfiltered by archived_at, see
+// module.exports above), exactly as before.
+async function handleArchiveAction(req, res, session, body, action) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin client archive failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Client not found." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase
+      .from("customers")
+      .select("id, first_name, last_name, phone, archived_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (action === "archive") {
+      if (current.archived_at) {
+        res.status(409).json({ error: "This client is already archived." });
+        return;
+      }
+
+      const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+      if (ARCHIVE_REASONS.indexOf(reason) === -1) {
+        res.status(400).json({ error: "Please choose a valid archive reason." });
+        return;
+      }
+      const note = sanitizeText(body.note, 2000) || null;
+      if (reason === "other" && !note) {
+        res.status(400).json({ error: "A note is required when the reason is Other." });
+        return;
+      }
+
+      const { data: updated, error } = await supabase
+        .from("customers")
+        .update({ archived_at: nowIso, archived_reason: reason, archived_note: note, archived_by: session.email, updated_at: nowIso })
+        .eq("id", id)
+        .is("archived_at", null)
+        .select("id, archived_at, archived_reason, archived_note, archived_by")
+        .maybeSingle();
+      if (error) throw error;
+      if (!updated) {
+        res.status(409).json({ error: "This client was just archived by someone else. Please refresh and try again." });
+        return;
+      }
+
+      await writeCustomerAuditLog(supabase, current, id, "archive", reason, note, session.email);
+
+      res.status(200).json({
+        ok: true,
+        archivedAt: updated.archived_at,
+        archivedReason: updated.archived_reason,
+        archivedNote: updated.archived_note,
+        archivedBy: updated.archived_by,
+      });
+      return;
+    }
+
+    // action === "restore"
+    if (!current.archived_at) {
+      res.status(409).json({ error: "This client is not archived." });
+      return;
+    }
+
+    const { data: restored, error } = await supabase
+      .from("customers")
+      .update({ archived_at: null, archived_reason: null, archived_note: null, archived_by: null, updated_at: nowIso })
+      .eq("id", id)
+      .not("archived_at", "is", null)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (!restored) {
+      res.status(409).json({ error: "This client was just restored by someone else. Please refresh and try again." });
+      return;
+    }
+
+    await writeCustomerAuditLog(supabase, current, id, "restore", null, null, session.email);
+
+    res.status(200).json({ ok: true, archivedAt: null });
+  } catch (err) {
+    console.error("Admin client archive/restore failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update this client's archive status." });
+  }
 }
 
 // Same bounded-length values as api/book.js's own MAX (kept as a small,

@@ -42,6 +42,15 @@ class FakeQueryBuilder {
     this._filters.push((row) => set.has(row[field]));
     return this;
   }
+  is(field, val) {
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    return this;
+  }
+  // Only the shape this codebase actually uses: .not(col, "is", null).
+  not(field, op, val) {
+    if (op === "is" && val === null) this._filters.push((row) => row[field] !== undefined && row[field] !== null);
+    return this;
+  }
   // Minimal ILIKE emulation sufficient for exercising the endpoint's own
   // logic: unescapes the "\%"/"\_"/"\\" the real sanitizer produces, then
   // does a plain case-insensitive substring test. This does not need to be
@@ -465,6 +474,55 @@ test("clients list: search result count is bounded, never the full table dumped 
   assert.strictEqual(res.body.hasMore, true);
 });
 
+// 3b. Batch 2D — archivedOnly=1 (default active-only vs. archived-only)
+test("clients list: the default (no archivedOnly) never includes an archived client", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.customers[0].archived_at = "2026-09-20T00:00:00Z";
+  db.customers[0].archived_reason = "duplicate_client";
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: {} }));
+  assert.strictEqual(res.statusCode, 200);
+  const ids = res.body.clients.map((c) => c.id);
+  assert.ok(ids.indexOf(JEN_ID) === -1, "the archived client must not appear in the default list");
+  assert.strictEqual(res.body.clients.length, 2);
+});
+
+test("clients list: archivedOnly=1 returns ONLY archived clients, with their reason", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.customers[0].archived_at = "2026-09-20T00:00:00Z";
+  db.customers[0].archived_reason = "duplicate_client";
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: { archivedOnly: "1" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.clients.length, 1);
+  assert.strictEqual(res.body.clients[0].id, JEN_ID);
+  assert.strictEqual(res.body.clients[0].archivedReason, "duplicate_client");
+});
+
+test("clients list: search also respects archivedOnly — an archived client never surfaces in a normal search", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.customers[0].archived_at = "2026-09-20T00:00:00Z";
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: { search: "Jen" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.clients.length, 0);
+});
+
+// This is also exactly what keeps an archived client out of the New/Past
+// Job picker (admin/client-picker.js calls this same endpoint's default,
+// active-only mode) — no separate change needed there.
+test("clients list: an archived client is excluded from the client-picker's own default (active-only) search", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.customers[1].archived_at = "2026-09-20T00:00:00Z"; // Alex
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: { search: "Alex", limit: "8" } }));
+  assert.strictEqual(res.body.clients.length, 0);
+});
+
 // 4. Client detail — happy path, history ordering, service-address source
 test("client detail: authenticated admin sees contact info and job history newest first", async () => {
   adminAuthed();
@@ -587,10 +645,13 @@ test("clients list: non-GET method is rejected with 405", async () => {
   assert.strictEqual(res.statusCode, 405);
 });
 
-test("client detail: non-GET method is rejected with 405", async () => {
+// PATCH is now a legitimate method here (Batch 2D — edit/archive/restore,
+// see tests/phase3c-client-edit-archive.test.js for its full coverage) —
+// this guard now checks a genuinely unsupported method instead.
+test("client detail: an unsupported method (DELETE) is rejected with 405", async () => {
   adminAuthed();
   currentFakeService = createFakeServiceClient(freshDb());
-  const res = await run(clientHandler, makeReq({ method: "PATCH", cookie: AUTH_COOKIE, query: { id: JEN_ID } }));
+  const res = await run(clientHandler, makeReq({ method: "DELETE", cookie: AUTH_COOKIE, query: { id: JEN_ID } }));
   assert.strictEqual(res.statusCode, 405);
 });
 

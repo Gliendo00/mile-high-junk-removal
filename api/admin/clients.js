@@ -50,11 +50,23 @@ module.exports = async (req, res) => {
   if (!Number.isFinite(offset) || offset < 0) offset = 0;
 
   const search = sanitizeSearchTerm(typeof req.query.search === "string" ? req.query.search : "");
+  // Batch 2D — archivedOnly=1 shows ONLY archived clients (the Clients
+  // page's "Show Archived" view); every other request (the default) shows
+  // only active ones. Deliberately not a three-way includeArchived mode
+  // mixing both sets in one response — there's no internal use case for
+  // that today, and admin/client-picker.js relying on this same default
+  // (active-only) is exactly what keeps an archived client out of the New/
+  // Past Job picker without any separate change there.
+  const archivedOnly = req.query.archivedOnly === "1";
 
   try {
-    const cols = "id, first_name, last_name, phone, email, city, created_at";
+    const cols = "id, first_name, last_name, phone, email, city, created_at, archived_at, archived_reason";
     let clients;
     let total;
+
+    function scoped(q) {
+      return archivedOnly ? q.not("archived_at", "is", null) : q.is("archived_at", null);
+    }
 
     if (search) {
       // Bounded, server-side, multi-field search: four independent,
@@ -64,10 +76,10 @@ module.exports = async (req, res) => {
       // paged. Each call is capped at SEARCH_FIELD_LIMIT.
       const pattern = "%" + search + "%";
       const [byFirst, byLast, byPhone, byEmail] = await Promise.all([
-        supabase.from("customers").select(cols).ilike("first_name", pattern).limit(SEARCH_FIELD_LIMIT),
-        supabase.from("customers").select(cols).ilike("last_name", pattern).limit(SEARCH_FIELD_LIMIT),
-        supabase.from("customers").select(cols).ilike("phone", pattern).limit(SEARCH_FIELD_LIMIT),
-        supabase.from("customers").select(cols).ilike("email", pattern).limit(SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("first_name", pattern)).limit(SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("last_name", pattern)).limit(SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("phone", pattern)).limit(SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("email", pattern)).limit(SEARCH_FIELD_LIMIT),
       ]);
       for (const r of [byFirst, byLast, byPhone, byEmail]) {
         if (r.error) throw r.error;
@@ -81,8 +93,8 @@ module.exports = async (req, res) => {
       clients = all.slice(offset, offset + limit);
     } else {
       const [countRes, pageRes] = await Promise.all([
-        supabase.from("customers").select("id", { count: "exact", head: true }),
-        supabase.from("customers").select(cols).order("created_at", { ascending: false }).range(offset, offset + limit - 1),
+        scoped(supabase.from("customers").select("id", { count: "exact", head: true })),
+        scoped(supabase.from("customers").select(cols)).order("created_at", { ascending: false }).range(offset, offset + limit - 1),
       ]);
       if (countRes.error) throw countRes.error;
       if (pageRes.error) throw pageRes.error;
@@ -111,6 +123,10 @@ module.exports = async (req, res) => {
         city: c.city,
         bookingCount: jobs.length,
         lastJobDate: jobs.length ? jobs[0].appointment_date : null,
+        // Only meaningful on the archivedOnly=1 view; harmless/unused
+        // elsewhere.
+        archivedAt: c.archived_at,
+        archivedReason: c.archived_reason,
       };
     });
 

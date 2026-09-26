@@ -832,6 +832,19 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/bookings.js: .update(",
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
+      // Batch 2D added exactly one new insert — writeCustomerAuditLog(),
+      // shared by ?action=archive and ?action=restore. See
+      // tests/phase3c-client-edit-archive.test.js.
+      "api/admin/client.js: .insert(",
+      // Batch 2D added exactly three new updates: handleEditAction() (Edit
+      // Client — firstName/lastName/phone/email/address/city/state/zip
+      // only, never customer_id-adjacent or booking fields), and
+      // handleArchiveAction()'s 'archive' and 'restore' branches
+      // (visibility columns only). See
+      // tests/phase3c-client-edit-archive.test.js.
+      "api/admin/client.js: .update(",
+      "api/admin/client.js: .update(",
+      "api/admin/client.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );
