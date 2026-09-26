@@ -1266,6 +1266,10 @@ button.admin-financial-card:focus-visible {
 .admin-status-dot-rental_out { background: #ea580c; }
 .admin-status-dot-completed { background: #374151; }
 .admin-status-dot-lost { background: #b91c1c; }
+/* Batch 2 — Requests "More" menu pseudo-filters, not real bookings.status
+   values (see admin/status-ui.js's STATUS_TEXT comment). */
+.admin-status-dot-completed_review_not_sent { background: #0891b2; }
+.admin-status-dot-archived { background: #6b7280; }
 
 /* Phase 3C Stage 2.5-v2 — additional-charge status badges. Reuses
    .admin-status-badge's base shape; distinct hues from the booking-status

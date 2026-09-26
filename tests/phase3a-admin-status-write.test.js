@@ -39,7 +39,10 @@ class FakeQueryBuilder {
     return this;
   }
   is(field, val) {
-    this._filters.push((row) => row[field] === val);
+    // Batch 2: treat a fixture that never set a column (undefined) as NULL
+    // — every fixture in this file predates archived_at, and .is("archived_at",
+    // null) must still match rows that simply never had it set explicitly.
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
     return this;
   }
   in(field, arr) {
@@ -745,6 +748,11 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // it's a function call into api/_lib/job-payments-ledger.js. See
       // tests/phase3c-stage3-job-payments.test.js.
       "api/admin/booking.js: .insert(",
+      // Batch 2 added exactly one new insert — writeBookingAuditLog(),
+      // shared by ?resource=archive (archive/restore) and
+      // ?resource=review-request (send/clear). See
+      // tests/phase3c-job-archive-review.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
       // api/admin/booking.js's handleUpdate() header comment for why this
@@ -779,6 +787,15 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // update — handleUpdateTip()'s PATCH ?resource=tip, which writes only
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
+      "api/admin/booking.js: .update(",
+      // Batch 2 added exactly four new updates: handleArchiveAction()'s
+      // 'archive' and 'restore' branches (visibility columns only), and
+      // handleReviewRequestAction()'s 'send' and 'clear' branches
+      // (review_request_sent_at/_by only). See
+      // tests/phase3c-job-archive-review.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

@@ -15,7 +15,22 @@ window.AdminStatusUI = (function () {
   // itself has no service_type awareness, it just renders whatever list
   // it's given.
   var STATUS_ORDER = ["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
-  var STATUS_TEXT = { new: "New", contacted: "Contacted", quoted: "Quoted", booked: "Booked", rental_out: "Rental Out", completed: "Completed", lost: "Lost" };
+  // Batch 2: 'archived'/'completed_review_not_sent' are only ever passed in
+  // via an explicit `values` list (admin/dashboard.js's "More" menu) — never
+  // part of STATUS_ORDER itself, since they aren't real bookings.status
+  // values and must never appear as an option on booking-detail.js's actual
+  // status-change sheet, which always renders the default STATUS_ORDER list.
+  var STATUS_TEXT = {
+    new: "New",
+    contacted: "Contacted",
+    quoted: "Quoted",
+    booked: "Booked",
+    rental_out: "Rental Out",
+    completed: "Completed",
+    lost: "Lost",
+    completed_review_not_sent: "Completed — Review Not Sent",
+    archived: "Archived",
+  };
 
   var overlay = null;
   var sheet = null;

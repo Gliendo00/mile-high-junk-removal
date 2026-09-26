@@ -29,6 +29,10 @@ class FakeQueryBuilder {
     this._filters.push((row) => row[field] === val);
     return this;
   }
+  is(field, val) {
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    return this;
+  }
   in(field, arr) {
     const set = new Set(arr);
     this._filters.push((row) => set.has(row[field]));

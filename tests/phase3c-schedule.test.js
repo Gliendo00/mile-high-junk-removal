@@ -47,7 +47,18 @@ class FakeQueryBuilder {
     return this;
   }
   is(field, val) {
-    this._filters.push((row) => row[field] === val);
+    // Batch 2: treat a fixture that simply never set a column (undefined)
+    // the same as an explicit NULL — every existing fixture in this file
+    // predates archived_at/review_request_sent_at and shouldn't need every
+    // single one retrofitted with archived_at: null just to keep matching
+    // a real "not archived" row, exactly the same convention this
+    // project's other fake query builders already use (e.g.
+    // tests/phase2-admin-api.test.js's).
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    return this;
+  }
+  not(field, op, val) {
+    if (op === "is" && val === null) this._filters.push((row) => row[field] !== undefined && row[field] !== null);
     return this;
   }
   in(field, arr) {
@@ -720,6 +731,12 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // ".insert("/".update(" in this file). See
       // tests/phase3c-stage3-job-payments.test.js.
       "api/admin/booking.js: .insert(",
+      // Batch 2 added exactly one new insert — writeBookingAuditLog(),
+      // shared by both ?resource=archive (archive/restore) and
+      // ?resource=review-request (send/clear), each event type writing
+      // exactly one booking_audit_log row. See
+      // tests/phase3c-job-archive-review.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",
@@ -750,6 +767,16 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // update — handleUpdateTip()'s PATCH ?resource=tip, which writes only
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
+      "api/admin/booking.js: .update(",
+      // Batch 2 added exactly four new updates: handleArchiveAction()'s
+      // 'archive' and 'restore' branches (one .update( each — visibility
+      // columns only, never job_payments/expenses/dumpster_rentals/
+      // customers), and handleReviewRequestAction()'s 'send' and 'clear'
+      // branches (same, review_request_sent_at/_by only). See
+      // tests/phase3c-job-archive-review.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

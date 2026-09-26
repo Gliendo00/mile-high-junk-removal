@@ -77,6 +77,24 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Batch 2 — Archive/restore (visibility flag only, no cascading effect —
+  // see sql/2026-09-26_phase3c-stage5-archive-review-rental-client.sql's §1
+  // header for why this exists instead of a hard delete). Same folding
+  // convention as every other ?resource= branch above: one more branch on
+  // this existing file, not a new Vercel function.
+  if (req.query.resource === "archive") {
+    if (req.method === "PATCH") return handleArchiveAction(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Batch 2 — Review-request tracking, completed jobs only.
+  if (req.query.resource === "review-request") {
+    if (req.method === "PATCH") return handleReviewRequestAction(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
   if (req.method === "POST") return handleCreate(req, res);
   if (req.method === "PATCH") return handleUpdate(req, res);
 
@@ -109,7 +127,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
       )
       .eq("id", id)
       .maybeSingle();
@@ -133,7 +151,7 @@ module.exports = async (req, res) => {
         .select("first_name, last_name, phone, email, address, city, state, zip")
         .eq("id", booking.customer_id)
         .maybeSingle(),
-      supabase.from("dumpster_rentals").select("delivery_date, pickup_date, material_type, placement_notes, actual_weight_lbs").eq("booking_id", id).maybeSingle(),
+      supabase.from("dumpster_rentals").select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes, actual_weight_lbs").eq("booking_id", id).maybeSingle(),
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
       supabase
         .from("rental_payments")
@@ -219,6 +237,15 @@ module.exports = async (req, res) => {
         // Never interpreted or displayed as a meaningful date/time by this
         // route itself.
         updatedAt: booking.updated_at,
+        // Batch 2 — archive/restore state.
+        archivedAt: booking.archived_at,
+        archivedReason: booking.archived_reason,
+        archivedNote: booking.archived_note,
+        archivedBy: booking.archived_by,
+        // Batch 2 — review-request tracking (completed jobs only; the UI
+        // decides whether to show this based on status, same as tip).
+        reviewRequestSentAt: booking.review_request_sent_at,
+        reviewRequestSentBy: booking.review_request_sent_by,
       },
       // Client identity/contact only — never the address. Job location is
       // reported separately below as `serviceAddress`, sourced from the
@@ -245,6 +272,7 @@ module.exports = async (req, res) => {
         ? {
             deliveryDate: dumpster.delivery_date,
             pickupDate: dumpster.pickup_date,
+            pickupDateIsManual: !!dumpster.pickup_date_is_manual,
             materialType: dumpster.material_type,
             placementNotes: dumpster.placement_notes,
             // 2026-09-18-v2 pricing update — the real post-disposal scale
@@ -1093,6 +1121,275 @@ async function handleUpdateTip(req, res, session) {
   } catch (err) {
     console.error("Admin update tip failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save the tip." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Batch 2 — Archive/restore (?resource=archive) + review-request tracking
+// (?resource=review-request). Both are visibility/administrative flags on
+// `bookings`, never a hard delete and never touching any other table
+// (job_payments, rental_payments, rental_additional_charges, expenses,
+// dumpster_rentals, customers) — see
+// sql/2026-09-26_phase3c-stage5-archive-review-rental-client.sql for the
+// full schema reasoning.
+// ---------------------------------------------------------------------
+
+const ARCHIVE_REASONS = ["client_canceled", "duplicate_booking", "test_spam", "no_show", "entered_by_mistake", "other"];
+
+// Best-effort human-readable snapshot for booking_audit_log, captured once
+// at write time — NOT re-derived later, so it stays accurate even after
+// the booking itself is edited or (via the customers -> bookings cascade)
+// hard-deleted. A failure looking up the customer's name here degrades to
+// "Unknown client" rather than ever blocking the actual audit write — the
+// event being recorded at all matters more than this one cosmetic detail.
+async function bookingSummarySnapshot(supabase, booking) {
+  let customerName = "Unknown client";
+  if (booking.customer_id) {
+    try {
+      const custRes = await supabase.from("customers").select("first_name, last_name").eq("id", booking.customer_id).maybeSingle();
+      if (!custRes.error && custRes.data) {
+        customerName = [custRes.data.first_name, custRes.data.last_name].filter(Boolean).join(" ") || "Unknown client";
+      }
+    } catch (e) {
+      // swallow — see comment above
+    }
+  }
+  return serviceLabel(booking.service_type) + " — " + customerName + " — " + (booking.appointment_date || "no date");
+}
+
+// Writes one booking_audit_log row. Deliberately application code, not a
+// database trigger (contrast expense_audit_log, built specifically for
+// financial data that must survive even a hand-run SQL fix — see the
+// migration file's §2 header for the full reasoning): this is
+// administrative state with exactly one narrow write path per event type,
+// the same shape api/admin/booking.js's own resource=charges approve/void
+// already uses for approved_by/approved_at.
+//
+// Runs AFTER the bookings UPDATE that made the event true, not before or
+// instead of it: without a real cross-table transaction available through
+// supabase-js, this ordering means the worst case on an audit-write
+// failure is a state change with a delayed/missing log entry (surfaced to
+// the admin as a 500, since this function re-throws) — never a log entry
+// for something that didn't actually happen.
+async function writeBookingAuditLog(supabase, booking, bookingId, eventType, reason, note, changedBy) {
+  const summary = await bookingSummarySnapshot(supabase, booking);
+  const { error } = await supabase.from("booking_audit_log").insert({
+    booking_id: bookingId,
+    booking_id_snapshot: bookingId,
+    booking_summary_snapshot: summary,
+    event_type: eventType,
+    reason: reason || null,
+    note: note || null,
+    changed_by: changedBy || null,
+  });
+  if (error) throw error;
+}
+
+// PATCH ?resource=archive { id, action: 'archive'|'restore', reason?, note? }
+async function handleArchiveAction(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin job archive failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  if (action !== "archive" && action !== "restore") {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase
+      .from("bookings")
+      .select("id, service_type, appointment_date, customer_id, archived_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (action === "archive") {
+      if (current.archived_at) {
+        res.status(409).json({ error: "This job is already archived." });
+        return;
+      }
+
+      const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+      if (ARCHIVE_REASONS.indexOf(reason) === -1) {
+        res.status(400).json({ error: "Please choose a valid archive reason." });
+        return;
+      }
+      const note = sanitizeText(body.note, MAX.long) || null;
+      if (reason === "other" && !note) {
+        res.status(400).json({ error: "A note is required when the reason is Other." });
+        return;
+      }
+
+      const { data: updated, error } = await supabase
+        .from("bookings")
+        .update({ archived_at: nowIso, archived_reason: reason, archived_note: note, archived_by: session.email, updated_at: nowIso })
+        .eq("id", id)
+        .is("archived_at", null)
+        .select("id, archived_at, archived_reason, archived_note, archived_by")
+        .maybeSingle();
+      if (error) throw error;
+      if (!updated) {
+        res.status(409).json({ error: "This job was just archived by someone else. Please refresh and try again." });
+        return;
+      }
+
+      await writeBookingAuditLog(supabase, current, id, "archive", reason, note, session.email);
+
+      res.status(200).json({
+        ok: true,
+        archivedAt: updated.archived_at,
+        archivedReason: updated.archived_reason,
+        archivedNote: updated.archived_note,
+        archivedBy: updated.archived_by,
+      });
+      return;
+    }
+
+    // action === "restore"
+    if (!current.archived_at) {
+      res.status(409).json({ error: "This job is not archived." });
+      return;
+    }
+
+    const { data: restored, error } = await supabase
+      .from("bookings")
+      .update({ archived_at: null, archived_reason: null, archived_note: null, archived_by: null, updated_at: nowIso })
+      .eq("id", id)
+      .not("archived_at", "is", null)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (!restored) {
+      res.status(409).json({ error: "This job was just restored by someone else. Please refresh and try again." });
+      return;
+    }
+
+    await writeBookingAuditLog(supabase, current, id, "restore", null, null, session.email);
+
+    res.status(200).json({ ok: true, archivedAt: null });
+  } catch (err) {
+    console.error("Admin job archive/restore failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update this job's archive status." });
+  }
+}
+
+// PATCH ?resource=review-request { id, action: 'send'|'clear' } — completed
+// jobs only, checked fresh against the database (never trusted from the
+// client), same discipline as handleUpdateTip()'s status check above.
+async function handleReviewRequestAction(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin review-request update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  if (action !== "send" && action !== "clear") {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase
+      .from("bookings")
+      .select("id, status, service_type, appointment_date, customer_id, review_request_sent_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (current.status !== "completed") {
+      res.status(400).json({ error: "A review request can only be tracked for a completed job." });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (action === "send") {
+      if (current.review_request_sent_at) {
+        res.status(409).json({ error: "A review request is already marked sent for this job." });
+        return;
+      }
+
+      const { data: updated, error } = await supabase
+        .from("bookings")
+        .update({ review_request_sent_at: nowIso, review_request_sent_by: session.email, updated_at: nowIso })
+        .eq("id", id)
+        .is("review_request_sent_at", null)
+        .select("id, review_request_sent_at, review_request_sent_by")
+        .maybeSingle();
+      if (error) throw error;
+      if (!updated) {
+        res.status(409).json({ error: "This job was just updated by someone else. Please refresh and try again." });
+        return;
+      }
+
+      await writeBookingAuditLog(supabase, current, id, "review_request_sent", null, null, session.email);
+
+      res.status(200).json({ ok: true, reviewRequestSentAt: updated.review_request_sent_at, reviewRequestSentBy: updated.review_request_sent_by });
+      return;
+    }
+
+    // action === "clear" — corrects an accidental check without losing the
+    // fact it happened: booking_audit_log keeps the 'review_request_sent'
+    // row from before, plus this new 'review_request_cleared' row, even
+    // though the live columns go back to NULL.
+    if (!current.review_request_sent_at) {
+      res.status(409).json({ error: "No review request is marked sent for this job." });
+      return;
+    }
+
+    const { data: cleared, error } = await supabase
+      .from("bookings")
+      .update({ review_request_sent_at: null, review_request_sent_by: null, updated_at: nowIso })
+      .eq("id", id)
+      .not("review_request_sent_at", "is", null)
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (!cleared) {
+      res.status(409).json({ error: "This job was just updated by someone else. Please refresh and try again." });
+      return;
+    }
+
+    await writeBookingAuditLog(supabase, current, id, "review_request_cleared", null, null, session.email);
+
+    res.status(200).json({ ok: true, reviewRequestSentAt: null });
+  } catch (err) {
+    console.error("Admin review-request update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update the review-request status." });
   }
 }
 

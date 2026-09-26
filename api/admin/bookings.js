@@ -122,7 +122,17 @@ module.exports = async (req, res) => {
   // security boundary, so an unrecognized value just falls back to the
   // unfiltered list rather than adding a new failure mode to this endpoint.
   const requestedStatus = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
-  const statusFilter = Object.prototype.hasOwnProperty.call(STATUS_LABELS, requestedStatus) ? requestedStatus : "";
+  // Batch 2: two more Requests-page "More" filter entries, deliberately
+  // sent through this exact same ?status= param (admin/dashboard.js's pill/
+  // "More" menu click handler needs zero changes to support them — it
+  // already just forwards whatever data-status value was tapped) even
+  // though neither is a real bookings.status value. Checked before the
+  // real-status allowlist below so neither can ever collide with an actual
+  // status string.
+  const isArchivedFilter = requestedStatus === "archived";
+  const isReviewNotSentFilter = requestedStatus === "completed_review_not_sent";
+  const statusFilter =
+    !isArchivedFilter && !isReviewNotSentFilter && Object.prototype.hasOwnProperty.call(STATUS_LABELS, requestedStatus) ? requestedStatus : "";
 
   // Phase 3C Stage 1: ?countsOnly=1 returns just the six-way status summary
   // (the same numbers this endpoint already computes on every call), never
@@ -174,14 +184,19 @@ module.exports = async (req, res) => {
   // a real bug found while adding this status: "new" was originally
   // total minus exactly five known statuses, and a rental_out booking would
   // have silently fallen through into that subtraction's blind spot.
+  // Batch 2: every count here excludes archived jobs (.is("archived_at",
+  // null)) — these back both the Requests-page pill badges and the
+  // "new" derivation below (total minus every known non-new status), so
+  // an archived job must never inflate any of them, matching "archived
+  // jobs do not count toward Booked or Revenue."
   const COUNT_QUERIES = [
-    supabase.from("bookings").select("id", { count: "exact", head: true }),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "contacted"),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "quoted"),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "booked"),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "rental_out"),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed"),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "lost"),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "contacted").is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "quoted").is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "booked").is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "rental_out").is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed").is("archived_at", null),
+    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "lost").is("archived_at", null),
   ];
 
   if (countsOnly) {
@@ -223,7 +238,19 @@ module.exports = async (req, res) => {
     // "new" is then derived as total minus every known non-new status,
     // which is correct however NULL/empty status is actually represented
     // in the database.
-    const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes] = await Promise.all([
+    // Batch 2: the archived / completed-review-not-sent pseudo-filters each
+    // page a totally different WHERE than the normal status-filtered list
+    // (and than each other), so filteredTotal/hasMore below can't reuse
+    // countsByStatus — this extra count-only query is only ever actually
+    // run when one of those two is active; every other request keeps this
+    // Promise.all at exactly the same 8 queries it always had.
+    const extraCountQuery = isArchivedFilter
+      ? supabase.from("bookings").select("id", { count: "exact", head: true }).not("archived_at", "is", null)
+      : isReviewNotSentFilter
+      ? supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed").is("review_request_sent_at", null).is("archived_at", null)
+      : null;
+
+    const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes, extraCountRes] = await Promise.all([
       ...COUNT_QUERIES,
       (function () {
         // "new" isn't a stored value (see docs/phase-1/crm-status-plan.md) —
@@ -235,16 +262,29 @@ module.exports = async (req, res) => {
         // for them.
         let q = supabase
           .from("bookings")
-          .select("id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_city, created_at")
+          .select(
+            "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_city, created_at, archived_at, archived_reason, review_request_sent_at"
+          )
           .order("created_at", { ascending: false })
           .range(offset, offset + limit - 1);
-        if (statusFilter === "new") q = q.is("status", null);
-        else if (statusFilter) q = q.eq("status", statusFilter);
+        if (isArchivedFilter) {
+          q = q.not("archived_at", "is", null);
+        } else if (isReviewNotSentFilter) {
+          q = q.eq("status", "completed").is("review_request_sent_at", null).is("archived_at", null);
+        } else {
+          // Batch 2: archived jobs disappear from every normal status
+          // view/filter — "All" included — matching Schedule's own
+          // exclusion in fetchScheduleJobs() above.
+          q = q.is("archived_at", null);
+          if (statusFilter === "new") q = q.is("status", null);
+          else if (statusFilter) q = q.eq("status", statusFilter);
+        }
         return q;
       })(),
+      extraCountQuery || Promise.resolve({ count: null, error: null }),
     ]);
 
-    for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes]) {
+    for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes, extraCountRes]) {
       if (r.error) throw r.error;
     }
 
@@ -296,6 +336,11 @@ module.exports = async (req, res) => {
         // NULL) falls back to the customer's current city.
         serviceCity: b.service_city || (customer && customer.city) || null,
         customer: customer ? { firstName: customer.first_name, lastName: customer.last_name } : null,
+        // Only meaningful on the Archived filter's cards; harmless/unused
+        // elsewhere.
+        archivedAt: b.archived_at,
+        archivedReason: b.archived_reason,
+        reviewRequestSentAt: b.review_request_sent_at,
       };
     });
 
@@ -321,7 +366,7 @@ module.exports = async (req, res) => {
       completed: completedRes.count || 0,
       lost: lostRes.count || 0,
     };
-    const filteredTotal = statusFilter ? countsByStatus[statusFilter] : total;
+    const filteredTotal = isArchivedFilter || isReviewNotSentFilter ? extraCountRes.count || 0 : statusFilter ? countsByStatus[statusFilter] : total;
 
     res.status(200).json({
       ok: true,
@@ -506,7 +551,13 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
     )
     .in("status", SCHEDULABLE_STATUSES)
     .gte("appointment_date", startDate)
-    .lte("appointment_date", endDate);
+    .lte("appointment_date", endDate)
+    // Batch 2: archived jobs disappear from every active Schedule view —
+    // this one query backs Today/Tomorrow/Yesterday/Day/Week/Month, so
+    // excluding it here is the single point of truth for all of them (and,
+    // transitively, for admin/schedule-financials.js's Revenue/Booked
+    // counters, which are computed client-side from exactly this response).
+    .is("archived_at", null);
   if (bookingsRes.error) throw bookingsRes.error;
 
   const bookings = bookingsRes.data || [];
@@ -691,7 +742,8 @@ async function handleYear(req, res, supabase, todayIso) {
       .select("id, appointment_date")
       .in("status", SCHEDULABLE_STATUSES)
       .gte("appointment_date", startDate)
-      .lte("appointment_date", endDate);
+      .lte("appointment_date", endDate)
+      .is("archived_at", null); // Batch 2: same exclusion as fetchScheduleJobs()
     if (bookingsRes.error) throw bookingsRes.error;
 
     const countsByMonth = new Array(12).fill(0);

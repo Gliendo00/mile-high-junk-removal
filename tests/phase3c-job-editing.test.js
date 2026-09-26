@@ -1056,11 +1056,15 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // tests/phase3c-stage3-job-payments.test.js. The tip-restore/manual-
   // payment-methods follow-up added one more still — handleUpdateTip()'s
   // PATCH ?resource=tip, writing only bookings.tip_amount (+ updated_at) —
-  // same reasoning again; see that same test file's Tip test.
+  // same reasoning again; see that same test file's Tip test. Batch 2
+  // added four more still — handleArchiveAction()'s archive/restore
+  // branches and handleReviewRequestAction()'s send/clear branches (see
+  // tests/phase3c-job-archive-review.test.js) — same "independently
+  // reviewed elsewhere" reasoning, just accounted for here.
   assert.strictEqual(
     updateCalls,
-    14,
-    "booking.js must have exactly 14 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up) — anything else needs deliberate review"
+    18,
+    "booking.js must have exactly 18 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request) — anything else needs deliberate review"
   );
 });
 

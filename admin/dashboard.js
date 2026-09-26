@@ -6,7 +6,14 @@
 // other markup is rendered as inert text, never parsed as HTML.
 document.addEventListener('DOMContentLoaded', function () {
   var PAGE_SIZE = 50;
-  var MORE_STATUSES = ['contacted', 'quoted', 'lost'];
+  // Batch 2: 'archived' and 'completed_review_not_sent' aren't real
+  // bookings.status values — they're sent through the exact same ?status=
+  // param api/admin/bookings.js already recognizes as two special
+  // pseudo-filters (see that file's own comment). Living in MORE_STATUSES
+  // means they need zero new click-handling code here: the existing
+  // filter-bar/More-menu click handler already just forwards whatever
+  // data-status value was tapped.
+  var MORE_STATUSES = ['contacted', 'quoted', 'lost', 'completed_review_not_sent', 'archived'];
 
   var errorBanner = document.getElementById('error-banner');
   var filterBar = document.getElementById('filter-bar');
