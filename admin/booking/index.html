@@ -277,6 +277,15 @@
         <div class="admin-row-label">Total received</div>
         <div class="admin-row-value" id="d-total-received">—</div>
       </div>
+      <div class="admin-row" id="d-review-request-row" style="display:none">
+        <div class="admin-row-label">Review request sent</div>
+        <div class="admin-row-value">
+          <label class="admin-checkbox-row" style="display:inline-flex">
+            <input type="checkbox" id="d-review-request-checkbox">
+            <span id="d-review-request-text">Not sent</span>
+          </label>
+        </div>
+      </div>
       <div id="d-job-payments-list" class="admin-charges-list"></div>
 
       <div class="admin-form-section" style="margin-top:14px">
@@ -318,6 +327,14 @@
         <button type="button" id="d-status-manage-trigger" class="admin-btn admin-btn-outline">Change Status</button>
       </div>
       <div class="admin-status-manage-meta" id="d-created">—</div>
+    </section>
+
+    <!-- 11. Archive/restore -->
+    <section class="admin-section" id="d-archive-section">
+      <h2>Archive</h2>
+      <div class="admin-alert admin-alert-neutral" id="d-archived-info"></div>
+      <button type="button" id="d-archive-btn" class="admin-btn admin-btn-outline" style="display:none">Archive Job</button>
+      <button type="button" id="d-restore-btn" class="admin-btn admin-btn-outline" style="display:none">Restore Job</button>
     </section>
 
   </div>

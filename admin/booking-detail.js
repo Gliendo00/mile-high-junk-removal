@@ -61,6 +61,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var bookingId = null;
   var currentStatus = 'new';
+  // Batch 2 — archive/restore + review-request state, set fresh from
+  // render() on every load. Never guessed/cached across bookings.
+  var currentArchivedAt = null;
+  var reviewRequestInFlight = false;
   // Phase 3C Stage 4: gates 'rental_out' out of the status picker for any
   // job that isn't a dumpster rental (see openStatusSheet() below) — set
   // from the loaded booking's own serviceType in render(), never guessed.
@@ -363,6 +367,7 @@ document.addEventListener('DOMContentLoaded', function () {
       loadCharges();
     }
 
+    renderArchiveState(booking);
     renderJobPayments(data);
 
     renderPhotos(data.photos);
@@ -831,6 +836,12 @@ document.addEventListener('DOMContentLoaded', function () {
   var tipEditInFlight = false;
   var currentTipAmount = null;
 
+  // Batch 2 — review-request tracking, same Payments-section home as Tip.
+  var reviewRequestRow = document.getElementById('d-review-request-row');
+  var reviewRequestCheckbox = document.getElementById('d-review-request-checkbox');
+  var reviewRequestTextEl = document.getElementById('d-review-request-text');
+  var currentReviewRequestSentAt = null;
+
   function renderJobPayments(data) {
     var booking = data.booking || {};
     set('d-collected-revenue', data.collectedRevenue != null ? formatPrice(data.collectedRevenue) : 'Not set yet');
@@ -847,6 +858,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var totalReceived = data.collectedRevenue != null || currentTipAmount != null ? (data.collectedRevenue || 0) + (currentTipAmount || 0) : null;
     set('d-total-received', totalReceived != null ? formatPrice(totalReceived) : 'Not set yet');
+
+    // Batch 2 — review-request tracking, completed jobs only (same rule as
+    // Tip above). The checkbox's own change handler (below) is what
+    // actually sends/clears — this only ever reflects current server state.
+    if (currentStatus === 'completed') {
+      reviewRequestRow.style.display = '';
+      currentReviewRequestSentAt = booking.reviewRequestSentAt || null;
+      reviewRequestCheckbox.checked = !!currentReviewRequestSentAt;
+      reviewRequestTextEl.textContent = currentReviewRequestSentAt ? 'Sent ' + formatDateTime(currentReviewRequestSentAt) : 'Not sent';
+    } else {
+      reviewRequestRow.style.display = 'none';
+    }
 
     while (jobPaymentsListEl.firstChild) jobPaymentsListEl.removeChild(jobPaymentsListEl.firstChild);
     var payments = data.jobPayments || [];
@@ -1011,6 +1034,324 @@ document.addEventListener('DOMContentLoaded', function () {
         tipEditBtn.disabled = false;
       });
   });
+
+  // Batch 2 — review-request tracking. Checking sends, unchecking clears
+  // (a correction, not a delete — see api/admin/booking.js's
+  // handleReviewRequestAction() for why booking_audit_log keeps both
+  // events). The checkbox is the whole control; no separate save button.
+  reviewRequestCheckbox.addEventListener('change', function () {
+    if (reviewRequestInFlight) return;
+    var checking = reviewRequestCheckbox.checked;
+    reviewRequestInFlight = true;
+    reviewRequestCheckbox.disabled = true;
+
+    adminFetch('/api/admin/booking?resource=review-request', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: bookingId, action: checking ? 'send' : 'clear' }),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not update the review request status.');
+            return body;
+          });
+      })
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        currentReviewRequestSentAt = body.reviewRequestSentAt || null;
+        reviewRequestCheckbox.checked = !!currentReviewRequestSentAt;
+        reviewRequestTextEl.textContent = currentReviewRequestSentAt ? 'Sent ' + formatDateTime(currentReviewRequestSentAt) : 'Not sent';
+        showToast(checking ? 'Marked as sent.' : 'Cleared.', 'success');
+      })
+      .catch(function (err) {
+        reviewRequestCheckbox.checked = !checking; // revert the optimistic toggle
+        showToast(err && err.message ? err.message : 'Could not update the review request status.', 'error');
+      })
+      .finally(function () {
+        reviewRequestInFlight = false;
+        reviewRequestCheckbox.disabled = false;
+      });
+  });
+
+  // -----------------------------------------------------------------
+  // Batch 2 — Archive/Restore. Built directly here (not through
+  // window.AdminStatusUI, which is shaped for a flat option list with no
+  // form fields) but reusing the exact same .admin-sheet-overlay/
+  // .admin-sheet chrome admin/expenses.js, admin/quick-expense.js,
+  // admin/client-picker.js, and admin/status-ui.js already established.
+  // -----------------------------------------------------------------
+  var ARCHIVE_REASON_TEXT = {
+    client_canceled: 'Client canceled',
+    duplicate_booking: 'Duplicate booking',
+    test_spam: 'Test / spam',
+    no_show: 'No-show',
+    entered_by_mistake: 'Entered by mistake',
+    other: 'Other',
+  };
+  var archiveBtn = document.getElementById('d-archive-btn');
+  var restoreBtn = document.getElementById('d-restore-btn');
+  var archivedInfoEl = document.getElementById('d-archived-info');
+
+  function renderArchiveState(state) {
+    currentArchivedAt = state.archivedAt || null;
+    if (currentArchivedAt) {
+      archiveBtn.style.display = 'none';
+      restoreBtn.style.display = '';
+      var parts = ['Archived ' + formatDateTime(currentArchivedAt)];
+      if (state.archivedReason) parts.push('Reason: ' + (ARCHIVE_REASON_TEXT[state.archivedReason] || state.archivedReason));
+      if (state.archivedNote) parts.push(state.archivedNote);
+      if (state.archivedBy) parts.push('by ' + state.archivedBy);
+      archivedInfoEl.textContent = parts.join(' — ');
+      archivedInfoEl.classList.add('is-visible');
+    } else {
+      archiveBtn.style.display = '';
+      restoreBtn.style.display = 'none';
+      archivedInfoEl.classList.remove('is-visible');
+      archivedInfoEl.textContent = '';
+    }
+  }
+
+  var archiveOverlay = null;
+  var archiveSheet = null;
+  function ensureArchiveSheetDom() {
+    if (archiveOverlay) return;
+    archiveOverlay = document.createElement('div');
+    archiveOverlay.className = 'admin-sheet-overlay';
+    archiveOverlay.setAttribute('hidden', '');
+    archiveSheet = document.createElement('div');
+    archiveSheet.className = 'admin-sheet';
+    archiveSheet.setAttribute('role', 'dialog');
+    archiveSheet.setAttribute('aria-modal', 'true');
+    archiveOverlay.appendChild(archiveSheet);
+    archiveOverlay.addEventListener('click', function (e) {
+      if (e.target === archiveOverlay) closeArchiveSheet();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !archiveOverlay.hasAttribute('hidden')) closeArchiveSheet();
+    });
+    document.body.appendChild(archiveOverlay);
+  }
+  function clearArchiveSheet() {
+    while (archiveSheet.firstChild) archiveSheet.removeChild(archiveSheet.firstChild);
+  }
+  function closeArchiveSheet() {
+    if (!archiveOverlay) return;
+    archiveOverlay.setAttribute('hidden', '');
+    clearArchiveSheet();
+  }
+
+  function openArchiveSheet() {
+    ensureArchiveSheetDom();
+    clearArchiveSheet();
+
+    var title = document.createElement('div');
+    title.className = 'admin-sheet-title';
+    title.textContent = 'Archive Job';
+    archiveSheet.appendChild(title);
+
+    var hint = document.createElement('p');
+    hint.className = 'admin-field-hint';
+    hint.textContent = 'This job will be hidden from Schedule and Requests, and excluded from Booked/Revenue totals. It stays in the record permanently and can be restored at any time.';
+    archiveSheet.appendChild(hint);
+
+    var errorBox = document.createElement('div');
+    errorBox.className = 'admin-alert admin-alert-error';
+    archiveSheet.appendChild(errorBox);
+
+    var reasonField = document.createElement('div');
+    reasonField.className = 'admin-field';
+    var reasonLabel = document.createElement('label');
+    reasonLabel.setAttribute('for', 'archive-reason-select');
+    reasonLabel.textContent = 'Reason';
+    reasonField.appendChild(reasonLabel);
+    var reasonSelect = document.createElement('select');
+    reasonSelect.id = 'archive-reason-select';
+    var placeholderOpt = document.createElement('option');
+    placeholderOpt.value = '';
+    placeholderOpt.textContent = 'Select a reason…';
+    reasonSelect.appendChild(placeholderOpt);
+    ['client_canceled', 'duplicate_booking', 'test_spam', 'no_show', 'entered_by_mistake', 'other'].forEach(function (key) {
+      var opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = ARCHIVE_REASON_TEXT[key];
+      reasonSelect.appendChild(opt);
+    });
+    reasonField.appendChild(reasonSelect);
+    archiveSheet.appendChild(reasonField);
+
+    var noteField = document.createElement('div');
+    noteField.className = 'admin-field';
+    noteField.style.display = 'none';
+    var noteLabel = document.createElement('label');
+    noteLabel.setAttribute('for', 'archive-note-input');
+    noteLabel.textContent = 'Note (required for Other)';
+    noteField.appendChild(noteLabel);
+    var noteInput = document.createElement('textarea');
+    noteInput.id = 'archive-note-input';
+    noteInput.rows = 2;
+    noteField.appendChild(noteInput);
+    archiveSheet.appendChild(noteField);
+
+    reasonSelect.addEventListener('change', function () {
+      noteField.style.display = reasonSelect.value === 'other' ? 'block' : 'none';
+    });
+
+    var actions = document.createElement('div');
+    actions.className = 'admin-duplicate-card-actions';
+    archiveSheet.appendChild(actions);
+
+    var confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'admin-btn admin-btn-danger';
+    confirmBtn.textContent = 'Archive Job';
+    actions.appendChild(confirmBtn);
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'admin-btn admin-btn-outline';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', closeArchiveSheet);
+    actions.appendChild(cancelBtn);
+
+    confirmBtn.addEventListener('click', function () {
+      var reason = reasonSelect.value;
+      if (!reason) {
+        errorBox.textContent = 'Please choose a reason.';
+        errorBox.classList.add('is-visible');
+        return;
+      }
+      var note = noteInput.value.trim();
+      if (reason === 'other' && !note) {
+        errorBox.textContent = 'A note is required when the reason is Other.';
+        errorBox.classList.add('is-visible');
+        return;
+      }
+      errorBox.classList.remove('is-visible');
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Archiving…';
+
+      adminFetch('/api/admin/booking?resource=archive', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: bookingId, action: 'archive', reason: reason, note: note }),
+      })
+        .then(function (res) {
+          if (res.status === 401) {
+            window.location.href = '/admin/login/';
+            return null;
+          }
+          return res
+            .json()
+            .catch(function () { return null; })
+            .then(function (body) {
+              if (!res.ok) throw new Error((body && body.error) || 'Could not archive this job.');
+              return body;
+            });
+        })
+        .then(function (body) {
+          if (!body) return; // redirected to login
+          closeArchiveSheet();
+          renderArchiveState(body);
+          showToast('Job archived.', 'success');
+        })
+        .catch(function (err) {
+          errorBox.textContent = err && err.message ? err.message : 'Could not archive this job.';
+          errorBox.classList.add('is-visible');
+        })
+        .finally(function () {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Archive Job';
+        });
+    });
+
+    archiveOverlay.removeAttribute('hidden');
+  }
+
+  function openRestoreSheet() {
+    ensureArchiveSheetDom();
+    clearArchiveSheet();
+
+    var title = document.createElement('div');
+    title.className = 'admin-sheet-title';
+    title.textContent = 'Restore Job';
+    archiveSheet.appendChild(title);
+
+    var hint = document.createElement('p');
+    hint.className = 'admin-field-hint';
+    hint.textContent = 'This job will reappear in Schedule/Requests and count toward Booked/Revenue again.';
+    archiveSheet.appendChild(hint);
+
+    var errorBox = document.createElement('div');
+    errorBox.className = 'admin-alert admin-alert-error';
+    archiveSheet.appendChild(errorBox);
+
+    var actions = document.createElement('div');
+    actions.className = 'admin-duplicate-card-actions';
+    archiveSheet.appendChild(actions);
+
+    var confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'admin-btn admin-btn-primary';
+    confirmBtn.textContent = 'Restore Job';
+    actions.appendChild(confirmBtn);
+
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'admin-btn admin-btn-outline';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', closeArchiveSheet);
+    actions.appendChild(cancelBtn);
+
+    confirmBtn.addEventListener('click', function () {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Restoring…';
+
+      adminFetch('/api/admin/booking?resource=archive', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: bookingId, action: 'restore' }),
+      })
+        .then(function (res) {
+          if (res.status === 401) {
+            window.location.href = '/admin/login/';
+            return null;
+          }
+          return res
+            .json()
+            .catch(function () { return null; })
+            .then(function (body) {
+              if (!res.ok) throw new Error((body && body.error) || 'Could not restore this job.');
+              return body;
+            });
+        })
+        .then(function (body) {
+          if (!body) return; // redirected to login
+          closeArchiveSheet();
+          renderArchiveState(body);
+          showToast('Job restored.', 'success');
+        })
+        .catch(function (err) {
+          errorBox.textContent = err && err.message ? err.message : 'Could not restore this job.';
+          errorBox.classList.add('is-visible');
+        })
+        .finally(function () {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Restore Job';
+        });
+    });
+
+    archiveOverlay.removeAttribute('hidden');
+  }
+
+  archiveBtn.addEventListener('click', openArchiveSheet);
+  restoreBtn.addEventListener('click', openRestoreSheet);
 
   paymentAddBtn.addEventListener('click', function () {
     if (paymentAddInFlight) return;

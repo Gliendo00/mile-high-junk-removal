@@ -1054,6 +1054,8 @@ button.admin-financial-card:focus-visible {
 }
 .admin-alert.is-visible { display: block; }
 .admin-alert-error { background: #fdecea; color: #7a1f18; }
+/* Batch 2 — archived-job/client info banners: informational, not an error. */
+.admin-alert-neutral { background: #f3f4f6; color: #374151; }
 
 /* ------------------------------------------------------------------ */
 /* Dashboard: filter bar (doubles as the summary — compact stat chips  */
