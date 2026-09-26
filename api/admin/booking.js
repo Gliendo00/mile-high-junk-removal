@@ -595,6 +595,42 @@ async function handleCreate(req, res) {
 
   const status = isPast ? "completed" : "booked";
 
+  // Batch 2C — dumpster rental fields, admin-created jobs only (the public
+  // /book flow is untouched and keeps collecting these directly from the
+  // customer). Delivery date is simply this booking's own appointmentDate
+  // — same convention api/book.js already established ("for
+  // dumpster_rental this IS the delivery date, not a generic preferred
+  // date" — see docs/phase-1/database-schema.md) — never a second,
+  // separate field here. Validated up front, before any insert, so a bad
+  // dumpster field can never leave behind a bookings row with no matching
+  // dumpster_rentals row.
+  let dumpsterFields = null;
+  if (serviceType === "dumpster_rental") {
+    const materialType = sanitizeText(body.materialType, MAX.short) || null;
+    const placementNotes = sanitizeText(body.placementNotes, MAX.short) || null;
+
+    const pickupDateInput = typeof body.pickupDate === "string" ? body.pickupDate.trim() : "";
+    let pickupDate;
+    let pickupDateIsManual;
+    if (pickupDateInput) {
+      if (!isValidIsoDate(pickupDateInput)) {
+        res.status(400).json({ error: "Please enter a valid pickup date." });
+        return;
+      }
+      if (pickupDateInput < appointmentDate) {
+        res.status(400).json({ error: "Pickup date cannot be before the delivery date." });
+        return;
+      }
+      pickupDate = pickupDateInput;
+      pickupDateIsManual = true;
+    } else {
+      pickupDate = addDaysIso(appointmentDate, DEFAULT_RENTAL_DAYS);
+      pickupDateIsManual = false;
+    }
+
+    dumpsterFields = { materialType: materialType, placementNotes: placementNotes, pickupDate: pickupDate, pickupDateIsManual: pickupDateIsManual };
+  }
+
   try {
     const customerRes = await supabase.from("customers").select("id").eq("id", customerId).maybeSingle();
     if (customerRes.error) throw customerRes.error;
@@ -633,6 +669,35 @@ async function handleCreate(req, res) {
 
     if (error || !created) throw error || new Error("Insert returned no row.");
 
+    let dumpsterResponse = null;
+    if (dumpsterFields) {
+      const { data: dumpsterCreated, error: dumpsterError } = await supabase
+        .from("dumpster_rentals")
+        .insert({
+          booking_id: created.id,
+          delivery_date: created.appointment_date,
+          pickup_date: dumpsterFields.pickupDate,
+          pickup_date_is_manual: dumpsterFields.pickupDateIsManual,
+          material_type: dumpsterFields.materialType,
+          placement_notes: dumpsterFields.placementNotes,
+        })
+        .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes")
+        .single();
+      if (dumpsterError || !dumpsterCreated) {
+        console.error("Admin job create: dumpster_rentals insert failed, rolling back the booking:", dumpsterError);
+        await safeDelete(supabase, "bookings", created.id);
+        res.status(500).json({ error: "Could not create the dumpster rental details. The job was not created." });
+        return;
+      }
+      dumpsterResponse = {
+        deliveryDate: dumpsterCreated.delivery_date,
+        pickupDate: dumpsterCreated.pickup_date,
+        pickupDateIsManual: !!dumpsterCreated.pickup_date_is_manual,
+        materialType: dumpsterCreated.material_type,
+        placementNotes: dumpsterCreated.placement_notes,
+      };
+    }
+
     res.status(200).json({
       ok: true,
       booking: {
@@ -661,6 +726,7 @@ async function handleCreate(req, res) {
         state: created.service_state,
         zip: created.service_zip,
       },
+      dumpster: dumpsterResponse,
     });
   } catch (err) {
     console.error("Admin job create failed:", err && err.stack ? err.stack : err);
@@ -842,6 +908,43 @@ async function handleUpdate(req, res) {
     return;
   }
 
+  // Batch 2C — dumpster rental fields. Delivery date is always this same
+  // request's (validated) appointmentDate — see handleCreate's matching
+  // comment. pickupDateManual is an explicit, client-computed flag (sticky
+  // once true: admin/booking-edit.js sends `existing pickup_date_is_manual
+  // OR the admin touched the field this session`), not something this
+  // endpoint infers — see that file for the full contract. When it's
+  // false, the submitted pickupDate is ignored entirely and this endpoint
+  // always (re)computes delivery + DEFAULT_RENTAL_DAYS instead, which is
+  // exactly what makes "delivery date changes shift a still-derived
+  // pickup date" work; when true, the submitted pickupDate is validated
+  // and stored as-is, and never recomputed again by a later delivery-date
+  // change.
+  let dumpsterFields = null;
+  if (serviceType === "dumpster_rental") {
+    const materialType = sanitizeText(body.materialType, MAX.short) || null;
+    const placementNotes = sanitizeText(body.placementNotes, MAX.short) || null;
+    const pickupDateIsManual = body.pickupDateManual === true;
+
+    let pickupDate;
+    if (pickupDateIsManual) {
+      const pickupDateInput = typeof body.pickupDate === "string" ? body.pickupDate.trim() : "";
+      if (!isValidIsoDate(pickupDateInput)) {
+        res.status(400).json({ error: "Please enter a valid pickup date." });
+        return;
+      }
+      if (pickupDateInput < appointmentDate) {
+        res.status(400).json({ error: "Pickup date cannot be before the delivery date." });
+        return;
+      }
+      pickupDate = pickupDateInput;
+    } else {
+      pickupDate = addDaysIso(appointmentDate, DEFAULT_RENTAL_DAYS);
+    }
+
+    dumpsterFields = { materialType: materialType, placementNotes: placementNotes, pickupDate: pickupDate, pickupDateIsManual: pickupDateIsManual };
+  }
+
   try {
     const currentRes = await supabase
       .from("bookings")
@@ -1010,6 +1113,43 @@ async function handleUpdate(req, res) {
       return;
     }
 
+    // Batch 2C — upsert (never a separate insert-or-update branch) so this
+    // single call handles both "already a dumpster rental, editing its
+    // fields" and "service type was just changed TO dumpster_rental on
+    // this same save, no dumpster_rentals row exists yet" identically —
+    // dumpster_rentals.booking_id already has a UNIQUE constraint (Phase
+    // 1), which is exactly the onConflict target this needs. A booking
+    // that is NOT (or is no longer) a dumpster rental never reaches this
+    // block at all — any existing dumpster_rentals row for it is left
+    // completely untouched, never deleted, matching "never destroy
+    // related records."
+    let dumpsterResponse = null;
+    if (dumpsterFields) {
+      const { data: dumpsterUpserted, error: dumpsterError } = await supabase
+        .from("dumpster_rentals")
+        .upsert(
+          {
+            booking_id: id,
+            delivery_date: updated.appointment_date,
+            pickup_date: dumpsterFields.pickupDate,
+            pickup_date_is_manual: dumpsterFields.pickupDateIsManual,
+            material_type: dumpsterFields.materialType,
+            placement_notes: dumpsterFields.placementNotes,
+          },
+          { onConflict: "booking_id" }
+        )
+        .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes")
+        .single();
+      if (dumpsterError || !dumpsterUpserted) throw dumpsterError || new Error("dumpster_rentals upsert returned no row.");
+      dumpsterResponse = {
+        deliveryDate: dumpsterUpserted.delivery_date,
+        pickupDate: dumpsterUpserted.pickup_date,
+        pickupDateIsManual: !!dumpsterUpserted.pickup_date_is_manual,
+        materialType: dumpsterUpserted.material_type,
+        placementNotes: dumpsterUpserted.placement_notes,
+      };
+    }
+
     res.status(200).json({
       ok: true,
       booking: {
@@ -1039,6 +1179,7 @@ async function handleUpdate(req, res) {
         state: updated.service_state,
         zip: updated.service_zip,
       },
+      dumpster: dumpsterResponse,
     });
   } catch (err) {
     console.error("Admin job update failed:", err && err.stack ? err.stack : err);
@@ -2262,8 +2403,15 @@ const SERVICE_TYPES = Object.keys(SERVICE_LABELS);
 // used to sort the Schedule chronologically — rather than a separate copy.
 const VALID_TIME_WINDOWS = Object.keys(TIME_WINDOW_DEFS);
 
-const MAX = { address: 200, city: 80, zip: 10, long: 2000 };
+const MAX = { address: 200, city: 80, zip: 10, long: 2000, short: 200 };
 const MAX_PRICE = 999999;
+// Batch 2C — the business's own "5 days included" rental policy (confirmed
+// against dumpster-rental.html's copy: "$349 flat rate includes...
+// up to 5 days"/"extra days are $15 each"): the default pickup date is
+// exactly 5 calendar days after delivery — e.g. a Sep 25 delivery defaults
+// to a Sep 30 pickup. Only ever applied when an admin hasn't manually
+// overridden the pickup date (dumpster_rentals.pickup_date_is_manual).
+const DEFAULT_RENTAL_DAYS = 5;
 // What a bare `<input type="time">.value` submits (24-hour "HH:MM", no
 // seconds) — the only shape this endpoint ever accepts from a client for
 // exact_time; Postgres accepts it directly, no ":00" suffix needed.
@@ -2294,6 +2442,30 @@ function isValidIsoDate(s) {
   const [y, m, d] = s.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() + 1 === m && dt.getUTCDate() === d;
+}
+
+// Same small, deliberate local copy as api/admin/bookings.js's own
+// addDaysIso() (UTC-noon-based so a day boundary can never shift under a
+// DST transition).
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return yy + "-" + mm + "-" + dd;
+}
+
+// Best-effort rollback, mirroring api/book.js's own safeDelete() — used
+// when a bookings row was just created but its required dumpster_rentals
+// row then fails to insert, so a job is never left half-created.
+async function safeDelete(supabase, table, id) {
+  try {
+    await supabase.from(table).delete().eq("id", id);
+  } catch (err) {
+    console.error("Rollback failed for " + table + " id " + id + ":", err);
+  }
 }
 
 // Current date in America/Denver as YYYY-MM-DD — same small, deliberate

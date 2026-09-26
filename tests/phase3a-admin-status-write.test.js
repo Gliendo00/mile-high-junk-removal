@@ -721,6 +721,11 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
     found,
     [
       "api/admin/booking-status.js: .update(",
+      // Batch 2C added exactly one new delete — safeDelete()'s rollback of
+      // a just-created bookings row when its required dumpster_rentals
+      // insert then fails (mirrors api/book.js's own safeDelete()). See
+      // tests/phase3c-dumpster-rental-admin.test.js.
+      "api/admin/booking.js: .delete(",
       "api/admin/booking.js: .insert(",
       // Phase 3C Stage 2.5-v2's ?resource=charges workflow (originally
       // built on Braintree, switched to Stripe before any production
@@ -752,6 +757,11 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // shared by ?resource=archive (archive/restore) and
       // ?resource=review-request (send/clear). See
       // tests/phase3c-job-archive-review.test.js.
+      "api/admin/booking.js: .insert(",
+      // Batch 2C added exactly one new insert — handleCreate()'s
+      // dumpster_rentals row, written only when serviceType is
+      // 'dumpster_rental' (with the matching safeDelete() rollback above
+      // if it fails). See tests/phase3c-dumpster-rental-admin.test.js.
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
@@ -797,6 +807,14 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // Batch 2C added exactly one new upsert — handleUpdate()'s
+      // dumpster_rentals write, keyed onConflict: "booking_id" (a real
+      // UNIQUE constraint, Phase 1) so one call correctly handles both
+      // "already a dumpster rental" and "service type just changed TO
+      // dumpster_rental on this save, no row exists yet." A booking that
+      // is not (or no longer) a dumpster rental never reaches this code at
+      // all. See tests/phase3c-dumpster-rental-admin.test.js.
+      "api/admin/booking.js: .upsert(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into
       // the (not-yet-migrated) expenses table — gated behind an explicit
