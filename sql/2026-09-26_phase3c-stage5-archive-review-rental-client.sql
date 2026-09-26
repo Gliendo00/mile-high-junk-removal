@@ -18,7 +18,10 @@
 --      see the "why not a trigger" note in §2 below), covering archive/
 --      restore/review-request events only.
 --   3. dumpster_rentals — 1 new column: pickup_date_is_manual, defaulting
---      false. No existing column touched. pickup_date itself already exists
+--      TRUE (see §3's own comment for why — a pre-rollout audit caught
+--      that false was a real data-corruption risk for both existing rows
+--      and every future public /book row, not just an imprecision). No
+--      existing column touched. pickup_date itself already exists
 --      (Phase 1) and is unchanged in shape.
 --   4. customers — 6 new nullable columns: archived_at/archived_reason/
 --      archived_note/archived_by (client archive/restore), updated_at/
@@ -161,19 +164,46 @@ ALTER TABLE public.booking_audit_log ENABLE ROW LEVEL SECURITY;
 -- 3. dumpster_rentals — extend in place. One new column: tracks whether
 --    pickup_date (already exists, Phase 1 — unchanged in shape here) is
 --    currently system-derived (delivery_date + 5 calendar days, recomputed
---    whenever delivery_date changes) or has been manually overridden by an
---    admin (frozen — later delivery_date edits never touch it again).
---    Defaulting false means every existing rental row is treated as
---    system-derived until an admin explicitly edits its pickup date —
---    the correct default for rows that predate this feature, since their
---    pickup_date was in fact whatever the customer entered on /book (not
---    literally "delivery + 5" in every historical case, but there is no
---    reliable way to distinguish that after the fact, and treating them as
---    derived just means a future delivery-date edit would recompute pickup
---    going forward, which is the safe, non-destructive default either way).
+--    whenever delivery_date changes) or is a real, human-chosen date that
+--    must never be silently recomputed.
+--
+--    DEFAULT true — corrected in a pre-rollout audit; the original draft
+--    of this migration defaulted this column to false, which was a real
+--    bug, not just an imprecise label. api/admin/booking.js's
+--    handleUpdate() rewrites pickup_date = delivery_date + 5 on EVERY Edit
+--    Job save of a dumpster-rental booking whenever pickup_date_is_manual
+--    is false — including a save that only touches an unrelated field
+--    (price, description) and never the delivery date at all. Every
+--    dumpster_rentals row that already exists as of this migration came
+--    from the public /book flow, where pickup_date is a real value the
+--    CUSTOMER explicitly chose — never "delivery + 5, derived." Left at
+--    false, the first time anyone edited one of those jobs for any
+--    reason, its real customer-chosen pickup date would have been
+--    silently overwritten with a fabricated delivery+5 value. The same is
+--    true of every NEW row /book creates going forward: that flow is
+--    deliberately untouched by this stage (see the top-of-file header)
+--    and has no concept of "derived" at all — every pickup date it writes
+--    is equally a real human choice, today and in the future, not just
+--    historically.
+--
+--    DEFAULT true fixes both cases in the one place that actually needs
+--    it, with zero change to api/book.js: Postgres applies a constant
+--    DEFAULT to every pre-existing row's stored metadata the moment the
+--    column is added (no table rewrite, no separate UPDATE/backfill
+--    statement needed — every already-existing row reads back as true
+--    immediately), and every row /book.js inserts afterward — which never
+--    mentions this column at all, exactly like every other column /book.js
+--    doesn't know about — gets the same true from the same mechanism,
+--    automatically, forever. This is safe for the admin app's own rows
+--    precisely because api/admin/booking.js's handleCreate()/handleUpdate()
+--    never rely on this default either way — both always write an
+--    explicit pickup_date_is_manual computed from the actual request
+--    (see dumpsterFields.pickupDateIsManual in both functions), so this
+--    default only ever governs rows written by code that has no opinion
+--    on the concept at all.
 -- =======================================================================
 ALTER TABLE public.dumpster_rentals
-  ADD COLUMN IF NOT EXISTS pickup_date_is_manual boolean NOT NULL DEFAULT false;
+  ADD COLUMN IF NOT EXISTS pickup_date_is_manual boolean NOT NULL DEFAULT true;
 
 -- =======================================================================
 -- 4. customers — extend in place. Client edit (this table's first-ever
@@ -251,9 +281,34 @@ GRANT SELECT, INSERT ON public.customer_audit_log TO service_role;
 -- select column_name, data_type, is_nullable, column_default from information_schema.columns
 --   where table_schema = 'public' and table_name in ('bookings', 'booking_audit_log', 'dumpster_rentals', 'customers', 'customer_audit_log')
 --   order by table_name, ordinal_position;
+-- -- dumpster_rentals.pickup_date_is_manual: expect column_default = 'true'.
 --
 -- select conname, contype, pg_get_constraintdef(oid) from pg_constraint
 --   where conrelid in ('public.booking_audit_log'::regclass, 'public.customer_audit_log'::regclass);
+--
+-- -- §3's fix, confirmed against actual data: every existing dumpster_rentals
+-- -- row must read back as manual immediately after this migration runs —
+-- -- there must be zero rows sitting at the old (wrong) false default.
+-- select count(*) as rows_incorrectly_not_manual
+--   from dumpster_rentals where pickup_date_is_manual = false;
+-- -- expect 0 immediately after this migration — every existing rental
+-- -- predates the admin auto-derive feature and must read as manual. A
+-- -- non-zero count here after the app is redeployed is NOT itself a
+-- -- problem — it just means the admin app has legitimately derived a
+-- -- pickup date for a new admin-created rental since (see §3's comment).
+--
+-- -- DECISIVE RLS check for §2/§5's RLS + §6's grants above: service_role must have BYPASSRLS for
+-- -- "RLS enabled, zero policies" (this table's actual posture) to grant
+-- -- any real access at all — has_table_privilege() alone (checked below)
+-- -- proves the GRANT exists, but not that RLS itself won't still block
+-- -- every row. This is the same posture job_payments/expenses/
+-- -- expense_audit_log already use live in this exact project (see
+-- -- docs/phase-3/stage3-payments-expenses-proposal.md §9's own real-engine
+-- -- confirmation of "SELECT -> true; INSERT -> true" under this identical
+-- -- shape) — expected to hold here for the same reason, not independently
+-- -- re-verified from this session (no live Supabase access).
+-- select rolname, rolbypassrls from pg_roles where rolname = 'service_role';
+-- -- expect rolbypassrls = true
 --
 -- select has_table_privilege('service_role', 'public.booking_audit_log', 'SELECT');  -- expect true
 -- select has_table_privilege('service_role', 'public.booking_audit_log', 'INSERT');  -- expect true
@@ -265,8 +320,18 @@ GRANT SELECT, INSERT ON public.customer_audit_log TO service_role;
 -- select has_table_privilege('service_role', 'public.customer_audit_log', 'DELETE'); -- expect false
 --
 -- -- Exercise the ON DELETE SET NULL behavior end-to-end (run in a
--- -- throwaway transaction, then ROLLBACK — never commit test data):
+-- -- throwaway transaction, then ROLLBACK — never commit test data). Proves
+-- -- the FK's structural behavior (role-independent — a foreign key acts
+-- -- the same way no matter who triggers it) but NOT service_role's real
+-- -- access on its own: the SQL editor normally runs as a superuser/owner
+-- -- role, which bypasses RLS regardless, so a successful insert here does
+-- -- not by itself confirm the app's actual service-role API key can do the
+-- -- same — that's what the rolbypassrls/has_table_privilege checks above
+-- -- are for. For a fully role-accurate version of this same exercise, wrap
+-- -- it in `set local role service_role;` first (reverts automatically at
+-- -- the transaction's rollback):
 -- -- begin;
+-- --   set local role service_role;
 -- --   insert into bookings (customer_id, service_type, appointment_date, description)
 -- --     values ((select id from customers limit 1), 'junk_removal', current_date, 'test') returning id;
 -- --   -- (use the returned id below)

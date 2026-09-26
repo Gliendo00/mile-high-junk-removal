@@ -416,6 +416,40 @@ test("Edit Job: once pickup is manually overridden, a later delivery-date change
   assert.strictEqual(res.body.dumpster.pickupDateIsManual, true);
 });
 
+// Pre-rollout audit finding, fixed in the migration (DEFAULT true, not
+// false — see sql/2026-09-26_phase3c-stage5-archive-review-rental-client
+// .sql §3): a historical (pre-Batch-2C) or public-/book-originated rental
+// always has pickup_date_is_manual = true. This proves WHY that default
+// matters, independent of the SQL itself (which this offline harness
+// can't execute): if a row were left at false, saving ANY edit to a
+// dumpster-rental job — even one that never touches delivery or pickup at
+// all — would silently overwrite a customer's real, chosen pickup date
+// with a fabricated delivery+5 value, purely as a side effect of
+// handleUpdate()'s "not manual -> always recompute" rule. A correctly
+// true row must be immune to exactly that.
+test("Edit Job: a manually-set pickup date survives a save that only touches an unrelated field, delivery unchanged (the exact corruption a wrong DB default would cause)", async () => {
+  adminAuthed();
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const booking = seedDumpsterBooking(db, { customer_id: cust.id, description: "Old description" });
+  // A real customer-chosen pickup date that is NOT delivery + 5 (delivery
+  // is 2026-09-25; delivery + 5 would be 2026-09-30) — exactly the shape
+  // of a genuine historical /book row this migration's default protects.
+  seedRental(db, booking.id, { delivery_date: "2026-09-25", pickup_date: "2026-10-10", pickup_date_is_manual: true });
+
+  // Same delivery date as already stored, pickupDateManual: true (this is
+  // what a correctly-backfilled row's client-side load would compute —
+  // see admin/booking-edit.js's loadedPickupDateIsManual) — but the admin
+  // is only actually changing the description, nothing rental-related.
+  const res = await req(db, {
+    method: "PATCH",
+    body: editBody(booking, { description: "Fixed a typo", appointmentDate: "2026-09-25", pickupDateManual: true, pickupDate: "2026-10-10" }),
+  });
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.dumpster.pickupDate, "2026-10-10", "an unrelated-field edit must never recompute a manually-set pickup date");
+  assert.strictEqual(res.body.dumpster.pickupDateIsManual, true);
+});
+
 test("Edit Job: a fresh manual pickup-date edit (delivery unchanged) is stored as-is", async () => {
   adminAuthed();
   const cust = makeCustomer();
@@ -467,6 +501,26 @@ test("Edit Job: a non-dumpster-rental job never touches dumpster_rentals, even w
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   assert.strictEqual(res.body.dumpster, null);
   assert.strictEqual(JSON.stringify(db.dumpster_rentals), before);
+});
+
+// =======================================================================
+// Migration content — static guard against the DEFAULT false bug
+// recurring. This offline harness has no real Postgres engine to run the
+// actual migration against (same "not testable offline" limit as every
+// other real-DDL behavior in this suite) — this instead reads the
+// migration file's own text and asserts the specific literal that fixes
+// the bug is present, so a future edit to this file can't silently
+// reintroduce it. See that file's §3 for the full reasoning.
+// =======================================================================
+test("sql migration: dumpster_rentals.pickup_date_is_manual defaults to TRUE, not false (a real historical/public-/book data-corruption risk, found and fixed in a pre-rollout audit)", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "sql", "2026-09-26_phase3c-stage5-archive-review-rental-client.sql"), "utf8");
+  const stmtStart = src.indexOf("ADD COLUMN IF NOT EXISTS pickup_date_is_manual");
+  assert.ok(stmtStart !== -1, "pickup_date_is_manual column must exist in the migration");
+  const stmtEnd = src.indexOf(";", stmtStart);
+  const stmt = src.slice(stmtStart, stmtEnd + 1);
+  assert.ok(/DEFAULT\s+true/i.test(stmt), "pickup_date_is_manual must default to true — false would silently corrupt every existing and future /book-originated rental's pickup date the first time an admin edits that job for any reason: " + stmt);
 });
 
 // ---------------------------------------------------------------------
