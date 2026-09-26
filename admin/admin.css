@@ -863,6 +863,14 @@ button.admin-financial-card:focus-visible {
   color: var(--color-text, #201e1d);
   min-height: 44px;
 }
+/* Batch 2D — the Clients page's "Show Archived" toggle in its pressed
+   state; a plain filled variant of the same outline button, not a new
+   button style. */
+.admin-btn-outline.is-active {
+  background: var(--color-text, #201e1d);
+  border-color: var(--color-text, #201e1d);
+  color: #fff;
+}
 /* Phase 3C Stage 3 — a destructive/void action (e.g. "Void Expense",
    "Void Payment"). Outline-shaped like .admin-btn-outline (never a solid
    fill — voiding is a considered action, not the page's primary CTA) but

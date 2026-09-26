@@ -17,9 +17,14 @@ document.addEventListener('DOMContentLoaded', function () {
   var loadMoreBtn = document.getElementById('load-more-btn');
   var logoutBtn = document.getElementById('logout-btn');
   var searchInput = document.getElementById('client-search');
+  var showArchivedBtn = document.getElementById('show-archived-btn');
 
   var offset = 0;
   var currentSearch = '';
+  // Batch 2D — the Clients page's only filter beyond search: the normal
+  // (active-only) view, or archived-only. Never both mixed together — see
+  // api/admin/clients.js's own archivedOnly comment for why.
+  var showArchived = false;
   var requestSeq = 0; // guards against an in-flight request resolving after a newer search
   var debounceTimer = null;
 
@@ -43,6 +48,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  var ARCHIVE_REASON_TEXT = {
+    duplicate_client: 'Duplicate client',
+    test_spam: 'Test / spam',
+    requested_removal: 'Requested removal',
+    entered_by_mistake: 'Entered by mistake',
+    other: 'Other',
+  };
+
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
@@ -65,6 +78,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var jobParts = [c.bookingCount + (c.bookingCount === 1 ? ' job' : ' jobs')];
     if (c.lastJobDate) jobParts.push('Last: ' + formatDate(c.lastJobDate));
+    // Batch 2D — archivedReason is only ever present on the Show Archived
+    // view (see api/admin/clients.js); harmless/absent otherwise.
+    if (c.archivedReason) jobParts.push('Archived: ' + (ARCHIVE_REASON_TEXT[c.archivedReason] || c.archivedReason));
     a.appendChild(el('div', 'admin-card-when', jobParts.join(' · ')));
 
     var footer = el('div', 'admin-card-footer');
@@ -90,6 +106,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var seq = ++requestSeq;
     var url = '/api/admin/clients?limit=' + PAGE_SIZE + '&offset=' + offset;
     if (currentSearch) url += '&search=' + encodeURIComponent(currentSearch);
+    if (showArchived) url += '&archivedOnly=1';
 
     return adminFetch(url)
       .then(function (res) {
@@ -113,7 +130,11 @@ document.addEventListener('DOMContentLoaded', function () {
         clearError();
 
         if (!body.clients.length && offset === 0) {
-          emptyEl.textContent = currentSearch ? 'No clients match your search.' : 'No clients yet.';
+          emptyEl.textContent = currentSearch
+            ? 'No clients match your search.'
+            : showArchived
+            ? 'No archived clients.'
+            : 'No clients yet.';
           emptyEl.style.display = 'block';
           listEl.style.display = 'none';
         } else {
@@ -132,6 +153,14 @@ document.addEventListener('DOMContentLoaded', function () {
         showError(err && err.message ? err.message : 'Could not load clients.');
       });
   }
+
+  showArchivedBtn.addEventListener('click', function () {
+    showArchived = !showArchived;
+    showArchivedBtn.textContent = showArchived ? 'Show Active' : 'Show Archived';
+    showArchivedBtn.setAttribute('aria-pressed', showArchived ? 'true' : 'false');
+    showArchivedBtn.classList.toggle('is-active', showArchived);
+    resetAndLoad();
+  });
 
   searchInput.addEventListener('input', function () {
     clearTimeout(debounceTimer);
