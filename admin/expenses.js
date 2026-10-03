@@ -658,7 +658,15 @@ document.addEventListener('DOMContentLoaded', function () {
         loadingEl.style.display = 'none';
         clearError();
 
-        totalSummaryEl.textContent = 'Total for selected period: ' + formatPrice(body.totalAmount) + ' (' + body.total + (body.total === 1 ? ' expense' : ' expenses') + ')';
+        // Structured label + big value (visual-parity pass, 2026-10) —
+        // was a single plain-text string; this is what lets admin.css
+        // give the dollar figure real hierarchy instead of everything
+        // being the same font-size/weight.
+        while (totalSummaryEl.firstChild) totalSummaryEl.removeChild(totalSummaryEl.firstChild);
+        totalSummaryEl.appendChild(el('span', 'admin-expense-total-label', 'Total for selected period'));
+        var expenseCountText = body.total + (body.total === 1 ? ' expense' : ' expenses');
+        totalSummaryEl.appendChild(el('span', 'admin-expense-total-value', formatPrice(body.totalAmount)));
+        totalSummaryEl.appendChild(el('span', 'admin-expense-total-count', expenseCountText));
 
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
         if (!body.expenses.length) {
@@ -989,7 +997,11 @@ document.addEventListener('DOMContentLoaded', function () {
         orLoadingEl.style.display = 'none';
         clearError();
 
-        orTotalSummaryEl.textContent = 'Total for selected period: ' + formatPrice(body.totalAmount) + ' (' + body.total + (body.total === 1 ? ' entry' : ' entries') + ')';
+        while (orTotalSummaryEl.firstChild) orTotalSummaryEl.removeChild(orTotalSummaryEl.firstChild);
+        orTotalSummaryEl.appendChild(el('span', 'admin-expense-total-label', 'Total for selected period'));
+        var otherRevenueCountText = body.total + (body.total === 1 ? ' entry' : ' entries');
+        orTotalSummaryEl.appendChild(el('span', 'admin-expense-total-value admin-expense-total-value-revenue', formatPrice(body.totalAmount)));
+        orTotalSummaryEl.appendChild(el('span', 'admin-expense-total-count', otherRevenueCountText));
 
         while (orListEl.firstChild) orListEl.removeChild(orListEl.firstChild);
         if (!body.otherRevenue.length) {

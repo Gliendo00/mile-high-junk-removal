@@ -57,6 +57,27 @@ document.addEventListener('DOMContentLoaded', function () {
   var bucketHeaderLabel = document.getElementById('bucket-section-header-label');
   var bucketHeaderCount = document.getElementById('bucket-section-header-count');
 
+  // Maps each Leads bucket (not a `bookings.status` value — waitingOnPhotos/
+  // estimateSent/followUp/pendingIntake/websiteRequests have no equivalent
+  // among the 7 admin-status-* booking statuses) to its own chip color, via
+  // admin.css's .admin-lead-bucket-* classes — reusing hues from the
+  // existing status/source palette where the meaning lines up (new/
+  // contacted/bookedWon/lost), picking a distinct existing hue for the
+  // lead-only stages otherwise. This is what the status chip in the Lead
+  // Card's top row (replacing the old plain-text status in the actions
+  // row) is colored by.
+  var BUCKET_CHIP_CLASS = {
+    pendingIntake: 'admin-lead-bucket-pendingIntake',
+    websiteRequests: 'admin-lead-bucket-websiteRequests',
+    new: 'admin-lead-bucket-new',
+    contacted: 'admin-lead-bucket-contacted',
+    waitingOnPhotos: 'admin-lead-bucket-waitingOnPhotos',
+    estimateSent: 'admin-lead-bucket-estimateSent',
+    followUp: 'admin-lead-bucket-followUp',
+    bookedWon: 'admin-lead-bucket-bookedWon',
+    lost: 'admin-lead-bucket-lost',
+  };
+
   var SOURCE_LABELS = {
     website: 'Website',
     screenshot_intake: 'Screenshot Intake',
@@ -142,17 +163,6 @@ document.addEventListener('DOMContentLoaded', function () {
     return item;
   }
 
-  function formatWhen(iso) {
-    if (!iso) return '—';
-    try {
-      var d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
-      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    } catch (e) {
-      return iso;
-    }
-  }
-
   function formatFollowUp(dateStr) {
     if (!dateStr) return '';
     try {
@@ -172,7 +182,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // GET /api/admin/bookings?view=leads's sections.*, already carrying
   // {id, kind, source, name, phone, serviceLabel, city, statusLabel,
   // updatedAt, nextFollowUpDate}.
-  function renderLeadCard(item) {
+  function renderLeadCard(item, bucketKey) {
     var li = document.createElement('li');
     var card = el('div', 'admin-booking-card admin-lead-card');
 
@@ -185,11 +195,15 @@ document.addEventListener('DOMContentLoaded', function () {
     main.className = 'admin-lead-card-main';
     if (item.kind === 'booking') main.href = '/admin/booking/?id=' + encodeURIComponent(item.id);
 
-    var top = el('div', 'admin-card-top');
-    var topLeft = el('div', 'admin-card-top-left');
-    topLeft.appendChild(el('span', 'admin-source-badge admin-source-badge-' + item.source, SOURCE_LABELS[item.source] || item.source));
-    top.appendChild(topLeft);
-    top.appendChild(el('span', 'admin-card-timeago', formatWhen(item.updatedAt)));
+    // Exactly 2 chips, never more: source + status — the status chip
+    // replaces what used to be a second, plain-text copy of the same
+    // information down in the actions row. No separate "updated Xh ago"
+    // timestamp either — not one of the essentials, and one more element
+    // than a calmer card needs (de-densification pass).
+    var top = el('div', 'admin-card-top admin-lead-card-chips');
+    top.appendChild(el('span', 'admin-source-badge admin-source-badge-' + item.source, SOURCE_LABELS[item.source] || item.source));
+    var statusChipClass = BUCKET_CHIP_CLASS[bucketKey] || 'admin-lead-bucket-new';
+    top.appendChild(el('span', 'admin-status-badge ' + statusChipClass, item.statusLabel || BUCKET_LABELS[bucketKey] || ''));
     main.appendChild(top);
 
     main.appendChild(el('div', 'admin-card-name', item.name || item.phone || 'Unidentified client'));
@@ -210,8 +224,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
     card.appendChild(main);
 
+    // One quiet secondary link + one clear primary action — status is
+    // already shown as a chip above, not repeated here.
     var actions = el('div', 'admin-lead-card-actions');
-    actions.appendChild(el('span', 'admin-lead-card-status', item.statusLabel || ''));
+    if (item.kind === 'booking') {
+      var viewLink = document.createElement('a');
+      viewLink.className = 'admin-card-view admin-lead-card-view';
+      viewLink.href = main.href;
+      viewLink.textContent = 'View details';
+      actions.appendChild(viewLink);
+    } else {
+      actions.appendChild(el('span', 'admin-lead-card-view'));
+    }
     var telHref = buildTelHref(item.phone);
     if (telHref) {
       var callBtn = document.createElement('a');
@@ -239,11 +263,9 @@ document.addEventListener('DOMContentLoaded', function () {
     main.className = 'admin-lead-card-main';
     main.href = '/admin/intake/?id=' + encodeURIComponent(intake.id);
 
-    var top = el('div', 'admin-card-top');
-    var topLeft = el('div', 'admin-card-top-left');
-    topLeft.appendChild(el('span', 'admin-source-badge admin-source-badge-screenshot_intake', 'Screenshot Intake'));
-    top.appendChild(topLeft);
-    top.appendChild(el('span', 'admin-card-timeago', formatWhen(intake.createdAt)));
+    var top = el('div', 'admin-card-top admin-lead-card-chips');
+    top.appendChild(el('span', 'admin-source-badge admin-source-badge-screenshot_intake', 'Screenshot Intake'));
+    top.appendChild(el('span', 'admin-status-badge admin-lead-bucket-pendingIntake', 'Pending Review'));
     main.appendChild(top);
 
     var title = intake.matchedClientName || intake.extractedClientName || intake.extractedPhone || intake.extractedEmail || 'Unidentified client';
@@ -262,9 +284,13 @@ document.addEventListener('DOMContentLoaded', function () {
     card.appendChild(main);
 
     var actions = el('div', 'admin-lead-card-actions');
-    actions.appendChild(el('span', 'admin-lead-card-status', 'Pending Review'));
     var telHref = buildTelHref(intake.extractedPhone);
     if (telHref) {
+      var reviewLink2 = document.createElement('a');
+      reviewLink2.className = 'admin-card-view admin-lead-card-view';
+      reviewLink2.href = main.href;
+      reviewLink2.textContent = 'Review';
+      actions.appendChild(reviewLink2);
       var callBtn = document.createElement('a');
       callBtn.className = 'admin-btn admin-btn-primary admin-lead-card-call';
       callBtn.href = telHref;
@@ -298,7 +324,7 @@ document.addEventListener('DOMContentLoaded', function () {
       countBadge.textContent = n > 99 ? '99+' : String(n);
       countBadge.hidden = false;
       items.forEach(function (item) {
-        listEl.appendChild(renderFn(item));
+        listEl.appendChild(renderFn(item, key));
       });
     } else {
       countBadge.hidden = true;

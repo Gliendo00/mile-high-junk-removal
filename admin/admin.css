@@ -33,7 +33,12 @@
   --admin-radius-xl: 14px;
   --admin-radius-full: 999px;
 
-  --admin-shadow-elevated: 0 4px 16px rgba(20, 21, 15, 0.14);
+  /* Strengthened (global visual-parity pass, 2026-10): the original value
+     read too close to the Flat tier's own new resting shadow to feel like
+     a genuinely distinct "needs attention" tier — a real jump in both
+     blur and opacity, not a 2px tweak, is what Elevated vs. Flat needs to
+     actually read as different surfaces at a glance. */
+  --admin-shadow-elevated: 0 10px 28px rgba(20, 21, 15, 0.20);
 }
 
 .admin-body {
@@ -235,7 +240,9 @@
 .admin-range-tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 16px;
+  /* Bumped (global visual-parity pass, 2026-10): more breathing room
+     before the financial strip/job list below. */
+  margin-bottom: 22px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -726,9 +733,14 @@
   grid-template-columns: repeat(2, 1fr);
   gap: 1px;
   background: rgba(255, 255, 255, 0.28);
-  border-radius: 12px;
+  border-radius: var(--admin-radius-lg);
   overflow: hidden;
-  margin-bottom: 16px;
+  margin-bottom: 24px;
+  /* Visually integrates the strip with the rest of the page instead of
+     reading as a flat colored bar pasted on top (global visual-parity
+     pass, 2026-10) — same resting-lift language every card on this page
+     already uses. */
+  box-shadow: 0 2px 8px rgba(20, 21, 15, 0.10);
 }
 @media (min-width: 860px) {
   .admin-schedule-financials {
@@ -1301,13 +1313,17 @@ button.admin-financial-card:focus-visible {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 18px;
 }
+/* Bumped 17px -> 22px (global visual-parity pass, 2026-10): this is the
+   single most visible typographic element on every admin page, and the
+   previous size read closer to a section label than a true page title —
+   see the Figma "Display/Page Title" style this now matches. */
 .admin-list-heading h1, .admin-list-heading h2 {
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
-  font-size: 17px;
+  font-size: 22px;
   margin: 0;
 }
 .admin-list-count {
@@ -1316,11 +1332,12 @@ button.admin-financial-card:focus-visible {
   font-weight: 600;
 }
 
-/* Booking list */
+/* Booking list — gap bumped 8 -> 12px (global visual-parity pass, 2026-10):
+   more intentional spacing between list items site-wide. */
 .admin-booking-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1330,10 +1347,15 @@ button.admin-financial-card:focus-visible {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
   border-left: 5px solid var(--color-neutral-300, #dcd3c4);
-  border-radius: 12px;
+  border-radius: var(--admin-radius-lg);
   padding: 12px 14px;
   text-decoration: none;
   color: inherit;
+  /* A soft resting lift on every card (the Flat tier) — distinct from the
+     Elevated tier's much stronger shadow below, but enough that a white
+     card visibly separates from the pale page background instead of
+     reading as flat-on-flat. */
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
 }
 .admin-booking-card:active { background: var(--admin-tint); }
 .admin-card-top {
@@ -1946,7 +1968,10 @@ button.admin-financial-card:focus-visible {
 /* Desktop: use the available width instead of a narrow fixed column.  */
 /* ------------------------------------------------------------------ */
 @media (min-width: 860px) {
-  .admin-main { max-width: 1040px; padding: 20px 24px 56px; }
+  /* Widened 1040 -> 1240px (global visual-parity pass, 2026-10): better
+     matches the Figma shell's use of desktop width — Leads' 2-column
+     card grid in particular reads cramped at the old, narrower column. */
+  .admin-main { max-width: 1240px; padding: 24px 28px 56px; }
   .admin-filter-bar { max-width: 620px; }
   .admin-card-top { align-items: center; }
   .admin-card-when { font-size: 15.5px; }
@@ -2188,14 +2213,42 @@ button.admin-financial-card:focus-visible {
    admin/expenses.js for the markup these classes style.
    =========================================================================== */
 
+/* Restructured (visual-parity pass, 2026-10) from one plain-text line into
+   a real label + big-number hierarchy — see expenses.js's two totals
+   handlers. The value is red for Expenses (money out) and green for Other
+   Revenue (money in, via .admin-expense-total-value-revenue) — a second,
+   always-visible cue distinguishing the two ledgers beyond the tab alone. */
 .admin-expense-total-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
-  border-radius: 12px;
-  padding: 12px 14px;
-  font-weight: 700;
-  font-size: 14px;
-  margin-bottom: 14px;
+  border-radius: var(--admin-radius-lg);
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.admin-expense-total-label {
+  flex-basis: 100%;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-expense-total-value {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 26px;
+  color: #b91c1c;
+}
+.admin-expense-total-value-revenue { color: var(--color-accent-700, #2f6f13); }
+.admin-expense-total-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-neutral-600, #82796a);
 }
 
 /* ---------------------------------------------------------------------
@@ -2218,9 +2271,10 @@ button.admin-financial-card:focus-visible {
 .admin-expense-filters {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
-  border-radius: 12px;
+  border-radius: var(--admin-radius-lg);
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
   padding: 14px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2286,12 +2340,13 @@ button.admin-financial-card:focus-visible {
    independently. */
 .admin-expense-row {
   background: #fff;
-  border: 1px solid var(--color-neutral-300, #dcd3c4);
-  border-radius: 10px;
-  padding: 12px 14px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-md);
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .admin-expense-row.is-voided {
   opacity: 0.65;
@@ -2445,7 +2500,7 @@ button.admin-financial-card:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
 .admin-section-header-icon {
   flex: none;
@@ -2500,25 +2555,37 @@ button.admin-financial-card:focus-visible {
    existing shape/colors as its base (same class stays on the element) and
    layers the redesign's structure on top: a clickable "main" region (name,
    service, metadata row, follow-up) separate from a persistent actions
-   row (status + a real Call action) — same main/actions split already
-   established by .admin-schedule-card-main/.admin-contact-actions, so a
-   lead-kind card (not yet linkable to a detail page) can render its main
-   area as a plain non-interactive div instead of forcing an invalid
-   nested <a>.
+   row (a single primary Call action, status already shown as a chip
+   above) — same main/actions split already established by
+   .admin-schedule-card-main/.admin-contact-actions, so a lead-kind card
+   (not yet linkable to a detail page) can render its main area as a plain
+   non-interactive div instead of forcing an invalid nested <a>.
+
+   De-densification pass (2026-10): .admin-booking-card's own 5px colored
+   border-left (originally a Schedule-status accent stripe) is reset back
+   to a plain 1px match here — a Lead Card already carries its status as a
+   chip, so the stripe was pure redundant visual noise. Generous internal
+   padding (vs. the base card's tighter 12/14px) is deliberate — "more
+   breathing room inside each card" was explicit feedback.
    --------------------------------------------------------------------- */
-.admin-lead-card { padding: 0; overflow: hidden; }
+.admin-lead-card {
+  padding: 0;
+  overflow: hidden;
+  border-left-width: 1px;
+}
 .admin-lead-card-main {
   display: block;
-  padding: 12px 14px 10px;
+  padding: 18px 20px 14px;
   text-decoration: none;
   color: inherit;
 }
 a.admin-lead-card-main:active { background: var(--admin-tint); }
+.admin-lead-card-chips { gap: 10px; margin-bottom: 10px; }
 .admin-lead-card-followup {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 10px;
   font-size: 12.5px;
   font-weight: 700;
   color: var(--color-accent-700, #2f6f13);
@@ -2528,15 +2595,48 @@ a.admin-lead-card-main:active { background: var(--admin-tint); }
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 12px 20px;
   border-top: 1px solid var(--color-neutral-100, #f9f4ed);
 }
-.admin-lead-card-status {
+/* Quiet secondary link — intentionally plain-text weight, never competing
+   with the one primary Call button for attention. */
+.admin-lead-card-view {
   font-size: 12.5px;
   font-weight: 700;
-  color: var(--color-neutral-600, #82796a);
+  color: var(--color-neutral-500, #a19786);
+  text-decoration: none;
 }
-.admin-lead-card-call { min-height: 32px; padding: 0 14px; font-size: 13px; }
+a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
+.admin-lead-card-call { min-height: 36px; padding: 0 18px; font-size: 13px; }
+
+/* Lead bucket status chips — see leads-list.js's BUCKET_CHIP_CLASS. Hues
+   reused from the existing status/source palette where the meaning lines
+   up (new/contacted/bookedWon/lost); a distinct existing hue picked for
+   each lead-only pipeline stage that has no equivalent booking status. */
+.admin-lead-bucket-pendingIntake { background: #6b7280; color: #fff; }
+.admin-lead-bucket-websiteRequests { background: #1d4ed8; color: #fff; }
+.admin-lead-bucket-new { background: #2f6f13; color: #fff; }
+.admin-lead-bucket-contacted { background: #b45309; color: #fff; }
+.admin-lead-bucket-waitingOnPhotos { background: #6d28d9; color: #fff; }
+.admin-lead-bucket-estimateSent { background: #0891b2; color: #fff; }
+.admin-lead-bucket-followUp { background: #ea580c; color: #fff; }
+.admin-lead-bucket-bookedWon { background: #1d4ed8; color: #fff; }
+.admin-lead-bucket-lost { background: #b91c1c; color: #fff; }
+
+/* ---------------------------------------------------------------------
+   Leads card grid — desktop 2 columns (reviewed against both 1 and 3:
+   1 wasted the available desktop width, 3 felt cramped/busy — explicit
+   feedback). Mobile stays a single column; .admin-booking-list's own
+   base flex/gap rule is overridden here, not replaced, so every other
+   page still using plain .admin-booking-list is unaffected. */
+.admin-leads-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+@media (min-width: 760px) {
+  .admin-leads-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
+}
 
 /* ---------------------------------------------------------------------
    Leads tab slider — desktop left/right controls wrapping the existing
@@ -2547,7 +2647,11 @@ a.admin-lead-card-main:active { background: var(--admin-tint); }
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 16px;
+  /* Clear visual separation from the card grid below — explicit feedback
+     that the tabs and cards read as too close together. */
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
 }
 .admin-leads-tabs-row .admin-leads-tabs { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
 .admin-leads-tab-arrow {
@@ -2612,13 +2716,15 @@ a.admin-lead-card-main:active { background: var(--admin-tint); }
 .admin-client-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 14px;
+  /* Bumped 12/16 -> 16/18px (visual-parity pass, 2026-10): "compact but
+     comfortable, not cramped" — explicit feedback on the first pass. */
+  padding: 16px 18px;
 }
 .admin-client-avatar {
   flex: none;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: var(--admin-radius-full);
   background: var(--admin-tint);
   color: var(--color-accent-700, #2f6f13);
@@ -2627,19 +2733,20 @@ a.admin-lead-card-main:active { background: var(--admin-tint); }
   justify-content: center;
   font-family: var(--font-body);
   font-weight: 800;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 .admin-client-row-text {
   flex: 1 1 auto;
   min-width: 0;
 }
 .admin-client-row-name {
-  font-weight: 700;
-  font-size: 14.5px;
+  font-weight: 800;
+  font-size: 15.5px;
   color: var(--color-text, #201e1d);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-bottom: 2px;
 }
 .admin-client-row-contact {
   font-size: 12.5px;
