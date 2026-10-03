@@ -821,6 +821,14 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // resource:"expense" discriminator so it can never be reached by any
       // booking-shaped request. See tests/phase3c-stage2.4-expenses.test.js.
       "api/admin/bookings.js: .insert(",
+      // Phase 3C Stage 6 (Batch 3) added exactly one new insert — the
+      // Other Revenue ledger's handleCreateOtherRevenue(), reachable only
+      // via resource:"other-revenue" on this same POST. Listed here (not
+      // after the Stage 3 comment below) because the array is sorted
+      // alphabetically before comparison, and ".insert(" sorts before
+      // ".update(" for this same file. See
+      // tests/phase3c-stage6-other-revenue.test.js.
+      "api/admin/bookings.js: .insert(",
       // Phase 3C Stage 3 (full Expense Management) added exactly two new
       // write calls — both inside handlePatchExpense(), both reachable only
       // via the same resource:"expense" PATCH discriminator: the "void"
@@ -830,6 +838,12 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // on public.expenses, not this file, is what writes
       // expense_audit_log. See tests/phase3c-stage3-expenses-management.test.js.
       "api/admin/bookings.js: .update(",
+      "api/admin/bookings.js: .update(",
+      // Phase 3C Stage 6 (Batch 3) added exactly one new update — the
+      // Other Revenue ledger's handleVoidOtherRevenue(), the ONLY write
+      // this ledger's PATCH allows (type/amount/revenueDate/bookingId are
+      // never editable once written — append-only, same pattern
+      // job_payments uses). See tests/phase3c-stage6-other-revenue.test.js.
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
       // Batch 2D added exactly one new insert — writeCustomerAuditLog(),

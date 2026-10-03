@@ -13,6 +13,7 @@ const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
 const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
 const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS } = require("../_lib/job-payments-ledger");
+const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -70,14 +71,32 @@ module.exports = async (req, res) => {
   // first, then branch on req.method, each branch reading only the fields
   // it explicitly names from the body). See handleCreateExpense() for the
   // full validation/write contract.
-  if (req.method === "POST") return handleCreateExpense(req, res, session);
+  //
+  // Phase 3C Stage 6 (Batch 3): resource:"other-revenue" is a sibling
+  // discriminator on this exact same POST, same reasoning — the Other
+  // Revenue ledger (Metal Recycling, Resale Sales) is its own small
+  // resource, not a kind of expense. Checked first so it can never be
+  // swallowed by handleCreateExpense()'s own resource !== "expense" 400.
+  if (req.method === "POST") {
+    const postResource = req.body && typeof req.body === "object" && typeof req.body.resource === "string" ? req.body.resource.trim() : "";
+    if (postResource === "other-revenue") return handleCreateOtherRevenue(req, res, session);
+    return handleCreateExpense(req, res, session);
+  }
 
   // Phase 3C Stage 3 (full Expense Management): PATCH edits or voids one
   // expense row — same `resource: "expense"` discriminator as the POST
   // above, with an `action` field distinguishing "update" (default) from
   // "void". Folded into this same file/method for the same 12-function-
   // budget reason as every other resource here (see this file's header).
-  if (req.method === "PATCH") return handlePatchExpense(req, res, session);
+  //
+  // Phase 3C Stage 6 (Batch 3): resource:"other-revenue" PATCH only ever
+  // voids (no "update" action exists for this ledger at all — see
+  // handleVoidOtherRevenue()'s own header for why).
+  if (req.method === "PATCH") {
+    const patchResource = req.body && typeof req.body === "object" && typeof req.body.resource === "string" ? req.body.resource.trim() : "";
+    if (patchResource === "other-revenue") return handleVoidOtherRevenue(req, res, session);
+    return handlePatchExpense(req, res, session);
+  }
 
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -174,8 +193,19 @@ module.exports = async (req, res) => {
   // picker the Expenses page's job-link field uses — searches by customer
   // name/phone, same multi-field ilike pattern api/admin/clients.js already
   // established, then returns that customer's recent bookings. Read-only.
+  // Reused as-is (zero changes) by the Other Revenue ledger's own optional
+  // job-link field below.
   if (req.query.view === "job-search") {
     return handleJobSearch(req, res, supabase);
+  }
+
+  // Phase 3C Stage 6 (Batch 3): ?view=other-revenue lists Other Revenue
+  // ledger rows (Metal Recycling, Resale Sales) for a bounded date range —
+  // same folding reasoning as every other view= mode in this file, and the
+  // same shape (list + totalAmount) as ?view=expenses so
+  // admin/schedule-financials.js can fetch it the same way.
+  if (req.query.view === "other-revenue") {
+    return handleOtherRevenueList(req, res, supabase);
   }
 
   // Phase 3C Stage 4: "rental_out" is counted here too, and folded into
@@ -1264,6 +1294,262 @@ async function handlePatchExpense(req, res, session) {
   } catch (err) {
     console.error("Admin expense update failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save this expense." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Other Revenue ledger (Phase 3C Stage 6 / Batch 3) — money the business
+// receives that is NOT a job's own collected/quoted amount: scrap-metal
+// recycling proceeds, resale of reusable items/furniture recovered on
+// jobs. Modeled as its own small append-only table (other_revenue),
+// closest in shape to job_payments (create + void only — no "update"
+// action exists at all, since there is nothing beyond create/void to
+// audit, same reasoning job_payments itself uses). See
+// sql/2026-10-02_phase3c-stage6-other-revenue.sql for the full schema/
+// grants writeup. Never touches bookings, job_payments, or expenses —
+// admin/schedule-financials.js is the only place this ledger's totals are
+// ever combined with job-derived Revenue, and only additively (Job Revenue
+// itself, computed from completed jobs, is completely untouched either
+// way).
+// ---------------------------------------------------------------------
+const OTHER_REVENUE_COLS = "id, type, amount, revenue_date, note, booking_id, voided_at, voided_reason, voided_by, created_at, created_by";
+const OTHER_REVENUE_MAX_AMOUNT = 999999;
+const OTHER_REVENUE_NOTE_MAX = 500;
+const OTHER_REVENUE_VOID_REASON_MAX = 300;
+
+function serializeOtherRevenue(r) {
+  return {
+    id: r.id,
+    type: r.type,
+    typeLabel: otherRevenueTypeLabel(r.type),
+    amount: r.amount,
+    revenueDate: r.revenue_date,
+    note: r.note,
+    bookingId: r.booking_id,
+    voidedAt: r.voided_at,
+    voidedReason: r.voided_reason,
+    voidedBy: r.voided_by,
+    isVoided: !!r.voided_at,
+    createdAt: r.created_at,
+    createdBy: r.created_by,
+  };
+}
+
+// GET ?view=other-revenue&startDate=&endDate=&type=&includeVoided=&bookingId= —
+// a bounded date range, same EXPENSES_MAX_RANGE_DAYS bound and the same
+// "voided rows excluded from totalAmount unconditionally, included in the
+// row list only when includeVoided=1" rule handleExpensesList uses (see
+// that function's own comment for the exact staging bug this mirrors the
+// fix for, applied here from the start rather than discovered later).
+async function handleOtherRevenueList(req, res, supabase) {
+  const startDateRaw = typeof req.query.startDate === "string" ? req.query.startDate.trim() : "";
+  const endDateRaw = typeof req.query.endDate === "string" ? req.query.endDate.trim() : "";
+  if (!isValidIsoDate(startDateRaw) || !isValidIsoDate(endDateRaw)) {
+    res.status(400).json({ error: "A valid startDate and endDate are required." });
+    return;
+  }
+  if (endDateRaw < startDateRaw) {
+    res.status(400).json({ error: "endDate cannot be before startDate." });
+    return;
+  }
+  const spanDays = Math.round((parseIsoAsUtcMs(endDateRaw) - parseIsoAsUtcMs(startDateRaw)) / 86400000) + 1;
+  if (spanDays > EXPENSES_MAX_RANGE_DAYS) {
+    res.status(400).json({ error: "Date range is too wide." });
+    return;
+  }
+
+  const typeRaw = typeof req.query.type === "string" ? req.query.type.trim() : "";
+  const typeFilter = Object.prototype.hasOwnProperty.call(OTHER_REVENUE_TYPES, typeRaw) ? typeRaw : "";
+
+  const bookingIdFilter = typeof req.query.bookingId === "string" ? req.query.bookingId.trim() : "";
+  const includeVoided = req.query.includeVoided === "1";
+
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = EXPENSE_LIST_DEFAULT_LIMIT;
+  limit = Math.min(limit, EXPENSE_LIST_MAX_LIMIT);
+  let offset = parseInt(req.query.offset, 10);
+  if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+  try {
+    let q = supabase.from("other_revenue").select(OTHER_REVENUE_COLS).gte("revenue_date", startDateRaw).lte("revenue_date", endDateRaw);
+    if (!includeVoided) q = q.is("voided_at", null);
+    if (typeFilter) q = q.eq("type", typeFilter);
+    if (bookingIdFilter) q = q.eq("booking_id", bookingIdFilter);
+    const { data, error } = await q.order("revenue_date", { ascending: false }).order("created_at", { ascending: false }).limit(EXPENSE_LIST_MAX_LIMIT);
+    if (error) throw error;
+
+    const rows = data || [];
+    // Same discipline as handleExpensesList's nonVoidedRows: totalAmount is
+    // ALWAYS active-only, unconditionally — includeVoided only controls
+    // what's displayed, never what counts toward the period total.
+    const nonVoidedRows = rows.filter(function (r) {
+      return !r.voided_at;
+    });
+    const total = nonVoidedRows.length;
+    const totalAmount = nonVoidedRows.reduce(function (sum, r) {
+      return sum + (Number(r.amount) || 0);
+    }, 0);
+    const page = rows.slice(offset, offset + limit).map(serializeOtherRevenue);
+    const enriched = await attachJobLabels(supabase, page);
+
+    res.status(200).json({
+      ok: true,
+      startDate: startDateRaw,
+      endDate: endDateRaw,
+      otherRevenue: enriched,
+      total: total,
+      totalAmount: Math.round(totalAmount * 100) / 100,
+      limit: limit,
+      offset: offset,
+      hasMore: offset + page.length < rows.length,
+    });
+  } catch (err) {
+    console.error("Admin other-revenue list failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load other revenue." });
+  }
+}
+
+// POST { resource: "other-revenue", type, amount, revenueDate, note,
+// bookingId } — create one Other Revenue row. Every field is read
+// individually and validated, same discipline as handleCreateExpense();
+// the request body is never spread into the insert payload.
+async function handleCreateOtherRevenue(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin other-revenue create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const type = typeof body.type === "string" ? body.type.trim() : "";
+  if (!Object.prototype.hasOwnProperty.call(OTHER_REVENUE_TYPES, type)) {
+    res.status(400).json({ error: "Please choose a valid revenue type." });
+    return;
+  }
+
+  if (body.amount === undefined || body.amount === null || body.amount === "") {
+    res.status(400).json({ error: "An amount is required." });
+    return;
+  }
+  const amountNum = Number(body.amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > OTHER_REVENUE_MAX_AMOUNT) {
+    res.status(400).json({ error: "Please enter a valid amount." });
+    return;
+  }
+  const amount = Math.round(amountNum * 100) / 100;
+
+  const revenueDate = typeof body.revenueDate === "string" ? body.revenueDate.trim() : "";
+  if (!isValidIsoDate(revenueDate)) {
+    res.status(400).json({ error: "A valid revenue date is required." });
+    return;
+  }
+  if (revenueDate < HISTORICAL_FLOOR_ISO) {
+    res.status(400).json({ error: "Revenue date cannot be before January 1, 2026." });
+    return;
+  }
+  const todayIso = denverTodayIso();
+  if (revenueDate > todayIso) {
+    res.status(400).json({ error: "Revenue date cannot be in the future." });
+    return;
+  }
+
+  const note = sanitizeExpenseText(body.note, OTHER_REVENUE_NOTE_MAX) || null;
+
+  let bookingId = null;
+  if (body.bookingId !== undefined && body.bookingId !== null && body.bookingId !== "") {
+    const bid = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+    if (!bid) {
+      res.status(400).json({ error: "Invalid job link." });
+      return;
+    }
+    // A malformed/nonexistent id is caught by the FK constraint on insert
+    // below (23503), not re-validated here — same as handleCreateExpense().
+    bookingId = bid;
+  }
+
+  try {
+    const { data: created, error } = await supabase
+      .from("other_revenue")
+      .insert({
+        type: type,
+        amount: amount,
+        revenue_date: revenueDate,
+        note: note,
+        booking_id: bookingId,
+        created_by: (session && session.email) || null,
+      })
+      .select(OTHER_REVENUE_COLS)
+      .single();
+
+    if (error) {
+      if (error.code === "23503") {
+        res.status(400).json({ error: "That job could not be found." });
+        return;
+      }
+      throw error;
+    }
+    if (!created) throw new Error("Insert returned no row.");
+
+    res.status(200).json({ ok: true, otherRevenue: serializeOtherRevenue(created) });
+  } catch (err) {
+    console.error("Admin other-revenue create failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this revenue entry." });
+  }
+}
+
+// PATCH { resource: "other-revenue", id, reason } — void one Other Revenue
+// row. The ONLY write this ledger's PATCH allows — type/amount/revenueDate/
+// bookingId are never editable once written (append-only, same financial-
+// audit requirement job_payments follows: a wrong entry is corrected by
+// voiding it here, then POSTing a new, correct row, never by mutating this
+// row's numbers). service_role's own column-scoped UPDATE grant enforces
+// this a second way, at the database permission level.
+async function handleVoidOtherRevenue(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin other-revenue void failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "An id is required." });
+    return;
+  }
+
+  const reason = sanitizeExpenseText(body.reason, OTHER_REVENUE_VOID_REASON_MAX);
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to void a revenue entry." });
+    return;
+  }
+
+  try {
+    const { data: voided, error } = await supabase
+      .from("other_revenue")
+      .update({
+        voided_at: new Date().toISOString(),
+        voided_reason: reason,
+        voided_by: (session && session.email) || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .is("voided_at", null)
+      .select(OTHER_REVENUE_COLS)
+      .maybeSingle();
+    if (error) throw error;
+    if (!voided) {
+      res.status(409).json({ error: "This entry was not found, or has already been voided." });
+      return;
+    }
+    res.status(200).json({ ok: true, otherRevenue: serializeOtherRevenue(voided) });
+  } catch (err) {
+    console.error("Admin other-revenue void failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not void this revenue entry." });
   }
 }
 
