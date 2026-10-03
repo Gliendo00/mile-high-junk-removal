@@ -2198,14 +2198,54 @@ button.admin-financial-card:focus-visible {
   margin-bottom: 14px;
 }
 
+/* ---------------------------------------------------------------------
+   Expense filters — CRM visual redesign. Same form fields/ids as before
+   (expenses.js's filter-apply wiring is completely untouched); only the
+   layout changes:
+     - Desktop: a single compact flex-wrap row instead of stacked label+
+       field blocks — `.admin-field-row`'s own flex layout is neutralized
+       with `display: contents` so its two children become direct items
+       of this row instead of a nested sub-row, and each field's <label>
+       is visually hidden (not removed — still read by a screen reader)
+       since a compact pill-style control reads fine from its own value/
+       placeholder alone.
+     - Mobile (<860px): hidden by default and shown as a real bottom
+       sheet — reusing .admin-sheet-overlay's existing fixed/backdrop
+       styling as-is for the overlay, with this container itself taking
+       on the same rounded-top/shadow/slide-up treatment as .admin-sheet
+       — triggered by the new "Filters (N)" button (admin/expenses.js).
+   --------------------------------------------------------------------- */
 .admin-expense-filters {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
   border-radius: 12px;
   padding: 14px;
   margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
-.admin-expense-filters .admin-field:last-child { margin-bottom: 0; }
+.admin-expense-filters .admin-field-row { display: contents; }
+.admin-expense-filters .admin-field {
+  flex: 1 1 140px;
+  min-width: 120px;
+  margin-bottom: 0;
+}
+.admin-expense-filters .admin-field label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.admin-expense-filters .admin-expense-filter-input {
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  border-radius: var(--admin-radius-sm);
+}
 .admin-expense-voided-toggle {
   display: flex;
   align-items: center;
@@ -2213,7 +2253,32 @@ button.admin-financial-card:focus-visible {
   font-size: 13.5px;
   color: var(--color-neutral-700, #645c50);
   cursor: pointer;
-  margin-top: 4px;
+  flex: 1 1 100%;
+}
+
+/* Desktop-only trigger; mobile shows .admin-expense-filters-toggle below
+   instead (see admin/expenses/index.html). */
+.admin-expense-filters-toggle { display: none; }
+
+@media (max-width: 859px) {
+  .admin-expense-filters {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 110;
+    max-height: 75vh;
+    overflow-y: auto;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    margin-bottom: 0;
+  }
+  .admin-expense-filters.is-open { display: flex; }
+  .admin-expense-filters .admin-field { flex: 1 1 100%; }
+
+  .admin-expense-filters-toggle { display: inline-flex; }
 }
 
 /* Expense card — same visual shape as .admin-charge-row (bordered, rounded,

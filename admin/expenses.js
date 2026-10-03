@@ -1064,6 +1064,63 @@ document.addEventListener('DOMContentLoaded', function () {
     input.addEventListener('change', loadOtherRevenueList);
   });
 
+  // ---------------------------------------------------------------
+  // CRM visual redesign — mobile "Filters (N)" bottom sheet. Desktop
+  // never calls any of this (the toggle button is display:none there,
+  // see admin.css); the filter fields themselves and their existing
+  // change/input listeners above are completely untouched either way —
+  // this only shows/hides the same container and reuses .admin-sheet-
+  // overlay's existing fixed/backdrop styling as-is.
+  // ---------------------------------------------------------------
+  function wireFilterSheet(toggleBtn, panelEl, backdropEl, countFn) {
+    function updateLabel() {
+      var n = countFn();
+      toggleBtn.textContent = n > 0 ? 'Filters (' + n + ')' : 'Filters';
+    }
+    function open() {
+      panelEl.classList.add('is-open');
+      backdropEl.hidden = false;
+    }
+    function close() {
+      panelEl.classList.remove('is-open');
+      backdropEl.hidden = true;
+    }
+    toggleBtn.addEventListener('click', function () {
+      if (panelEl.classList.contains('is-open')) close(); else open();
+    });
+    backdropEl.addEventListener('click', close);
+    panelEl.addEventListener('change', updateLabel);
+    panelEl.addEventListener('input', updateLabel);
+    updateLabel();
+  }
+
+  wireFilterSheet(
+    document.getElementById('expense-filters-toggle'),
+    document.getElementById('expense-filters'),
+    document.getElementById('expense-filters-backdrop'),
+    function () {
+      var n = 0;
+      if (filterCategory.value) n++;
+      if (filterPaymentMethod.value) n++;
+      if (filterSearch.value.trim()) n++;
+      if (filterIncludeVoided.checked) n++;
+      if (filterStartDate.value !== firstOfMonthIso(todayIso) || filterEndDate.value !== todayIso) n++;
+      return n;
+    }
+  );
+  wireFilterSheet(
+    document.getElementById('other-revenue-filters-toggle'),
+    document.getElementById('other-revenue-filters'),
+    document.getElementById('other-revenue-filters-backdrop'),
+    function () {
+      var n = 0;
+      if (orFilterType.value) n++;
+      if (orFilterIncludeVoided.checked) n++;
+      if (orFilterStartDate.value !== firstOfMonthIso(todayIso) || orFilterEndDate.value !== todayIso) n++;
+      return n;
+    }
+  );
+
   addBtn.addEventListener('click', openAddSheet);
   addOtherRevenueBtn.addEventListener('click', openAddOtherRevenueSheet);
 

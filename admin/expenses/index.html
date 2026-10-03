@@ -40,10 +40,18 @@
     <div id="expense-total-summary" class="admin-expense-total-summary">Loading…</div>
 
     <!-- Filters — Date range, Category, Payment Method, Job, Search. Kept as
-         plain form controls (not the admin-filter-pill dropdown component
-         used elsewhere) since several of these are free text/date inputs,
-         not a small fixed set of pill choices. -->
-    <div class="admin-expense-filters">
+         plain native form controls (real <select>/<input type="date">,
+         already a genuine dropdown/date-picker — not a hand-built popover)
+         since several of these are free text/date inputs, not a small
+         fixed set of pill choices. CRM visual redesign: laid out as one
+         compact flex-wrap row on desktop (admin.css visually hides each
+         <label>, read by a screen reader); collapses into a real bottom
+         sheet on mobile (reusing .admin-sheet-overlay as-is for the
+         backdrop), opened via the "Filters" button below — see
+         admin/expenses.js for the open/close + active-count wiring. -->
+    <button type="button" id="expense-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
+    <div id="expense-filters-backdrop" class="admin-sheet-overlay" hidden></div>
+    <div class="admin-expense-filters" id="expense-filters">
       <div class="admin-field-row">
         <div class="admin-field">
           <label for="filter-start-date">From</label>
@@ -115,7 +123,9 @@
 
     <div id="other-revenue-total-summary" class="admin-expense-total-summary">Loading…</div>
 
-    <div class="admin-expense-filters">
+    <button type="button" id="other-revenue-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
+    <div id="other-revenue-filters-backdrop" class="admin-sheet-overlay" hidden></div>
+    <div class="admin-expense-filters" id="other-revenue-filters">
       <div class="admin-field-row">
         <div class="admin-field">
           <label for="or-filter-start-date">From</label>
