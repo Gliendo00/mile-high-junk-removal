@@ -156,6 +156,17 @@ test("admin/leads/index.html's section keys exactly match api/admin/bookings.js'
   assert.deepStrictEqual(serverKeys.sort(), uiKeysWithoutIntake.sort());
 });
 
+// Preview QA finding (2026-10): api/admin/bookings.js's ?view=leads now
+// degrades per-query instead of 500ing the whole response — this page
+// must never silently show "nothing waiting" when something actually
+// failed to load. See tests/phase3c-batch6-leads-view.test.js for the
+// server-side behavior this reads.
+test("admin/leads-list.js: surfaces leadsBody.sectionErrors via the existing error banner (never silently treats a partial failure as 'all empty')", () => {
+  const src = readNormalized("admin/leads-list.js");
+  assert.ok(/leadsBody\.sectionErrors/.test(src), "must read sectionErrors off the ?view=leads response");
+  assert.ok(/showError\(/.test(src), "must route a partial failure through the existing error-banner mechanism");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

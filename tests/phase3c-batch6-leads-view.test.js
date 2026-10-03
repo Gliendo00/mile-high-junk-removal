@@ -37,6 +37,7 @@ class FakeQueryBuilder {
     this._filters = [];
     this._order = null;
     this._count = null;
+    this._statusValue = undefined; // tracked only so __forceError can target one specific status query, see eq()/is() below
   }
   select(_cols, opts) {
     if (opts && opts.count) this._count = opts;
@@ -44,6 +45,7 @@ class FakeQueryBuilder {
   }
   eq(field, val) {
     this._filters.push((row) => row[field] === val);
+    if (field === "status") this._statusValue = val;
     return this;
   }
   in(field, arr) {
@@ -53,6 +55,7 @@ class FakeQueryBuilder {
   }
   is(field, val) {
     this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    if (field === "status") this._statusValue = val; // null here means the "websiteRequests" (IS NULL) query
     return this;
   }
   order(field, opts) {
@@ -67,6 +70,18 @@ class FakeQueryBuilder {
     return this._resolve().then(resolve, reject);
   }
   async _resolve() {
+    // Error injection for the resilience tests below — db.__forceError is
+    // either `{ table: true }` (every query against that table fails) or
+    // `{ table: { statuses: [...] } }` (only queries filtered to one of
+    // those status values fail — e.g. simulate ONLY the "quoted" query
+    // hitting a real 42703, leaving the other 6 bookings-status queries
+    // and the leads query completely unaffected, exactly like a single
+    // missing-column error would in production).
+    const forceSpec = this._db.__forceError && this._db.__forceError[this._table];
+    if (forceSpec === true || (forceSpec && forceSpec.statuses && forceSpec.statuses.indexOf(this._statusValue) !== -1)) {
+      return { data: null, error: { code: "42703", message: 'column "simulated" does not exist' } };
+    }
+
     let filtered = this._rows.filter((row) => this._filters.every((f) => f(row)));
     if (this._order) {
       const field = this._order.field;
@@ -365,6 +380,58 @@ test("?view=leads: requireAdmin() gates this view exactly like every other — n
   const res = await run(makeReq({ query: { view: "leads" } }));
   assert.strictEqual(res.statusCode, 401);
   assert.strictEqual(res.body.sections, undefined);
+});
+
+// =======================================================================
+// Resilience — the Preview QA finding (2026-10): one query among the 8
+// erroring (a column missing on a given environment — see
+// tests/phase3c-batch6-leads-schema-contract.test.js for why) must not
+// blank the entire page. Simulates exactly that: ONE status query fails
+// with a real 42703-shaped error, every other query is completely
+// unaffected and still has real fixture data behind it.
+// =======================================================================
+test("?view=leads: one query erroring (simulated 42703) degrades that query's own section to empty, but every OTHER section still renders its real data, status 200", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.__forceError = { bookings: { statuses: ["quoted"] } };
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(makeReq({ cookie: AUTH_COOKIE, query: { view: "leads" } }));
+
+  assert.strictEqual(res.statusCode, 200, "a single query failure must never turn into a 500 for the whole view");
+  assert.strictEqual(res.body.sections.estimateSent.filter((c) => c.kind === "booking").length, 0, "the failed (quoted) query's own website-origin contribution to estimateSent must be empty");
+  assert.ok(Array.isArray(res.body.sectionErrors) && res.body.sectionErrors.indexOf("estimateSent") !== -1, "the failure must be named in sectionErrors");
+
+  // Every other bookings-status section (unaffected by the simulated
+  // failure) must still show its real fixture data — the whole point of
+  // this fix is that ONE bad query doesn't take the other 7 down with it.
+  assert.ok(res.body.sections.websiteRequests.some((c) => c.id === makeBookingId("new")));
+  assert.ok(res.body.sections.contacted.some((c) => c.id === makeBookingId("contacted")));
+  assert.ok(res.body.sections.lost.some((c) => c.id === makeBookingId("lost")));
+  assert.ok(res.body.sections.bookedWon.some((c) => c.id === makeBookingId("booked")));
+});
+
+test("?view=leads: the leads table erroring degrades only the leads-table-sourced rows — website-origin sections are completely unaffected", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.__forceError = { leads: true };
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(makeReq({ cookie: AUTH_COOKIE, query: { view: "leads" } }));
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(res.body.sectionErrors.indexOf("leads table") !== -1);
+  assert.deepStrictEqual(res.body.sections.new, [], "leads-table-only sections are empty when that table errors");
+  // Website-origin sections (independent queries) are untouched.
+  assert.ok(res.body.sections.websiteRequests.some((c) => c.id === makeBookingId("new")));
+  assert.ok(res.body.sections.estimateSent.some((c) => c.id === makeBookingId("quoted")));
+});
+
+test("?view=leads: no sectionErrors field at all when every query succeeds (unchanged response shape for the common case)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(makeReq({ cookie: AUTH_COOKIE, query: { view: "leads" } }));
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.sectionErrors, undefined);
 });
 
 // ---------------------------------------------------------------------

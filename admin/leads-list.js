@@ -228,6 +228,18 @@ document.addEventListener('DOMContentLoaded', function () {
       renderSection('lost', sections.lost, renderLeadCard);
 
       finish();
+
+      // Partial-failure honesty (Preview QA finding, 2026-10): api/admin/
+      // bookings.js's ?view=leads now degrades per-query rather than
+      // failing the whole response — every section backed by a query that
+      // DID succeed is rendered above exactly as always. This just makes
+      // sure a section that failed is never silently indistinguishable
+      // from "genuinely empty" — the empty-state message above would
+      // otherwise read as "nothing waiting" when something actually
+      // failed to load.
+      if (leadsBody.sectionErrors && leadsBody.sectionErrors.length) {
+        showError('Some sections failed to load: ' + leadsBody.sectionErrors.join(', ') + '. Other sections above are showing correctly.');
+      }
     })
     .catch(function (err) {
       loadingEl.style.display = 'none';

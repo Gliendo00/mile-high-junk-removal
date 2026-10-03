@@ -1746,6 +1746,24 @@ const LEAD_STATUS_TO_BUCKET = {
   lost: "lost",
 };
 
+// Preview QA finding (2026-10): a single environment-level schema gap —
+// one column one query touches, missing on a given Supabase project —
+// must never blank the ENTIRE Leads page when seven other queries would
+// have succeeded fine. Named here (rather than inline per query) so a
+// failure is logged against the exact section it came from, not just "the
+// first error Promise.all happened to see" — the prior single combined
+// throw could only ever report that, never which of the 8 queries it was.
+const LEADS_QUERY_LABELS = {
+  newRes: "websiteRequests",
+  contactedRes: "contacted",
+  quotedRes: "estimateSent",
+  bookedRes: "bookedWon (booked)",
+  rentalOutRes: "bookedWon (rental_out)",
+  completedRes: "bookedWon (completed)",
+  lostRes: "lost",
+  leadsRes: "leads table",
+};
+
 async function handleLeadsView(req, res, supabase) {
   try {
     const [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes] = await Promise.all([
@@ -1758,9 +1776,25 @@ async function handleLeadsView(req, res, supabase) {
       supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "lost").is("archived_at", null).order("created_at", { ascending: false }),
       supabase.from("leads").select(LEADS_TABLE_COLS).order("created_at", { ascending: false }),
     ]);
-    for (const r of [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes]) {
-      if (r.error) throw r.error;
-    }
+
+    // Each of the 8 queries above is now independent: one erroring (e.g.
+    // a column this repo has no tracked migration for — see
+    // tests/phase3c-batch6-leads-schema-contract.test.js — missing on a
+    // given environment) contributes an EMPTY result to whatever
+    // section(s) it feeds, logged individually, and named in the
+    // response's `sectionErrors`. Every OTHER, successful query's data
+    // renders exactly as it always has — no change to bucket placement or
+    // any successful row's shape.
+    const resultsByVar = { newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes };
+    const sectionErrors = [];
+    Object.keys(resultsByVar).forEach((key) => {
+      const r = resultsByVar[key];
+      if (r.error) {
+        console.error("Admin leads view: " + LEADS_QUERY_LABELS[key] + " query failed:", r.error);
+        sectionErrors.push(LEADS_QUERY_LABELS[key]);
+        r.data = [];
+      }
+    });
 
     const allBookingRows = []
       .concat(newRes.data || [], contactedRes.data || [], quotedRes.data || [], bookedRes.data || [], rentalOutRes.data || [], completedRes.data || [], lostRes.data || []);
@@ -1768,10 +1802,19 @@ async function handleLeadsView(req, res, supabase) {
     const customersById = {};
     if (customerIds.length) {
       const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, city").in("id", customerIds);
-      if (custRes.error) throw custRes.error;
-      (custRes.data || []).forEach((c) => {
-        customersById[c.id] = c;
-      });
+      if (custRes.error) {
+        // Non-fatal: bookingCard() below already treats an unresolved
+        // customer id as null name/phone/city — the page still renders,
+        // just with those fields blank for website-origin cards, rather
+        // than failing the whole response over a secondary enrichment
+        // lookup.
+        console.error("Admin leads view: customer name/phone/city lookup failed:", custRes.error);
+        sectionErrors.push("client names/phone/city");
+      } else {
+        (custRes.data || []).forEach((c) => {
+          customersById[c.id] = c;
+        });
+      }
     }
 
     function bookingCard(b, bucket) {
@@ -1834,9 +1877,14 @@ async function handleLeadsView(req, res, supabase) {
       lost: (lostRes.data || []).map((b) => bookingCard(b, "lost")).concat(leadsByBucket.lost || []),
     };
 
-    res.status(200).json({ ok: true, sections: sections });
+    res.status(200).json({ ok: true, sections: sections, sectionErrors: sectionErrors.length ? sectionErrors : undefined });
   } catch (err) {
-    console.error("Admin leads view failed:", err && err.stack ? err.stack : err);
+    // Only reachable now for a genuinely unexpected failure outside the 8
+    // queries/customer lookup above (e.g. a thrown error in the mapping
+    // logic itself) — every expected per-query failure is caught and
+    // handled inline above instead of reaching here, so this still
+    // returns ok:true for the common case of "one query had a problem."
+    console.error("Admin leads view failed unexpectedly:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load leads." });
   }
 }
