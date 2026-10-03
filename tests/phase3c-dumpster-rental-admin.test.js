@@ -26,6 +26,39 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// Derived from the real clock at test-run time, never a hardcoded literal
+// — a fixed future-looking date string (e.g. "2026-10-01") silently rots
+// into the past as real time passes it, which is exactly what broke two
+// "Edit Job: ...delivery date..." tests below (found during a pre-rollout
+// audit: both moved a booking's appointmentDate to a literal that had
+// become yesterday relative to the real clock, so handleUpdate()'s
+// genuine "appointment date cannot be in the past" validation correctly
+// rejected it — a test bug, not a validation bug). Same
+// UTC-noon-anchored day-math approach this project already uses
+// server-side (api/admin/bookings.js's addDaysIso()) and in other test
+// files (tests/phase3c-job-editing.test.js's own addDaysIso()).
+function denverTodayIso() {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit" });
+  const parts = {};
+  fmt.formatToParts(new Date()).forEach((p) => { parts[p.type] = p.value; });
+  return parts.year + "-" + parts.month + "-" + parts.day;
+}
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.getUTCFullYear() + "-" + String(dt.getUTCMonth() + 1).padStart(2, "0") + "-" + String(dt.getUTCDate()).padStart(2, "0");
+}
+const TODAY_ISO = denverTodayIso();
+// A generous +30 days keeps this comfortably future-proof for a long time
+// (this suite is run far more often than every 30 days) without pinning
+// an exact literal that could itself rot — if it ever does go stale, the
+// fix is this one constant, not a re-audit of every date string in the
+// file.
+const FUTURE_DELIVERY_ISO = addDaysIso(TODAY_ISO, 30);
+const FUTURE_DELIVERY_PLUS_5_ISO = addDaysIso(FUTURE_DELIVERY_ISO, 5);
+const FUTURE_MANUAL_PICKUP_ISO = addDaysIso(TODAY_ISO, 45);
+
 class FakeQueryBuilder {
   constructor(table, db) {
     this.table = table;
@@ -390,10 +423,10 @@ test("Edit Job: changing delivery date while pickup is still system-derived shif
   const booking = seedDumpsterBooking(db, { customer_id: cust.id });
   seedRental(db, booking.id, { pickup_date_is_manual: false });
 
-  const res = await req(db, { method: "PATCH", body: editBody(booking, { appointmentDate: "2026-10-01", pickupDateManual: false }) });
+  const res = await req(db, { method: "PATCH", body: editBody(booking, { appointmentDate: FUTURE_DELIVERY_ISO, pickupDateManual: false }) });
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
-  assert.strictEqual(res.body.dumpster.deliveryDate, "2026-10-01");
-  assert.strictEqual(res.body.dumpster.pickupDate, "2026-10-06");
+  assert.strictEqual(res.body.dumpster.deliveryDate, FUTURE_DELIVERY_ISO);
+  assert.strictEqual(res.body.dumpster.pickupDate, FUTURE_DELIVERY_PLUS_5_ISO);
   assert.strictEqual(res.body.dumpster.pickupDateIsManual, false);
   assert.strictEqual(db.dumpster_rentals.length, 1, "must upsert onto the existing row, never create a second one");
 });
@@ -403,17 +436,36 @@ test("Edit Job: once pickup is manually overridden, a later delivery-date change
   const cust = makeCustomer();
   const db = freshDb({ customers: [cust] });
   const booking = seedDumpsterBooking(db, { customer_id: cust.id });
-  seedRental(db, booking.id, { pickup_date: "2026-10-15", pickup_date_is_manual: true });
+  seedRental(db, booking.id, { pickup_date: FUTURE_MANUAL_PICKUP_ISO, pickup_date_is_manual: true });
 
   // The delivery date is changing, but the client (per its own sticky
   // "was already manual" tracking) still sends pickupDateManual: true and
   // resubmits the SAME pickup date it loaded — proving the server never
   // recomputes it just because delivery moved.
-  const res = await req(db, { method: "PATCH", body: editBody(booking, { appointmentDate: "2026-10-01", pickupDateManual: true, pickupDate: "2026-10-15" }) });
+  const res = await req(db, { method: "PATCH", body: editBody(booking, { appointmentDate: FUTURE_DELIVERY_ISO, pickupDateManual: true, pickupDate: FUTURE_MANUAL_PICKUP_ISO }) });
   assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
-  assert.strictEqual(res.body.dumpster.deliveryDate, "2026-10-01");
-  assert.strictEqual(res.body.dumpster.pickupDate, "2026-10-15", "the manually-set pickup date must survive the delivery-date change untouched");
+  assert.strictEqual(res.body.dumpster.deliveryDate, FUTURE_DELIVERY_ISO);
+  assert.strictEqual(res.body.dumpster.pickupDate, FUTURE_MANUAL_PICKUP_ISO, "the manually-set pickup date must survive the delivery-date change untouched");
   assert.strictEqual(res.body.dumpster.pickupDateIsManual, true);
+});
+
+// Preserves past-date-rejection coverage with the same dynamic-clock
+// approach — a literal past date would itself be fine here (the floor
+// never moves forward out from under a FIXED past literal the way a
+// fixed FUTURE literal rots), but deriving it from TODAY_ISO keeps this
+// test consistent with the rest of the file and makes the intent explicit
+// rather than relying on a bare string's reader-assumed meaning.
+test("Edit Job: an appointment date change into the past is rejected (production validation unchanged) — not a complimentary/dumpster-specific rule, just confirming date-rot fixes above never weakened it", async () => {
+  adminAuthed();
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const booking = seedDumpsterBooking(db, { customer_id: cust.id, appointment_date: FUTURE_DELIVERY_ISO });
+  seedRental(db, booking.id, { delivery_date: FUTURE_DELIVERY_ISO, pickup_date: FUTURE_DELIVERY_PLUS_5_ISO, pickup_date_is_manual: false });
+
+  const pastDate = addDaysIso(TODAY_ISO, -1);
+  const res = await req(db, { method: "PATCH", body: editBody(booking, { appointmentDate: pastDate, pickupDateManual: false }) });
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.bookings[0].appointment_date, FUTURE_DELIVERY_ISO, "nothing must be written on rejection");
 });
 
 // Pre-rollout audit finding, fixed in the migration (DEFAULT true, not
