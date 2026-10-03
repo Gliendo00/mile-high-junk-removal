@@ -697,18 +697,22 @@ test("admin client JS (incl. new status-ui.js) never uses innerHTML/insertAdjace
 // docs/phase-3/stage2.1-new-job-proposal.md, not an incidental side effect.
 // Batch 5 (5A) relocated the status write from booking-status.js (now
 // deleted) into booking.js's ?resource=status branch — same single
-// .update( call, now counted against booking.js instead.
+// .update( call, now counted against booking.js instead. Batch 5 (5B/5C)
+// added the new api/admin/intake.js file entirely (11 write calls — 2
+// insert, 7 update, 2 delete — see
+// docs/phase-3/batch5-screenshot-intake-proposal.md), plus two new _lib
+// requires (customer-identity.js, intake-vision-provider.js — both zero
+// write calls, confirmed, since they're pure-function/fetch-only helpers).
 //
-// Scoped to api/admin/*.js plus exactly the three api/_lib files admin
-// routes actually require (confirmed by grepping every require("../_lib/...")
-// across api/admin/*.js: admin-auth.js, supabase-admin.js, booking-format.js)
-// — NOT the whole api/_lib directory, which also holds
-// spam-protection.js for the public /api/book and /api/contact endpoints.
-// That file's `buckets.delete(k)` is a plain in-memory JS Map cleanup, not
-// a Supabase call, and isn't reachable from any admin route at all; a
-// directory-wide scan flags it as a false positive.
+// Scoped to api/admin/*.js plus exactly the api/_lib files admin routes
+// actually require (confirmed by grepping every require("../_lib/...")
+// across api/admin/*.js) — NOT the whole api/_lib directory, which also
+// holds spam-protection.js for the public /api/book and /api/contact
+// endpoints. That file's `buckets.delete(k)` is a plain in-memory JS Map
+// cleanup, not a Supabase call, and isn't reachable from any admin route at
+// all; a directory-wide scan flags it as a false positive.
 test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( calls across the admin API's actual code (api/admin/* + the _lib files it requires)", async () => {
-  const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js"];
+  const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js", "customer-identity.js", "intake-vision-provider.js"];
   const files = fs
     .readdirSync(path.join(__dirname, "..", "api/admin"))
     .filter((f) => f.endsWith(".js"))
@@ -870,6 +874,28 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
+      // Batch 5 (5B/5C) added the new api/admin/intake.js file — 11 write
+      // calls total: handleDiscard()'s and handleRemoveScreenshot()'s row
+      // deletes (2), handleCreateSession()'s and handleUploadScreenshot()'s
+      // inserts (2), and 7 updates (handleExtract()'s two — the
+      // extraction_failed path and the pending_review success path —
+      // handleUpdateFields(), handleReclassify(), handleSetClientMatch(),
+      // handleLinkExistingBooking(), handleDiscard()'s status flip). None of
+      // these ever touch customers or bookings — see
+      // tests/phase3c-batch5-intake-endpoint.test.js's own dedicated
+      // read-only guard for that. See
+      // docs/phase-3/batch5-screenshot-intake-proposal.md.
+      "api/admin/intake.js: .delete(",
+      "api/admin/intake.js: .delete(",
+      "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );

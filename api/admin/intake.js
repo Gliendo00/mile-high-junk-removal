@@ -1,0 +1,876 @@
+// Vercel serverless function — Batch 5, Screenshot AI Intake. The 12th slot
+// freed by Batch 5 (5A)'s retirement of api/admin/booking-status.js into
+// api/admin/booking.js's ?resource=status branch — see
+// docs/phase-3/batch5-screenshot-intake-proposal.md §3.
+//
+// Scope of THIS file (5B/5C): upload screenshots, run extraction through
+// the swappable vision adapter, compute client/existing-job matches, and
+// let the admin review/correct/save the result as a Pending Intake record.
+//
+// Explicitly OUT of scope here, deferred to Stage 5D: creating or updating
+// any customers/bookings row. Nothing in this file ever writes to those two
+// tables — only reads (to compute a match or verify a picked id), and only
+// ever writes to intake_sessions/intake_screenshots. `linked_existing_booking_id`
+// and `matched_customer_id` are intake-session metadata recording what the
+// admin decided to attach, not a mutation of the customer/booking itself.
+//
+// requireAdmin() gates every action below, same as every other /api/admin/*
+// route, before any query/body/header is ever inspected.
+const { requireAdmin } = require("../_lib/admin-auth");
+const { getServiceClient } = require("../_lib/supabase-admin");
+const { normalizePhone } = require("../_lib/customer-identity");
+const { extractFromScreenshots, CLASSIFICATIONS, FIELD_KEYS } = require("../_lib/intake-vision-provider");
+const crypto = require("crypto");
+
+const BUCKET = "intake-screenshots";
+const SCREENSHOT_URL_TTL_SECONDS = 300; // short-lived, minted fresh per request — same posture as booking.js's job photos
+const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // mirrors api/upload-photo.js's existing cap, same Vercel body-size reasoning
+const MAX_SCREENSHOTS_PER_SESSION = 10; // soft operational cap — guards against runaway upload/extraction cost, not from the brief
+const ALLOWED_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const INTAKE_STATUSES = ["processing", "pending_review", "confirmed", "discarded", "extraction_failed"];
+// Only a real, currently-open appointment is a candidate to be "the same
+// job" an existing_job_update screenshot is talking about — not a lead
+// still in the sales pipeline (new/contacted/quoted) and not one already
+// completed or lost.
+const EXISTING_JOB_CANDIDATE_STATUSES = ["booked", "rental_out"];
+
+module.exports = async (req, res) => {
+  const session = await requireAdmin(req, res);
+  if (!session) return;
+
+  if (req.method === "POST") {
+    if (req.query.action === "upload-screenshot") return handleUploadScreenshot(req, res);
+    if (req.query.action === "extract") return handleExtract(req, res);
+    return handleCreateSession(req, res, session);
+  }
+
+  if (req.method === "GET") {
+    const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+    if (id) return handleDetail(req, res, id);
+    return handleList(req, res);
+  }
+
+  if (req.method === "PATCH") return handlePatch(req, res);
+
+  res.status(405).json({ error: "Method not allowed" });
+};
+
+function serverNotConfigured(res) {
+  console.error("Admin intake failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+  res.status(500).json({ error: "Admin data is not available right now." });
+}
+
+// Current date in America/Denver as YYYY-MM-DD — same small, deliberate
+// local copy every other file in this project keeps (see
+// api/_lib/job-payments-ledger.js's own denverTodayIso() for the
+// established rationale: not a shared import, per this project's convention).
+function denverTodayIso() {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit" });
+  const parts = {};
+  fmt.formatToParts(new Date()).forEach(function (p) {
+    parts[p.type] = p.value;
+  });
+  return parts.year + "-" + parts.month + "-" + parts.day;
+}
+
+// Same magic-byte check as api/upload-photo.js — duplicated rather than
+// shared, matching this project's existing convention of small per-file
+// helpers (see e.g. denverTodayIso() above) over a premature shared module
+// for two call sites.
+function matchesMagicBytes(buffer, type) {
+  if (type === "image/jpeg") {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (type === "image/png") {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    if (buffer.length < sig.length) return false;
+    for (let i = 0; i < sig.length; i++) {
+      if (buffer[i] !== sig[i]) return false;
+    }
+    return true;
+  }
+  if (type === "image/webp") {
+    if (buffer.length < 12) return false;
+    const riff = buffer.toString("ascii", 0, 4);
+    const webp = buffer.toString("ascii", 8, 12);
+    return riff === "RIFF" && webp === "WEBP";
+  }
+  return false;
+}
+
+async function safeDeleteStorageObject(supabase, path) {
+  try {
+    await supabase.storage.from(BUCKET).remove([path]);
+  } catch (err) {
+    console.error("Intake: rollback failed deleting storage object " + path + ":", err);
+  }
+}
+
+// Phone-first client match, per docs/phase-3/batch5-screenshot-intake-proposal.md
+// §5.3 — reuses the SAME normalization api/_lib/customer-identity.js already
+// defines for every other matching path in this project, never a second
+// definition of "the same phone number."
+async function computeClientMatch(supabase, rawPhoneValue) {
+  const normalizedPhone = rawPhoneValue ? normalizePhone(rawPhoneValue) : "";
+  if (!normalizedPhone) {
+    return { matchStatus: "new_candidate", matchedCustomerId: null, normalizedPhone: null };
+  }
+  const { data, error } = await supabase.from("customers").select("id").eq("phone_normalized", normalizedPhone);
+  if (error) throw error;
+  const rows = data || [];
+  if (rows.length === 1) return { matchStatus: "existing_exact", matchedCustomerId: rows[0].id, normalizedPhone: normalizedPhone };
+  if (rows.length === 0) return { matchStatus: "new_candidate", matchedCustomerId: null, normalizedPhone: normalizedPhone };
+  // More than one customer row shares this normalized phone. Never guessed
+  // — surfaced for the admin to resolve via PATCH ?action=set-client-match.
+  return { matchStatus: "needs_confirmation", matchedCustomerId: null, normalizedPhone: normalizedPhone };
+}
+
+// ---------------------------------------------------------------------
+// POST /api/admin/intake — start a new intake session. No screenshots yet.
+// ---------------------------------------------------------------------
+async function handleCreateSession(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  try {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("intake_sessions")
+      .insert({ created_by: session.email, status: "processing", updated_at: nowIso })
+      .select("id, status, created_at")
+      .single();
+    if (error) throw error;
+    res.status(200).json({ ok: true, id: data.id, status: data.status, createdAt: data.created_at });
+  } catch (err) {
+    console.error("Intake create-session failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not start a new intake." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// POST /api/admin/intake?action=upload-screenshot — one screenshot per
+// call, same raw-octet-stream-body shape as api/upload-photo.js (the only
+// content type Vercel's Node runtime auto-buffers into req.body as a
+// Buffer). The target session is named by the X-Intake-Session-Id header,
+// not the body, since the body here IS the image bytes.
+// ---------------------------------------------------------------------
+async function handleUploadScreenshot(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const sessionId = String(req.headers["x-intake-session-id"] || "").trim();
+  if (!sessionId || !UUID_RE.test(sessionId)) {
+    res.status(400).json({ error: "A valid intake session id is required." });
+    return;
+  }
+
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (!contentType.includes("application/octet-stream")) {
+    res.status(415).json({ error: "Unsupported content type." });
+    return;
+  }
+
+  const declaredType = String(req.headers["x-screenshot-type"] || "").toLowerCase().trim();
+  if (!ALLOWED_TYPES[declaredType]) {
+    res.status(400).json({ error: "Unsupported screenshot type." });
+    return;
+  }
+
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (contentLength > MAX_SCREENSHOT_BYTES) {
+    res.status(413).json({ error: "Screenshot is too large." });
+    return;
+  }
+
+  const buffer = req.body;
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    res.status(400).json({ error: "Invalid screenshot data." });
+    return;
+  }
+  if (buffer.length > MAX_SCREENSHOT_BYTES) {
+    res.status(413).json({ error: "Screenshot is too large." });
+    return;
+  }
+  if (!matchesMagicBytes(buffer, declaredType)) {
+    res.status(400).json({ error: "Screenshot data does not match its declared type." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status").eq("id", sessionId).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake session not found." });
+      return;
+    }
+    // Only while still building the session, before extraction has run —
+    // once extraction runs the screenshot set this stage reviewed against
+    // must not silently change underneath it. See handleExtract()'s own
+    // status gate for the matching rule on the other side.
+    if (sessionRes.data.status !== "processing") {
+      res.status(400).json({ error: "Screenshots can only be added before extraction has run." });
+      return;
+    }
+
+    const countRes = await supabase.from("intake_screenshots").select("id", { count: "exact", head: true }).eq("intake_session_id", sessionId);
+    if (countRes.error) throw countRes.error;
+    const existingCount = countRes.count || 0;
+    if (existingCount >= MAX_SCREENSHOTS_PER_SESSION) {
+      res.status(400).json({ error: "Maximum number of screenshots already added to this intake." });
+      return;
+    }
+
+    const fileName = crypto.randomUUID() + "." + ALLOWED_TYPES[declaredType];
+    const storagePath = "intake/" + sessionId + "/" + fileName;
+
+    const { error: uploadError } = await supabase.storage.from(BUCKET).upload(storagePath, buffer, {
+      contentType: declaredType,
+      upsert: false,
+    });
+    if (uploadError) throw uploadError;
+
+    const { data: screenshotRow, error: insertError } = await supabase
+      .from("intake_screenshots")
+      .insert({ intake_session_id: sessionId, storage_path: storagePath, content_type: declaredType, sort_order: existingCount })
+      .select("id, sort_order")
+      .single();
+    if (insertError) {
+      await safeDeleteStorageObject(supabase, storagePath);
+      throw insertError;
+    }
+
+    res.status(200).json({ ok: true, screenshotId: screenshotRow.id, sortOrder: screenshotRow.sort_order });
+  } catch (err) {
+    console.error("Intake screenshot upload failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not upload screenshot. Please try again." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// POST /api/admin/intake?action=extract — body { id }. Runs the whole
+// session's screenshots through the vision adapter in ONE call (so the
+// model can reason across them — see
+// api/_lib/intake-vision-provider.js's own header), then computes the
+// client match deterministically in THIS code, never the model. Allowed
+// from 'processing' (the normal path) or 'extraction_failed' (retry with
+// the same already-uploaded screenshots) — never from 'pending_review' or
+// later, so a second call can never silently clobber an admin's review.
+// ---------------------------------------------------------------------
+async function handleExtract(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake session not found." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake session not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "processing" && sessionRes.data.status !== "extraction_failed") {
+      res.status(400).json({ error: "Extraction has already run for this intake." });
+      return;
+    }
+
+    const screenshotsRes = await supabase
+      .from("intake_screenshots")
+      .select("id, storage_path, content_type, sort_order")
+      .eq("intake_session_id", id)
+      .order("sort_order", { ascending: true });
+    if (screenshotsRes.error) throw screenshotsRes.error;
+    const screenshots = screenshotsRes.data || [];
+    if (screenshots.length === 0) {
+      res.status(400).json({ error: "Add at least one screenshot before extracting." });
+      return;
+    }
+
+    const images = [];
+    for (const shot of screenshots) {
+      const downloadRes = await supabase.storage.from(BUCKET).download(shot.storage_path);
+      if (downloadRes.error) throw downloadRes.error;
+      const arrayBuffer = await downloadRes.data.arrayBuffer();
+      images.push({ base64: Buffer.from(arrayBuffer).toString("base64"), mimeType: shot.content_type });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    let extraction = null;
+    let extractionError = null;
+    try {
+      extraction = await extractFromScreenshots({ images: images });
+    } catch (err) {
+      // Every failure mode (missing OPENAI_API_KEY today, a network error,
+      // a malformed model response) reaches here identically — see
+      // api/_lib/intake-vision-provider.js's own contract. The session
+      // moves to extraction_failed; the uploaded screenshots are never
+      // lost, and the admin can discard or retry.
+      extractionError = err && err.message ? err.message : "Extraction failed.";
+    }
+
+    if (extractionError) {
+      const { error: failUpdateError } = await supabase
+        .from("intake_sessions")
+        .update({ status: "extraction_failed", extraction_error: extractionError, updated_at: nowIso })
+        .eq("id", id);
+      if (failUpdateError) throw failUpdateError;
+      res.status(200).json({ ok: true, id: id, status: "extraction_failed", error: extractionError });
+      return;
+    }
+
+    const matchInfo = await computeClientMatch(supabase, extraction.fields.phone.value);
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({
+        status: "pending_review",
+        ai_raw_extraction: extraction,
+        extracted_data: extraction,
+        extraction_error: null,
+        classification: extraction.classification,
+        classification_confidence: extraction.classificationConfidence,
+        match_status: matchInfo.matchStatus,
+        matched_customer_id: matchInfo.matchedCustomerId,
+        extracted_phone_normalized: matchInfo.normalizedPhone,
+        updated_at: nowIso,
+      })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, status: "pending_review" });
+  } catch (err) {
+    console.error("Intake extraction failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not extract intake information." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// GET /api/admin/intake — Pending Intake queue (default ?status=pending_review).
+// ?countsOnly=1 returns just the pending count — same folding trick
+// api/admin/bookings.js's Requests badge already uses, so the Pending
+// Intake nav badge needs no new function either.
+// ---------------------------------------------------------------------
+async function handleList(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const countsOnly = req.query.countsOnly === "1";
+  const statusFilter = typeof req.query.status === "string" && INTAKE_STATUSES.indexOf(req.query.status) !== -1 ? req.query.status : "pending_review";
+
+  try {
+    if (countsOnly) {
+      const countRes = await supabase.from("intake_sessions").select("id", { count: "exact", head: true }).eq("status", "pending_review");
+      if (countRes.error) throw countRes.error;
+      res.status(200).json({ ok: true, pendingCount: countRes.count || 0 });
+      return;
+    }
+
+    const listRes = await supabase
+      .from("intake_sessions")
+      .select("id, created_at, updated_at, status, classification, classification_confidence, match_status, matched_customer_id")
+      .eq("status", statusFilter)
+      .order("created_at", { ascending: false });
+    if (listRes.error) throw listRes.error;
+
+    const rows = listRes.data || [];
+    // One batched lookup for every matched customer's display name, never
+    // N+1 queries for an N-row list.
+    const customerIds = Array.from(new Set(rows.map((r) => r.matched_customer_id).filter(Boolean)));
+    const customersById = {};
+    if (customerIds.length) {
+      const custRes = await supabase.from("customers").select("id, first_name, last_name").in("id", customerIds);
+      if (custRes.error) throw custRes.error;
+      (custRes.data || []).forEach((c) => {
+        customersById[c.id] = c;
+      });
+    }
+
+    const intakes = rows.map((r) => {
+      const customer = r.matched_customer_id ? customersById[r.matched_customer_id] : null;
+      return {
+        id: r.id,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        status: r.status,
+        classification: r.classification,
+        classificationConfidence: r.classification_confidence,
+        matchStatus: r.match_status,
+        matchedClientName: customer ? [customer.first_name, customer.last_name].filter(Boolean).join(" ") : null,
+      };
+    });
+
+    res.status(200).json({ ok: true, intakes: intakes });
+  } catch (err) {
+    console.error("Intake list failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load intakes." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// GET /api/admin/intake?id=... — full review detail: fields, conflicts,
+// classification, client match (with a job count when matched), existing-
+// job candidates (only computed for classification = existing_job_update
+// with a resolved client), and signed screenshot URLs.
+// ---------------------------------------------------------------------
+async function handleDetail(req, res, id) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+  if (!UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase
+      .from("intake_sessions")
+      .select(
+        "id, created_at, updated_at, status, extraction_error, extracted_data, classification, classification_confidence, match_status, matched_customer_id, linked_existing_booking_id"
+      )
+      .eq("id", id)
+      .maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    const row = sessionRes.data;
+    if (!row) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+
+    const screenshotsRes = await supabase
+      .from("intake_screenshots")
+      .select("id, storage_path, sort_order, created_at")
+      .eq("intake_session_id", id)
+      .order("sort_order", { ascending: true });
+    if (screenshotsRes.error) throw screenshotsRes.error;
+
+    const screenshots = [];
+    for (const shot of screenshotsRes.data || []) {
+      const signed = await supabase.storage.from(BUCKET).createSignedUrl(shot.storage_path, SCREENSHOT_URL_TTL_SECONDS);
+      screenshots.push({
+        id: shot.id,
+        sortOrder: shot.sort_order,
+        url: signed.data ? signed.data.signedUrl : null,
+        createdAt: shot.created_at,
+      });
+    }
+
+    let matchedClient = null;
+    if (row.matched_customer_id) {
+      const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, email").eq("id", row.matched_customer_id).maybeSingle();
+      if (custRes.error) throw custRes.error;
+      if (custRes.data) {
+        const jobCountRes = await supabase.from("bookings").select("id", { count: "exact", head: true }).eq("customer_id", row.matched_customer_id);
+        if (jobCountRes.error) throw jobCountRes.error;
+        matchedClient = {
+          id: custRes.data.id,
+          firstName: custRes.data.first_name,
+          lastName: custRes.data.last_name,
+          phone: custRes.data.phone,
+          email: custRes.data.email,
+          jobCount: jobCountRes.count || 0,
+        };
+      }
+    }
+
+    let existingJobCandidates = [];
+    if (row.classification === "existing_job_update" && row.matched_customer_id) {
+      const candRes = await supabase
+        .from("bookings")
+        .select("id, service_type, appointment_date, time_window, exact_time, status")
+        .eq("customer_id", row.matched_customer_id)
+        .in("status", EXISTING_JOB_CANDIDATE_STATUSES)
+        .gte("appointment_date", denverTodayIso())
+        .order("appointment_date", { ascending: true });
+      if (candRes.error) throw candRes.error;
+      existingJobCandidates = (candRes.data || []).map((b) => ({
+        id: b.id,
+        serviceType: b.service_type,
+        appointmentDate: b.appointment_date,
+        timeWindow: b.time_window,
+        exactTime: b.exact_time,
+        status: b.status,
+      }));
+    }
+
+    res.status(200).json({
+      ok: true,
+      intake: {
+        id: row.id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        status: row.status,
+        extractionError: row.extraction_error,
+        fields: row.extracted_data ? row.extracted_data.fields : null,
+        conflicts: row.extracted_data ? row.extracted_data.conflicts : [],
+        classification: row.classification,
+        classificationConfidence: row.classification_confidence,
+        matchStatus: row.match_status,
+        matchedClient: matchedClient,
+        linkedExistingBookingId: row.linked_existing_booking_id,
+        existingJobCandidates: existingJobCandidates,
+        screenshots: screenshots,
+      },
+    });
+  } catch (err) {
+    console.error("Intake detail failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load intake." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// PATCH /api/admin/intake — every review/edit/save-pending action,
+// discriminated by body.action (same convention as api/admin/client.js's
+// own PATCH). NONE of these write to customers or bookings — see the file
+// header. Confirming an intake into a real customer/booking is Stage 5D,
+// not implemented here.
+// ---------------------------------------------------------------------
+async function handlePatch(req, res) {
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+
+  if (action === "update") return handleUpdateFields(req, res, body);
+  if (action === "reclassify") return handleReclassify(req, res, body);
+  if (action === "set-client-match") return handleSetClientMatch(req, res, body);
+  if (action === "link-existing-booking") return handleLinkExistingBooking(req, res, body);
+  if (action === "remove-screenshot") return handleRemoveScreenshot(req, res, body);
+  if (action === "discard") return handleDiscard(req, res, body);
+
+  res.status(400).json({ error: "Unknown action." });
+}
+
+// Admin corrections to extracted field values, before confirming. Only
+// ever merges into extracted_data.fields for keys in the fixed FIELD_KEYS
+// list — an unrecognized key is silently ignored, never written, and
+// nothing outside `fields` can be touched through this action (status/
+// classification/match have their own dedicated actions below).
+async function handleUpdateFields(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+  const fieldsInput = body.fields && typeof body.fields === "object" && !Array.isArray(body.fields) ? body.fields : null;
+  if (!fieldsInput || Object.keys(fieldsInput).length === 0) {
+    res.status(400).json({ error: "No field corrections provided." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status, extracted_data").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be edited right now." });
+      return;
+    }
+
+    const current = sessionRes.data.extracted_data || { fields: {}, classification: null, classificationConfidence: null, conflicts: [] };
+    const updatedFields = Object.assign({}, current.fields);
+
+    Object.keys(fieldsInput).forEach((key) => {
+      if (FIELD_KEYS.indexOf(key) === -1) return;
+      const raw = fieldsInput[key];
+      const value = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+      // A human just supplied this value directly, so it is now confirmed
+      // — and it stops being attributed to any particular screenshot,
+      // since it may no longer match what that screenshot actually said.
+      updatedFields[key] = { value: value, confidence: value === null ? "missing" : "confirmed", sourceIndex: null };
+    });
+
+    const updatedExtractedData = Object.assign({}, current, { fields: updatedFields });
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({ extracted_data: updatedExtractedData, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id });
+  } catch (err) {
+    console.error("Intake field update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save changes." });
+  }
+}
+
+// Admin overrides the classification the model (or a prior reclassify)
+// picked. Always treated as confirmed — the admin said so explicitly.
+async function handleReclassify(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+  const classification = typeof body.classification === "string" ? body.classification.trim() : "";
+  if (CLASSIFICATIONS.indexOf(classification) === -1) {
+    res.status(400).json({ error: "Invalid classification." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status, extracted_data").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be edited right now." });
+      return;
+    }
+
+    const current = sessionRes.data.extracted_data || {};
+    const updatedExtractedData = Object.assign({}, current, { classification: classification, classificationConfidence: "confirmed" });
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({
+        classification: classification,
+        classification_confidence: "confirmed",
+        extracted_data: updatedExtractedData,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, classification: classification });
+  } catch (err) {
+    console.error("Intake reclassify failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update classification." });
+  }
+}
+
+// Admin resolves (or overrides) which existing customer this intake
+// attaches to, or explicitly marks it as a new client. This is intake-
+// session metadata only — see the file header: no customers row is ever
+// touched here, only read once to confirm the given id is real.
+async function handleSetClientMatch(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+  const hasCustomerId = typeof body.matchedCustomerId === "string" && body.matchedCustomerId.trim() !== "";
+  const matchedCustomerId = hasCustomerId ? body.matchedCustomerId.trim() : null;
+  if (matchedCustomerId && !UUID_RE.test(matchedCustomerId)) {
+    res.status(400).json({ error: "Invalid client id." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be edited right now." });
+      return;
+    }
+
+    if (matchedCustomerId) {
+      const custRes = await supabase.from("customers").select("id").eq("id", matchedCustomerId).maybeSingle();
+      if (custRes.error) throw custRes.error;
+      if (!custRes.data) {
+        res.status(404).json({ error: "Client not found." });
+        return;
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({
+        matched_customer_id: matchedCustomerId,
+        match_status: matchedCustomerId ? "existing_exact" : "new_candidate",
+        // A link to an existing booking only ever makes sense for the
+        // client it was found under — changing (or clearing) the match
+        // must always clear any previously-linked booking too.
+        linked_existing_booking_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, matchStatus: matchedCustomerId ? "existing_exact" : "new_candidate" });
+  } catch (err) {
+    console.error("Intake set-client-match failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update client match." });
+  }
+}
+
+// Admin links this intake to one of the matched client's existing upcoming
+// bookings (the existing_job_update case) — or clears that link. Records
+// the choice on the intake row only; the linked booking itself is never
+// read for anything beyond confirming it really belongs to the matched
+// client, and is never written to.
+async function handleLinkExistingBooking(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+  const hasBookingId = typeof body.bookingId === "string" && body.bookingId.trim() !== "";
+  const bookingId = hasBookingId ? body.bookingId.trim() : null;
+  if (bookingId && !UUID_RE.test(bookingId)) {
+    res.status(400).json({ error: "Invalid booking id." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status, matched_customer_id").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be edited right now." });
+      return;
+    }
+
+    if (bookingId) {
+      if (!sessionRes.data.matched_customer_id) {
+        res.status(400).json({ error: "Select a client before linking an existing job." });
+        return;
+      }
+      const bookingRes = await supabase.from("bookings").select("id, customer_id").eq("id", bookingId).maybeSingle();
+      if (bookingRes.error) throw bookingRes.error;
+      if (!bookingRes.data || bookingRes.data.customer_id !== sessionRes.data.matched_customer_id) {
+        res.status(400).json({ error: "That job does not belong to the matched client." });
+        return;
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({ linked_existing_booking_id: bookingId, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, linkedExistingBookingId: bookingId });
+  } catch (err) {
+    console.error("Intake link-existing-booking failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update the linked job." });
+  }
+}
+
+// Removes one screenshot from a still-open (not yet confirmed/discarded)
+// intake — a real row delete plus its Storage object, per the brief. Does
+// NOT re-run extraction; a field that screenshot was the sole source for
+// stays as-is until the admin corrects it (handleUpdateFields) or the
+// whole intake is discarded and re-uploaded.
+async function handleRemoveScreenshot(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const screenshotId = typeof body.screenshotId === "string" ? body.screenshotId.trim() : "";
+  if (!id || !UUID_RE.test(id) || !screenshotId || !UUID_RE.test(screenshotId)) {
+    res.status(404).json({ error: "Intake or screenshot not found." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status !== "processing" && sessionRes.data.status !== "pending_review") {
+      res.status(400).json({ error: "Screenshots cannot be changed on this intake anymore." });
+      return;
+    }
+
+    const shotRes = await supabase.from("intake_screenshots").select("id, storage_path").eq("id", screenshotId).eq("intake_session_id", id).maybeSingle();
+    if (shotRes.error) throw shotRes.error;
+    if (!shotRes.data) {
+      res.status(404).json({ error: "Screenshot not found." });
+      return;
+    }
+
+    const { error: deleteError } = await supabase.from("intake_screenshots").delete().eq("id", screenshotId);
+    if (deleteError) throw deleteError;
+
+    await safeDeleteStorageObject(supabase, shotRes.data.storage_path);
+
+    res.status(200).json({ ok: true, id: id, screenshotId: screenshotId });
+  } catch (err) {
+    console.error("Intake remove-screenshot failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not remove screenshot." });
+  }
+}
+
+// Marks an intake discarded and cleans up its screenshots (rows + Storage
+// objects). Idempotent: discarding an already-discarded intake is a no-op
+// success, never an error. A confirmed intake can never be discarded —
+// Stage 5D's job once it exists.
+async function handleDiscard(req, res, body) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase.from("intake_sessions").select("id, status").eq("id", id).maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    if (!sessionRes.data) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+    if (sessionRes.data.status === "confirmed") {
+      res.status(400).json({ error: "A confirmed intake cannot be discarded." });
+      return;
+    }
+    if (sessionRes.data.status === "discarded") {
+      res.status(200).json({ ok: true, id: id, status: "discarded" });
+      return;
+    }
+
+    const screenshotsRes = await supabase.from("intake_screenshots").select("id, storage_path").eq("intake_session_id", id);
+    if (screenshotsRes.error) throw screenshotsRes.error;
+
+    for (const shot of screenshotsRes.data || []) {
+      await safeDeleteStorageObject(supabase, shot.storage_path);
+    }
+
+    const { error: deleteRowsError } = await supabase.from("intake_screenshots").delete().eq("intake_session_id", id);
+    if (deleteRowsError) throw deleteRowsError;
+
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({ status: "discarded", updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, status: "discarded" });
+  } catch (err) {
+    console.error("Intake discard failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not discard intake." });
+  }
+}

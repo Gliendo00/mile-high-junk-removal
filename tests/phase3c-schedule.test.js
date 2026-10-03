@@ -672,7 +672,7 @@ test("new admin client JS (schedule.js, nav-badge.js) never uses innerHTML/inser
 // write surface is exactly those three known calls, not that it never grew.
 // =======================================================================
 test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls — the pre-existing booking-status.js write plus Stage 2.1's two new inserts", () => {
-  const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js", "time-windows.js"];
+  const adminLibFiles = ["admin-auth.js", "supabase-admin.js", "booking-format.js", "time-windows.js", "customer-identity.js", "intake-vision-provider.js"];
   const files = fs
     .readdirSync(path.join(__dirname, "..", "api/admin"))
     .filter((f) => f.endsWith(".js"))
@@ -833,6 +833,25 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
+      // Batch 5 (5B/5C) added the new api/admin/intake.js file — 11 write
+      // calls total (2 delete, 2 insert, 7 update). None of these ever
+      // touch customers or bookings — see
+      // tests/phase3c-batch5-intake-endpoint.test.js's own dedicated
+      // read-only guard for that, and
+      // tests/phase3a-admin-status-write.test.js's matching comment for the
+      // full per-handler breakdown. See
+      // docs/phase-3/batch5-screenshot-intake-proposal.md.
+      "api/admin/intake.js: .delete(",
+      "api/admin/intake.js: .delete(",
+      "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );
