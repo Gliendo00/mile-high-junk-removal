@@ -14,6 +14,26 @@
      Deliberately scoped to this file only; the public site's neutral
      beige background (--color-neutral-100 in ../styles.css) is untouched. */
   --admin-tint: color-mix(in srgb, #69c22a 7%, #ffffff);
+
+  /* CRM visual redesign — spacing scale. Existing components keep their
+     own already-tuned values (untouched, unaffected by this); new/updated
+     sections use these instead of inventing yet another one-off number. */
+  --admin-space-4: 4px;
+  --admin-space-8: 8px;
+  --admin-space-12: 12px;
+  --admin-space-16: 16px;
+  --admin-space-20: 20px;
+  --admin-space-24: 24px;
+  --admin-space-32: 32px;
+  --admin-space-40: 40px;
+
+  --admin-radius-sm: 8px;
+  --admin-radius-md: 10px;
+  --admin-radius-lg: 12px;
+  --admin-radius-xl: 14px;
+  --admin-radius-full: 999px;
+
+  --admin-shadow-elevated: 0 4px 16px rgba(20, 21, 15, 0.14);
 }
 
 .admin-body {
@@ -2269,3 +2289,98 @@ button.admin-financial-card:focus-visible {
   gap: 6px;
 }
 .admin-expense-history-desc { font-size: 13.5px; color: var(--color-text, #201e1d); }
+
+/* ===========================================================================
+   CRM visual redesign — shared primitives (Figma "Mile High Admin CRM —
+   Design System" file is the source of truth for all of these).
+
+   Scoped additions, not a rewrite: every existing card/badge/button class
+   above is untouched and still used as-is on pages this redesign pass
+   doesn't reach this round (booking/client/intake detail, etc.). These are
+   the new shared building blocks that Leads/Schedule/Clients/Expenses are
+   updated to use instead of one-off per-page styles.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------
+   Card — Flat / Elevated / Sunken. Flat is the default for dense scanning
+   lists (lead cards, client rows, expense rows); Elevated is reserved for
+   "needs attention right now" (e.g. today's scheduled jobs only — see
+   admin-schedule-card.is-today-elevated below); Sunken is the existing
+   dashed/tinted treatment already used for muted/secondary content
+   (.admin-section-muted), given a general-purpose name here.
+   --------------------------------------------------------------------- */
+.admin-card {
+  background: #fff;
+  border-radius: var(--admin-radius-lg);
+  padding: var(--admin-space-16);
+}
+.admin-card-flat {
+  border: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-card-elevated {
+  border: none;
+  box-shadow: var(--admin-shadow-elevated);
+}
+.admin-card-sunken {
+  background: var(--admin-tint);
+  border: 1px dashed var(--color-neutral-300, #dcd3c4);
+}
+
+/* ---------------------------------------------------------------------
+   Section header — icon + small-caps eyebrow label + optional count.
+   Used above a grouped list (a Leads bucket, "Today's Jobs") instead of
+   each page inventing its own heading treatment.
+   --------------------------------------------------------------------- */
+.admin-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.admin-section-header-icon {
+  flex: none;
+  color: var(--color-accent-700, #2f6f13);
+}
+.admin-section-header-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-neutral-700, #645c50);
+}
+.admin-section-header-count {
+  flex: none;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+}
+
+/* ---------------------------------------------------------------------
+   Metadata row — a horizontal, wrapping row of small icon+text pairs
+   (e.g. phone, city) beneath a card's primary content. Replaces a plain
+   comma-joined text line with something scannable at a glance.
+   --------------------------------------------------------------------- */
+.admin-metadata-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+.admin-metadata-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--color-neutral-600, #82796a);
+  min-width: 0;
+}
+.admin-metadata-item svg { flex: none; color: var(--color-neutral-500, #a19786); }
+.admin-metadata-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
