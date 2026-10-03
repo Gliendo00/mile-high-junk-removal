@@ -1601,10 +1601,20 @@ const EXPENSE_AUDIT_FIELD_LABELS = {
 };
 
 // GET ?view=job-search&q=... — the small "link to a job" picker the
-// Expenses page's job-link field uses. Searches customers by name/phone
-// (same bounded multi-field ilike pattern as api/admin/clients.js), then
-// returns each match's recent bookings, newest first, capped generously —
-// this is a lightweight picker, not a full booking search.
+// Expenses and Other Revenue pages' job-link fields both use. Searches
+// customers by name/phone (same bounded multi-field ilike pattern as
+// api/admin/clients.js), then returns each match's recent bookings, newest
+// first, capped generously — this is a lightweight picker, not a full
+// booking search.
+//
+// Batch 4 (B) fix: archived jobs are excluded here (.is("archived_at",
+// null)) — a job the owner archived should never be offered as a NEW link
+// target. This intentionally does NOT touch attachJobLabels() (the
+// separate lookup that enriches an already-saved expense/other-revenue
+// row's job label for display) — an expense/other-revenue entry linked to
+// a job that was archived AFTER the link was made must keep showing that
+// job's label exactly as before; only the picker's own search RESULTS are
+// scoped to active jobs.
 async function handleJobSearch(req, res, supabase) {
   const q = sanitizeIlikeSearchTerm(typeof req.query.q === "string" ? req.query.q : "");
   if (!q || q.length < 2) {
@@ -1634,6 +1644,7 @@ async function handleJobSearch(req, res, supabase) {
       .from("bookings")
       .select("id, appointment_date, service_type, customer_id")
       .in("customer_id", customerIds)
+      .is("archived_at", null)
       .order("appointment_date", { ascending: false })
       .limit(JOB_SEARCH_RESULT_LIMIT);
     if (bookingsRes.error) throw bookingsRes.error;

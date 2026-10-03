@@ -678,6 +678,44 @@ test("GET job-search: no matching customer -> empty jobs array, not an error", a
   assert.deepStrictEqual(res.body.jobs, []);
 });
 
+// Batch 4 (B): an archived job must never be offered as a NEW link target
+// from this picker — it's the one the Expenses (and Other Revenue) "link
+// to a job" field uses to search for jobs to link.
+test("GET job-search (Batch 4 B): an archived booking is excluded from search results — only the active one of two matching jobs comes back", async () => {
+  adminAuthed();
+  const customer = { id: makeId(), first_name: "Jane", last_name: "Doe", phone: "3035551212" };
+  const activeBooking = { id: makeId(), appointment_date: "2026-09-12", service_type: "junk_removal", customer_id: customer.id, archived_at: null };
+  const archivedBooking = { id: makeId(), appointment_date: "2026-08-01", service_type: "junk_removal", customer_id: customer.id, archived_at: "2026-09-01T12:00:00Z" };
+  const db = freshDb({ customers: [customer], bookings: [activeBooking, archivedBooking] });
+  const res = await req(db, { query: { view: "job-search", q: "doe" } });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.jobs.length, 1, "only the active booking should be offered");
+  assert.strictEqual(res.body.jobs[0].id, activeBooking.id);
+});
+
+test("GET job-search (Batch 4 B): a customer whose ONLY booking is archived returns zero jobs, not an error", async () => {
+  adminAuthed();
+  const customer = { id: makeId(), first_name: "Jane", last_name: "Doe", phone: "3035551212" };
+  const archivedBooking = { id: makeId(), appointment_date: "2026-08-01", service_type: "junk_removal", customer_id: customer.id, archived_at: "2026-09-01T12:00:00Z" };
+  const db = freshDb({ customers: [customer], bookings: [archivedBooking] });
+  const res = await req(db, { query: { view: "job-search", q: "doe" } });
+  assert.strictEqual(res.statusCode, 200);
+  assert.deepStrictEqual(res.body.jobs, []);
+});
+
+test("GET expenses (Batch 4 B): an expense already linked to a job that is LATER archived still shows its job label — attachJobLabels() is untouched by the picker's archived filter", async () => {
+  adminAuthed();
+  const customer = { id: makeId(), first_name: "Jane", last_name: "Doe", phone: "3035551212" };
+  const archivedBooking = { id: makeId(), appointment_date: "2026-08-01", service_type: "junk_removal", customer_id: customer.id, archived_at: "2026-09-01T12:00:00Z" };
+  const e = makeExpense({ expense_date: "2026-09-10", booking_id: archivedBooking.id });
+  const db = freshDb({ customers: [customer], bookings: [archivedBooking], expenses: [e] });
+  const res = await req(db, { query: { view: "expenses", startDate: "2026-09-01", endDate: "2026-09-30" } });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.expenses.length, 1);
+  assert.ok(res.body.expenses[0].job, "the linked (now-archived) job's label must still be attached");
+  assert.ok(res.body.expenses[0].job.label.indexOf("Jane Doe") !== -1);
+});
+
 // =======================================================================
 // POST create — Stage 3's new optional fields
 // =======================================================================
