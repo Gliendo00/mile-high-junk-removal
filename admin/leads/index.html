@@ -41,83 +41,61 @@
   <div id="loading" class="admin-loading">Loading leads…</div>
   <div id="empty" class="admin-empty" style="display:none">Nothing waiting in any Leads section right now.</div>
 
-  <!-- Batch 6 (Leads consolidation) — a shell of 9 sections, each its own
-       small heading + count + list. Pending Intake is the EXISTING
-       GET /api/admin/intake list (status=pending_review), fetched
-       alongside the merged GET /api/admin/bookings?view=leads response
-       that backs the other 8 — see admin/leads-list.js. A section renders
-       only once it has at least one card, so an all-empty section never
-       shows a heading with nothing under it. -->
+  <!-- Batch 6 follow-up — sub-tabs/pills, one bucket visible at a time.
+       Pending Intake is the EXISTING GET /api/admin/intake list
+       (status=pending_review), fetched alongside the merged GET
+       /api/admin/bookings?view=leads response that backs the other 8 —
+       see admin/leads-list.js. Static, always-present buttons (same
+       convention as .admin-range-tab on Schedule): JS toggles .is-active
+       and each count badge's hidden state, never builds the tab bar
+       itself. Horizontally scrollable at phone width — see
+       .admin-leads-tabs in admin.css. -->
   <div id="leads-sections" style="display:none">
-    <section class="admin-leads-section" id="section-pendingIntake" hidden>
-      <div class="admin-list-heading">
-        <h2>Pending Intake</h2>
-        <span class="admin-list-count" id="count-pendingIntake"></span>
-      </div>
+    <div class="admin-leads-tabs" id="leads-tabs" role="tablist" aria-label="Leads sections">
+      <button type="button" class="admin-leads-tab" data-bucket="pendingIntake" role="tab">Pending Intake<span class="admin-nav-badge" id="tab-count-pendingIntake" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="websiteRequests" role="tab">Website Requests<span class="admin-nav-badge" id="tab-count-websiteRequests" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="new" role="tab">New<span class="admin-nav-badge" id="tab-count-new" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="contacted" role="tab">Contacted<span class="admin-nav-badge" id="tab-count-contacted" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="waitingOnPhotos" role="tab">Waiting on Photos<span class="admin-nav-badge" id="tab-count-waitingOnPhotos" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="estimateSent" role="tab">Estimate Sent<span class="admin-nav-badge" id="tab-count-estimateSent" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="followUp" role="tab">Follow Up<span class="admin-nav-badge" id="tab-count-followUp" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="bookedWon" role="tab">Booked/Won<span class="admin-nav-badge" id="tab-count-bookedWon" hidden>0</span></button>
+      <button type="button" class="admin-leads-tab" data-bucket="lost" role="tab">Lost<span class="admin-nav-badge" id="tab-count-lost" hidden>0</span></button>
+    </div>
+
+    <section class="admin-leads-section" id="section-pendingIntake" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-pendingIntake"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-websiteRequests" hidden>
-      <div class="admin-list-heading">
-        <h2>Website Requests</h2>
-        <span class="admin-list-count" id="count-websiteRequests"></span>
-      </div>
+    <section class="admin-leads-section" id="section-websiteRequests" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-websiteRequests"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-new" hidden>
-      <div class="admin-list-heading">
-        <h2>New</h2>
-        <span class="admin-list-count" id="count-new"></span>
-      </div>
+    <section class="admin-leads-section" id="section-new" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-new"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-contacted" hidden>
-      <div class="admin-list-heading">
-        <h2>Contacted</h2>
-        <span class="admin-list-count" id="count-contacted"></span>
-      </div>
+    <section class="admin-leads-section" id="section-contacted" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-contacted"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-waitingOnPhotos" hidden>
-      <div class="admin-list-heading">
-        <h2>Waiting on Photos</h2>
-        <span class="admin-list-count" id="count-waitingOnPhotos"></span>
-      </div>
+    <section class="admin-leads-section" id="section-waitingOnPhotos" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-waitingOnPhotos"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-estimateSent" hidden>
-      <div class="admin-list-heading">
-        <h2>Estimate Sent</h2>
-        <span class="admin-list-count" id="count-estimateSent"></span>
-      </div>
+    <section class="admin-leads-section" id="section-estimateSent" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-estimateSent"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-followUp" hidden>
-      <div class="admin-list-heading">
-        <h2>Follow Up</h2>
-        <span class="admin-list-count" id="count-followUp"></span>
-      </div>
+    <section class="admin-leads-section" id="section-followUp" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-followUp"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-bookedWon" hidden>
-      <div class="admin-list-heading">
-        <h2>Booked/Won</h2>
-        <span class="admin-list-count" id="count-bookedWon"></span>
-      </div>
+    <section class="admin-leads-section" id="section-bookedWon" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-bookedWon"></ul>
     </section>
 
-    <section class="admin-leads-section" id="section-lost" hidden>
-      <div class="admin-list-heading">
-        <h2>Lost</h2>
-        <span class="admin-list-count" id="count-lost"></span>
-      </div>
+    <section class="admin-leads-section" id="section-lost" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-lost"></ul>
     </section>
   </div>

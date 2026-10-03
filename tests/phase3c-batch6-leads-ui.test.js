@@ -94,13 +94,22 @@ const LEADS_SECTION_KEYS = [
   "lost",
 ];
 
-test("admin/leads/index.html: has all 9 section containers, each starting hidden", () => {
+test("admin/leads/index.html: has all 9 section containers, each starting hidden, plus a tab button + count badge per bucket (sub-tabs follow-up)", () => {
   const html = readNormalized("admin/leads/index.html");
   LEADS_SECTION_KEYS.forEach((key) => {
     assert.ok(new RegExp('id="section-' + key + '"[^>]*hidden').test(html), "missing hidden section-" + key);
     assert.ok(new RegExp('id="list-' + key + '"').test(html), "missing list-" + key);
-    assert.ok(new RegExp('id="count-' + key + '"').test(html), "missing count-" + key);
+    assert.ok(new RegExp('data-bucket="' + key + '"').test(html), "missing the tab button for " + key);
+    assert.ok(new RegExp('id="tab-count-' + key + '"[^>]*hidden').test(html), "missing the hidden-by-default count badge for " + key);
   });
+});
+
+test("admin/leads/index.html: the tabs container is horizontally scrollable (mobile) via .admin-leads-tabs", () => {
+  const html = readNormalized("admin/leads/index.html");
+  assert.ok(/id="leads-tabs"[^>]*class="admin-leads-tabs"|class="admin-leads-tabs"[^>]*id="leads-tabs"/.test(html), "the tab bar must use .admin-leads-tabs");
+  const css = readNormalized("admin/admin.css");
+  const block = css.slice(css.indexOf(".admin-leads-tabs {"), css.indexOf(".admin-leads-tabs {") + 400);
+  assert.ok(/overflow-x:\s*auto/.test(block), ".admin-leads-tabs must scroll horizontally rather than wrap");
 });
 
 test("admin/leads/index.html: loads admin-fetch.js, nav-badge.js, and leads-list.js", () => {
@@ -169,6 +178,63 @@ test("admin/leads-list.js: surfaces leadsBody.sectionErrors via the existing err
   const src = readNormalized("admin/leads-list.js");
   assert.ok(/leadsBody\.sectionErrors/.test(src), "must read sectionErrors off the ?view=leads response");
   assert.ok(/showError\(/.test(src), "must route a partial failure through the existing error-banner mechanism");
+});
+
+// =======================================================================
+// Leads sub-tabs/pills (follow-up, same batch) — one bucket visible at a
+// time, counts, default-selection cascade. This project has no DOM/jsdom
+// harness, so the tab-switching logic is verified by reading the actual
+// source text, same as every other client-side test in this suite.
+// =======================================================================
+test("admin/leads-list.js: SECTION_ORDER is exactly the 9 requested tabs, in the requested order", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const m = src.match(/var SECTION_ORDER = \[([^\]]+)\]/);
+  assert.ok(m, "SECTION_ORDER must be defined");
+  const keys = m[1].split(",").map((s) => s.trim().replace(/'/g, ""));
+  assert.deepStrictEqual(keys, ["pendingIntake", "websiteRequests", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"]);
+});
+
+test("admin/leads-list.js: selectBucket() shows exactly the selected section and hides every other one (one bucket visible at a time)", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const fnSrc = src.slice(src.indexOf("function selectBucket"), src.indexOf("function selectBucket") + 500);
+  assert.ok(/SECTION_ORDER\.forEach/.test(fnSrc), "must iterate every section, not just the newly-selected one — otherwise a previously-shown section could stay visible");
+  assert.ok(/sectionEl\.hidden = k !== key/.test(fnSrc), "every section not matching the selected key must be hidden");
+});
+
+test("admin/leads-list.js: clicking a tab calls selectBucket with that tab's data-bucket (delegated click handler on the tab bar)", () => {
+  const src = readNormalized("admin/leads-list.js");
+  assert.ok(/tabsEl\.addEventListener\('click'/.test(src));
+  assert.ok(/closest\(['"]\.admin-leads-tab['"]\)/.test(src));
+  assert.ok(/selectBucket\(btn\.getAttribute\('data-bucket'\)\)/.test(src));
+});
+
+test("admin/leads-list.js: count badges show the real count when non-zero and stay hidden at zero (never a visible '0')", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const fnSrc = src.slice(src.indexOf("function renderSection"), src.indexOf("function renderSection") + 900);
+  assert.ok(/countBadge\.hidden = false/.test(fnSrc) && /countBadge\.hidden = true/.test(fnSrc), "must toggle the badge's hidden attribute both ways, never leave a stale 0 visible");
+  assert.ok(/n > 99 \? '99\+' : String\(n\)/.test(fnSrc), "must cap the displayed count the same way nav-badge.js already does");
+});
+
+test("admin/leads-list.js: defaultBucket() picks the first non-empty bucket in SECTION_ORDER — satisfies the full cascade (Pending Intake, then Website Requests, then the active pipeline, Booked/Won and Lost last) from one simple rule", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const fnSrc = src.slice(src.indexOf("function defaultBucket"), src.indexOf("function defaultBucket") + 400);
+  assert.ok(/for \(var i = 0; i < SECTION_ORDER\.length; i\+\+\)/.test(fnSrc), "must walk SECTION_ORDER in order");
+  assert.ok(/counts\[SECTION_ORDER\[i\]\] > 0/.test(fnSrc), "must return the first bucket with a non-zero count");
+  assert.ok(/return SECTION_ORDER\[0\]/.test(fnSrc), "must fall back to the first tab (Pending Intake) when every bucket is empty, rather than showing nothing selected");
+});
+
+test("admin/leads-list.js: finish() selects a bucket after rendering (a tab is always active once loading completes)", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const fnSrc = src.slice(src.indexOf("function finish"), src.indexOf("function finish") + 400);
+  assert.ok(/selectBucket\(defaultBucket\(\)\)/.test(fnSrc));
+});
+
+test("admin/leads/index.html: every bucket's section only contains its own <ul> now (no redundant per-section heading/count — the tab itself carries the label and count)", () => {
+  const html = readNormalized("admin/leads/index.html");
+  // Guards against silently reintroducing the old count-<key> spans this
+  // test file used to assert on, which would now be dead markup never
+  // written to by leads-list.js (it writes tab-count-<key> instead).
+  assert.ok(!/id="count-pendingIntake"/.test(html), "the old per-section count span must not come back — tab-count-pendingIntake is what's live now");
 });
 
 // ---------------------------------------------------------------------

@@ -1323,12 +1323,53 @@ button.admin-financial-card:focus-visible {
 .admin-status-dot-archived { background: #6b7280; }
 
 /* Batch 6 (Leads consolidation) — the /admin/leads/ workspace shell.
-   Each of the 9 sections reuses .admin-list-heading (h2 variant, already
-   defined above) + .admin-list-count for its own small heading, and
-   .admin-booking-list/.admin-booking-card/.admin-card-* for its cards —
-   no new card shape, just one extra vertical gap between sections. */
-.admin-leads-section { margin-bottom: 20px; }
-.admin-leads-section:last-child { margin-bottom: 0; }
+   Only one of the 9 sections is unhidden at a time (admin/leads-list.js
+   owns which), selected via .admin-leads-tabs below — each still reuses
+   .admin-booking-list/.admin-booking-card/.admin-card-* for its cards, no
+   new card shape. */
+.admin-leads-section { margin-bottom: 0; }
+
+/* Leads sub-tabs/pills — same horizontal-scroll shape as .admin-range-tabs
+   (Schedule's Today/Tomorrow/Week/Month/Year row), copied rather than
+   reused outright: a different class name keeps a reader grepping for
+   one from landing on the other's conceptually distinct feature. 9 pills
+   never need to fit unscrolled on a phone the way 5 range tabs mostly do
+   — scrolling is the expected, primary interaction here, not a rare
+   overflow case. */
+.admin-leads-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.admin-leads-tabs::-webkit-scrollbar { display: none; }
+.admin-leads-tab {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-leads-tab.is-active {
+  background: var(--color-dark, #14150f);
+  border-color: var(--color-dark, #14150f);
+  color: #fff;
+}
+/* The count badge (.admin-nav-badge, reused as-is) needs no override on
+   either background — its own green fill already reads fine on white or
+   on --color-dark. */
 
 /* Pale tint-on-colored-text (the OPPOSITE treatment from
    .admin-status-badge's solid fill, deliberately) so a source badge and a

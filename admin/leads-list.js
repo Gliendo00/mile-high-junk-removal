@@ -11,10 +11,20 @@
 //     `leads` table (not yet migrated anywhere) — see that endpoint's own
 //     header comment in api/admin/bookings.js for the full contract.
 //
-// Neither fetch writes anything. A section renders only once it has at
-// least one card — an all-empty section never shows a heading with
-// nothing under it (same restraint as admin/dashboard.js's Complimentary
-// Service summary, hidden whenever empty).
+// Neither fetch writes anything.
+//
+// Follow-up (same batch, still Batch 6) — sub-tabs/pills: exactly ONE of
+// the 9 sections is shown at a time, selected via the horizontally-
+// scrollable .admin-leads-tabs row. Every section's data is still fetched
+// and rendered up front (so switching tabs is instant, no re-fetch); only
+// VISIBILITY is tab-driven. Default-selection cascade is simply "first
+// non-empty bucket in SECTION_ORDER" — which, given that order, already
+// satisfies every rule asked for: Pending Intake first, then Website
+// Requests, then the active-lead-pipeline buckets (new through
+// followUp), with Booked/Won and Lost last — so they only ever become
+// the default when everything ahead of them is empty. If literally every
+// bucket is empty, the first tab (Pending Intake) is still selected, just
+// showing its own empty state.
 //
 // Every dynamic value below is written with textContent (never innerHTML/
 // insertAdjacentHTML with a concatenated string) — same discipline as
@@ -24,8 +34,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var loadingEl = document.getElementById('loading');
   var emptyEl = document.getElementById('empty');
   var sectionsEl = document.getElementById('leads-sections');
+  var tabsEl = document.getElementById('leads-tabs');
   var logoutBtn = document.getElementById('logout-btn');
 
+  // Fixed tab order — see the header comment above for why this single
+  // array is also the entire default-selection rule.
   var SECTION_ORDER = ['pendingIntake', 'websiteRequests', 'new', 'contacted', 'waitingOnPhotos', 'estimateSent', 'followUp', 'bookedWon', 'lost'];
 
   var SOURCE_LABELS = {
@@ -156,32 +169,66 @@ document.addEventListener('DOMContentLoaded', function () {
     return li;
   }
 
+  var counts = {}; // key -> item count, filled in as each section renders
+
+  // Renders a section's cards (or a small inline empty notice) and its
+  // tab's count badge. Visibility is handled separately by selectBucket()
+  // — this never shows/hides the section itself.
   function renderSection(key, items, renderFn) {
-    var sectionEl = document.getElementById('section-' + key);
     var listEl = document.getElementById('list-' + key);
-    var countEl = document.getElementById('count-' + key);
-    if (!items || !items.length) {
-      sectionEl.hidden = true;
-      return;
+    var countBadge = document.getElementById('tab-count-' + key);
+    var n = items ? items.length : 0;
+    counts[key] = n;
+
+    if (n > 0) {
+      countBadge.textContent = n > 99 ? '99+' : String(n);
+      countBadge.hidden = false;
+      items.forEach(function (item) {
+        listEl.appendChild(renderFn(item));
+      });
+    } else {
+      countBadge.hidden = true;
+      // Reuses .admin-empty's existing dashed-box styling (defined for
+      // the page-level #empty banner) rather than a new class — same
+      // look, just scoped to one bucket's own content area.
+      listEl.appendChild(el('li', 'admin-empty', 'Nothing here yet.'));
     }
-    countEl.textContent = String(items.length);
-    items.forEach(function (item) {
-      listEl.appendChild(renderFn(item));
-    });
-    sectionEl.hidden = false;
   }
 
-  function anySectionVisible() {
-    return SECTION_ORDER.some(function (key) {
-      return !document.getElementById('section-' + key).hidden;
+  // Exactly one bucket visible at a time: unhide the selected section (and
+  // hide every other), mark its tab .is-active, clear the rest.
+  function selectBucket(key) {
+    SECTION_ORDER.forEach(function (k) {
+      var sectionEl = document.getElementById('section-' + k);
+      var tabEl = tabsEl.querySelector('[data-bucket="' + k + '"]');
+      sectionEl.hidden = k !== key;
+      if (tabEl) {
+        tabEl.classList.toggle('is-active', k === key);
+        tabEl.setAttribute('aria-selected', k === key ? 'true' : 'false');
+      }
     });
+  }
+
+  function defaultBucket() {
+    for (var i = 0; i < SECTION_ORDER.length; i++) {
+      if (counts[SECTION_ORDER[i]] > 0) return SECTION_ORDER[i];
+    }
+    return SECTION_ORDER[0]; // every bucket empty — still land on Pending Intake
   }
 
   function finish() {
     loadingEl.style.display = 'none';
     sectionsEl.style.display = 'block';
-    emptyEl.style.display = anySectionVisible() ? 'none' : 'block';
+    var total = SECTION_ORDER.reduce(function (sum, k) { return sum + (counts[k] || 0); }, 0);
+    emptyEl.style.display = total === 0 ? 'block' : 'none';
+    selectBucket(defaultBucket());
   }
+
+  tabsEl.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.admin-leads-tab') : null;
+    if (!btn) return;
+    selectBucket(btn.getAttribute('data-bucket'));
+  });
 
   Promise.all([
     adminFetch('/api/admin/intake').then(function (res) {
