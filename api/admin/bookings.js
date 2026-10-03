@@ -209,6 +209,17 @@ module.exports = async (req, res) => {
     return handleOtherRevenueList(req, res, supabase);
   }
 
+  // Batch 6 (Leads consolidation): ?view=leads is the merged, READ-ONLY
+  // union behind the new /admin/leads/ workspace — same folding reasoning
+  // as every other view= mode in this file. See handleLeadsView() below for
+  // the full contract: it never writes to bookings, customers, or leads: it
+  // only reads bookings (today's unchanged website-origin pipeline) and the
+  // new `leads` table (screenshot-intake/phone/manual leads) side by side,
+  // tagging each row with where it actually lives so nothing is migrated.
+  if (req.query.view === "leads") {
+    return handleLeadsView(req, res, supabase);
+  }
+
   // Phase 3C Stage 4: "rental_out" is counted here too, and folded into
   // knownNonNew below, specifically so it can never inflate the derived
   // "new" lead count the Requests-page badge (admin/nav-badge.js) shows —
@@ -1679,10 +1690,162 @@ async function handleJobSearch(req, res, supabase) {
 const JOB_SEARCH_CUSTOMER_LIMIT = 100;
 const JOB_SEARCH_RESULT_LIMIT = 25;
 
+// ---------------------------------------------------------------------
+// Batch 6 (Leads consolidation) — GET ?view=leads. A READ-ONLY merge of
+// two sources that never touch each other:
+//   - `bookings` rows from the public /book/ flow (junk_removal/
+//     light_demo), exactly as Requests already reads them today — same
+//     seven status values, same archived_at exclusion. Tagged source:
+//     "website" in the response; nothing about how these rows are written
+//     (api/book.js) changes.
+//   - `leads` rows (screenshot-intake-confirmed, phone, or manual —
+//     sql/2026-10-05_phase3c-batch6-leads.sql, not yet run anywhere) —
+//     their own richer status vocabulary, since this is the table that
+//     actually has a slot for "waiting_on_photos"/"estimate_sent"/
+//     "follow_up". Tagged source: "screenshot_intake" | "phone" | "manual".
+//
+// "Pending Intake" is deliberately NOT a section here — it's the existing,
+// unchanged GET /api/admin/intake list (status=pending_review), which the
+// Leads UI fetches directly. Folding it in here would mean this file
+// querying intake_sessions, duplicating logic api/admin/intake.js already
+// owns — the Leads page itself does the assembly instead.
+//
+// Every bucket key below matches the Leads workspace nav exactly. A
+// website-origin booking and a leads-table row can both land in the same
+// bucket (e.g. "contacted") — they are never merged into one record, only
+// displayed side by side, each still carrying its own `kind`/`source` and
+// its own real id in its own real table.
+// ---------------------------------------------------------------------
+const LEADS_BOOKING_COLS = "id, customer_id, service_type, service_city, status, created_at, updated_at";
+const LEADS_TABLE_COLS =
+  "id, source, status, first_name, last_name, phone, city, service_type, created_at, updated_at, next_follow_up_date";
+
+const LEADS_BUCKET_LABELS = {
+  websiteRequests: "Website Request",
+  new: "New",
+  contacted: "Contacted",
+  waitingOnPhotos: "Waiting on Photos",
+  estimateSent: "Estimate Sent",
+  followUp: "Follow Up",
+  bookedWon: "Booked/Won",
+  lost: "Lost",
+};
+
+// leads.status -> Leads-workspace bucket key. Every bookings.status value
+// maps to its bucket inline in handleLeadsView() below (it's a fixed, tiny
+// 7-value set with no reuse elsewhere); this one's broken out because
+// leads.status and bucket keys differ in spelling (snake_case vs
+// camelCase) in a way worth naming once rather than inline per call site.
+const LEAD_STATUS_TO_BUCKET = {
+  new: "new",
+  contacted: "contacted",
+  waiting_on_photos: "waitingOnPhotos",
+  estimate_sent: "estimateSent",
+  follow_up: "followUp",
+  booked: "bookedWon",
+  lost: "lost",
+};
+
+async function handleLeadsView(req, res, supabase) {
+  try {
+    const [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes] = await Promise.all([
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).is("status", null).is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "contacted").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "quoted").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "booked").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "rental_out").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "completed").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "lost").is("archived_at", null).order("created_at", { ascending: false }),
+      supabase.from("leads").select(LEADS_TABLE_COLS).order("created_at", { ascending: false }),
+    ]);
+    for (const r of [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes]) {
+      if (r.error) throw r.error;
+    }
+
+    const allBookingRows = []
+      .concat(newRes.data || [], contactedRes.data || [], quotedRes.data || [], bookedRes.data || [], rentalOutRes.data || [], completedRes.data || [], lostRes.data || []);
+    const customerIds = Array.from(new Set(allBookingRows.map((b) => b.customer_id).filter(Boolean)));
+    const customersById = {};
+    if (customerIds.length) {
+      const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, city").in("id", customerIds);
+      if (custRes.error) throw custRes.error;
+      (custRes.data || []).forEach((c) => {
+        customersById[c.id] = c;
+      });
+    }
+
+    function bookingCard(b, bucket) {
+      const cust = b.customer_id ? customersById[b.customer_id] : null;
+      const name = cust ? [cust.first_name, cust.last_name].filter(Boolean).join(" ") : "";
+      return {
+        id: b.id,
+        kind: "booking",
+        source: "website",
+        name: name || null,
+        phone: cust ? cust.phone : null,
+        serviceType: b.service_type,
+        serviceLabel: serviceLabel(b.service_type),
+        city: b.service_city || (cust && cust.city) || null,
+        status: bucket,
+        statusLabel: LEADS_BUCKET_LABELS[bucket],
+        updatedAt: b.updated_at || b.created_at,
+        nextFollowUpDate: null, // bookings has no follow-up-date concept
+      };
+    }
+
+    function leadCard(l) {
+      const bucket = LEAD_STATUS_TO_BUCKET[l.status] || l.status;
+      const name = [l.first_name, l.last_name].filter(Boolean).join(" ");
+      return {
+        id: l.id,
+        kind: "lead",
+        source: l.source,
+        name: name || null,
+        phone: l.phone,
+        serviceType: l.service_type,
+        serviceLabel: serviceLabel(l.service_type),
+        city: l.city,
+        status: bucket,
+        statusLabel: LEADS_BUCKET_LABELS[bucket],
+        updatedAt: l.updated_at || l.created_at,
+        nextFollowUpDate: l.next_follow_up_date || null,
+      };
+    }
+
+    const leadRows = leadsRes.data || [];
+    const leadsByBucket = {};
+    leadRows.forEach((l) => {
+      const bucket = LEAD_STATUS_TO_BUCKET[l.status];
+      if (!bucket) return; // an unrecognized status can't happen given the CHECK constraint, but never crash the view over it
+      (leadsByBucket[bucket] || (leadsByBucket[bucket] = [])).push(leadCard(l));
+    });
+
+    const sections = {
+      websiteRequests: (newRes.data || []).map((b) => bookingCard(b, "websiteRequests")),
+      new: leadsByBucket.new || [],
+      contacted: (contactedRes.data || []).map((b) => bookingCard(b, "contacted")).concat(leadsByBucket.contacted || []),
+      waitingOnPhotos: leadsByBucket.waitingOnPhotos || [],
+      estimateSent: (quotedRes.data || []).map((b) => bookingCard(b, "estimateSent")).concat(leadsByBucket.estimateSent || []),
+      followUp: leadsByBucket.followUp || [],
+      bookedWon: []
+        .concat(bookedRes.data || [], rentalOutRes.data || [], completedRes.data || [])
+        .map((b) => bookingCard(b, "bookedWon"))
+        .concat(leadsByBucket.bookedWon || []),
+      lost: (lostRes.data || []).map((b) => bookingCard(b, "lost")).concat(leadsByBucket.lost || []),
+    };
+
+    res.status(200).json({ ok: true, sections: sections });
+  } catch (err) {
+    console.error("Admin leads view failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load leads." });
+  }
+}
+
 // Strips control characters, trims, caps length, then escapes ILIKE
-// wildcard characters — same discipline as api/admin/clients.js's own
-// sanitizeSearchTerm(), a small deliberate local copy rather than a shared
-// import (this project's established convention).
+// wildcard characters — same discipline as api/admin/client.js's own
+// sanitizeSearchTerm() (originally api/admin/clients.js's, retired into
+// client.js in Batch 6), a small deliberate local copy rather than a
+// shared import (this project's established convention).
 function sanitizeIlikeSearchTerm(value) {
   if (typeof value !== "string") return "";
   var stripped = "";
