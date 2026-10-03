@@ -63,30 +63,56 @@ document.addEventListener('DOMContentLoaded', function () {
     return node;
   }
 
+  // Up to 2 initials from the client's name — "Mary-Kate Fitzgerald-O'Brien"
+  // -> "MF", a single-word name -> its first letter alone. Falls back to
+  // "?" for the rare unnamed client, never an empty avatar.
+  function initialsFor(firstName, lastName) {
+    var words = [firstName, lastName].filter(Boolean).join(' ').split(/[\s-]+/).filter(Boolean);
+    if (!words.length) return '?';
+    return words.slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join('');
+  }
+
   function renderClientCard(c) {
     var li = document.createElement('li');
     var a = document.createElement('a');
-    a.className = 'admin-booking-card';
+    a.className = 'admin-booking-card admin-client-row';
     a.href = '/admin/client/?id=' + encodeURIComponent(c.id);
 
-    a.appendChild(el('div', 'admin-card-name', [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client'));
+    a.appendChild(el('div', 'admin-client-avatar', initialsFor(c.firstName, c.lastName)));
+
+    var textCol = el('div', 'admin-client-row-text');
+    textCol.appendChild(el('div', 'admin-client-row-name', [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client'));
 
     var contactParts = [];
     if (c.phone) contactParts.push(formatPhone(c.phone));
+    if (c.email) contactParts.push(c.email);
     if (c.city) contactParts.push(c.city);
-    a.appendChild(el('div', 'admin-card-service', contactParts.length ? contactParts.join(' · ') : '—'));
+    textCol.appendChild(el('div', 'admin-client-row-contact', contactParts.length ? contactParts.join(' · ') : '—'));
+    a.appendChild(textCol);
 
     var jobParts = [c.bookingCount + (c.bookingCount === 1 ? ' job' : ' jobs')];
     if (c.lastJobDate) jobParts.push('Last: ' + formatDate(c.lastJobDate));
     // Batch 2D — archivedReason is only ever present on the Show Archived
     // view (see api/admin/clients.js); harmless/absent otherwise.
     if (c.archivedReason) jobParts.push('Archived: ' + (ARCHIVE_REASON_TEXT[c.archivedReason] || c.archivedReason));
-    a.appendChild(el('div', 'admin-card-when', jobParts.join(' · ')));
-
-    var footer = el('div', 'admin-card-footer');
-    footer.appendChild(el('span', null, c.email || ''));
-    footer.appendChild(el('span', 'admin-card-view', 'View Client →'));
-    a.appendChild(footer);
+    var metaWrap = el('div', 'admin-client-row-meta');
+    metaWrap.appendChild(el('span', 'admin-client-row-meta-text', jobParts.join(' · ')));
+    var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    chevron.setAttribute('class', 'admin-client-row-chevron');
+    chevron.setAttribute('width', '14');
+    chevron.setAttribute('height', '14');
+    chevron.setAttribute('viewBox', '0 0 24 24');
+    chevron.setAttribute('fill', 'none');
+    chevron.setAttribute('stroke', 'currentColor');
+    chevron.setAttribute('stroke-width', '2');
+    chevron.setAttribute('stroke-linecap', 'round');
+    chevron.setAttribute('stroke-linejoin', 'round');
+    chevron.setAttribute('aria-hidden', 'true');
+    var chevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    chevronPath.setAttribute('d', 'm9 18 6-6-6-6');
+    chevron.appendChild(chevronPath);
+    metaWrap.appendChild(chevron);
+    a.appendChild(metaWrap);
 
     li.appendChild(a);
     return li;
