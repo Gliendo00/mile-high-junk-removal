@@ -692,7 +692,6 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
   assert.deepStrictEqual(
     found,
     [
-      "api/admin/booking-status.js: .update(",
       // Batch 2C added exactly one new delete — safeDelete()'s rollback of
       // a just-created bookings row when its required dumpster_rentals
       // insert then fails. See tests/phase3c-dumpster-rental-admin.test.js.
@@ -775,6 +774,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // update — handleUpdateTip()'s PATCH ?resource=tip, which writes only
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
+      "api/admin/booking.js: .update(",
+      // Batch 5 (5A) relocated the one status-write .update( here from the
+      // now-deleted api/admin/booking-status.js — handleStatusAction()'s
+      // PATCH ?resource=status, byte-for-byte the same write it always was.
+      // See docs/phase-3/batch5-screenshot-intake-proposal.md §3.
       "api/admin/booking.js: .update(",
       // Batch 2 added exactly four new updates: handleArchiveAction()'s
       // 'archive' and 'restore' branches (one .update( each — visibility

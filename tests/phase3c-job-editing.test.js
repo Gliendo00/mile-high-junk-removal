@@ -1060,22 +1060,28 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // added four more still — handleArchiveAction()'s archive/restore
   // branches and handleReviewRequestAction()'s send/clear branches (see
   // tests/phase3c-job-archive-review.test.js) — same "independently
-  // reviewed elsewhere" reasoning, just accounted for here.
+  // reviewed elsewhere" reasoning, just accounted for here. Batch 5 (5A)
+  // added exactly one more still — handleStatusAction(), the status write
+  // relocated from the now-deleted api/admin/booking-status.js file (see
+  // docs/phase-3/batch5-screenshot-intake-proposal.md §3) — same
+  // "independently reviewed elsewhere" reasoning, just accounted for here.
   assert.strictEqual(
     updateCalls,
-    18,
-    "booking.js must have exactly 18 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request) — anything else needs deliberate review"
+    19,
+    "booking.js must have exactly 19 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write) — anything else needs deliberate review"
   );
 });
 
-test("api/admin/booking-status.js (the dedicated status endpoint) is untouched by this stage", () => {
-  const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/booking-status.js"), "utf8");
-  assert.ok(/the ONE intentional write capability/.test(src), "must still be the same file — not consolidated or retired");
-  // Phase 3C Stage 4 added "rental_out" here (a real, deliberate change to
-  // this exact file, made in a later stage than the one this test guards) —
-  // this regex was updated to match; the Job Editing stage itself still
-  // never touched this file.
-  assert.ok(/const ALLOWED_STATUSES = \["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"\];/.test(src));
+// Historically this guarded that the Job Editing stage never touched the
+// then-separate api/admin/booking-status.js file. Batch 5 (5A) deliberately
+// retired that file into api/admin/booking.js's ?resource=status branch
+// (see docs/phase-3/batch5-screenshot-intake-proposal.md §3) — updated here
+// to confirm the SAME narrow write capability survived the move intact,
+// rather than silently widening into a generic "update a booking" endpoint.
+test("booking.js's relocated status-write capability (?resource=status) still enforces the exact original allowlist/guard", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/booking.js"), "utf8");
+  assert.ok(/the ONE intentional, narrow write capability/.test(src), "must still be documented as the one narrow status-write path, not folded into handleUpdate()'s general field allowlist");
+  assert.ok(/const STATUS_ALLOWED_STATUSES = \["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"\];/.test(src));
 });
 
 // =======================================================================

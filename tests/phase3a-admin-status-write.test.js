@@ -1,6 +1,12 @@
 // Local, offline test harness for the Phase 3A booking-status write
-// endpoint (api/admin/booking-status.js) and the read-only status filter
-// added to api/admin/bookings.js.
+// endpoint and the read-only status filter added to api/admin/bookings.js.
+//
+// Batch 5 (5A): the status-write endpoint was retired from its own
+// api/admin/booking-status.js file into api/admin/booking.js's
+// ?resource=status branch, to free a Vercel function slot for
+// api/admin/intake.js (see docs/phase-3/batch5-screenshot-intake-proposal.md
+// §3). Every assertion below is unchanged in substance — same behavior,
+// same write discipline — just retargeted at the new location.
 //
 // Same approach as tests/phase1-api.test.js and tests/phase2-admin-api.test.js:
 // "@supabase/supabase-js" is intercepted at require-time and replaced with
@@ -158,7 +164,6 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
 
-const statusHandler = require("../api/admin/booking-status.js");
 const bookingsHandler = require("../api/admin/bookings.js");
 const bookingHandler = require("../api/admin/booking.js");
 
@@ -271,7 +276,7 @@ function adminAuthed() {
 
 function patchStatus(db, cookie, body) {
   currentFakeService = createFakeServiceClient(db);
-  return run(statusHandler, makeReq({ method: "PATCH", cookie: cookie, body: body }));
+  return run(bookingHandler, makeReq({ method: "PATCH", cookie: cookie, query: { resource: "status" }, body: body }));
 }
 
 // ---------------------------------------------------------------------
@@ -320,7 +325,7 @@ test("PATCH booking-status: GET is rejected with 405 (method-scoped)", async () 
   adminAuthed();
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
-  const res = await run(statusHandler, makeReq({ method: "GET", cookie: "mhjr_admin_at=at-good", query: { id: REAL_ID } }));
+  const res = await run(bookingHandler, makeReq({ method: "GET", cookie: "mhjr_admin_at=at-good", query: { resource: "status", id: REAL_ID } }));
   assert.strictEqual(res.statusCode, 405);
 });
 
@@ -593,7 +598,7 @@ test("PATCH booking-status: never calls storage.createSignedUrl", async () => {
       },
     };
   };
-  await run(statusHandler, makeReq({ method: "PATCH", cookie: "mhjr_admin_at=at-good", body: { id: REAL_ID, status: "booked" } }));
+  await run(bookingHandler, makeReq({ method: "PATCH", cookie: "mhjr_admin_at=at-good", query: { resource: "status" }, body: { id: REAL_ID, status: "booked" } }));
   assert.strictEqual(signCalled, false);
 });
 
@@ -690,6 +695,9 @@ test("admin client JS (incl. new status-ui.js) never uses innerHTML/insertAdjace
 // booking-status.js status write, plus the new booking.js "+ New Job" and
 // client.js Create Client inserts — each one reviewed individually in
 // docs/phase-3/stage2.1-new-job-proposal.md, not an incidental side effect.
+// Batch 5 (5A) relocated the status write from booking-status.js (now
+// deleted) into booking.js's ?resource=status branch — same single
+// .update( call, now counted against booking.js instead.
 //
 // Scoped to api/admin/*.js plus exactly the three api/_lib files admin
 // routes actually require (confirmed by grepping every require("../_lib/...")
@@ -720,7 +728,6 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
   assert.deepStrictEqual(
     found,
     [
-      "api/admin/booking-status.js: .update(",
       // Batch 2C added exactly one new delete — safeDelete()'s rollback of
       // a just-created bookings row when its required dumpster_rentals
       // insert then fails (mirrors api/book.js's own safeDelete()). See
@@ -797,6 +804,10 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // update — handleUpdateTip()'s PATCH ?resource=tip, which writes only
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
+      "api/admin/booking.js: .update(",
+      // Batch 5 (5A) relocated the one status-write .update( here from the
+      // now-deleted api/admin/booking-status.js — handleStatusAction()'s
+      // PATCH ?resource=status, byte-for-byte the same write it always was.
       "api/admin/booking.js: .update(",
       // Batch 2 added exactly four new updates: handleArchiveAction()'s
       // 'archive' and 'restore' branches (visibility columns only), and

@@ -1,5 +1,5 @@
 // /admin/booking/?id=<uuid> — booking detail. Read-only except for one
-// control: the status badge, which PATCHes /api/admin/booking-status.
+// control: the status badge, which PATCHes /api/admin/booking?resource=status.
 //
 // Every dynamic value is written with textContent, and every link's href is
 // built from a plain string assignment (never HTML concatenation), so
@@ -406,7 +406,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusLabelEl.textContent = 'Saving to ' + targetLabel + '…';
     statusManageTrigger.disabled = true;
 
-    adminFetch('/api/admin/booking-status', {
+    adminFetch('/api/admin/booking?resource=status', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: bookingId, status: newStatus }),
@@ -453,8 +453,9 @@ document.addEventListener('DOMContentLoaded', function () {
     // 'rental_out' only makes sense for a dumpster rental — the owner
     // explicitly asked that a junk-removal/light-demo job never accidentally
     // land there. Reuses the booking's own already-loaded serviceType rather
-    // than a second field/lookup. The server (api/admin/booking-status.js)
-    // re-checks this independently regardless of what the picker offers.
+    // than a second field/lookup. The server (api/admin/booking.js's
+    // ?resource=status branch) re-checks this independently regardless of
+    // what the picker offers.
     var values = window.AdminStatusUI.STATUS_ORDER.filter(function (key) {
       return key !== 'rental_out' || currentServiceType === 'dumpster_rental';
     });

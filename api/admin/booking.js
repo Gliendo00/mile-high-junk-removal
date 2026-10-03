@@ -96,6 +96,20 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Batch 5 (5A) — retired from its own api/admin/booking-status.js file
+  // into this ?resource=status branch, to free a Vercel function slot
+  // (Hobby plan's 12-function cap) for api/admin/intake.js. Pre-approved in
+  // principle in docs/phase-3/stage2-decisions.md §2; see
+  // docs/phase-3/batch5-screenshot-intake-proposal.md §3 for why this stage
+  // is what finally used that approval. Same folding convention as every
+  // other ?resource= branch above: one more branch on this existing file,
+  // not a new Vercel function.
+  if (req.query.resource === "status") {
+    if (req.method === "PATCH") return handleStatusAction(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
   if (req.method === "POST") return handleCreate(req, res);
   if (req.method === "PATCH") return handleUpdate(req, res);
 
@@ -771,6 +785,104 @@ async function handleCreate(req, res) {
   } catch (err) {
     console.error("Admin job create failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not create job." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// PATCH /api/admin/booking?resource=status — retired here from its own
+// api/admin/booking-status.js file in Batch 5 (5A), to free a Vercel
+// function slot for api/admin/intake.js. See
+// docs/phase-3/batch5-screenshot-intake-proposal.md §3.
+//
+// This remains the ONE intentional, narrow write capability for
+// bookings.status it always was — it does not become a generic "update a
+// booking" endpoint, and handleUpdate() below still refuses to touch status
+// at all (see its own header/allowlist). The only column this function can
+// ever write is bookings.status, to one of exactly seven hardcoded strings
+// (plus a service_type check for the one rental-only value — see
+// STATUS_RENTAL_ONLY_STATUS below). The request body is never spread into
+// the update payload — id and status are read individually as primitives,
+// so a caller cannot smuggle extra column names or values through the
+// request no matter what the JSON body contains. Byte-for-byte the same
+// behavior as the retired file, just relocated.
+const STATUS_ALLOWED_STATUSES = ["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
+const STATUS_RENTAL_ONLY_STATUS = "rental_out";
+const STATUS_RENTAL_SERVICE_TYPE = "dumpster_rental";
+
+async function handleStatusAction(req, res, session) {
+  if (req.method !== "PATCH") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  // Only ever read exactly these two primitives off the body. Anything else
+  // the caller sends is silently ignored — never inspected, never logged as
+  // if it were meaningful, and never reaches the database query below.
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const requestedStatus = typeof body.status === "string" ? body.status.trim() : "";
+
+  if (!id) {
+    res.status(400).json({ error: "Booking id is required." });
+    return;
+  }
+  if (!UUID_RE.test(id)) {
+    // A malformed id can never match a real row — treated identically to
+    // "not found" rather than a distinct 400, so the response never
+    // confirms anything about id format/validation.
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+
+  if (!requestedStatus) {
+    res.status(400).json({ error: "Status is required." });
+    return;
+  }
+  // Exact, case-sensitive membership only — no trimming/lowercasing beyond
+  // the plain .trim() above, no fuzzy matching.
+  if (STATUS_ALLOWED_STATUSES.indexOf(requestedStatus) === -1) {
+    res.status(400).json({ error: "Invalid status." });
+    return;
+  }
+
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin booking-status update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  try {
+    // Only fetched for the one status that needs it — every other status
+    // write stays exactly the single-query round trip it always was.
+    if (requestedStatus === STATUS_RENTAL_ONLY_STATUS) {
+      const currentRes = await supabase.from("bookings").select("id, service_type").eq("id", id).maybeSingle();
+      if (currentRes.error) throw currentRes.error;
+      if (!currentRes.data) {
+        res.status(404).json({ error: "Booking not found." });
+        return;
+      }
+      if (currentRes.data.service_type !== STATUS_RENTAL_SERVICE_TYPE) {
+        res.status(400).json({ error: "Rental Out can only be set on a dumpster rental job." });
+        return;
+      }
+    }
+
+    // The update payload is a literal object with exactly one key, built
+    // here — never the request body, never a spread of the request body.
+    const { data, error } = await supabase.from("bookings").update({ status: requestedStatus }).eq("id", id).select("id, status").maybeSingle();
+    if (error) throw error;
+
+    if (!data) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, id: data.id, status: normalizedStatus(data.status) });
+  } catch (err) {
+    console.error("Admin booking-status update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update status." });
   }
 }
 

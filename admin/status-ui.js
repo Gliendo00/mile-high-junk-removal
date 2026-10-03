@@ -2,7 +2,7 @@
 //   - admin/dashboard.js (the "More" filter menu — read-only, picks which
 //     status to filter the list by)
 //   - admin/booking-detail.js (the status editor — picks a new value to
-//     save via PATCH /api/admin/booking-status)
+//     save via PATCH /api/admin/booking?resource=status)
 //
 // This module only renders UI and reports which option was tapped; it never
 // makes a network call itself. All rendering uses textContent/DOM
