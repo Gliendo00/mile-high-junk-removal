@@ -27,10 +27,15 @@ function test(name, fn) {
 
 // =======================================================================
 // Nav tab — added to every pre-existing admin page (including the three
-// Batch 5 added), per the same convention every prior section used. The
-// Requests and Intake nav links/badges are explicitly asserted to STILL be
-// present and unchanged here — per the instruction to keep /admin/requests/
-// reachable and NOT remove its nav link until parity is proven.
+// Batch 5 added), per the same convention every prior section used.
+//
+// SUPERSEDED in part by Batch 6's own later nav-consolidation pass
+// (2026-10): this block originally asserted Requests/Intake stayed in the
+// visible nav alongside Leads. They've since been removed from the
+// visible nav entirely (both routes remain live/reachable directly — see
+// tests/phase3c-batch6-nav-consolidation.test.js for the full positive
+// assertions on that). Updated here so this file stops asserting a nav
+// shape that no longer ships.
 // =======================================================================
 const PAGES_WITH_SHARED_NAV = [
   "admin/booking-edit/index.html",
@@ -48,28 +53,27 @@ const PAGES_WITH_SHARED_NAV = [
 ];
 
 PAGES_WITH_SHARED_NAV.forEach((rel) => {
-  test(rel + ": carries the new Leads nav tab, AND still carries the unchanged Requests/Intake nav tabs + badges", () => {
+  test(rel + ": carries the Leads nav tab; Requests/Intake nav tabs + badges are gone from the visible nav", () => {
     const html = readNormalized(rel);
     assert.ok(/href="\/admin\/leads\/"\s+class="admin-nav-tab/.test(html), "missing the Leads nav tab link");
-    assert.ok(/href="\/admin\/requests\/"\s+class="admin-nav-tab/.test(html), "the Requests nav tab link must still be present — not removed yet");
-    assert.ok(/id="nav-badge-requests"/.test(html), "the Requests nav badge element must still be present");
-    assert.ok(/href="\/admin\/intakes\/"\s+class="admin-nav-tab/.test(html), "the Intake nav tab link must still be present");
-    assert.ok(/id="nav-badge-intake"/.test(html), "the Intake nav badge element must still be present");
+    assert.ok(!/href="\/admin\/requests\/"\s+class="admin-nav-tab/.test(html), "the Requests nav tab link must be removed from the visible nav");
+    assert.ok(!/id="nav-badge-requests"/.test(html), "the Requests nav badge element must be removed along with its tab");
+    assert.ok(!/href="\/admin\/intakes\/"\s+class="admin-nav-tab/.test(html), "the Intake nav tab link must be removed from the visible nav");
   });
 });
 
-test("the Leads nav tab appears AFTER Intake and BEFORE Clients on every page (consistent tab order)", () => {
+test("the Leads nav tab appears AFTER Schedule and BEFORE Clients on every page (consistent tab order)", () => {
   PAGES_WITH_SHARED_NAV.forEach((rel) => {
     const html = readNormalized(rel);
-    const intakeIdx = html.indexOf('href="/admin/intakes/"');
+    const scheduleIdx = html.indexOf('href="/admin/"');
     const leadsIdx = html.indexOf('href="/admin/leads/"');
     const clientsIdx = html.indexOf('href="/admin/clients/"');
-    assert.ok(intakeIdx !== -1 && leadsIdx !== -1 && clientsIdx !== -1, rel + ": missing a nav tab");
-    assert.ok(intakeIdx < leadsIdx && leadsIdx < clientsIdx, rel + ": Leads tab must sit between Intake and Clients");
+    assert.ok(scheduleIdx !== -1 && leadsIdx !== -1 && clientsIdx !== -1, rel + ": missing a nav tab");
+    assert.ok(scheduleIdx < leadsIdx && leadsIdx < clientsIdx, rel + ": Leads tab must sit between Schedule and Clients");
   });
 });
 
-test("admin/requests/index.html: the route itself is still a real, normal page (not stubbed out, no redirect, no removal)", () => {
+test("admin/requests/index.html: the route itself is still a real, normal page (not stubbed out, no redirect, no removal) — just no longer in the visible nav", () => {
   const html = readNormalized("admin/requests/index.html");
   assert.ok(/<h1>Requests<\/h1>/.test(html) || /Requests/.test(html), "the Requests page must still render its own heading/content");
   assert.ok(/src="\.\.\/dashboard\.js"/.test(html), "the Requests page must still load dashboard.js — unchanged");

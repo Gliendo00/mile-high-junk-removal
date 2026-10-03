@@ -609,12 +609,17 @@ test("static files: the booking-detail back-link now points at /admin/requests/,
 // =======================================================================
 // 8. Navigation: three tabs present on every admin page except login
 // =======================================================================
-test("navigation: every admin page except login has all three nav tabs (Schedule, Requests, Clients)", () => {
+// SUPERSEDED by Batch 6's nav consolidation (2026-10): Requests was
+// removed from the visible nav (the route itself stays live — see
+// tests/phase3c-batch6-nav-consolidation.test.js) and Leads took its
+// place in the tab order. Updated here rather than left asserting a
+// link that no longer ships in the nav bar.
+test("navigation: every admin page except login has Schedule, Leads, and Clients nav tabs", () => {
   const pages = ["admin/index.html", "admin/requests/index.html", "admin/booking/index.html", "admin/clients/index.html", "admin/client/index.html"];
   pages.forEach((rel) => {
     const html = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
     assert.ok(html.includes('href="/admin/"') && html.includes(">Schedule<"), rel + " must link to Schedule");
-    assert.ok(html.includes('href="/admin/requests/"'), rel + " must link to Requests");
+    assert.ok(html.includes('href="/admin/leads/"'), rel + " must link to Leads");
     assert.ok(html.includes('href="/admin/clients/"') && html.includes(">Clients<"), rel + " must link to Clients");
   });
 });
@@ -641,13 +646,18 @@ test("navigation: login page has no nav tabs (unchanged convention)", () => {
   assert.ok(!html.includes("admin-nav-tabs"), "login must not gain a nav bar");
 });
 
-test("navigation: the Requests nav badge markup is present on every non-login admin page, hidden by default", () => {
+// SUPERSEDED by Batch 6's nav consolidation (2026-10): the Requests nav
+// tab (and its badge) was removed from the visible nav on every page —
+// see tests/phase3c-batch6-nav-consolidation.test.js for the full
+// positive assertions. nav-badge.js itself is untouched and still loads
+// on every page (a future badge could reuse it); it simply finds no
+// nav-badge-requests element to populate anymore.
+test("navigation: the Requests nav badge markup is gone from every admin page (removed along with its nav tab); nav-badge.js still loads", () => {
   const pages = ["admin/index.html", "admin/requests/index.html", "admin/booking/index.html", "admin/clients/index.html", "admin/client/index.html"];
   pages.forEach((rel) => {
     const html = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    assert.ok(html.includes('id="nav-badge-requests"'), rel + " must include the badge element");
-    assert.ok(/id="nav-badge-requests"[^>]*\shidden(?=[\s>])/.test(html), rel + " badge must start hidden");
-    assert.ok(html.includes('src="' + (rel === "admin/index.html" ? "" : "../") + 'nav-badge.js"'), rel + " must load nav-badge.js");
+    assert.ok(!html.includes('id="nav-badge-requests"'), rel + " must not include the Requests badge element anymore");
+    assert.ok(html.includes('src="' + (rel === "admin/index.html" ? "" : "../") + 'nav-badge.js"'), rel + " must still load nav-badge.js");
   });
 });
 

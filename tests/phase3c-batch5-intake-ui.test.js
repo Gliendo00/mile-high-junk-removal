@@ -26,8 +26,15 @@ function test(name, fn) {
 }
 
 // =======================================================================
-// Nav tab — added to every pre-existing admin page, per the same
-// convention every prior section (Clients, Expenses, Requests) was added.
+// Nav tab — added to every pre-existing admin page when Batch 5 shipped.
+// SUPERSEDED by Batch 6's nav consolidation (2026-10): the Intake tab (and
+// its badge) was deliberately removed from the visible top nav on every
+// page — /admin/intakes/ is still a live, directly-reachable route (see
+// tests/phase3c-batch6-nav-consolidation.test.js for the full positive
+// assertions: exactly 4 visible tabs, the route still works, Pending
+// Intake still surfaces inside the Leads workspace instead). This file's
+// own assertions are updated to ABSENCE to match, rather than left
+// contradicting what actually ships.
 // =======================================================================
 const PAGES_WITH_SHARED_NAV = [
   "admin/booking-edit/index.html",
@@ -45,20 +52,11 @@ const PAGES_WITH_SHARED_NAV = [
 ];
 
 PAGES_WITH_SHARED_NAV.forEach((rel) => {
-  test(rel + ": carries the Intake nav tab + badge, and loads nav-badge.js", () => {
+  test(rel + ": no longer carries a visible Intake nav tab (Batch 6 nav consolidation) — but still loads nav-badge.js", () => {
     const html = readNormalized(rel);
-    assert.ok(/href="\/admin\/intakes\/"\s+class="admin-nav-tab/.test(html), "missing the Intake nav tab link");
-    assert.ok(/id="nav-badge-intake"/.test(html), "missing the Intake nav badge element");
-    assert.ok(/src="(\.\.\/)*nav-badge\.js"/.test(html), "must still load nav-badge.js");
-  });
-});
-
-test("the Intake nav tab appears BEFORE the Clients tab on every page (consistent tab order)", () => {
-  PAGES_WITH_SHARED_NAV.forEach((rel) => {
-    const html = readNormalized(rel);
-    const intakeIdx = html.indexOf('href="/admin/intakes/"');
-    const clientsIdx = html.indexOf('href="/admin/clients/"');
-    assert.ok(intakeIdx !== -1 && clientsIdx !== -1 && intakeIdx < clientsIdx, rel + ": Intake tab must appear before Clients");
+    assert.ok(!/href="\/admin\/intakes\/"\s+class="admin-nav-tab/.test(html), "the Intake nav tab link must be removed from the visible nav");
+    assert.ok(!/id="nav-badge-intake"/.test(html), "the Intake nav badge element must be removed along with its tab");
+    assert.ok(/src="(\.\.\/)*nav-badge\.js"/.test(html), "must still load nav-badge.js (file untouched, simply finds no badge element to populate now)");
   });
 });
 
