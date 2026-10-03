@@ -1322,6 +1322,33 @@ button.admin-financial-card:focus-visible {
 .admin-status-dot-completed_review_not_sent { background: #0891b2; }
 .admin-status-dot-archived { background: #6b7280; }
 
+/* Batch 6 (Leads consolidation) — the /admin/leads/ workspace shell.
+   Each of the 9 sections reuses .admin-list-heading (h2 variant, already
+   defined above) + .admin-list-count for its own small heading, and
+   .admin-booking-list/.admin-booking-card/.admin-card-* for its cards —
+   no new card shape, just one extra vertical gap between sections. */
+.admin-leads-section { margin-bottom: 20px; }
+.admin-leads-section:last-child { margin-bottom: 0; }
+
+/* Pale tint-on-colored-text (the OPPOSITE treatment from
+   .admin-status-badge's solid fill, deliberately) so a source badge and a
+   status badge never look like the same kind of thing at a glance — a
+   card can show both side by side without them competing for attention. */
+.admin-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.admin-source-badge-website { background: #e0ecff; color: #1d4ed8; }
+.admin-source-badge-screenshot_intake { background: #ede9fe; color: #6d28d9; }
+.admin-source-badge-phone { background: #dcfce7; color: #166534; }
+.admin-source-badge-manual { background: #f3f4f6; color: #4b5563; }
+
 /* Phase 3C Stage 2.5-v2 — additional-charge status badges. Reuses
    .admin-status-badge's base shape; distinct hues from the booking-status
    set above so the two badge families are never visually confusable next

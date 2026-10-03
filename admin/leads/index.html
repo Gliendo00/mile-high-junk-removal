@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Leads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <a class="admin-brand" href="/admin/">
+    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </a>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<nav class="admin-nav-tabs" aria-label="Admin sections">
+  <a href="/admin/" class="admin-nav-tab">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
+  <a href="/admin/intakes/" class="admin-nav-tab">Intake<span class="admin-nav-badge" id="nav-badge-intake" hidden>0</span></a>
+  <a href="/admin/leads/" class="admin-nav-tab is-active" aria-current="page">Leads</a>
+  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
+  <a href="/admin/expenses/" class="admin-nav-tab">Expenses</a>
+</nav>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <div class="admin-list-heading">
+    <h1>Leads</h1>
+  </div>
+
+  <div id="loading" class="admin-loading">Loading leads…</div>
+  <div id="empty" class="admin-empty" style="display:none">Nothing waiting in any Leads section right now.</div>
+
+  <!-- Batch 6 (Leads consolidation) — a shell of 9 sections, each its own
+       small heading + count + list. Pending Intake is the EXISTING
+       GET /api/admin/intake list (status=pending_review), fetched
+       alongside the merged GET /api/admin/bookings?view=leads response
+       that backs the other 8 — see admin/leads-list.js. A section renders
+       only once it has at least one card, so an all-empty section never
+       shows a heading with nothing under it. -->
+  <div id="leads-sections" style="display:none">
+    <section class="admin-leads-section" id="section-pendingIntake" hidden>
+      <div class="admin-list-heading">
+        <h2>Pending Intake</h2>
+        <span class="admin-list-count" id="count-pendingIntake"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-pendingIntake"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-websiteRequests" hidden>
+      <div class="admin-list-heading">
+        <h2>Website Requests</h2>
+        <span class="admin-list-count" id="count-websiteRequests"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-websiteRequests"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-new" hidden>
+      <div class="admin-list-heading">
+        <h2>New</h2>
+        <span class="admin-list-count" id="count-new"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-new"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-contacted" hidden>
+      <div class="admin-list-heading">
+        <h2>Contacted</h2>
+        <span class="admin-list-count" id="count-contacted"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-contacted"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-waitingOnPhotos" hidden>
+      <div class="admin-list-heading">
+        <h2>Waiting on Photos</h2>
+        <span class="admin-list-count" id="count-waitingOnPhotos"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-waitingOnPhotos"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-estimateSent" hidden>
+      <div class="admin-list-heading">
+        <h2>Estimate Sent</h2>
+        <span class="admin-list-count" id="count-estimateSent"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-estimateSent"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-followUp" hidden>
+      <div class="admin-list-heading">
+        <h2>Follow Up</h2>
+        <span class="admin-list-count" id="count-followUp"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-followUp"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-bookedWon" hidden>
+      <div class="admin-list-heading">
+        <h2>Booked/Won</h2>
+        <span class="admin-list-count" id="count-bookedWon"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-bookedWon"></ul>
+    </section>
+
+    <section class="admin-leads-section" id="section-lost" hidden>
+      <div class="admin-list-heading">
+        <h2>Lost</h2>
+        <span class="admin-list-count" id="count-lost"></span>
+      </div>
+      <ul class="admin-booking-list" id="list-lost"></ul>
+    </section>
+  </div>
+</main>
+
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../leads-list.js"></script>
+</body>
+</html>
