@@ -35,6 +35,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var emptyEl = document.getElementById('empty');
   var sectionsEl = document.getElementById('leads-sections');
   var tabsEl = document.getElementById('leads-tabs');
+  var tabsPrevBtn = document.getElementById('leads-tabs-prev');
+  var tabsNextBtn = document.getElementById('leads-tabs-next');
   var logoutBtn = document.getElementById('logout-btn');
 
   // Fixed tab order — see the header comment above for why this single
@@ -69,6 +71,63 @@ document.addEventListener('DOMContentLoaded', function () {
     return node;
   }
 
+  // Small stroke-icon helper — built via SVG DOM APIs (createElementNS),
+  // never innerHTML, so this file's "no innerHTML" discipline (see header
+  // comment) holds even for these static, non-user-supplied glyphs.
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgIcon(shapes) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.75');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    shapes.forEach(function (shape) {
+      var node = document.createElementNS(SVG_NS, shape.tag);
+      Object.keys(shape.attrs).forEach(function (k) { node.setAttribute(k, shape.attrs[k]); });
+      svg.appendChild(node);
+    });
+    return svg;
+  }
+  function iconPhone() {
+    return svgIcon([{ tag: 'path', attrs: { d: 'M5 3 L9 3 L10.5 7 L8 9.5 C9.5 12.5 11.5 14.5 14.5 16 L17 13.5 L21 15 L21 19 C21 20.1 20.1 21 19 21 C10.7 21 3 13.3 3 5 C3 3.9 3.9 3 5 3 Z' } }]);
+  }
+  function iconMapPin() {
+    return svgIcon([
+      { tag: 'path', attrs: { d: 'M12 21 C12 21 5 13.5 5 9 C5 5.1 8.1 2 12 2 C15.9 2 19 5.1 19 9 C19 13.5 12 21 12 21 Z' } },
+      { tag: 'circle', attrs: { cx: '12', cy: '9', r: '2', fill: 'currentColor', stroke: 'none' } },
+    ]);
+  }
+  function iconCalendar() {
+    return svgIcon([
+      { tag: 'rect', attrs: { x: '3', y: '4', width: '18', height: '16', rx: '2' } },
+      { tag: 'line', attrs: { x1: '3', y1: '10', x2: '21', y2: '10' } },
+      { tag: 'line', attrs: { x1: '8', y1: '2', x2: '8', y2: '6' } },
+      { tag: 'line', attrs: { x1: '16', y1: '2', x2: '16', y2: '6' } },
+    ]);
+  }
+
+  // Same safe digit-only tel: normalization as admin/booking-detail.js's
+  // buildTelHref — duplicated rather than imported, matching this
+  // project's established per-file convention (see this file's own header
+  // comment re: renderIntakeCard above).
+  function buildTelHref(phone) {
+    var digits = String(phone || '').replace(/\D/g, '');
+    if (!digits) return null;
+    return digits.length === 10 ? 'tel:+1' + digits : 'tel:+' + digits;
+  }
+
+  function metadataItem(iconNode, text) {
+    var item = el('span', 'admin-metadata-item');
+    item.appendChild(iconNode);
+    item.appendChild(el('span', null, text));
+    return item;
+  }
+
   function formatWhen(iso) {
     if (!iso) return '—';
     try {
@@ -101,33 +160,53 @@ document.addEventListener('DOMContentLoaded', function () {
   // updatedAt, nextFollowUpDate}.
   function renderLeadCard(item) {
     var li = document.createElement('li');
+    var card = el('div', 'admin-booking-card admin-lead-card');
+
     // A website booking already has a real detail page; a leads-table row
     // doesn't yet (Lead -> Booking conversion, and a lead detail screen,
-    // are both out of scope for this batch) — so only booking-kind cards
-    // are links for now.
-    var card = item.kind === 'booking' ? document.createElement('a') : document.createElement('div');
-    card.className = 'admin-booking-card';
-    if (item.kind === 'booking') card.href = '/admin/booking/?id=' + encodeURIComponent(item.id);
+    // are both out of scope for this batch) — so only booking-kind cards'
+    // main area is a link; a lead-kind card's is a plain non-interactive
+    // div instead (same information, just not yet clickable).
+    var main = item.kind === 'booking' ? document.createElement('a') : document.createElement('div');
+    main.className = 'admin-lead-card-main';
+    if (item.kind === 'booking') main.href = '/admin/booking/?id=' + encodeURIComponent(item.id);
 
     var top = el('div', 'admin-card-top');
     var topLeft = el('div', 'admin-card-top-left');
     topLeft.appendChild(el('span', 'admin-source-badge admin-source-badge-' + item.source, SOURCE_LABELS[item.source] || item.source));
     top.appendChild(topLeft);
     top.appendChild(el('span', 'admin-card-timeago', formatWhen(item.updatedAt)));
-    card.appendChild(top);
+    main.appendChild(top);
 
-    card.appendChild(el('div', 'admin-card-name', item.name || item.phone || 'Unidentified client'));
+    main.appendChild(el('div', 'admin-card-name', item.name || item.phone || 'Unidentified client'));
+    main.appendChild(el('div', 'admin-card-service', item.serviceLabel || '—'));
 
-    var serviceParts = [item.serviceLabel || '—'];
-    if (item.city) serviceParts.push(item.city);
-    card.appendChild(el('div', 'admin-card-service', serviceParts.join(' · ')));
+    var metaRow = el('div', 'admin-metadata-row');
+    if (item.phone) metaRow.appendChild(metadataItem(iconPhone(), item.phone));
+    if (item.city) metaRow.appendChild(metadataItem(iconMapPin(), item.city));
+    if (metaRow.childNodes.length) main.appendChild(metaRow);
 
-    if (item.phone) card.appendChild(el('div', 'admin-card-when', item.phone));
+    var followUpText = formatFollowUp(item.nextFollowUpDate);
+    if (followUpText) {
+      var followRow = el('div', 'admin-lead-card-followup');
+      followRow.appendChild(iconCalendar());
+      followRow.appendChild(document.createTextNode(followUpText));
+      main.appendChild(followRow);
+    }
 
-    var footer = el('div', 'admin-card-footer');
-    footer.appendChild(el('span', null, item.statusLabel || ''));
-    footer.appendChild(el('span', null, formatFollowUp(item.nextFollowUpDate)));
-    card.appendChild(footer);
+    card.appendChild(main);
+
+    var actions = el('div', 'admin-lead-card-actions');
+    actions.appendChild(el('span', 'admin-lead-card-status', item.statusLabel || ''));
+    var telHref = buildTelHref(item.phone);
+    if (telHref) {
+      var callBtn = document.createElement('a');
+      callBtn.className = 'admin-btn admin-btn-primary admin-lead-card-call';
+      callBtn.href = telHref;
+      callBtn.textContent = 'Call';
+      actions.appendChild(callBtn);
+    }
+    card.appendChild(actions);
 
     li.appendChild(card);
     return li;
@@ -140,32 +219,53 @@ document.addEventListener('DOMContentLoaded', function () {
   // returns is, by definition, a raw screenshot upload.
   function renderIntakeCard(intake) {
     var li = document.createElement('li');
-    var a = document.createElement('a');
-    a.className = 'admin-booking-card';
-    a.href = '/admin/intake/?id=' + encodeURIComponent(intake.id);
+    var card = el('div', 'admin-booking-card admin-lead-card');
+
+    var main = document.createElement('a');
+    main.className = 'admin-lead-card-main';
+    main.href = '/admin/intake/?id=' + encodeURIComponent(intake.id);
 
     var top = el('div', 'admin-card-top');
     var topLeft = el('div', 'admin-card-top-left');
     topLeft.appendChild(el('span', 'admin-source-badge admin-source-badge-screenshot_intake', 'Screenshot Intake'));
     top.appendChild(topLeft);
     top.appendChild(el('span', 'admin-card-timeago', formatWhen(intake.createdAt)));
-    a.appendChild(top);
+    main.appendChild(top);
 
     var title = intake.matchedClientName || intake.extractedClientName || intake.extractedPhone || intake.extractedEmail || 'Unidentified client';
-    a.appendChild(el('div', 'admin-card-name', title));
+    main.appendChild(el('div', 'admin-card-name', title));
 
     var classificationText = INTAKE_CLASSIFICATION_TEXT[intake.classification] || 'Unclassified';
     if (intake.extractedServiceType) classificationText += ' · ' + intake.extractedServiceType;
-    a.appendChild(el('div', 'admin-card-service', classificationText));
+    main.appendChild(el('div', 'admin-card-service', classificationText));
 
-    if (intake.extractedPhone) a.appendChild(el('div', 'admin-card-when', intake.extractedPhone));
+    if (intake.extractedPhone) {
+      var metaRow = el('div', 'admin-metadata-row');
+      metaRow.appendChild(metadataItem(iconPhone(), intake.extractedPhone));
+      main.appendChild(metaRow);
+    }
 
-    var footer = el('div', 'admin-card-footer');
-    footer.appendChild(el('span', null, 'Pending Review'));
-    footer.appendChild(el('span', 'admin-card-view', 'Review →'));
-    a.appendChild(footer);
+    card.appendChild(main);
 
-    li.appendChild(a);
+    var actions = el('div', 'admin-lead-card-actions');
+    actions.appendChild(el('span', 'admin-lead-card-status', 'Pending Review'));
+    var telHref = buildTelHref(intake.extractedPhone);
+    if (telHref) {
+      var callBtn = document.createElement('a');
+      callBtn.className = 'admin-btn admin-btn-primary admin-lead-card-call';
+      callBtn.href = telHref;
+      callBtn.textContent = 'Call';
+      actions.appendChild(callBtn);
+    } else {
+      var reviewLink = document.createElement('a');
+      reviewLink.className = 'admin-card-view';
+      reviewLink.href = main.href;
+      reviewLink.textContent = 'Review →';
+      actions.appendChild(reviewLink);
+    }
+    card.appendChild(actions);
+
+    li.appendChild(card);
     return li;
   }
 
@@ -195,6 +295,52 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  // Tab slider — desktop left/right controls wrapping the existing
+  // horizontally-scrollable .admin-leads-tabs row (admin.css's
+  // .admin-leads-tabs-row). Arrows are plain scroll-by-a-page buttons, not
+  // a carousel with discrete "pages" of tabs — simplest correct behavior
+  // for a row whose items have very different widths ("New" vs. "Waiting
+  // on Photos"). Each arrow's `hidden` attribute reflects whether there's
+  // actually more content in that direction right now, recomputed on every
+  // scroll/resize so it never shows a dead-end arrow.
+  function updateTabArrows() {
+    var maxScroll = tabsEl.scrollWidth - tabsEl.clientWidth;
+    // Sub-pixel rounding from zoom/fractional scaling can leave scrollLeft
+    // a hair short of 0 or maxScroll — 1px tolerance avoids a flickering
+    // arrow that never quite reaches hidden.
+    tabsPrevBtn.hidden = tabsEl.scrollLeft <= 1;
+    tabsNextBtn.hidden = tabsEl.scrollLeft >= maxScroll - 1;
+  }
+
+  function scrollTabsBy(delta) {
+    tabsEl.scrollBy({ left: delta, behavior: 'smooth' });
+  }
+
+  tabsPrevBtn.addEventListener('click', function () { scrollTabsBy(-160); });
+  tabsNextBtn.addEventListener('click', function () { scrollTabsBy(160); });
+  tabsEl.addEventListener('scroll', updateTabArrows);
+  window.addEventListener('resize', updateTabArrows);
+
+  // A plain vertical mouse wheel (no shift, no trackpad's native horizontal
+  // delta) over the tab row scrolls it horizontally instead of doing
+  // nothing — trackpad/touch horizontal scrolling already works natively
+  // via the row's own overflow-x and needs no help here.
+  tabsEl.addEventListener('wheel', function (e) {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // already a horizontal gesture
+    tabsEl.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+
+  function scrollActiveTabIntoView(key) {
+    var tabEl = tabsEl.querySelector('[data-bucket="' + key + '"]');
+    if (!tabEl) return;
+    var tabsRect = tabsEl.getBoundingClientRect();
+    var tabRect = tabEl.getBoundingClientRect();
+    if (tabRect.left < tabsRect.left || tabRect.right > tabsRect.right) {
+      tabEl.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }
+
   // Exactly one bucket visible at a time: unhide the selected section (and
   // hide every other), mark its tab .is-active, clear the rest.
   function selectBucket(key) {
@@ -207,6 +353,7 @@ document.addEventListener('DOMContentLoaded', function () {
         tabEl.setAttribute('aria-selected', k === key ? 'true' : 'false');
       }
     });
+    scrollActiveTabIntoView(key);
   }
 
   function defaultBucket() {
@@ -222,6 +369,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var total = SECTION_ORDER.reduce(function (sum, k) { return sum + (counts[k] || 0); }, 0);
     emptyEl.style.display = total === 0 ? 'block' : 'none';
     selectBucket(defaultBucket());
+    // Only meaningful once the row is actually laid out (it was
+    // display:none until sectionsEl.style.display = 'block' just above) —
+    // no 'scroll' event fires for a display-toggle to trigger this itself.
+    updateTabArrows();
   }
 
   tabsEl.addEventListener('click', function (e) {

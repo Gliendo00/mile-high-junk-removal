@@ -24,7 +24,11 @@
   </div>
 
   <div id="loading" class="admin-loading">Loading leads…</div>
-  <div id="empty" class="admin-empty" style="display:none">Nothing waiting in any Leads section right now.</div>
+  <div id="empty" class="admin-empty-state" style="display:none">
+    <img class="admin-empty-state-mascot" src="/images/mile-high-cleanup-mascot.png" alt="">
+    <div class="admin-empty-state-title">All caught up</div>
+    <div class="admin-empty-state-subtext">Nothing waiting in any Leads section right now.</div>
+  </div>
 
   <!-- Batch 6 follow-up — sub-tabs/pills, one bucket visible at a time.
        Pending Intake is the EXISTING GET /api/admin/intake list
@@ -34,18 +38,34 @@
        convention as .admin-range-tab on Schedule): JS toggles .is-active
        and each count badge's hidden state, never builds the tab bar
        itself. Horizontally scrollable at phone width — see
-       .admin-leads-tabs in admin.css. -->
+       .admin-leads-tabs in admin.css.
+
+       CRM visual redesign — real desktop slider: the tabs row is wrapped
+       in left/right arrow controls (hidden by default; leads-list.js
+       shows/enables each only when the row actually overflows in that
+       direction) and the active tab auto-scrolls into view on selection.
+       Mouse wheel/trackpad and touch scrolling both still work natively
+       since .admin-leads-tabs itself is unchanged (just now one flex
+       child of the row below instead of the page's direct child). -->
   <div id="leads-sections" style="display:none">
-    <div class="admin-leads-tabs" id="leads-tabs" role="tablist" aria-label="Leads sections">
-      <button type="button" class="admin-leads-tab" data-bucket="pendingIntake" role="tab">Pending Intake<span class="admin-nav-badge" id="tab-count-pendingIntake" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="websiteRequests" role="tab">Website Requests<span class="admin-nav-badge" id="tab-count-websiteRequests" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="new" role="tab">New<span class="admin-nav-badge" id="tab-count-new" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="contacted" role="tab">Contacted<span class="admin-nav-badge" id="tab-count-contacted" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="waitingOnPhotos" role="tab">Waiting on Photos<span class="admin-nav-badge" id="tab-count-waitingOnPhotos" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="estimateSent" role="tab">Estimate Sent<span class="admin-nav-badge" id="tab-count-estimateSent" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="followUp" role="tab">Follow Up<span class="admin-nav-badge" id="tab-count-followUp" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="bookedWon" role="tab">Booked/Won<span class="admin-nav-badge" id="tab-count-bookedWon" hidden>0</span></button>
-      <button type="button" class="admin-leads-tab" data-bucket="lost" role="tab">Lost<span class="admin-nav-badge" id="tab-count-lost" hidden>0</span></button>
+    <div class="admin-leads-tabs-row">
+      <button type="button" id="leads-tabs-prev" class="admin-leads-tab-arrow" aria-label="Scroll tabs left" hidden>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4 7 12l8 8"/></svg>
+      </button>
+      <div class="admin-leads-tabs" id="leads-tabs" role="tablist" aria-label="Leads sections">
+        <button type="button" class="admin-leads-tab" data-bucket="pendingIntake" role="tab">Pending Intake<span class="admin-nav-badge" id="tab-count-pendingIntake" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="websiteRequests" role="tab">Website Requests<span class="admin-nav-badge" id="tab-count-websiteRequests" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="new" role="tab">New<span class="admin-nav-badge" id="tab-count-new" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="contacted" role="tab">Contacted<span class="admin-nav-badge" id="tab-count-contacted" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="waitingOnPhotos" role="tab">Waiting on Photos<span class="admin-nav-badge" id="tab-count-waitingOnPhotos" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="estimateSent" role="tab">Estimate Sent<span class="admin-nav-badge" id="tab-count-estimateSent" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="followUp" role="tab">Follow Up<span class="admin-nav-badge" id="tab-count-followUp" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="bookedWon" role="tab">Booked/Won<span class="admin-nav-badge" id="tab-count-bookedWon" hidden>0</span></button>
+        <button type="button" class="admin-leads-tab" data-bucket="lost" role="tab">Lost<span class="admin-nav-badge" id="tab-count-lost" hidden>0</span></button>
+      </div>
+      <button type="button" id="leads-tabs-next" class="admin-leads-tab-arrow" aria-label="Scroll tabs right" hidden>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4l8 8-8 8"/></svg>
+      </button>
     </div>
 
     <section class="admin-leads-section" id="section-pendingIntake" hidden role="tabpanel">

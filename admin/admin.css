@@ -2384,3 +2384,111 @@ button.admin-financial-card:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------
+   Lead Card — the Leads page's main unit. Reuses .admin-booking-card's
+   existing shape/colors as its base (same class stays on the element) and
+   layers the redesign's structure on top: a clickable "main" region (name,
+   service, metadata row, follow-up) separate from a persistent actions
+   row (status + a real Call action) — same main/actions split already
+   established by .admin-schedule-card-main/.admin-contact-actions, so a
+   lead-kind card (not yet linkable to a detail page) can render its main
+   area as a plain non-interactive div instead of forcing an invalid
+   nested <a>.
+   --------------------------------------------------------------------- */
+.admin-lead-card { padding: 0; overflow: hidden; }
+.admin-lead-card-main {
+  display: block;
+  padding: 12px 14px 10px;
+  text-decoration: none;
+  color: inherit;
+}
+a.admin-lead-card-main:active { background: var(--admin-tint); }
+.admin-lead-card-followup {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
+}
+.admin-lead-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-neutral-100, #f9f4ed);
+}
+.admin-lead-card-status {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-lead-card-call { min-height: 32px; padding: 0 14px; font-size: 13px; }
+
+/* ---------------------------------------------------------------------
+   Leads tab slider — desktop left/right controls wrapping the existing
+   .admin-leads-tabs scroll row (unchanged). JS (leads-list.js) toggles
+   each arrow's [hidden] based on actual scroll position/overflow.
+   --------------------------------------------------------------------- */
+.admin-leads-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.admin-leads-tabs-row .admin-leads-tabs { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
+.admin-leads-tab-arrow {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  display: none; /* shown via JS (removes [hidden]) only once content actually overflows */
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  background: #fff;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+}
+.admin-leads-tab-arrow:not([hidden]) { display: flex; }
+@media (min-width: 860px) {
+  /* Arrows are a desktop affordance (mouse/trackpad); mobile relies on
+     native touch swipe, same as every other horizontally-scrolling row in
+     this app. */
+  .admin-leads-tab-arrow { display: none; }
+  .admin-leads-tab-arrow:not([hidden]) { display: flex; }
+}
+
+/* ---------------------------------------------------------------------
+   Empty state — Mascot variant, for the one genuinely celebratory empty
+   moment on this page (every Leads bucket empty at once = "all caught
+   up"). Per-bucket "nothing here yet" notices stay on the plain .admin-
+   empty dashed box — mascots are reserved for this single page-level
+   moment, not sprinkled on every empty list.
+   --------------------------------------------------------------------- */
+.admin-empty-state {
+  text-align: center;
+  padding: 28px 16px;
+}
+.admin-empty-state-mascot {
+  width: 84px;
+  height: auto;
+  margin: 0 auto 10px;
+  display: block;
+}
+.admin-empty-state-title {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--color-text, #201e1d);
+  margin-bottom: 4px;
+}
+.admin-empty-state-subtext {
+  font-size: 13.5px;
+  color: var(--color-neutral-600, #82796a);
+}
