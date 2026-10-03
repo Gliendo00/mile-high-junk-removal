@@ -21,17 +21,31 @@
   min-height: 100vh;
 }
 
-.admin-topbar {
+/* ------------------------------------------------------------------ */
+/* Shared header (admin/admin-chrome.js injects this into every admin    */
+/* page's #admin-chrome placeholder) — single source of truth for the    */
+/* brand mark, icon-based section nav (desktop), and the global Drop a    */
+/* Lead / Log Out actions. Mobile swaps the inline nav for                */
+/* .admin-bottom-nav below instead of cramming icons into this bar. */
+/* ------------------------------------------------------------------ */
+.admin-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   padding: 10px 16px;
   background: var(--color-dark, #14150f);
   color: #fff;
   position: sticky;
   top: 0;
   z-index: 20;
+}
+.admin-header-left {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .admin-brand {
@@ -40,6 +54,7 @@
   gap: 8px;
   text-decoration: none;
   color: #fff;
+  min-width: 0;
 }
 .admin-brand-logo {
   width: 30px;
@@ -49,59 +64,116 @@
   flex: none;
   display: block;
 }
+/* On a narrow phone, the wordmark truncates with an ellipsis instead of
+   overlapping Drop a Lead/Log Out — min-width:0 lets this flex child shrink
+   below its text's natural width at all, which a flex item can't do by
+   default, and overflow:hidden is what makes text-overflow:ellipsis apply
+   rather than the text just silently painting outside its shrunk box. */
 .admin-brand-word {
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
   font-size: 18px;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.admin-topbar-actions {
+/* Icon nav lives inline in the header on desktop only; mobile relies on
+   .admin-bottom-nav instead (see below) rather than shrinking this to fit. */
+.admin-header-nav { display: none; }
+@media (min-width: 860px) {
+  .admin-header-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+}
+.admin-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.admin-nav-item-icon { flex: none; }
+.admin-nav-item.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.admin-header-right {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
+  white-space: nowrap;
+}
+/* The global primary action stays compact on narrow phones so it never
+   crowds Log Out out of the header; full padding returns once there's room. */
+.admin-drop-lead-btn { padding: 0 12px; }
+@media (min-width: 420px) {
+  .admin-drop-lead-btn { padding: 0 16px; }
 }
 
 .admin-main {
   max-width: 760px;
   margin: 0 auto;
-  padding: 14px 14px 48px;
+  /* Extra bottom padding clears the fixed .admin-bottom-nav below — see
+     its own comment. Reset back down at the desktop breakpoint, where the
+     bottom nav is hidden and the inline header nav takes over instead. */
+  padding: 14px 14px 88px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Top-level section nav (Requests / Clients). Shown on every admin page */
-/* except login — two tabs, deliberately: this stays a small operations */
-/* tool, not a growing CRM sidebar. */
+/* Mobile bottom nav — admin-chrome.js appends this as the last child of  */
+/* <body> on every admin page. Hidden at/above the desktop breakpoint,     */
+/* where .admin-header-nav handles navigation instead. Fixed so the 4      */
+/* destinations stay reachable one-handed while scrolling.                 */
 /* ------------------------------------------------------------------ */
-.admin-nav-tabs {
+.admin-bottom-nav {
   display: flex;
-  gap: 6px;
-  padding: 8px 16px;
-  background: var(--color-dark, #14150f);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-.admin-nav-tab {
-  flex: 1 1 0;
-  text-align: center;
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 13.5px;
-  color: rgba(255, 255, 255, 0.7);
-  text-decoration: none;
-}
-.admin-nav-tab.is-active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  align-items: stretch;
+  justify-content: space-between;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #fff;
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px));
+  z-index: 20;
 }
 @media (min-width: 860px) {
-  .admin-nav-tabs { max-width: 1040px; margin: 0 auto; justify-content: flex-start; }
-  .admin-nav-tab { flex: none; padding: 0 22px; }
+  .admin-bottom-nav { display: none; }
+}
+.admin-bottom-nav-item {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  border-radius: 10px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 10.5px;
+  color: var(--color-neutral-600, #82796a);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-bottom-nav-item-icon { flex: none; }
+.admin-bottom-nav-item.is-active {
+  color: var(--color-accent-700, #2f6f13);
 }
 
 /* Requests nav badge — a small restrained count, not an alert. Deliberately

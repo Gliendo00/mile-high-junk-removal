@@ -14,31 +14,17 @@
 </head>
 <body class="admin-body">
 
-<div class="admin-topbar">
-  <a class="admin-brand" href="/admin/">
-    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
-    <span class="admin-brand-word">Mile High Admin</span>
-  </a>
-  <div class="admin-topbar-actions">
-    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
-  </div>
-</div>
-
-<nav class="admin-nav-tabs" aria-label="Admin sections">
-  <a href="/admin/" class="admin-nav-tab">Schedule</a>
-  <a href="/admin/leads/" class="admin-nav-tab">Leads</a>
-  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
-  <a href="/admin/expenses/" class="admin-nav-tab">Expenses</a>
-</nav>
+<div id="admin-chrome"></div>
 
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
+  <!-- The former "+ New Intake" button here duplicated the global "Drop a
+       Lead" action now in every page's header (admin-chrome.js) — removed
+       rather than kept as a second way to reach the same /admin/intake-new/
+       route. -->
   <div class="admin-list-heading">
     <h1>Pending Intake</h1>
-    <div class="admin-list-heading-actions">
-      <a href="/admin/intake-new/" class="admin-btn admin-btn-primary">+ New Intake</a>
-    </div>
   </div>
 
   <div id="loading" class="admin-loading">Loading intakes…</div>
@@ -46,6 +32,7 @@
   <ul id="intake-list" class="admin-booking-list" style="display:none"></ul>
 </main>
 
+<script src="../admin-chrome.js"></script>
 <script src="../admin-fetch.js"></script>
 <script src="../nav-badge.js"></script>
 <script src="../intakes-list.js"></script>

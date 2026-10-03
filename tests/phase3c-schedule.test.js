@@ -614,17 +614,22 @@ test("static files: the booking-detail back-link now points at /admin/requests/,
 // tests/phase3c-batch6-nav-consolidation.test.js) and Leads took its
 // place in the tab order. Updated here rather than left asserting a
 // link that no longer ships in the nav bar.
-test("navigation: every admin page except login has Schedule, Leads, and Clients nav tabs", () => {
+// UPDATED by the CRM visual redesign (2026-10): nav tabs (Schedule, Leads,
+// Clients, Expenses alike) are no longer static per-page links — every page
+// now loads the shared admin/admin-chrome.js, which owns the nav entirely
+// (see tests/phase3c-batch6-nav-consolidation.test.js, which asserts its
+// SECTIONS list directly). What's left to check per-page is just that each
+// one actually wires up that shared chrome.
+test("navigation: every admin page except login loads the shared admin-chrome header/nav", () => {
   const pages = ["admin/index.html", "admin/requests/index.html", "admin/booking/index.html", "admin/clients/index.html", "admin/client/index.html"];
   pages.forEach((rel) => {
     const html = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    assert.ok(html.includes('href="/admin/"') && html.includes(">Schedule<"), rel + " must link to Schedule");
-    assert.ok(html.includes('href="/admin/leads/"'), rel + " must link to Leads");
-    assert.ok(html.includes('href="/admin/clients/"') && html.includes(">Clients<"), rel + " must link to Clients");
+    assert.ok(html.includes('<div id="admin-chrome"></div>'), rel + " must have the #admin-chrome placeholder");
+    assert.ok(/<script src="[^"]*admin-chrome\.js"><\/script>/.test(html), rel + " must load admin-chrome.js");
   });
 });
 
-test("navigation: Phase 3C Stage 3 — every admin page's nav bar (all 8 pages that have one) gained an Expenses tab", () => {
+test("navigation: Phase 3C Stage 3 — every page with a nav bar (all 8 that have one) reaches Expenses via the shared admin-chrome header", () => {
   const pages = [
     "admin/index.html",
     "admin/requests/index.html",
@@ -637,7 +642,7 @@ test("navigation: Phase 3C Stage 3 — every admin page's nav bar (all 8 pages t
   ];
   pages.forEach((rel) => {
     const html = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    assert.ok(html.includes('href="/admin/expenses/"') && html.includes(">Expenses<"), rel + " must link to Expenses");
+    assert.ok(/<script src="[^"]*admin-chrome\.js"><\/script>/.test(html), rel + " must load admin-chrome.js");
   });
 });
 

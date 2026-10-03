@@ -90,11 +90,22 @@ test("new admin client JS (intakes-list.js, intake-new.js, intake-detail.js) nev
 // =======================================================================
 // admin/intakes/ (Pending Intake queue)
 // =======================================================================
-test("admin/intakes/index.html: has the +New Intake link, list container, and loads intakes-list.js", () => {
+test("admin/intakes/index.html: list container, loads intakes-list.js, and reaches /admin/intake-new/ via the shared header's Drop a Lead action", () => {
   const html = readNormalized("admin/intakes/index.html");
-  assert.ok(/href="\/admin\/intake-new\/"/.test(html));
+  // The page's own standalone "+ New Intake" button was removed (CRM visual
+  // redesign) now that every admin page carries a global "Drop a Lead"
+  // action in the shared header (admin/admin-chrome.js) pointing at the
+  // same route — see that assertion below instead of a page-local link.
+  assert.ok(/id="admin-chrome"/.test(html));
+  assert.ok(/src="\.\.\/admin-chrome\.js"/.test(html));
   assert.ok(/id="intake-list"/.test(html));
   assert.ok(/src="\.\.\/intakes-list\.js"/.test(html));
+});
+
+test("admin/admin-chrome.js: Drop a Lead links to the existing /admin/intake-new/ intake route", () => {
+  const src = readNormalized("admin/admin-chrome.js");
+  assert.ok(/href="\/admin\/intake-new\/"/.test(src));
+  assert.ok(/Drop a Lead/.test(src));
 });
 
 test("admin/intakes-list.js: links each card to /admin/intake/?id=", () => {

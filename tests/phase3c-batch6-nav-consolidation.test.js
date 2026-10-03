@@ -51,21 +51,41 @@ const ALL_NAV_PAGES = [
 // Requirement 1 — visible nav has EXACTLY Schedule, Leads, Clients,
 // Expenses, in that order, on every single admin page, with no leftover
 // Requests/Intake tab anywhere.
+//
+// UPDATED for the CRM visual redesign (2026-10): the nav is no longer
+// static per-page HTML — every page now loads admin/admin-chrome.js (the
+// single shared source of truth for the header/nav/bottom-nav) and
+// provides only an empty `<div id="admin-chrome"></div>` placeholder for
+// it to fill in at runtime. So this now asserts two things instead: (a)
+// every page actually wires up the shared chrome correctly, and (b)
+// admin-chrome.js itself — the one place nav order/membership is now
+// defined — has the right four destinations in the right order and
+// nothing for Requests/Intakes. See tests/phase3c-schedule.test.js and
+// tests/phase3c-batch6-leads-ui.test.js for the same update applied to
+// their own nav assertions.
 // =======================================================================
 ALL_NAV_PAGES.forEach((rel) => {
-  test(rel + ": visible nav is exactly Schedule, Leads, Clients, Expenses (no Requests, no Intake)", () => {
+  test(rel + ": wires up the shared admin-chrome header/nav (placeholder + script, loaded before the page's own script)", () => {
     const html = readNormalized(rel);
-    const navMatch = html.match(/<nav class="admin-nav-tabs"[^>]*>([\s\S]*?)<\/nav>/);
-    assert.ok(navMatch, rel + ": must have the shared <nav class=\"admin-nav-tabs\"> element");
-    const navHtml = navMatch[1];
-
-    // Every <a ... class="admin-nav-tab...">Label< occurrence, in order.
-    const labels = Array.from(navHtml.matchAll(/class="admin-nav-tab[^"]*"[^>]*>([^<]+?)(?:<span|<\/a>)/g)).map((m) => m[1].trim());
-    assert.deepStrictEqual(labels, ["Schedule", "Leads", "Clients", "Expenses"], rel + ": visible nav tabs must be exactly these four, in this order — found " + JSON.stringify(labels));
-
-    assert.ok(!/href="\/admin\/requests\/"/.test(navHtml), rel + ": Requests link must not appear inside the nav element");
-    assert.ok(!/href="\/admin\/intakes\/"/.test(navHtml), rel + ": Intakes link must not appear inside the nav element");
+    assert.ok(/<div id="admin-chrome"><\/div>/.test(html), rel + ": must have the #admin-chrome placeholder");
+    const chromeScriptMatch = html.match(/<script src="([^"]*admin-chrome\.js)"><\/script>/);
+    assert.ok(chromeScriptMatch, rel + ": must load admin-chrome.js");
+    // Must be the FIRST script tag — its DOMContentLoaded handler has to run
+    // (and inject #logout-btn etc.) before any page-specific script's own
+    // DOMContentLoaded handler looks for those elements.
+    const firstScriptMatch = html.match(/<script src="([^"]+)"><\/script>/);
+    assert.strictEqual(firstScriptMatch[1], chromeScriptMatch[1], rel + ": admin-chrome.js must be the first script tag on the page");
   });
+});
+
+test("admin/admin-chrome.js: nav is exactly Schedule, Leads, Clients, Expenses, in that order, with no Requests/Intakes destination", () => {
+  const src = readNormalized("admin/admin-chrome.js");
+  const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
+  assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
+  const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
+  assert.deepStrictEqual(labels, ["Schedule", "Leads", "Clients", "Expenses"]);
+  assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
+  assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
 
 // =======================================================================

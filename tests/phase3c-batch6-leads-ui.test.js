@@ -52,24 +52,17 @@ const PAGES_WITH_SHARED_NAV = [
   "admin/intake/index.html",
 ];
 
+// UPDATED for the CRM visual redesign (2026-10): nav tabs are no longer
+// static per-page HTML — every page now loads the shared admin-chrome.js
+// (see tests/phase3c-batch6-nav-consolidation.test.js, which asserts its
+// SECTIONS list directly: Leads present, in order, no Requests/Intakes).
+// What's left to check here is just that each of these pages still wires
+// up that shared chrome at all.
 PAGES_WITH_SHARED_NAV.forEach((rel) => {
-  test(rel + ": carries the Leads nav tab; Requests/Intake nav tabs + badges are gone from the visible nav", () => {
+  test(rel + ": loads the shared admin-chrome header/nav (which carries Leads; Requests/Intake are not nav destinations)", () => {
     const html = readNormalized(rel);
-    assert.ok(/href="\/admin\/leads\/"\s+class="admin-nav-tab/.test(html), "missing the Leads nav tab link");
-    assert.ok(!/href="\/admin\/requests\/"\s+class="admin-nav-tab/.test(html), "the Requests nav tab link must be removed from the visible nav");
-    assert.ok(!/id="nav-badge-requests"/.test(html), "the Requests nav badge element must be removed along with its tab");
-    assert.ok(!/href="\/admin\/intakes\/"\s+class="admin-nav-tab/.test(html), "the Intake nav tab link must be removed from the visible nav");
-  });
-});
-
-test("the Leads nav tab appears AFTER Schedule and BEFORE Clients on every page (consistent tab order)", () => {
-  PAGES_WITH_SHARED_NAV.forEach((rel) => {
-    const html = readNormalized(rel);
-    const scheduleIdx = html.indexOf('href="/admin/"');
-    const leadsIdx = html.indexOf('href="/admin/leads/"');
-    const clientsIdx = html.indexOf('href="/admin/clients/"');
-    assert.ok(scheduleIdx !== -1 && leadsIdx !== -1 && clientsIdx !== -1, rel + ": missing a nav tab");
-    assert.ok(scheduleIdx < leadsIdx && leadsIdx < clientsIdx, rel + ": Leads tab must sit between Schedule and Clients");
+    assert.ok(/<div id="admin-chrome"><\/div>/.test(html), rel + ": missing the #admin-chrome placeholder");
+    assert.ok(/<script src="[^"]*admin-chrome\.js"><\/script>/.test(html), rel + ": missing the admin-chrome.js script tag");
   });
 });
 

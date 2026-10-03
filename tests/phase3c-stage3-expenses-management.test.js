@@ -411,12 +411,13 @@ test("admin/expenses.js never uses innerHTML/insertAdjacentHTML/document.write",
   assert.ok(!/document\.write\s*\(/.test(src), "must not call document.write(...)");
 });
 
-test("admin/expenses/index.html exists, wires expenses.js, and has the Expenses nav tab active", () => {
+test("admin/expenses/index.html exists, wires expenses.js, and loads the shared admin-chrome header/nav (which marks Expenses active by URL — see admin-chrome.js's currentSectionKey())", () => {
   const fs = require("fs");
   const path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "admin", "expenses", "index.html"), "utf8");
   assert.ok(src.includes('src="../expenses.js"'));
-  assert.ok(/class="admin-nav-tab is-active"[^>]*>Expenses</.test(src));
+  assert.ok(src.includes('<div id="admin-chrome"></div>'));
+  assert.ok(/<script src="[^"]*admin-chrome\.js"><\/script>/.test(src));
 });
 
 test("no hard-delete path exists anywhere in api/admin/bookings.js for expenses — grep guard", () => {
