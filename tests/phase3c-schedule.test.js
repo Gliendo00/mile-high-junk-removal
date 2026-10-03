@@ -1158,10 +1158,10 @@ function makeFakeElement(tag) {
 // DOM subtree, not a stub.
 function makeFullFakeFinancialsDom() {
   const els = {};
-  ["schedule-financials", "financial-revenue-value", "financial-booked-value", "financial-expenses-value", "financial-net-value", "financial-net-card"].forEach((id) => {
+  ["schedule-financials", "financial-revenue-value", "financial-booked-value", "financial-expenses-value", "financial-net-value", "financial-net-card", "complimentary-summary-text"].forEach((id) => {
     els[id] = makeFakeElement("div");
   });
-  ["financial-revenue-card", "financial-booked-card", "financial-expenses-card"].forEach((id) => {
+  ["financial-revenue-card", "financial-booked-card", "financial-expenses-card", "complimentary-summary"].forEach((id) => {
     els[id] = makeFakeElement("button");
   });
   const documentListeners = {};
@@ -1544,6 +1544,152 @@ test("Resale Sales never alters or inflates Job Revenue: the same completed-jobs
 
       assert.strictEqual(withoutJobTotal, withJobTotal, "Job Revenue's own total must be identical whether or not a resale_sale row exists in the range");
       assert.strictEqual(withoutJobTotal, 400);
+      resolve();
+    });
+  });
+});
+
+// =======================================================================
+// 12. Batch 3 addendum: complimentary/free job tracking —
+// admin/schedule-financials.js's completedRevenueAmount() defense-in-depth
+// check, the Job Revenue breakdown excluding complimentary jobs, and the
+// separate (never-summed-into-Revenue) Complimentary Service summary/
+// breakdown. Same vm technique as sections 8–11.
+// =======================================================================
+test("admin/schedule-financials.js: completedRevenueAmount() checks job.isComplimentary FIRST, before ever reading finalPrice/estimatedPrice", () => {
+  const src = readSrc("admin/schedule-financials.js");
+  const fnBody = src.slice(src.indexOf("function completedRevenueAmount("), src.indexOf("function bookedJobAmount("));
+  const complimentaryCheckIdx = fnBody.indexOf("job.isComplimentary");
+  const finalPriceCheckIdx = fnBody.indexOf("job.finalPrice");
+  assert.ok(complimentaryCheckIdx !== -1, "expected an explicit job.isComplimentary check");
+  assert.ok(finalPriceCheckIdx !== -1, "expected the existing finalPrice check to still be present");
+  assert.ok(complimentaryCheckIdx < finalPriceCheckIdx, "isComplimentary must be checked BEFORE finalPrice — defense in depth even if a stray nonzero finalPrice ever reached this function");
+});
+
+test("Complimentary defense-in-depth: a job marked isComplimentary with a STRAY nonzero finalPrice still contributes $0 to Revenue (proves the client-side guard works independently of the server-side force-to-0)", () => {
+  // In real operation the server always forces finalPrice to 0 for a
+  // complimentary job (see tests/phase3c-batch3-complimentary-jobs.test.js)
+  // — this test deliberately feeds a shape the server would never actually
+  // produce, to prove the SECOND, independent guard in this file also
+  // holds on its own.
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", isComplimentary: true, finalPrice: 450, estimatedPrice: 450, complimentaryValue: 450 }]);
+  assert.strictEqual(result.revenue, "$0.00");
+});
+
+test("Ordinary job regression: finalPrice=0 (NOT complimentary) still correctly reads $0.00 — the client-side half of the audited invariant", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", isComplimentary: false, finalPrice: 0, estimatedPrice: 300 }]);
+  assert.strictEqual(result.revenue, "$0.00");
+});
+
+const COMPLIMENTARY_TEST_JOBS = REVENUE_TEST_JOBS.concat([
+  {
+    id: "c1",
+    status: "completed",
+    isComplimentary: true,
+    finalPrice: 0,
+    estimatedPrice: 0,
+    complimentaryValue: 275,
+    complimentaryReason: "loyal_client",
+    complimentaryReasonLabel: "Loyal Client",
+    complimentaryNote: "10th job for this client",
+    appointmentDate: "2026-09-17",
+    serviceLabel: "Junk Removal",
+    customer: { firstName: "Dee", lastName: "Chen" },
+  },
+]);
+
+test("Revenue counter: a complimentary job contributes nothing — Revenue is identical with or without it present", () => {
+  const withoutComp = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  const withComp = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      assert.strictEqual(withoutComp.els["financial-revenue-value"].textContent, withComp.els["financial-revenue-value"].textContent);
+      assert.strictEqual(withComp.els["financial-revenue-value"].textContent, "$400.00");
+      resolve();
+    });
+  });
+});
+
+test("Net: a complimentary job's value never leaks into Net — Net is identical with or without it present (same Expenses either way)", () => {
+  const withoutComp = mountRealFinancialsScript(REVENUE_TEST_JOBS, { totalAmount: 50, expenses: [] });
+  const withComp = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS, { totalAmount: 50, expenses: [] });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      assert.strictEqual(withoutComp.els["financial-net-value"].textContent, withComp.els["financial-net-value"].textContent);
+      assert.strictEqual(withComp.els["financial-net-value"].textContent, "$350.00", "$400 Revenue - $50 Expenses, completely unaffected by the $275 complimentary value");
+      resolve();
+    });
+  });
+});
+
+test("Complimentary summary: hidden when the range has no complimentary jobs", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      assert.strictEqual(mounted.els["complimentary-summary"].hidden, true);
+      resolve();
+    });
+  });
+});
+
+test("Complimentary summary: shown with the correct count/value text when the range has a complimentary job", () => {
+  const mounted = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      assert.strictEqual(mounted.els["complimentary-summary"].hidden, false);
+      assert.strictEqual(mounted.els["complimentary-summary-text"].textContent, "1 complimentary job — $275.00 value given away (not included in Revenue)");
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: Total Revenue breakdown excludes the complimentary job entirely from the Job Revenue group — only r1/r2 appear, complimentary contributes nothing to the total", () => {
+  const mounted = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["financial-revenue-card"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.deepStrictEqual(sheetState.groupLabels, ["Job Revenue"], "the complimentary job must never create or appear under a Job Revenue group row");
+      assert.strictEqual(sheetState.rows.length, 2, "only r1 and r2 — Dee Chen's complimentary job must not appear here at all");
+      assert.ok(!sheetState.rows.some((r) => r.name === "Dee Chen"), "the complimentary job's name must never appear in the Total Revenue breakdown");
+      assert.strictEqual(sheetState.totalText, "Total Revenue $400.00");
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: clicking the Complimentary Service summary opens its own separate sheet, listing the job with its reason/value/note, explicitly labeled informational", () => {
+  const mounted = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["complimentary-summary"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.ok(sheetState.open);
+      assert.strictEqual(sheetState.title, "Complimentary Service");
+      assert.strictEqual(sheetState.rows.length, 1);
+      assert.strictEqual(sheetState.rows[0].name, "Dee Chen");
+      assert.strictEqual(sheetState.rows[0].amount, "$275.00");
+      assert.ok(sheetState.rows[0].meta.indexOf("Loyal Client") !== -1, "the reason label must appear in the row's meta line");
+      assert.strictEqual(sheetState.rows[0].note, "10th job for this client");
+      assert.ok(sheetState.totalText.indexOf("$275.00") !== -1);
+      assert.ok(sheetState.totalText.toLowerCase().indexOf("informational") !== -1, "the total label must explicitly say this is informational, never included in Revenue");
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: the Complimentary Service sheet is completely separate from the Total Revenue sheet — opening one never shows the other's rows or total", () => {
+  const mounted = mountRealFinancialsScript(COMPLIMENTARY_TEST_JOBS);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["complimentary-summary"].click();
+      const complimentarySheet = readOpenSheet(mounted.body);
+      assert.strictEqual(complimentarySheet.title, "Complimentary Service");
+
+      mounted.els["financial-revenue-card"].click();
+      const revenueSheet = readOpenSheet(mounted.body);
+      assert.strictEqual(revenueSheet.title, "Total Revenue");
+      assert.ok(!revenueSheet.rows.some((r) => r.name === "Dee Chen"), "switching to the Revenue sheet must not carry over the complimentary row");
       resolve();
     });
   });

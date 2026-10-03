@@ -86,8 +86,32 @@ document.addEventListener('DOMContentLoaded', function () {
   var actualPriceInput = document.getElementById('actual-price');
   var pricingTipRow = document.getElementById('pricing-tip');
   var tipAmountInput = document.getElementById('tip-amount');
+  var pricingComplimentaryRow = document.getElementById('pricing-complimentary');
+  var isComplimentaryInput = document.getElementById('is-complimentary');
+  var complimentaryFields = document.getElementById('complimentary-fields');
+  var complimentaryReasonSelect = document.getElementById('complimentary-reason');
+  var complimentaryValueInput = document.getElementById('complimentary-value');
+  var complimentaryNoteInput = document.getElementById('complimentary-note');
+  var complimentaryNoteRequiredHint = document.getElementById('complimentary-note-required-hint');
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
+
+  // Batch 3 addendum — complimentary/free job tracking. Checking the box
+  // reveals Reason/Value/Note and disables+clears Actual Job Amount
+  // Collected (the server forces final_price to 0 for a complimentary job
+  // regardless of what's typed there). Only reachable at all when
+  // pricingComplimentaryRow is shown (isCompleted — see render() below).
+  isComplimentaryInput.addEventListener('change', function () {
+    var on = isComplimentaryInput.checked;
+    complimentaryFields.style.display = on ? 'block' : 'none';
+    actualPriceInput.disabled = on;
+    if (on) actualPriceInput.value = '';
+    updateComplimentaryNoteHint();
+  });
+  complimentaryReasonSelect.addEventListener('change', updateComplimentaryNoteHint);
+  function updateComplimentaryNoteHint() {
+    complimentaryNoteRequiredHint.style.display = isComplimentaryInput.checked && complimentaryReasonSelect.value === 'other' ? 'inline' : 'none';
+  }
 
   // Batch 2C — dumpster rental fields, shown only when Service Type is
   // Dumpster Rental. Appointment Date above doubles as the delivery date
@@ -343,6 +367,24 @@ document.addEventListener('DOMContentLoaded', function () {
       tipAmountInput.value = '';
     }
 
+    // Batch 3 addendum — complimentary/free job tracking, completed-only
+    // (same gating as Tip above).
+    if (isCompleted) {
+      pricingComplimentaryRow.style.display = 'block';
+      isComplimentaryInput.checked = !!booking.isComplimentary;
+      complimentaryFields.style.display = booking.isComplimentary ? 'block' : 'none';
+      complimentaryReasonSelect.value = booking.complimentaryReason || 'loyal_client';
+      complimentaryValueInput.value = booking.complimentaryValue === null || booking.complimentaryValue === undefined ? '' : booking.complimentaryValue;
+      complimentaryNoteInput.value = booking.complimentaryNote || '';
+      actualPriceInput.disabled = !!booking.isComplimentary;
+      updateComplimentaryNoteHint();
+    } else {
+      pricingComplimentaryRow.style.display = 'none';
+      isComplimentaryInput.checked = false;
+      complimentaryFields.style.display = 'none';
+      actualPriceInput.disabled = false;
+    }
+
     descriptionInput.value = booking.description || '';
     internalNotesInput.value = booking.internalNotes || '';
 
@@ -409,6 +451,30 @@ document.addEventListener('DOMContentLoaded', function () {
     if (isCompleted) {
       var tipRaw = tipAmountInput.value.trim();
       body.tipAmount = tipRaw ? Number(tipRaw) : '';
+    }
+
+    // Batch 3 addendum — complimentary/free job tracking, completed-only
+    // (same gating as Tip above). The server forces finalPrice to 0
+    // unconditionally whenever isComplimentary is true, ignoring whatever
+    // was sent above as body.finalPrice. Unchecking the box (or never
+    // having checked it) sends isComplimentary: false, which clears any
+    // previously-saved reason/value/note back to null server-side.
+    if (isCompleted) {
+      if (isComplimentaryInput.checked && !complimentaryReasonSelect.value) {
+        showError('Please choose a reason for the complimentary job.');
+        return;
+      }
+      if (isComplimentaryInput.checked && complimentaryReasonSelect.value === 'other' && !complimentaryNoteInput.value.trim()) {
+        showError('Please enter a note explaining this complimentary job.');
+        return;
+      }
+      body.isComplimentary = isComplimentaryInput.checked;
+      if (isComplimentaryInput.checked) {
+        body.complimentaryReason = complimentaryReasonSelect.value;
+        var compValueRaw = complimentaryValueInput.value.trim();
+        if (compValueRaw) body.complimentaryValue = Number(compValueRaw);
+        body.complimentaryNote = complimentaryNoteInput.value.trim();
+      }
     }
 
     // Batch 2C — dumpster rental fields. See the pickupTouchedThisSession

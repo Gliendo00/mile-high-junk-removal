@@ -105,7 +105,20 @@ window.AdminScheduleFinancials = (function () {
   // ever coercing it with Number() — see the regression tests in
   // tests/phase3c-schedule.test.js for the exact bug this guards against
   // (Number(null) === 0, and 0 is finite).
+  //
+  // Batch 3 addendum — complimentary/free job tracking: isComplimentary is
+  // checked FIRST and short-circuits to 0, unconditionally, before
+  // finalPrice/estimatedPrice are ever looked at. This is defense in depth
+  // on top of the server-side guarantee (api/admin/booking.js's
+  // parseComplimentary() forces final_price to 0 at write time, and the
+  // database CHECK constraint bookings_complimentary_final_price_zero_check
+  // backs that up) — Job Revenue for a complimentary job is $0 even if some
+  // future bug ever let a nonzero finalPrice reach this function. The
+  // job's complimentaryValue (what the service would have been worth) is
+  // completely separate and is NEVER read here — see buildComplimentaryRows()
+  // below for where it's used instead.
   function completedRevenueAmount(job) {
+    if (job.isComplimentary) return 0;
     var hasFinal = job.finalPrice !== null && job.finalPrice !== undefined && job.finalPrice !== '';
     var amount = Number(hasFinal ? job.finalPrice : job.estimatedPrice);
     return Number.isFinite(amount) ? amount : 0;
@@ -133,10 +146,41 @@ window.AdminScheduleFinancials = (function () {
   function buildRevenueRows(jobs) {
     return (jobs || [])
       .filter(function (job) {
-        return job.status === 'completed';
+        // Batch 3 addendum: a complimentary job is excluded from the Job
+        // Revenue list — it always contributes exactly $0 (see
+        // completedRevenueAmount() above), so listing it here would just be
+        // a stray "$0.00" row; it's shown instead, with its informational
+        // value, in the separate Complimentary Service breakdown (see
+        // buildComplimentaryRows()).
+        return job.status === 'completed' && !job.isComplimentary;
       })
       .map(function (job) {
         return { id: job.id, name: jobDisplayName(job), service: job.serviceLabel || job.serviceType || '—', date: job.appointmentDate, amount: completedRevenueAmount(job) };
+      });
+  }
+
+  // Batch 3 addendum — Complimentary Service rows: completed jobs marked
+  // is_complimentary, with their purely-informational complimentaryValue.
+  // This value is NEVER summed into Revenue/Booked/Expenses/Net anywhere —
+  // it only ever feeds the separate complimentary-summary UI below, which
+  // is structurally isolated from the Revenue breakdown sheet (its own
+  // button, its own sheet, its own total line) specifically so it can
+  // never be mistaken for part of Total Revenue.
+  function buildComplimentaryRows(jobs) {
+    return (jobs || [])
+      .filter(function (job) {
+        return job.status === 'completed' && job.isComplimentary;
+      })
+      .map(function (job) {
+        return {
+          id: job.id,
+          name: jobDisplayName(job),
+          service: job.serviceLabel || job.serviceType || '—',
+          date: job.appointmentDate,
+          value: Number(job.complimentaryValue) || 0,
+          reasonLabel: job.complimentaryReasonLabel || job.complimentaryReason || '—',
+          note: job.complimentaryNote || null,
+        };
       });
   }
 
@@ -195,6 +239,7 @@ window.AdminScheduleFinancials = (function () {
   var container = null;
   var revenueEl, bookedEl, expensesEl, netEl, netCardEl;
   var revenueCardEl, bookedCardEl, expensesCardEl;
+  var complimentarySummaryEl, complimentarySummaryTextEl;
   var domReady = false;
   // Guards an in-flight expenses fetch from resolving after a newer
   // show()/hide() call already moved on to a different date range — same
@@ -238,6 +283,16 @@ window.AdminScheduleFinancials = (function () {
     if (revenueCardEl) revenueCardEl.addEventListener('click', openRevenueBreakdown);
     if (bookedCardEl) bookedCardEl.addEventListener('click', openBookedBreakdown);
     if (expensesCardEl) expensesCardEl.addEventListener('click', openExpensesBreakdown);
+
+    // Batch 3 addendum — Complimentary Service: a separate, non-card,
+    // informational summary element (see admin/index.html) — structurally
+    // outside the Revenue/Booked/Expenses/Net 4-card row on purpose, so it
+    // can never visually or programmatically be mistaken for part of Total
+    // Revenue. Optional: a page that hasn't added this markup simply never
+    // shows it, same graceful-degradation posture as `container` itself.
+    complimentarySummaryEl = document.getElementById('complimentary-summary');
+    complimentarySummaryTextEl = document.getElementById('complimentary-summary-text');
+    if (complimentarySummaryEl) complimentarySummaryEl.addEventListener('click', openComplimentaryBreakdown);
   }
 
   // ---------------------------------------------------------------------
@@ -404,6 +459,44 @@ window.AdminScheduleFinancials = (function () {
     });
   }
 
+  // Batch 3 addendum — Complimentary Service breakdown. Entirely separate
+  // from openRevenueBreakdown(): its own sheet, its own total line labeled
+  // explicitly as informational, never opened from the same button and
+  // never sharing a total with Total Revenue. complimentaryValue is a raw
+  // sum of exactly the rows shown — nothing is ever added to or compared
+  // against Revenue/Net here.
+  function openComplimentaryBreakdown() {
+    var rows = buildComplimentaryRows(lastJobs);
+    var total = rows.reduce(function (sum, r) {
+      return sum + r.value;
+    }, 0);
+    openBreakdownSheet('Complimentary Service', 'No complimentary jobs in this range.', rows, total, 'Total Complimentary Value (informational — not included in Revenue)', function (row) {
+      return renderRow(row.name, row.value, row.service + ' · ' + formatDateShort(row.date) + ' · ' + row.reasonLabel, row.note);
+    });
+  }
+
+  // Updates (or hides) the informational Complimentary Service summary —
+  // called from show()/hide() alongside the main counters, computed from
+  // the exact same `jobs` array, synchronously, no fetch. Hidden entirely
+  // when the range has no complimentary jobs, so it never shows a bare
+  // "$0" that could be mistaken for a real counter.
+  function updateComplimentarySummary(jobs) {
+    if (!complimentarySummaryEl) return;
+    var rows = buildComplimentaryRows(jobs);
+    if (!rows.length) {
+      complimentarySummaryEl.hidden = true;
+      return;
+    }
+    var total = rows.reduce(function (sum, r) {
+      return sum + r.value;
+    }, 0);
+    if (complimentarySummaryTextEl) {
+      complimentarySummaryTextEl.textContent =
+        rows.length + (rows.length === 1 ? ' complimentary job — ' : ' complimentary jobs — ') + formatMoney(total) + ' value given away (not included in Revenue)';
+    }
+    complimentarySummaryEl.hidden = false;
+  }
+
   // expenses === null means "not yet known" (still loading, or the fetch
   // failed) — shown as an em dash rather than a misleading $0 that would
   // make Net silently read as if it exactly equaled Revenue.
@@ -457,6 +550,9 @@ window.AdminScheduleFinancials = (function () {
     // contribution until its own fetch below resolves); Expenses/Net fill
     // in a moment later once that request resolves — never blocked on it.
     render(currentRevenue(), totals.booked, lastExpensesTotal);
+    // Synchronous, same as Revenue/Booked — no fetch, computed from the
+    // same `jobs` array already in hand.
+    updateComplimentarySummary(lastJobs);
 
     adminFetch('/api/admin/bookings?view=other-revenue&startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate))
       .then(function (res) {
@@ -510,6 +606,7 @@ window.AdminScheduleFinancials = (function () {
     ++requestSeq; // invalidate any in-flight expenses fetch
     closeSheet();
     container.hidden = true;
+    if (complimentarySummaryEl) complimentarySummaryEl.hidden = true;
   }
 
   return { show: show, hide: hide };

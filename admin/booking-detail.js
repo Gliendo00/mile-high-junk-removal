@@ -325,6 +325,22 @@ document.addEventListener('DOMContentLoaded', function () {
     set('d-estimated-price', quoted || 'Not set yet');
     set('d-final-price', final || 'Not set yet');
 
+    // Batch 3 addendum — complimentary/free job tracking. Informational
+    // only: never affects what's shown above as Actual Collected (which
+    // already correctly reads $0.00 for a complimentary job — the server
+    // forces final_price to 0 at write time).
+    var complimentaryRow = document.getElementById('d-complimentary-row');
+    if (booking.isComplimentary) {
+      var compParts = [booking.complimentaryReasonLabel || 'Complimentary'];
+      var compValueText = formatPrice(booking.complimentaryValue);
+      if (compValueText) compParts.push('Value ' + compValueText);
+      if (booking.complimentaryNote) compParts.push(booking.complimentaryNote);
+      set('d-complimentary-value', compParts.join(' · '));
+      complimentaryRow.style.display = 'block';
+    } else {
+      complimentaryRow.style.display = 'none';
+    }
+
     set('d-notes', booking.internalNotes || 'No internal notes yet.');
 
     if (data.dumpster) {

@@ -161,6 +161,40 @@
         </div>
       </div>
 
+      <!-- Batch 3 addendum — complimentary/free job tracking. Completed-only
+           (same gating as Tip above — see this page's own script's
+           render()): a job that isn't completed yet has nothing to mark
+           complimentary. Checking the box disables+clears Actual Job Amount
+           Collected (the server forces final_price to 0 for a complimentary
+           job regardless of what's typed there) and reveals Reason/Value/
+           Note. -->
+      <div class="admin-field" id="pricing-complimentary" style="display:none">
+        <label class="admin-expense-voided-toggle">
+          <input type="checkbox" id="is-complimentary">
+          Mark as Complimentary (no charge to the client)
+        </label>
+        <div id="complimentary-fields" style="display:none">
+          <div class="admin-field">
+            <label for="complimentary-reason">Reason</label>
+            <select id="complimentary-reason">
+              <option value="loyal_client">Loyal Client</option>
+              <option value="community_charity">Community / Charity</option>
+              <option value="service_recovery">Service Recovery</option>
+              <option value="friends_family">Friends &amp; Family</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="admin-field">
+            <label for="complimentary-value">Service Value (optional, informational only)</label>
+            <input type="number" id="complimentary-value" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+          </div>
+          <div class="admin-field">
+            <label for="complimentary-note">Note <span id="complimentary-note-required-hint" style="display:none">(required for "Other")</span></label>
+            <textarea id="complimentary-note" rows="2" placeholder="Why this job was complimentary"></textarea>
+          </div>
+        </div>
+      </div>
+
       <div class="admin-field">
         <label for="description">Description / Details (optional)</label>
         <textarea id="description" rows="2" placeholder="What's being removed, access notes, etc."></textarea>

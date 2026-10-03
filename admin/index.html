@@ -90,6 +90,18 @@
     </div>
   </div>
 
+  <!-- Batch 3 addendum — Complimentary Service: a purely informational
+       summary, deliberately NOT a 5th card in the row above (per explicit
+       "don't clutter the UI" instruction) and structurally outside
+       #schedule-financials entirely, so it can never be mistaken for part
+       of Revenue/Net. Hidden whenever the current range has no
+       complimentary jobs; admin/schedule-financials.js's
+       updateComplimentarySummary()/openComplimentaryBreakdown() own this
+       element exactly like the Revenue/Booked/Expenses cards own theirs. -->
+  <button type="button" id="complimentary-summary" class="admin-complimentary-summary" hidden>
+    <span id="complimentary-summary-text"></span>
+  </button>
+
   <!-- Quick Expense — Phase 3C Stage 2.4.2: relocated here, directly under
        the Schedule tabs, so it's always in the same place regardless of
        which range is open. admin/quick-expense.js's showBar()/hideBar()

@@ -709,6 +709,32 @@ button.admin-financial-card:focus-visible {
   outline-offset: -3px;
 }
 
+/* Batch 3 addendum — Complimentary Service summary. Deliberately plain/
+   quiet compared to .admin-financial-card (a subtle outlined pill, not a
+   solid-fill card) — visually reinforcing that this is informational only,
+   never a 5th Revenue/Booked/Expenses/Net figure. */
+.admin-complimentary-summary {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px dashed var(--color-neutral-300, #e0d7c6);
+  background: var(--color-neutral-100, #faf7f1);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-neutral-700, #645c50);
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+.admin-complimentary-summary[hidden] { display: none; }
+.admin-complimentary-summary:hover { filter: brightness(0.97); }
+.admin-complimentary-summary:focus-visible { outline: 2px solid var(--color-accent-700, #2f6f13); outline-offset: 1px; }
+
 /* Stage 4 drill-down sheet content — reuses .admin-sheet-overlay/
    .admin-sheet/.admin-sheet-title/.admin-sheet-cancel/.admin-empty as-is
    (see admin/schedule-financials.js's openBreakdownSheet()); these are just

@@ -118,6 +118,40 @@
         </div>
       </div>
 
+      <!-- Batch 3 addendum — complimentary/free job tracking. A Past Job is
+           always a completed job, so this is always available here (unlike
+           Edit Job, where it's gated to an already-completed job — see
+           admin/booking-edit/index.html). Checking the box hides/ignores
+           Actual Job Amount Collected above (the server forces final_price
+           to 0 for a complimentary job regardless of what's typed there)
+           and reveals Reason/Value/Note. -->
+      <div class="admin-field admin-complimentary-field">
+        <label class="admin-expense-voided-toggle">
+          <input type="checkbox" id="is-complimentary">
+          Mark as Complimentary (no charge to the client)
+        </label>
+      </div>
+      <div id="complimentary-fields" style="display:none">
+        <div class="admin-field">
+          <label for="complimentary-reason">Reason</label>
+          <select id="complimentary-reason">
+            <option value="loyal_client">Loyal Client</option>
+            <option value="community_charity">Community / Charity</option>
+            <option value="service_recovery">Service Recovery</option>
+            <option value="friends_family">Friends &amp; Family</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="admin-field">
+          <label for="complimentary-value">Service Value (optional, informational only)</label>
+          <input type="number" id="complimentary-value" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 250">
+        </div>
+        <div class="admin-field">
+          <label for="complimentary-note">Note <span id="complimentary-note-required-hint" style="display:none">(required for "Other")</span></label>
+          <textarea id="complimentary-note" rows="2" placeholder="Why this job was complimentary"></textarea>
+        </div>
+      </div>
+
       <div class="admin-field">
         <label id="time-mode-label">Appointment Time (optional)</label>
         <div class="admin-segmented" id="time-mode-toggle">

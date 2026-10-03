@@ -66,8 +66,31 @@ document.addEventListener('DOMContentLoaded', function () {
   var quoteToLabel = document.getElementById('quote-to-label');
   var actualPriceInput = document.getElementById('actual-price');
   var tipAmountInput = document.getElementById('tip-amount');
+  var isComplimentaryInput = document.getElementById('is-complimentary');
+  var complimentaryFields = document.getElementById('complimentary-fields');
+  var complimentaryReasonSelect = document.getElementById('complimentary-reason');
+  var complimentaryValueInput = document.getElementById('complimentary-value');
+  var complimentaryNoteInput = document.getElementById('complimentary-note');
+  var complimentaryNoteRequiredHint = document.getElementById('complimentary-note-required-hint');
   var descriptionInput = document.getElementById('description');
   var internalNotesInput = document.getElementById('internal-notes');
+
+  // Batch 3 addendum — complimentary/free job tracking. Checking the box
+  // reveals Reason/Value/Note and disables+clears Actual Job Amount
+  // Collected (the server forces final_price to 0 for a complimentary job
+  // regardless of what's typed there — disabling it here is purely so the
+  // admin never sees a stale, ignored number). Unchecking reverses both.
+  isComplimentaryInput.addEventListener('change', function () {
+    var on = isComplimentaryInput.checked;
+    complimentaryFields.style.display = on ? 'block' : 'none';
+    actualPriceInput.disabled = on;
+    if (on) actualPriceInput.value = '';
+    updateComplimentaryNoteHint();
+  });
+  complimentaryReasonSelect.addEventListener('change', updateComplimentaryNoteHint);
+  function updateComplimentaryNoteHint() {
+    complimentaryNoteRequiredHint.style.display = isComplimentaryInput.checked && complimentaryReasonSelect.value === 'other' ? 'inline' : 'none';
+  }
 
   var successPanel = document.getElementById('success-panel');
   var successMeta = document.getElementById('success-meta');
@@ -214,6 +237,14 @@ document.addEventListener('DOMContentLoaded', function () {
       showError('The maximum quote amount must be greater than the minimum.');
       return;
     }
+    if (isComplimentaryInput.checked && !complimentaryReasonSelect.value) {
+      showError('Please choose a reason for the complimentary job.');
+      return;
+    }
+    if (isComplimentaryInput.checked && complimentaryReasonSelect.value === 'other' && !complimentaryNoteInput.value.trim()) {
+      showError('Please enter a note explaining this complimentary job.');
+      return;
+    }
 
     var body = {
       mode: 'past',
@@ -244,6 +275,17 @@ document.addEventListener('DOMContentLoaded', function () {
     if (priceRaw) body.finalPrice = Number(priceRaw);
     var tipRaw = tipAmountInput.value.trim();
     if (tipRaw) body.tipAmount = Number(tipRaw);
+
+    // Batch 3 addendum — complimentary/free job tracking. The server forces
+    // finalPrice to 0 unconditionally whenever isComplimentary is true,
+    // ignoring whatever (if anything) was sent above as body.finalPrice.
+    if (isComplimentaryInput.checked) {
+      body.isComplimentary = true;
+      body.complimentaryReason = complimentaryReasonSelect.value;
+      var valueRaw = complimentaryValueInput.value.trim();
+      if (valueRaw) body.complimentaryValue = Number(valueRaw);
+      body.complimentaryNote = complimentaryNoteInput.value.trim();
+    }
 
     savingInFlight = true;
     saveBtn.disabled = true;
@@ -284,8 +326,12 @@ document.addEventListener('DOMContentLoaded', function () {
     form.style.display = 'none';
     var name = [client.firstName, client.lastName].filter(Boolean).join(' ') || 'Unnamed client';
     var metaParts = [name, booking.appointmentDate];
-    var priceText = formatPrice(booking.finalPrice);
-    if (priceText) metaParts.push(priceText);
+    if (booking.isComplimentary) {
+      metaParts.push('Complimentary');
+    } else {
+      var priceText = formatPrice(booking.finalPrice);
+      if (priceText) metaParts.push(priceText);
+    }
     var tipText = formatPrice(booking.tipAmount);
     if (tipText) metaParts.push('Tip ' + tipText);
     successMeta.textContent = metaParts.join(' · ');
