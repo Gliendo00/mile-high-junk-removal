@@ -720,6 +720,21 @@ button.admin-financial-card:focus-visible {
   margin-top: -4px;
 }
 .admin-financial-breakdown-list { display: flex; flex-direction: column; }
+/* Stage 6 (Batch 3): the Total Revenue breakdown's group headers (Job
+   Revenue / Metal Recycling / Resale Sales) — a plain small label, not a
+   row, so it's never picked up by any .admin-financial-breakdown-row
+   selector/style. Only rendered for a group that actually has rows (see
+   admin/schedule-financials.js's openRevenueBreakdown()), so Booked/
+   Expenses (which never use this class) are completely unaffected. */
+.admin-financial-breakdown-group-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-neutral-600, #82796a);
+  padding: 12px 12px 4px;
+}
+.admin-financial-breakdown-group-label:first-child { padding-top: 10px; }
 .admin-financial-breakdown-row {
   padding: 10px 12px;
   border-bottom: 1px solid var(--color-neutral-200, #eee7db);

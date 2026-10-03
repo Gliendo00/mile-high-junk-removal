@@ -11,7 +11,7 @@
 //
 // Amount rules (locked with the owner — see docs/phase-3/ for the full
 // stage 4 proposal):
-//   Revenue  = SUM(finalPrice, falling back to estimatedPrice only if
+//   Job Revenue = SUM(finalPrice, falling back to estimatedPrice only if
 //              finalPrice is null/undefined/'') over 'completed' jobs only.
 //              A real finalPrice of 0 stays 0 (see completedRevenueAmount()).
 //   Booked   = SUM(estimatedPrice) over 'booked' + 'rental_out' jobs —
@@ -19,7 +19,9 @@
 //              already display as the primary quoted figure.
 //   Expenses = the expenses endpoint's own totalAmount for the same range
 //              (already excludes voided rows by default).
-//   Net      = Revenue - Expenses. Booked is never part of Net.
+//   Revenue (the counter/card) = Job Revenue + Other Revenue — see Stage 6
+//              addendum below. Net = Revenue - Expenses. Booked is never
+//              part of either.
 // A booking's status is exclusive at any moment, so its amount can only
 // ever land in exactly one of Revenue/Booked — booked -> rental_out keeps
 // it in Booked, rental_out -> completed moves it into Revenue — never both,
@@ -41,6 +43,27 @@
 // admin/calendar-views.js's state, so closing it always returns to the
 // exact same Schedule view. Net has no button/click handler at all, per
 // explicit instruction to leave it non-interactive for now.
+//
+// Stage 6 (Batch 3) addendum — Other Revenue (Metal Recycling, Resale
+// Sales): a third parallel fetch, GET ?view=other-revenue&startDate=&
+// endDate=, same shape/endpoint-reuse reasoning as the Expenses fetch
+// above. The Revenue CARD/counter deliberately keeps its existing compact
+// label ("Revenue") — it already means "every revenue source for this
+// range," so no dashboard label changed and no new top-level card was
+// added, per the owner's explicit "don't clutter the UI" instruction.
+// Disambiguation happens one tap in: opening the Revenue breakdown sheet
+// now shows three clearly separated, individually-labeled groups (Job
+// Revenue / Metal Recycling / Resale Sales), each only rendered when it has
+// at least one row, under a sheet title of "Total Revenue" — so there is
+// never any ambiguity about what the number is made of, without adding a
+// fifth card. Job Revenue itself (completedRevenueAmount()) is completely
+// untouched by this addendum — Other Revenue only ever ADDS to the
+// Revenue/Net figures, never blended into or mistaken for a job's own
+// amount. Revenue/Booked still render synchronously from `jobs` the instant
+// show() is called (Other Revenue defaults to a $0 contribution until its
+// own fetch resolves, then the Revenue/Net counters quietly refine upward
+// if the range has any — same progressive-fill pattern Expenses/Net already
+// use, never a blocking wait).
 //
 // Every dynamic value is written with textContent, matching every other
 // admin script's no-innerHTML discipline.
@@ -134,6 +157,35 @@ window.AdminScheduleFinancials = (function () {
       });
   }
 
+  // Stage 6 (Batch 3): one Other Revenue row per type, built from
+  // `lastOtherRevenueRows` (the ledger rows the ?view=other-revenue fetch
+  // already returned — never re-filtered server-side, just split by
+  // `type` here so each group renders separately in the breakdown sheet).
+  // `label` is the row's own typeLabel from the server (e.g. "Metal
+  // Recycling"), matching the group header above it.
+  function buildOtherRevenueRowsByType(rows, type) {
+    return (rows || [])
+      .filter(function (r) {
+        return r.type === type;
+      })
+      .map(function (r) {
+        return {
+          id: r.id,
+          label: r.typeLabel || r.type,
+          date: r.revenueDate,
+          amount: Number(r.amount) || 0,
+          note: r.note || null,
+          jobLabel: r.job ? r.job.label : null,
+        };
+      });
+  }
+
+  function otherRevenueRowToEl(row) {
+    var metaParts = [formatDateShort(row.date)];
+    if (row.jobLabel) metaParts.push(row.jobLabel);
+    return renderRow(row.label, row.amount, metaParts.join(' · '), row.note);
+  }
+
   function buildExpenseRows(expenseRows) {
     return (expenseRows || []).map(function (e) {
       return { id: e.id, category: e.categoryLabel || e.category, date: e.expenseDate, amount: Number(e.amount) || 0, note: e.note || null, vendor: e.vendor || null };
@@ -159,6 +211,15 @@ window.AdminScheduleFinancials = (function () {
   var lastJobs = [];
   var lastExpenseRows = null;
   var lastExpensesTotal = null;
+  // Stage 6 (Batch 3): default to an empty/zero contribution rather than
+  // null/"unknown" — unlike Expenses, Revenue has always rendered
+  // synchronously the instant show() is called (from `jobs`, already in
+  // hand); Other Revenue is additive on top of that, so it defaults to
+  // contributing $0 until its own fetch resolves, then the Revenue/Net
+  // counters quietly refine upward rather than ever blocking or showing an
+  // em dash for Revenue itself.
+  var lastOtherRevenueRows = [];
+  var lastOtherRevenueTotal = 0;
 
   function ensureDom() {
     if (domReady) return;
@@ -227,9 +288,12 @@ window.AdminScheduleFinancials = (function () {
     return row;
   }
 
-  // title/emptyText/totalLabel: static per-counter strings. rows/total:
-  // this specific range's data. rowToEl(row): builds one row's markup.
-  function openBreakdownSheet(title, emptyText, rows, total, totalLabel, rowToEl) {
+  // Shared sheet chrome (title/range label/list/total row/close button) —
+  // takes an already-built list element rather than rows+rowToEl, so both
+  // the simple single-list counters (Booked/Expenses) and Revenue's
+  // multi-group breakdown (Stage 6/Batch 3, see below) can share this one
+  // shell without Revenue needing a rows/rowToEl shape it doesn't have.
+  function renderSheetChrome(title, listEl, total, totalLabel) {
     ensureSheetDom();
     while (sheet.firstChild) sheet.removeChild(sheet.firstChild);
 
@@ -237,15 +301,7 @@ window.AdminScheduleFinancials = (function () {
     var rangeLabel = dateRangeLabel(lastStartDate, lastEndDate);
     if (rangeLabel) sheet.appendChild(el('div', 'admin-financial-breakdown-range', rangeLabel));
 
-    var list = el('div', 'admin-financial-breakdown-list');
-    if (!rows.length) {
-      list.appendChild(el('div', 'admin-empty', emptyText));
-    } else {
-      rows.forEach(function (row) {
-        list.appendChild(rowToEl(row));
-      });
-    }
-    sheet.appendChild(list);
+    sheet.appendChild(listEl);
 
     var totalRow = el('div', 'admin-financial-breakdown-total');
     totalRow.appendChild(el('span', null, totalLabel));
@@ -260,14 +316,62 @@ window.AdminScheduleFinancials = (function () {
     overlay.removeAttribute('hidden');
   }
 
+  // title/emptyText/totalLabel: static per-counter strings. rows/total:
+  // this specific range's data. rowToEl(row): builds one row's markup.
+  // Unchanged behavior from before Stage 6 — still exactly one flat list.
+  function openBreakdownSheet(title, emptyText, rows, total, totalLabel, rowToEl) {
+    var list = el('div', 'admin-financial-breakdown-list');
+    if (!rows.length) {
+      list.appendChild(el('div', 'admin-empty', emptyText));
+    } else {
+      rows.forEach(function (row) {
+        list.appendChild(rowToEl(row));
+      });
+    }
+    renderSheetChrome(title, list, total, totalLabel);
+  }
+
+  // Stage 6 (Batch 3): Revenue's breakdown is no longer a single flat list
+  // — it's three clearly separated, individually-labeled groups (Job
+  // Revenue / Metal Recycling / Resale Sales), so there is never any
+  // ambiguity about what the Revenue counter is made of once Other Revenue
+  // is in use. A group is only rendered at all when it has at least one
+  // row — an empty group (the common case for Metal Recycling/Resale Sales
+  // until the owner actually starts using them) shows nothing rather than
+  // a redundant "no rows" line for every unused type. The sheet title is
+  // "Total Revenue" (distinct from the compact "Revenue" card label, which
+  // deliberately stays unchanged on the dashboard itself — see this file's
+  // header). grandTotal is always the exact sum of every rendered row
+  // (never a separate re-fetch), so it can never drift from what the
+  // Revenue/Net counters show.
   function openRevenueBreakdown() {
-    var rows = buildRevenueRows(lastJobs);
-    var total = rows.reduce(function (sum, r) {
-      return sum + r.amount;
-    }, 0);
-    openBreakdownSheet('Revenue', 'No completed jobs in this range.', rows, total, 'Total Revenue', function (row) {
-      return renderRow(row.name, row.amount, row.service + ' · ' + formatDateShort(row.date));
+    var groups = [
+      {
+        label: 'Job Revenue',
+        rows: buildRevenueRows(lastJobs),
+        rowToEl: function (row) {
+          return renderRow(row.name, row.amount, row.service + ' · ' + formatDateShort(row.date));
+        },
+      },
+      { label: 'Metal Recycling', rows: buildOtherRevenueRowsByType(lastOtherRevenueRows, 'metal_recycling'), rowToEl: otherRevenueRowToEl },
+      { label: 'Resale Sales', rows: buildOtherRevenueRowsByType(lastOtherRevenueRows, 'resale_sale'), rowToEl: otherRevenueRowToEl },
+    ];
+
+    var list = el('div', 'admin-financial-breakdown-list');
+    var grandTotal = 0;
+    var anyRows = false;
+    groups.forEach(function (group) {
+      if (!group.rows.length) return;
+      anyRows = true;
+      list.appendChild(el('div', 'admin-financial-breakdown-group-label', group.label));
+      group.rows.forEach(function (row) {
+        list.appendChild(group.rowToEl(row));
+        grandTotal += row.amount;
+      });
     });
+    if (!anyRows) list.appendChild(el('div', 'admin-empty', 'No revenue in this range.'));
+
+    renderSheetChrome('Total Revenue', list, grandTotal, 'Total Revenue');
   }
 
   function openBookedBreakdown() {
@@ -333,13 +437,46 @@ window.AdminScheduleFinancials = (function () {
     lastJobs = jobs || [];
     lastExpenseRows = null;
     lastExpensesTotal = null;
+    lastOtherRevenueRows = [];
+    lastOtherRevenueTotal = 0;
 
     var seq = ++requestSeq;
     var totals = computeFromJobs(lastJobs);
-    // Revenue/Booked render immediately (everything needed is already in
-    // hand); Expenses/Net fill in a moment later once that request
-    // resolves — never blocked on it.
-    render(totals.revenue, totals.booked, null);
+    // Stage 6 (Batch 3): the Revenue counter is Job Revenue + Other Revenue
+    // — always read lastOtherRevenueTotal fresh here rather than closing
+    // over a value captured before its own fetch resolves, so this same
+    // function is correct whether it runs before or after that fetch
+    // settles (see the two .then() calls below, each of which re-renders
+    // through this same helper).
+    function currentRevenue() {
+      return totals.revenue + (lastOtherRevenueTotal || 0);
+    }
+
+    // Revenue/Booked render immediately (everything needed for Job
+    // Revenue/Booked is already in hand; Other Revenue defaults to a $0
+    // contribution until its own fetch below resolves); Expenses/Net fill
+    // in a moment later once that request resolves — never blocked on it.
+    render(currentRevenue(), totals.booked, lastExpensesTotal);
+
+    adminFetch('/api/admin/bookings?view=other-revenue&startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate))
+      .then(function (res) {
+        // A 401/failure here just means Other Revenue stays at its $0
+        // default contribution for this render — Job Revenue/Booked/
+        // Expenses/Net are all completely unaffected either way.
+        if (!res.ok) return null;
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (body) {
+        if (seq !== requestSeq) return; // superseded by a newer range/date
+        if (body && typeof body.totalAmount === 'number') {
+          lastOtherRevenueTotal = body.totalAmount;
+          lastOtherRevenueRows = Array.isArray(body.otherRevenue) ? body.otherRevenue : [];
+        }
+        render(currentRevenue(), totals.booked, lastExpensesTotal);
+      })
+      .catch(function () {
+        // Non-blocking, same posture as the expenses fetch below.
+      });
 
     adminFetch('/api/admin/bookings?view=expenses&startDate=' + encodeURIComponent(startDate) + '&endDate=' + encodeURIComponent(endDate))
       .then(function (res) {
@@ -359,7 +496,7 @@ window.AdminScheduleFinancials = (function () {
           lastExpensesTotal = expenses;
           lastExpenseRows = Array.isArray(body.expenses) ? body.expenses : [];
         }
-        render(totals.revenue, totals.booked, expenses);
+        render(currentRevenue(), totals.booked, expenses);
       })
       .catch(function () {
         // Non-blocking, same posture as admin/quick-expense.js: Revenue/

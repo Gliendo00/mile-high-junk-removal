@@ -798,6 +798,13 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // reached by any booking-shaped request. See
       // tests/phase3c-stage2.4-expenses.test.js for its full coverage.
       "api/admin/bookings.js: .insert(",
+      // Phase 3C Stage 6 (Batch 3) added exactly one new insert — the
+      // Other Revenue ledger's handleCreateOtherRevenue(), reachable only
+      // via resource:"other-revenue" on this same POST. Listed here (not
+      // after the Stage 3 comment below) since ".insert(" sorts before
+      // ".update(" for this file. See
+      // tests/phase3c-stage6-other-revenue.test.js.
+      "api/admin/bookings.js: .insert(",
       // Phase 3C Stage 3 (full Expense Management) added exactly two new
       // write calls, both inside handlePatchExpense(), both reachable only
       // via the same resource:"expense" PATCH discriminator — see
@@ -805,6 +812,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // full explanation, and tests/phase3c-stage3-expenses-management.test.js
       // for this stage's own coverage.
       "api/admin/bookings.js: .update(",
+      "api/admin/bookings.js: .update(",
+      // Phase 3C Stage 6 (Batch 3) added exactly one new update — the
+      // Other Revenue ledger's handleVoidOtherRevenue(), the ONLY write
+      // this ledger's PATCH allows. See
+      // tests/phase3c-stage6-other-revenue.test.js.
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
       // Batch 2D added exactly one new insert — writeCustomerAuditLog(),
@@ -1171,16 +1183,24 @@ function makeFullFakeFinancialsDom() {
 
 // Loads the real, unmodified admin/schedule-financials.js into a vm context
 // against the fuller fake DOM above and calls show() with the given
-// jobs/expenses. expensesBody defaults to an empty, successfully-loaded
-// list (never null) so Expenses-breakdown tests exercise the real loaded
-// path, not the "could not load" fallback — pass expensesBody: null to
-// test that fallback specifically.
-function mountRealFinancialsScript(jobs, expensesBody) {
+// jobs/expenses/other-revenue. expensesBody defaults to an empty,
+// successfully-loaded list (never null) so Expenses-breakdown tests
+// exercise the real loaded path, not the "could not load" fallback — pass
+// expensesBody: null to test that fallback specifically. otherRevenueBody
+// (Stage 6 / Batch 3) defaults the same way to an empty, successfully-
+// loaded list — $0 contribution, same as every pre-Stage-6 test expects,
+// since none of them pass it explicitly.
+function mountRealFinancialsScript(jobs, expensesBody, otherRevenueBody) {
   const src = readSrc("admin/schedule-financials.js");
   const fakeDom = makeFullFakeFinancialsDom();
   const body = expensesBody === undefined ? { totalAmount: 0, expenses: [] } : expensesBody;
+  const otherBody = otherRevenueBody === undefined ? { totalAmount: 0, otherRevenue: [] } : otherRevenueBody;
   const sandbox = {
-    fetch: () => (body === null ? Promise.resolve({ ok: false }) : Promise.resolve({ ok: true, json: () => Promise.resolve(body) })),
+    fetch: (url) => {
+      const isOtherRevenue = typeof url === "string" && url.indexOf("view=other-revenue") !== -1;
+      const thisBody = isOtherRevenue ? otherBody : body;
+      return thisBody === null ? Promise.resolve({ ok: false }) : Promise.resolve({ ok: true, json: () => Promise.resolve(thisBody) });
+    },
     document: fakeDom.document,
     console,
   };
@@ -1221,8 +1241,15 @@ function readOpenSheet(fakeBody) {
   });
   const emptyEl = collectByClass(sheet, "admin-empty", [])[0];
   const totalEl = collectByClass(sheet, "admin-financial-breakdown-total", [])[0];
+  // Stage 6 (Batch 3): the Revenue breakdown's group headers ("Job
+  // Revenue" / "Metal Recycling" / "Resale Sales") — a different class
+  // than .admin-financial-breakdown-row, so they never show up in `rows`
+  // above; collected separately, in document order, for the new grouping
+  // tests below.
+  const groupLabels = collectByClass(sheet, "admin-financial-breakdown-group-label", []).map((g) => g.textContent);
   return {
     open: true,
+    groupLabels,
     title: title && title.textContent,
     range: rangeEl && rangeEl.textContent,
     rows,
@@ -1243,7 +1270,7 @@ test("Drill-down: clicking Revenue opens a sheet listing only completed jobs, us
   mounted.els["financial-revenue-card"].click();
   const sheetState = readOpenSheet(mounted.body);
   assert.ok(sheetState.open, "clicking Revenue must open the sheet");
-  assert.strictEqual(sheetState.title, "Revenue");
+  assert.strictEqual(sheetState.title, "Total Revenue");
   assert.strictEqual(sheetState.rows.length, 2, "only the two completed jobs (r1, r2) belong in the Revenue breakdown");
   assert.strictEqual(sheetState.rows[0].name, "Alice Smith");
   assert.strictEqual(sheetState.rows[0].amount, "$100.00");
@@ -1391,6 +1418,135 @@ test("admin/schedule-financials.js: completedRevenueAmount() and bookedJobAmount
   const bookedCalls = (src.match(/bookedJobAmount\(job\)/g) || []).length;
   assert.ok(completedCalls >= 2, "completedRevenueAmount(job) must be called from both computeFromJobs() and buildRevenueRows()");
   assert.ok(bookedCalls >= 2, "bookedJobAmount(job) must be called from both computeFromJobs() and buildBookedRows()");
+});
+
+// =======================================================================
+// 11. Stage 6 (Batch 3): Other Revenue (Metal Recycling, Resale Sales)
+// integration with the Revenue/Net counters and the Total Revenue
+// breakdown sheet. Same vm technique as sections 8–9 — the real,
+// unmodified admin/schedule-financials.js, a fake DOM, and a fetch stub
+// that now routes by URL (see mountRealFinancialsScript's otherRevenueBody
+// param).
+// =======================================================================
+const OTHER_REVENUE_TEST_ROWS = [
+  { id: "or1", type: "metal_recycling", typeLabel: "Metal Recycling", amount: 185, revenueDate: "2026-09-19", note: "Scrap load", job: null },
+  { id: "or2", type: "resale_sale", typeLabel: "Resale Sales", amount: 40, revenueDate: "2026-09-18", note: "Sold recovered sofa", job: { label: "Bob Jones — 2026-09-18 — 15-Yard Dumpster Rental" } },
+];
+
+test("Revenue counter: Other Revenue adds to Job Revenue once its own fetch resolves, and Net reflects the combined total", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS, { totalAmount: 50, expenses: [] }, { totalAmount: 225, otherRevenue: OTHER_REVENUE_TEST_ROWS });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      // Job Revenue alone (REVENUE_TEST_JOBS r1+r2) is $400.00 — see the
+      // existing Drill-down Revenue test above. + $225 Other Revenue = $625.
+      assert.strictEqual(mounted.els["financial-revenue-value"].textContent, "$625.00");
+      assert.strictEqual(mounted.els["financial-net-value"].textContent, "$575.00", "Net = $625 Revenue - $50 Expenses");
+      resolve();
+    });
+  });
+});
+
+test("Booked counter: completely unaffected by Other Revenue — resale/metal entries are never job rows and never summed into Booked", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS, undefined, { totalAmount: 225, otherRevenue: OTHER_REVENUE_TEST_ROWS });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      // REVENUE_TEST_JOBS's r3 (booked, $200) + r4 (rental_out, $150) = $350, same as the pre-Stage-6 Booked test above.
+      assert.strictEqual(mounted.els["financial-booked-value"].textContent, "$350.00");
+      resolve();
+    });
+  });
+});
+
+test("Revenue counter: before the Other Revenue fetch resolves, Revenue shows Job Revenue alone (a $0 default contribution, never blocking)", () => {
+  const result = renderJobsWithRealFinancialsScript([{ status: "completed", finalPrice: 300, estimatedPrice: 0 }]);
+  // Read synchronously, before any stubbed fetch's promise has had a chance
+  // to resolve — same technique the existing Completed-Revenue regression
+  // tests above already rely on.
+  assert.strictEqual(result.revenue, "$300.00");
+});
+
+test("Drill-down: clicking Total Revenue with both Other Revenue types present shows three groups — Job Revenue, Metal Recycling, Resale Sales — each reconciling exactly, with no cross-contamination between them", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS, undefined, { totalAmount: 225, otherRevenue: OTHER_REVENUE_TEST_ROWS });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["financial-revenue-card"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.ok(sheetState.open);
+      assert.strictEqual(sheetState.title, "Total Revenue");
+      assert.deepStrictEqual(sheetState.groupLabels, ["Job Revenue", "Metal Recycling", "Resale Sales"]);
+      assert.strictEqual(sheetState.rows.length, 4, "2 completed jobs + 1 metal_recycling row + 1 resale_sale row");
+
+      // Job Revenue rows — byte-identical to the pre-Stage-6 Revenue
+      // breakdown test above, proving Other Revenue never altered them.
+      assert.strictEqual(sheetState.rows[0].name, "Alice Smith");
+      assert.strictEqual(sheetState.rows[0].amount, "$100.00");
+      assert.strictEqual(sheetState.rows[1].name, "Bob Jones");
+      assert.strictEqual(sheetState.rows[1].amount, "$300.00");
+
+      // Metal Recycling row.
+      assert.strictEqual(sheetState.rows[2].name, "Metal Recycling");
+      assert.strictEqual(sheetState.rows[2].amount, "$185.00");
+      assert.strictEqual(sheetState.rows[2].note, "Scrap load");
+
+      // Resale Sales row — including its optional linked-job meta line.
+      assert.strictEqual(sheetState.rows[3].name, "Resale Sales");
+      assert.strictEqual(sheetState.rows[3].amount, "$40.00");
+      assert.ok(sheetState.rows[3].meta.indexOf("Bob Jones") !== -1, "the linked job's label must show in the meta line");
+      assert.strictEqual(sheetState.rows[3].note, "Sold recovered sofa");
+
+      assert.strictEqual(sheetState.totalText, "Total Revenue $625.00", "$400 Job Revenue + $185 Metal Recycling + $40 Resale Sales");
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: Total Revenue with NO Other Revenue in range shows only the Job Revenue group — no empty Metal Recycling/Resale Sales headers", () => {
+  const mounted = mountRealFinancialsScript(REVENUE_TEST_JOBS); // otherRevenueBody defaults to {totalAmount:0, otherRevenue:[]}
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["financial-revenue-card"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.deepStrictEqual(sheetState.groupLabels, ["Job Revenue"], "an empty type must never render its own group header");
+      assert.strictEqual(sheetState.rows.length, 2);
+      resolve();
+    });
+  });
+});
+
+test("Drill-down: Total Revenue with zero completed jobs AND zero Other Revenue shows the 'No revenue in this range' empty state, not a stray $0 row", () => {
+  const mounted = mountRealFinancialsScript([]);
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      mounted.els["financial-revenue-card"].click();
+      const sheetState = readOpenSheet(mounted.body);
+      assert.deepStrictEqual(sheetState.groupLabels, []);
+      assert.strictEqual(sheetState.rows.length, 0);
+      assert.strictEqual(sheetState.emptyText, "No revenue in this range.");
+      assert.strictEqual(sheetState.totalText, "Total Revenue $0.00");
+      resolve();
+    });
+  });
+});
+
+test("Resale Sales never alters or inflates Job Revenue: the same completed-jobs-only job array produces the identical Job Revenue amount with or without a resale_sale row present", () => {
+  const withoutResale = mountRealFinancialsScript(REVENUE_TEST_JOBS, undefined, { totalAmount: 0, otherRevenue: [] });
+  const withResale = mountRealFinancialsScript(REVENUE_TEST_JOBS, undefined, { totalAmount: 40, otherRevenue: [OTHER_REVENUE_TEST_ROWS[1]] });
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      withoutResale.els["financial-revenue-card"].click();
+      const withoutState = readOpenSheet(withoutResale.body);
+      const withoutJobTotal = withoutState.rows.reduce((sum, r) => sum + Number(r.amount.replace(/[^0-9.-]/g, "")), 0);
+
+      withResale.els["financial-revenue-card"].click();
+      const withState = readOpenSheet(withResale.body);
+      const withJobRows = withState.rows.slice(0, withState.rows.length - 1); // drop the trailing resale_sale row
+      const withJobTotal = withJobRows.reduce((sum, r) => sum + Number(r.amount.replace(/[^0-9.-]/g, "")), 0);
+
+      assert.strictEqual(withoutJobTotal, withJobTotal, "Job Revenue's own total must be identical whether or not a resale_sale row exists in the range");
+      assert.strictEqual(withoutJobTotal, 400);
+      resolve();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------
