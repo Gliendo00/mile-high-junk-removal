@@ -270,12 +270,12 @@ document.addEventListener('DOMContentLoaded', function () {
       var smsHref = buildSmsHref(customer.phone);
       if (telHref) {
         phoneLink.href = telHref;
-        phoneLink.textContent = customer.phone;
+        phoneLink.textContent = formatPhone(customer.phone);
         callBtn.href = telHref;
         textBtn.href = smsHref;
       } else {
         phoneLink.removeAttribute('href');
-        phoneLink.textContent = customer.phone || '—';
+        phoneLink.textContent = formatPhone(customer.phone) || '—';
         disableAction(callBtn);
         disableAction(textBtn);
       }

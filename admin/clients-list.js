@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-card-name', [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client'));
 
     var contactParts = [];
-    if (c.phone) contactParts.push(c.phone);
+    if (c.phone) contactParts.push(formatPhone(c.phone));
     if (c.city) contactParts.push(c.city);
     a.appendChild(el('div', 'admin-card-service', contactParts.length ? contactParts.join(' · ') : '—'));
 

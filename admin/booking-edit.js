@@ -264,7 +264,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') : '';
     clientNameEl.textContent = name || 'Unknown client';
     var metaParts = [];
-    if (customer && customer.phone) metaParts.push(customer.phone);
+    if (customer && customer.phone) metaParts.push(formatPhone(customer.phone));
     if (customer && customer.email) metaParts.push(customer.email);
     clientMetaEl.textContent = metaParts.length ? metaParts.join(' · ') : 'No contact info on file';
 

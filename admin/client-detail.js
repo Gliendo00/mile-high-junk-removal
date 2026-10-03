@@ -161,12 +161,12 @@ document.addEventListener('DOMContentLoaded', function () {
     var smsHref = buildSmsHref(client.phone);
     if (telHref) {
       phoneLink.href = telHref;
-      phoneLink.textContent = client.phone;
+      phoneLink.textContent = formatPhone(client.phone);
       callBtn.href = telHref;
       textBtn.href = smsHref;
     } else {
       phoneLink.removeAttribute('href');
-      phoneLink.textContent = client.phone || '—';
+      phoneLink.textContent = formatPhone(client.phone) || '—';
       disableAction(callBtn);
       disableAction(textBtn);
     }
@@ -419,14 +419,14 @@ document.addEventListener('DOMContentLoaded', function () {
     var smsHref = buildSmsHref(client.phone);
     if (telHref) {
       phoneLink.href = telHref;
-      phoneLink.textContent = client.phone;
+      phoneLink.textContent = formatPhone(client.phone);
       callBtn.removeAttribute('aria-disabled');
       textBtn.removeAttribute('aria-disabled');
       callBtn.href = telHref;
       textBtn.href = smsHref;
     } else {
       phoneLink.removeAttribute('href');
-      phoneLink.textContent = client.phone || '—';
+      phoneLink.textContent = formatPhone(client.phone) || '—';
       disableAction(callBtn);
       disableAction(textBtn);
     }

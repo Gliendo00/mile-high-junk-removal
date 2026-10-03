@@ -190,7 +190,7 @@ window.AdminClientPicker = (function () {
     var name = [existingClient.firstName, existingClient.lastName].filter(Boolean).join(" ") || "Unnamed client";
     card.appendChild(el("div", "admin-duplicate-card-name", name));
     var metaParts = [];
-    if (existingClient.phone) metaParts.push(existingClient.phone);
+    if (existingClient.phone) metaParts.push(formatPhone(existingClient.phone));
     if (existingClient.email) metaParts.push(existingClient.email);
     if (existingClient.city) metaParts.push(existingClient.city);
     card.appendChild(el("div", "admin-duplicate-card-meta", metaParts.join(" · ")));
@@ -346,7 +346,7 @@ window.AdminClientPicker = (function () {
       var name = [client.firstName, client.lastName].filter(Boolean).join(" ") || "Unnamed client";
       summaryName.textContent = name;
       var metaParts = [];
-      if (client.phone) metaParts.push(client.phone);
+      if (client.phone) metaParts.push(formatPhone(client.phone));
       if (client.email) metaParts.push(client.email);
       summaryMeta.textContent = metaParts.length ? metaParts.join(" · ") : "No contact info on file";
       summary.removeAttribute("hidden");
@@ -392,7 +392,7 @@ window.AdminClientPicker = (function () {
           var name = [c.firstName, c.lastName].filter(Boolean).join(" ") || "Unnamed client";
           btn.appendChild(el("span", "admin-picker-item-name", name));
           var metaParts = [];
-          if (c.phone) metaParts.push(c.phone);
+          if (c.phone) metaParts.push(formatPhone(c.phone));
           if (c.city) metaParts.push(c.city);
           btn.appendChild(el("span", "admin-picker-item-meta", metaParts.join(" · ") || "No contact info on file"));
           btn.addEventListener("click", function () {
