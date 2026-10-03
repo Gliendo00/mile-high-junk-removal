@@ -229,6 +229,22 @@ test("admin.css: defines all four confidence-dot color classes, reusing the exis
   });
 });
 
+// =======================================================================
+// Mock vision provider (hardening pass) — a Preview/test-only, explicit
+// opt-in, never a silent fallback from a failing/unconfigured real provider.
+// =======================================================================
+test("api/_lib/intake-vision-provider.js: mock is reachable only via explicit INTAKE_VISION_PROVIDER=mock, default stays openai", () => {
+  const src = readNormalized("api/_lib/intake-vision-provider.js");
+  assert.ok(/mock:\s*callMock/.test(src), "PROVIDERS map must register the mock provider");
+  assert.ok(/process\.env\.INTAKE_VISION_PROVIDER \|\| "openai"/.test(src), "the default must remain openai even with mock implemented");
+});
+
+test("api/_lib/intake-vision-provider.js: the openai provider has no code path that invokes callMock on its own failure", () => {
+  const src = readNormalized("api/_lib/intake-vision-provider.js");
+  const openAiFnSrc = src.slice(src.indexOf("async function callOpenAi"), src.indexOf("async function callOpenAi") + 3000);
+  assert.ok(!/callMock/.test(openAiFnSrc), "callOpenAi() must never reference callMock() — no fallback chain of any kind");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

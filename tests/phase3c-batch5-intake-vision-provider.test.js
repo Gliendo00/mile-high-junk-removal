@@ -92,6 +92,7 @@ function resetEnv() {
   delete process.env.OPENAI_API_KEY;
   delete process.env.INTAKE_VISION_PROVIDER;
   delete process.env.INTAKE_VISION_MODEL;
+  delete process.env.VERCEL_ENV;
   fetchCalls = [];
   fetchImpl = okFetch(openAiEnvelope(fullValidExtraction()));
 }
@@ -336,6 +337,98 @@ test("the API key never appears anywhere in a thrown error's message, across eve
     caught = err;
   }
   assert.ok(!caught.message.includes("sk-super-secret-value"));
+});
+
+// ---------------------------------------------------------------------
+// Mock provider (INTAKE_VISION_PROVIDER=mock) — Preview/test only.
+// ---------------------------------------------------------------------
+test("mock provider: never calls fetch and needs no OPENAI_API_KEY", async () => {
+  resetEnv();
+  process.env.INTAKE_VISION_PROVIDER = "mock";
+  const result = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  assert.strictEqual(fetchCalls.length, 0, "mock must never touch the network");
+  assert.ok(result);
+});
+
+test("mock provider: returns the same deterministic result across repeated calls", async () => {
+  resetEnv();
+  process.env.INTAKE_VISION_PROVIDER = "mock";
+  const r1 = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  const r2 = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  assert.deepStrictEqual(r1, r2);
+});
+
+test("mock provider: result matches the normalized shape (every FIELD_KEYS key present, valid classification/confidence)", async () => {
+  resetEnv();
+  process.env.INTAKE_VISION_PROVIDER = "mock";
+  const result = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  FIELD_KEYS.forEach((key) => {
+    assert.ok(result.fields[key], "missing field: " + key);
+    assert.ok(["value", "confidence", "sourceIndex"].every((k) => k in result.fields[key]));
+  });
+  assert.strictEqual(result.fields.firstName.value, "Mock");
+  assert.strictEqual(result.fields.phone.value, "(303) 555-0199");
+  assert.strictEqual(result.classification, "lead_only");
+  assert.strictEqual(Array.isArray(result.conflicts), true);
+});
+
+test("mock provider: a single screenshot produces no conflicts; more than one produces a date conflict (exercises the Conflicts UI)", async () => {
+  resetEnv();
+  process.env.INTAKE_VISION_PROVIDER = "mock";
+  const single = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  assert.strictEqual(single.conflicts.length, 0);
+
+  const multi = await extractFromScreenshots({ images: [SAMPLE_IMAGES[0], SAMPLE_IMAGES[0]] });
+  assert.strictEqual(multi.conflicts.length, 1);
+  assert.strictEqual(multi.conflicts[0].field, "date");
+  assert.strictEqual(multi.conflicts[0].values.length, 2);
+});
+
+test("mock provider: refuses outright when VERCEL_ENV=production, regardless of how INTAKE_VISION_PROVIDER got set to mock", async () => {
+  resetEnv();
+  process.env.INTAKE_VISION_PROVIDER = "mock";
+  process.env.VERCEL_ENV = "production";
+  await assert.rejects(() => extractFromScreenshots({ images: SAMPLE_IMAGES }));
+  assert.strictEqual(fetchCalls.length, 0);
+});
+
+test("a failing/unconfigured openai provider NEVER silently falls back to the mock's deterministic output", async () => {
+  resetEnv();
+  // INTAKE_VISION_PROVIDER left unset -> defaults to "openai" per the file's
+  // own contract; OPENAI_API_KEY also left unset -> must reject, not quietly
+  // hand back mock's "Mock"/"(303) 555-0199" fixture.
+  let caught = null;
+  let result = null;
+  try {
+    result = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  } catch (err) {
+    caught = err;
+  }
+  assert.strictEqual(result, null, "must never resolve at all when openai has no key configured");
+  assert.ok(caught instanceof Error);
+
+  // Same check for a configured-but-failing openai (network/HTTP error) —
+  // still never silently resolves with mock data.
+  process.env.OPENAI_API_KEY = "sk-test";
+  fetchImpl = function () {
+    return Promise.reject(new Error("network down"));
+  };
+  let caught2 = null;
+  let result2 = null;
+  try {
+    result2 = await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  } catch (err) {
+    caught2 = err;
+  }
+  assert.strictEqual(result2, null);
+  assert.ok(caught2 instanceof Error);
+});
+
+test("INTAKE_VISION_PROVIDER still defaults to openai when unset, even with mock implemented", async () => {
+  resetEnv();
+  process.env.OPENAI_API_KEY = "sk-test";
+  await extractFromScreenshots({ images: SAMPLE_IMAGES });
+  assert.strictEqual(fetchCalls.length, 1, "the default path must still be openai (a real fetch call), not mock");
 });
 
 // ---------------------------------------------------------------------

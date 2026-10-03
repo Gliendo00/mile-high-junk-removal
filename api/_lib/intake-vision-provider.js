@@ -22,8 +22,8 @@
 // add it to Vercel without Rocky's explicit go-ahead):
 //   OPENAI_API_KEY — the only credential the "openai" provider needs.
 // Optional:
-//   INTAKE_VISION_PROVIDER — defaults to "openai". Reserved for a future
-//     "claude"/"gemini" value once another branch exists below.
+//   INTAKE_VISION_PROVIDER — "openai" (default) or "mock". Reserved values
+//     for a future "claude"/"gemini" branch once one exists below.
 //   INTAKE_VISION_MODEL — defaults to DEFAULT_OPENAI_MODEL. Lets the exact
 //     model be tuned (e.g. for cost/quality) without a code change.
 //
@@ -31,7 +31,19 @@
 // a safe, generic error — callers (api/admin/intake.js) must treat that
 // identically to any other provider failure: mark the intake session
 // extraction_failed, never crash the request, never lose the uploaded
-// screenshots.
+// screenshots. The "openai" provider NEVER falls back to "mock" on its own
+// failure (missing key, network error, bad response) — PROVIDERS below is a
+// single strict-by-name lookup with no fallback chain of any kind. The only
+// way "mock" ever runs is INTAKE_VISION_PROVIDER being explicitly set to
+// "mock" in that environment's own config.
+//
+// "mock" (Preview/test only — see callMock() below): returns a fixed,
+// deterministic extraction with no network call and no credential, so the
+// full upload -> extract -> pending_review -> review/edit -> discard flow
+// can be exercised in Preview before OPENAI_API_KEY is ever added. Refuses
+// outright when VERCEL_ENV is "production" — a stray INTAKE_VISION_PROVIDER
+// misconfiguration must never fabricate fake client data into a real
+// intake record.
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
@@ -290,12 +302,78 @@ async function callOpenAi(images, hintContext) {
   return normalizeExtractionResult(parsed);
 }
 
+// Deterministic Preview/test fixture — no network, no credential, same
+// output shape normalizeExtractionResult() guarantees for every other
+// provider. Fixed values on purpose (not derived from the actual image
+// bytes, which this function never reads) so the same upload sequence
+// always produces the same reviewable record: a resolvable phone number
+// (Rocky can seed one matching Preview customer to exercise existing_exact,
+// a different/no match for new_candidate, two matching customers for
+// needs_confirmation — see docs/phase-3/batch5-storage-design.md), a
+// low-confidence/conflicting date when more than one screenshot is given
+// (to exercise the Conflicts UI without needing a real ambiguous
+// conversation), and a `missing` value for anything a real extraction would
+// often miss.
+async function callMock(images) {
+  if (process.env.VERCEL_ENV === "production") {
+    // Defense in depth, not the only guard — see the file header. A mock
+    // record must never reach a real client/booking, and this is the
+    // cheapest place to refuse outright regardless of how
+    // INTAKE_VISION_PROVIDER ended up set to "mock" in production.
+    console.error("Intake extraction refused: INTAKE_VISION_PROVIDER=mock is not allowed when VERCEL_ENV=production.");
+    throw new Error("Screenshot extraction is not available right now.");
+  }
+
+  const fields = {};
+  FIELD_KEYS.forEach((key) => {
+    fields[key] = { value: null, confidence: "missing", sourceIndex: null };
+  });
+  fields.firstName = { value: "Mock", confidence: "confirmed", sourceIndex: 0 };
+  fields.lastName = { value: "Client", confidence: "confirmed", sourceIndex: 0 };
+  // Normalizes to "3035550199" — seed a Preview customer with this phone
+  // (or don't) to deterministically drive existing_exact/new_candidate/
+  // needs_confirmation without ever needing a real OpenAI call.
+  fields.phone = { value: "(303) 555-0199", confidence: "confirmed", sourceIndex: 0 };
+  fields.serviceType = { value: "junk_removal", confidence: "likely", sourceIndex: 0 };
+  fields.serviceDetails = {
+    value: "Deterministic mock extraction for Preview testing (INTAKE_VISION_PROVIDER=mock) — not derived from a real screenshot.",
+    confidence: "likely",
+    sourceIndex: 0,
+  };
+  fields.date = { value: "2026-01-15", confidence: "uncertain", sourceIndex: 0 };
+  fields.schedulingStatus = { value: "tentative", confidence: "uncertain", sourceIndex: 0 };
+
+  const conflicts = [];
+  if (images.length > 1) {
+    // Mirrors the brief's own canonical example (Wednesday-then-Thursday)
+    // so the Conflicts UI section has something real to render in Preview.
+    fields.date = { value: "2026-01-16", confidence: "likely", sourceIndex: 1 };
+    conflicts.push({
+      field: "date",
+      values: [
+        { value: "2026-01-15", sourceIndex: 0 },
+        { value: "2026-01-16", sourceIndex: 1 },
+      ],
+    });
+  }
+
+  return normalizeExtractionResult({
+    fields: fields,
+    classification: "lead_only",
+    classificationConfidence: "likely",
+    conflicts: conflicts,
+  });
+}
+
 // provider name -> implementation. Adding "claude" or "gemini" later is
 // exactly one more entry here (plus that provider's own request-building/
 // response-parsing helpers above) — INTAKE_VISION_PROVIDER picks which one
-// runs; nothing calling extractFromScreenshots() needs to change.
+// runs; nothing calling extractFromScreenshots() needs to change. There is
+// no fallback between entries — a failure in one is never silently retried
+// against another.
 const PROVIDERS = {
   openai: callOpenAi,
+  mock: callMock,
 };
 
 // images: [{ base64: string, mimeType: "image/jpeg"|"image/png"|"image/webp" }, ...]
