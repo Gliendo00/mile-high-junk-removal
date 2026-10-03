@@ -39,7 +39,8 @@
     { "source": "/privacy-policy", "destination": "/privacy-policy.html" },
 
     { "source": "/api/admin/login", "destination": "/api/admin/auth?action=login" },
-    { "source": "/api/admin/logout", "destination": "/api/admin/auth?action=logout" }
+    { "source": "/api/admin/logout", "destination": "/api/admin/auth?action=logout" },
+    { "source": "/api/admin/clients", "destination": "/api/admin/client?resource=list" }
   ],
   "crons": [
     { "path": "/api/admin/intake?action=cleanup-expired", "schedule": "0 9 * * *" }

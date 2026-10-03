@@ -802,9 +802,12 @@ test("deployment: total function-producing files under api/ are still within the
   // later retired api/admin/booking-status.js into api/admin/booking.js's
   // ?resource=status branch, freeing one slot (11) — which Batch 5 (5B)
   // then used for api/admin/intake.js, bringing the total back to 12. See
-  // docs/phase-3/batch5-screenshot-intake-proposal.md §3. Stage 2.5's own
-  // guarantee (it added zero new endpoint files) still holds.
-  assert.strictEqual(total, 12, "Stage 2.5 itself adds zero new endpoint files — every change lands inside existing api/admin/booking.js, api/admin/bookings.js, and api/admin/client.js");
+  // docs/phase-3/batch5-screenshot-intake-proposal.md §3. Batch 6 (Leads
+  // consolidation) then retired api/admin/clients.js into api/admin/
+  // client.js's own ?resource=list branch, freeing this slot again (11) —
+  // reserved for the still-unbuilt api/admin/lead.js. Stage 2.5's own
+  // guarantee (it added zero new endpoint files) still holds at today's count.
+  assert.strictEqual(total, 11, "Stage 2.5 itself adds zero new endpoint files — every change lands inside existing api/admin/booking.js, api/admin/bookings.js, and api/admin/client.js");
 });
 
 // =======================================================================

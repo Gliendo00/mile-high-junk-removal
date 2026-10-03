@@ -167,9 +167,21 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
 
-const clientsHandler = require("../api/admin/clients.js");
 const clientHandler = require("../api/admin/client.js");
 const bookingHandler = require("../api/admin/booking.js");
+
+// api/admin/clients.js (plural) was retired into api/admin/client.js's own
+// ?resource=list branch (Batch 6 — Leads consolidation, frees the Vercel
+// function slot api/admin/lead.js will need). The real /api/admin/clients
+// URL is preserved unchanged via vercel.json's rewrite to
+// /api/admin/client?resource=list; this thin wrapper routes every
+// existing assertion below through that exact same branch, which IS the
+// parity proof for the consolidation — same fixtures, same req/res mocks,
+// same expected responses as before the retirement.
+function clientsHandler(req, res) {
+  req.query = Object.assign({}, req.query, { resource: "list" });
+  return clientHandler(req, res);
+}
 
 // ---------------------------------------------------------------------
 // req/res mocks (identical shape to phase2's/phase3a's)

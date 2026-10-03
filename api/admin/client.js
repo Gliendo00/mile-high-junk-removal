@@ -19,6 +19,27 @@ module.exports = async (req, res) => {
   const session = await requireAdmin(req, res);
   if (!session) return;
 
+  // Leads consolidation (Batch 6) — api/admin/clients.js (plural,
+  // read-only list/search, GET-only) is retired into this file as
+  // ?resource=list, freeing the Vercel function slot api/admin/lead.js
+  // will need under the Hobby plan's 12-function cap (same move Batch 5
+  // (5A) made retiring booking-status.js into booking.js — see that
+  // commit's own message). The public URL /api/admin/clients is unchanged:
+  // vercel.json rewrites it to this exact branch, so every existing caller
+  // (admin/clients-list.js, admin/client-picker.js, admin/intake-detail.js)
+  // needed zero edits. Checked, and its own method gate enforced, BEFORE
+  // the POST/PATCH branches below — clients.js never supported POST/PATCH
+  // (405 for both), and this file's own POST=create/PATCH=edit must not
+  // silently start accepting those methods on the /api/admin/clients URL
+  // just because the two files share a dispatcher now.
+  if (req.query.resource === "list") {
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    return handleList(req, res);
+  }
+
   if (req.method === "POST") return handleCreate(req, res);
   // Batch 2D — edit and archive/restore, both PATCH, discriminated by an
   // `action` field in the body (default "edit") — same shape as
@@ -136,6 +157,138 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: "Could not load client." });
   }
 };
+
+// ---------------------------------------------------------------------
+// GET /api/admin/client?resource=list — retired from api/admin/clients.js
+// (Phase 3B Step 3) verbatim, Batch 6. Read-only client list + search for
+// the admin Clients section; see requireAdmin() above — already run
+// before this is ever reached. Never writes anything, exactly as before.
+//
+// A "client" here is simply a row in `customers`, shown once each.
+// ---------------------------------------------------------------------
+const LIST_DEFAULT_LIMIT = 50;
+const LIST_MAX_LIMIT = 100;
+const LIST_MAX_SEARCH_LEN = 60;
+// Per-field candidate cap when searching — see the identical constant's
+// original comment in the retired api/admin/clients.js for the full
+// reasoning (bounded in-memory search, never a full-table dump).
+const LIST_SEARCH_FIELD_LIMIT = 200;
+
+async function handleList(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin clients list failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = LIST_DEFAULT_LIMIT;
+  limit = Math.min(limit, LIST_MAX_LIMIT);
+
+  let offset = parseInt(req.query.offset, 10);
+  if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+  const search = sanitizeSearchTerm(typeof req.query.search === "string" ? req.query.search : "");
+  const archivedOnly = req.query.archivedOnly === "1";
+
+  try {
+    const cols = "id, first_name, last_name, phone, email, city, created_at, archived_at, archived_reason";
+    let clients;
+    let total;
+
+    function scoped(q) {
+      return archivedOnly ? q.not("archived_at", "is", null) : q.is("archived_at", null);
+    }
+
+    if (search) {
+      const pattern = "%" + search + "%";
+      const [byFirst, byLast, byPhone, byEmail] = await Promise.all([
+        scoped(supabase.from("customers").select(cols).ilike("first_name", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("last_name", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("phone", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+        scoped(supabase.from("customers").select(cols).ilike("email", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+      ]);
+      for (const r of [byFirst, byLast, byPhone, byEmail]) {
+        if (r.error) throw r.error;
+      }
+      const merged = new Map();
+      [byFirst, byLast, byPhone, byEmail].forEach((r) => {
+        (r.data || []).forEach((c) => merged.set(c.id, c));
+      });
+      const all = Array.from(merged.values()).sort(listByCreatedAtDesc);
+      total = all.length;
+      clients = all.slice(offset, offset + limit);
+    } else {
+      const [countRes, pageRes] = await Promise.all([
+        scoped(supabase.from("customers").select("id", { count: "exact", head: true })),
+        scoped(supabase.from("customers").select(cols)).order("created_at", { ascending: false }).range(offset, offset + limit - 1),
+      ]);
+      if (countRes.error) throw countRes.error;
+      if (pageRes.error) throw pageRes.error;
+      total = countRes.count || 0;
+      clients = pageRes.data || [];
+    }
+
+    const customerIds = clients.map((c) => c.id);
+    const bookingsByCustomer = {};
+    if (customerIds.length) {
+      const bookingsRes = await supabase.from("bookings").select("customer_id, appointment_date, created_at").in("customer_id", customerIds);
+      if (bookingsRes.error) throw bookingsRes.error;
+      (bookingsRes.data || []).forEach((b) => {
+        (bookingsByCustomer[b.customer_id] || (bookingsByCustomer[b.customer_id] = [])).push(b);
+      });
+    }
+
+    const items = clients.map((c) => {
+      const jobs = (bookingsByCustomer[c.id] || []).slice().sort(listByCreatedAtDesc);
+      return {
+        id: c.id,
+        firstName: c.first_name,
+        lastName: c.last_name,
+        phone: c.phone,
+        email: c.email,
+        city: c.city,
+        bookingCount: jobs.length,
+        lastJobDate: jobs.length ? jobs[0].appointment_date : null,
+        archivedAt: c.archived_at,
+        archivedReason: c.archived_reason,
+      };
+    });
+
+    res.status(200).json({
+      ok: true,
+      clients: items,
+      limit: limit,
+      offset: offset,
+      hasMore: offset + items.length < total,
+    });
+  } catch (err) {
+    console.error("Admin clients list failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load clients." });
+  }
+}
+
+function listByCreatedAtDesc(a, b) {
+  if (a.created_at < b.created_at) return 1;
+  if (a.created_at > b.created_at) return -1;
+  return 0;
+}
+
+// Same escaping discipline as the retired api/admin/clients.js's own
+// sanitizeSearchTerm() — strips control characters, trims, caps length
+// BEFORE escaping, then escapes backslash/%/_ so the term is matched as a
+// literal ILIKE substring, never a caller-controlled wildcard pattern.
+function sanitizeSearchTerm(value) {
+  if (typeof value !== "string") return "";
+  var stripped = "";
+  for (var i = 0; i < value.length; i++) {
+    var code = value.charCodeAt(i);
+    if (code > 31) stripped += value[i];
+  }
+  var capped = stripped.trim().slice(0, LIST_MAX_SEARCH_LEN);
+  return capped.replace(/[\\%_]/g, "\\$&");
+}
 
 // ---------------------------------------------------------------------
 // Create a client (Phase 3C Stage 2.1) — POST /api/admin/client. Used both

@@ -232,11 +232,13 @@ test("no new file was added under api/ (still reusing the existing authenticated
   // api/admin/booking-status.js into api/admin/booking.js's ?resource=status
   // branch, freeing one slot (11) for api/admin/intake.js — which Batch 5
   // (5B) then added, bringing the total back to 12. See
-  // docs/phase-3/batch5-screenshot-intake-proposal.md §3. This stage's own
-  // guarantee (a client-picker UX task adds no new api/ file) still holds;
-  // the overall <=12 ceiling is separately enforced in
-  // tests/phase3c-schedule.test.js.
-  assert.strictEqual(files.length, 12, "must not add a new api/ file — a client-picker UX task must not add a new Vercel function");
+  // docs/phase-3/batch5-screenshot-intake-proposal.md §3. Batch 6 (Leads
+  // consolidation) then retired api/admin/clients.js into api/admin/
+  // client.js's own ?resource=list branch, freeing this slot again (11) for
+  // the still-unbuilt api/admin/lead.js. This stage's own guarantee (a
+  // client-picker UX task adds no new api/ file) still holds; the overall
+  // <=12 ceiling is separately enforced in tests/phase3c-schedule.test.js.
+  assert.strictEqual(files.length, 11, "must not add a new api/ file — a client-picker UX task must not add a new Vercel function");
   assert.ok(!files.some((f) => /client-picker|typeahead|client-search/i.test(f)), "must not introduce a dedicated search endpoint — the existing GET /api/admin/clients is reused as-is");
 });
 
