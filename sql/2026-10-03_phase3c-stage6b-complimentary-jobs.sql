@@ -26,7 +26,7 @@
 -- separate, non-summed "Complimentary Service" informational section.
 --
 -- Adds, and nothing else: 4 new columns on the existing bookings table,
--- plus 3 CHECK constraints enforcing the core invariants at the database
+-- plus 5 CHECK constraints enforcing the core invariants at the database
 -- layer too (defense in depth — the application already enforces all
 -- three independently).
 --
@@ -54,32 +54,59 @@ ALTER TABLE public.bookings
 -- Invariants, enforced at the database layer (the application already
 -- enforces all three independently in api/admin/booking.js's
 -- parseComplimentary() — this is defense in depth, not the only guard).
+--
+-- Each is wrapped in a DO block that checks pg_constraint first, since
+-- plain `ALTER TABLE ... ADD CONSTRAINT` has no `IF NOT EXISTS` clause in
+-- PostgreSQL (unlike `ADD COLUMN IF NOT EXISTS` above) — without this
+-- guard, running this file a second time would error out on the first
+-- ADD CONSTRAINT with "constraint already exists" rather than being a
+-- safe no-op, breaking this project's own established "re-running a
+-- migration file is always safe" convention (see
+-- sql/2026-09-19_phase3c-stage3-job-payments-and-expenses.sql §9.1, which
+-- explicitly verified and relied on that same property). Found and fixed
+-- in this same pre-rollout review, before this file was ever run.
 -- =======================================================================
 
 -- 1. complimentary_value, if set, is never negative.
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_complimentary_value_check
-  CHECK (complimentary_value IS NULL OR complimentary_value >= 0);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bookings_complimentary_value_check') THEN
+    ALTER TABLE public.bookings
+      ADD CONSTRAINT bookings_complimentary_value_check
+      CHECK (complimentary_value IS NULL OR complimentary_value >= 0);
+  END IF;
+END $$;
 
 -- 2. complimentary_reason, if set, must be one of the 5 allowed values —
 --    mirrors api/_lib/complimentary-reasons.js's ALL_COMPLIMENTARY_REASON_KEYS,
 --    which must stay in sync with this list.
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_complimentary_reason_check
-  CHECK (complimentary_reason IS NULL OR complimentary_reason IN
-    ('loyal_client', 'community_charity', 'service_recovery', 'friends_family', 'other'));
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bookings_complimentary_reason_check') THEN
+    ALTER TABLE public.bookings
+      ADD CONSTRAINT bookings_complimentary_reason_check
+      CHECK (complimentary_reason IS NULL OR complimentary_reason IN
+        ('loyal_client', 'community_charity', 'service_recovery', 'friends_family', 'other'));
+  END IF;
+END $$;
 
 -- 3. is_complimentary=true requires a reason; reason='other' additionally
 --    requires a non-blank note — the exact rule the app enforces at create/
 --    edit time, repeated here so a row can never reach this shape via any
 --    other path (a future direct SQL edit included).
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_complimentary_requires_reason_check
-  CHECK (NOT is_complimentary OR complimentary_reason IS NOT NULL);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bookings_complimentary_requires_reason_check') THEN
+    ALTER TABLE public.bookings
+      ADD CONSTRAINT bookings_complimentary_requires_reason_check
+      CHECK (NOT is_complimentary OR complimentary_reason IS NOT NULL);
+  END IF;
+END $$;
 
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_complimentary_other_requires_note_check
-  CHECK (complimentary_reason IS DISTINCT FROM 'other' OR (complimentary_note IS NOT NULL AND length(trim(complimentary_note)) > 0));
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bookings_complimentary_other_requires_note_check') THEN
+    ALTER TABLE public.bookings
+      ADD CONSTRAINT bookings_complimentary_other_requires_note_check
+      CHECK (complimentary_reason IS DISTINCT FROM 'other' OR (complimentary_note IS NOT NULL AND length(trim(complimentary_note)) > 0));
+  END IF;
+END $$;
 
 -- 4. THE core revenue-safety invariant: a complimentary job's final_price
 --    must be exactly 0 — never null (which would fall back to
@@ -87,9 +114,13 @@ ALTER TABLE public.bookings
 --    number. This is what makes every existing revenue calculation in this
 --    codebase automatically correct for a complimentary job with zero new
 --    complimentary-aware logic in any of them.
-ALTER TABLE public.bookings
-  ADD CONSTRAINT bookings_complimentary_final_price_zero_check
-  CHECK (NOT is_complimentary OR final_price = 0);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bookings_complimentary_final_price_zero_check') THEN
+    ALTER TABLE public.bookings
+      ADD CONSTRAINT bookings_complimentary_final_price_zero_check
+      CHECK (NOT is_complimentary OR final_price = 0);
+  END IF;
+END $$;
 
 -- No index added: nothing queries bookings.is_complimentary directly today
 -- — the Complimentary Service summary is computed client-side from the
@@ -109,7 +140,7 @@ ALTER TABLE public.bookings
 --
 -- select conname, pg_get_constraintdef(oid) from pg_constraint
 --   where conrelid = 'public.bookings'::regclass and conname like 'bookings_complimentary%';
--- -- expect the 4 CHECK constraints above, verbatim.
+-- -- expect the 5 CHECK constraints above, verbatim.
 --
 -- -- Every EXISTING row must read back as NOT complimentary (false), with
 -- -- every complimentary_* column NULL — confirms the DEFAULT/ADD COLUMN
