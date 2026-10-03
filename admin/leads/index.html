@@ -68,6 +68,16 @@
       </button>
     </div>
 
+    <!-- One shared section header, repositioned (its label/count updated)
+         to match whichever bucket is current — same "exactly one bucket
+         visible" model the sections themselves already use, see
+         leads-list.js's selectBucket(). -->
+    <div class="admin-section-header">
+      <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+      <span class="admin-section-header-label" id="bucket-section-header-label">Pending Intake</span>
+      <span class="admin-section-header-count" id="bucket-section-header-count"></span>
+    </div>
+
     <section class="admin-leads-section" id="section-pendingIntake" hidden role="tabpanel">
       <ul class="admin-booking-list" id="list-pendingIntake"></ul>
     </section>

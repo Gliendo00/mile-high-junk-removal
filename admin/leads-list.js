@@ -43,6 +43,20 @@ document.addEventListener('DOMContentLoaded', function () {
   // array is also the entire default-selection rule.
   var SECTION_ORDER = ['pendingIntake', 'websiteRequests', 'new', 'contacted', 'waitingOnPhotos', 'estimateSent', 'followUp', 'bookedWon', 'lost'];
 
+  var BUCKET_LABELS = {
+    pendingIntake: 'Pending Intake',
+    websiteRequests: 'Website Requests',
+    new: 'New',
+    contacted: 'Contacted',
+    waitingOnPhotos: 'Waiting on Photos',
+    estimateSent: 'Estimate Sent',
+    followUp: 'Follow Up',
+    bookedWon: 'Booked/Won',
+    lost: 'Lost',
+  };
+  var bucketHeaderLabel = document.getElementById('bucket-section-header-label');
+  var bucketHeaderCount = document.getElementById('bucket-section-header-count');
+
   var SOURCE_LABELS = {
     website: 'Website',
     screenshot_intake: 'Screenshot Intake',
@@ -353,6 +367,8 @@ document.addEventListener('DOMContentLoaded', function () {
         tabEl.setAttribute('aria-selected', k === key ? 'true' : 'false');
       }
     });
+    bucketHeaderLabel.textContent = BUCKET_LABELS[key] || key;
+    bucketHeaderCount.textContent = counts[key] ? String(counts[key]) : '';
     scrollActiveTabIntoView(key);
   }
 
