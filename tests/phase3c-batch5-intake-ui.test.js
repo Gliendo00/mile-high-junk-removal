@@ -230,6 +230,56 @@ test("admin.css: defines all four confidence-dot color classes, reusing the exis
 });
 
 // =======================================================================
+// Screenshot retention (hardening pass) — the review screen must explain
+// an empty screenshot grid caused by expiry, not just look broken.
+// =======================================================================
+test("admin/intake/index.html: has a screenshots-expired-note container, starting hidden, inside the Source Screenshots section", () => {
+  const html = readNormalized("admin/intake/index.html");
+  assert.ok(/id="screenshots-expired-note"[^>]*style="display:none"/.test(html));
+  const sourceSectionIdx = html.indexOf("Source Screenshots");
+  const noteIdx = html.indexOf('id="screenshots-expired-note"');
+  const gridIdx = html.indexOf('id="screenshot-grid"');
+  assert.ok(sourceSectionIdx < noteIdx && noteIdx < gridIdx, "the note must sit between the section heading and the screenshot grid");
+});
+
+test("admin/intake-detail.js: renders the screenshots-expired note only when screenshotsExpiredAt is set, mentioning the retention window rather than looking like a bug", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  assert.ok(src.includes("renderScreenshotsExpiredNote"));
+  assert.ok(src.includes("intake.screenshotsExpiredAt"));
+  assert.ok(/automatically removed/.test(src));
+});
+
+// =======================================================================
+// Vercel Cron (hardening pass) — cleanup reuses the EXISTING intake.js
+// file, never a new Vercel function.
+// =======================================================================
+test("vercel.json: a cron job targets the existing api/admin/intake.js file (?action=cleanup-expired), not a new endpoint file", () => {
+  const vercelConfig = JSON.parse(readNormalized("vercel.json"));
+  assert.ok(Array.isArray(vercelConfig.crons) && vercelConfig.crons.length >= 1, "vercel.json must define at least one cron job");
+  const cronPaths = vercelConfig.crons.map((c) => c.path);
+  assert.ok(cronPaths.some((p) => p === "/api/admin/intake?action=cleanup-expired"), "expected a cron targeting /api/admin/intake?action=cleanup-expired");
+  vercelConfig.crons.forEach((c) => {
+    assert.ok(/^\/api\//.test(c.path), "a cron path must target an existing api/ route, not introduce a new one");
+    assert.ok(typeof c.schedule === "string" && c.schedule.trim(), "every cron entry needs a schedule");
+  });
+});
+
+test("vercel.json: the cron schedule runs at most once per day (Vercel Hobby plan's cron frequency limit)", () => {
+  const vercelConfig = JSON.parse(readNormalized("vercel.json"));
+  const cleanupCron = vercelConfig.crons.find((c) => c.path === "/api/admin/intake?action=cleanup-expired");
+  assert.ok(cleanupCron);
+  // A 5-field cron schedule "m h dom mon dow" runs at most once/day only
+  // when both the day-of-month and month fields are "*" (every day) and
+  // hour/minute are each a single fixed value, not a repeating */N pattern.
+  const parts = cleanupCron.schedule.trim().split(/\s+/);
+  assert.strictEqual(parts.length, 5, "expected a standard 5-field cron expression");
+  const [minute, hour, dom, month] = parts;
+  assert.ok(!/\*\/|,/.test(minute) && !/\*\/|,/.test(hour), "minute/hour must be fixed values, not a repeating or multi-value pattern, to stay within one run/day");
+  assert.strictEqual(dom, "*");
+  assert.strictEqual(month, "*");
+});
+
+// =======================================================================
 // Mock vision provider (hardening pass) — a Preview/test-only, explicit
 // opt-in, never a silent fallback from a failing/unconfigured real provider.
 // =======================================================================

@@ -57,36 +57,63 @@ dashboard before any real screenshot upload can succeed, per
   `booking-photos`' own `bookings/<bookingId>/<uuid>.<ext>` convention
   exactly.
 
-## Retention — current behavior vs. open questions
+## Retention — implemented (hardening pass)
 
-**Discarded**: immediate, unconditional cleanup. `PATCH ?action=discard`
-and `PATCH ?action=remove-screenshot` both delete the Storage object
-alongside the database row, synchronously, in the same request — a
-discarded intake's screenshots do not linger in Storage at all (modulo the
-same best-effort-only caveat `api/upload-photo.js`'s own
-`safeDeleteStorageObject()` already has: a delete failure is logged, not
-retried, so a rare orphan is possible but not expected).
+**Discarded**: immediate, unconditional cleanup, unchanged from the
+original design. `PATCH ?action=discard` and `PATCH ?action=remove-screenshot`
+both delete the Storage object alongside the database row, synchronously, in
+the same request — a discarded intake's screenshots do not linger in
+Storage at all (modulo the same best-effort-only caveat
+`api/upload-photo.js`'s own `safeDeleteStorageObject()` already has: a
+delete failure is logged, not retried, so a rare orphan is possible but not
+expected).
 
-**Pending (`processing`/`pending_review`/`extraction_failed`)**: **no
-automatic expiry exists yet.** A screenshot persists in Storage
-indefinitely until an admin explicitly discards it or removes it — there is
-no scheduled job in this project (this codebase has no cron/background-job
-infrastructure at all) that auto-discards a stale pending intake after N
-days. This is a real, current gap worth flagging to Rocky, not a decision
-already made: if screenshots accumulate because intakes get created but
-never reviewed, there is currently no automatic cleanup. A future addition
-(out of scope for Batch 5) could add a scheduled Vercel Cron Job that
-auto-discards `pending_review`/`extraction_failed` sessions past some age
-threshold (e.g. 30 days) — not built here.
+**Pending (`processing`/`pending_review`/`extraction_failed`)**: screenshots
+are removed **7 days** after the intake was created if nobody has acted on
+it (`PENDING_RETENTION_DAYS` in `api/admin/intake.js`). **Confirmed**
+(Stage 5D, not built — this branch is a no-op until then): **30 days**
+(`CONFIRMED_RETENTION_DAYS`).
 
-**Confirmed**: **undefined — Stage 5D doesn't exist yet**, so there is
-literally no code path that reaches a `confirmed` intake's screenshots. A
-reasonable default for when 5D is designed: keep them, the same way
-`booking_photos` are kept indefinitely once a booking exists (no
-auto-delete, since they become a durable record of what the client
-originally sent — if storage cost ever becomes a concern, that's a later,
-separate, data-retention-policy decision). This is a **recommendation for
-5D's design, not an implemented behavior.**
+In both cases, only the screenshots are removed — `intake_sessions.extracted_data`,
+`ai_raw_extraction`, `classification`, `match_status`, and every other
+column survive untouched. The structured review record outlives its source
+images; the "duplicate/existing-job detection" and audit trail an admin
+might still need to reference are never lost just because the retention
+window passed. `screenshots_expired_at` is set at that point so the review
+screen can show "screenshots expired on \<date\>" instead of a silently
+empty grid that looks like a bug (`admin/intake-detail.js`'s
+`renderScreenshotsExpiredNote()`).
+
+### Cleanup mechanism — no new Vercel function
+
+`GET`/`POST /api/admin/intake?action=cleanup-expired` is a new action on the
+**existing** `api/admin/intake.js` file — not a new endpoint file, so the
+function count stays at 12/12. It is the one action on that file **not**
+gated by `requireAdmin()`: a Vercel Cron job (configured in `vercel.json`'s
+new `"crons"` entry, `0 9 * * *` — once daily, within the Hobby plan's
+cron-frequency limit) has no browser session cookie to present, so it
+authenticates instead with a bearer token matching the `CRON_SECRET`
+environment variable — Vercel's own documented pattern for securing
+cron-triggered endpoints (Vercel automatically attaches
+`Authorization: Bearer $CRON_SECRET` to the requests it sends to trigger a
+configured cron). Until `CRON_SECRET` is set, this action always returns
+401 and touches nothing — same "documented, not configured, fails safe"
+posture as `OPENAI_API_KEY`.
+
+**`CRON_SECRET` is a second new environment variable this batch needs,
+beyond `OPENAI_API_KEY`** — not an AI credential, just a shared secret
+authenticating the cron trigger. Also **not yet added anywhere**, same
+explicit-go-ahead rule as every other new environment variable.
+
+**Preview caveat:** per Vercel's documented cron behavior, a configured
+cron job only fires against the **Production** deployment, not Preview —
+so the daily sweep itself cannot be exercised by deploying to Preview alone
+(confirm this against Vercel's current docs when actually wiring it up; not
+independently re-verified from this environment, which has no live Vercel
+access). To test `?action=cleanup-expired` in Preview, call it directly
+(e.g. `curl -X POST https://<preview-url>/api/admin/intake?action=cleanup-expired
+-H "Authorization: Bearer $CRON_SECRET"`) once `CRON_SECRET` is set there —
+this exercises the exact same code path a real cron trigger would.
 
 ## Summary (quick reference)
 
@@ -95,5 +122,7 @@ separate, data-retention-policy decision). This is a **recommendation for
 | Max screenshots per intake | 10 (app-enforced, `MAX_SCREENSHOTS_PER_SESSION`) |
 | Max file size per screenshot | 4 MB (app-enforced, `MAX_SCREENSHOT_BYTES`); recommend ~5–6 MB bucket-level cap as defense-in-depth |
 | Retention — discarded | Deleted immediately (row + Storage object), synchronously |
-| Retention — pending/extraction_failed | **No automatic expiry** — persists until an admin acts; a future scheduled-cleanup job is a known gap, not built |
-| Retention — confirmed | Undefined (Stage 5D not built); recommended default is "kept indefinitely," matching `booking_photos` |
+| Retention — pending/processing/extraction_failed | **7 days** (`PENDING_RETENTION_DAYS`), swept by the daily cron |
+| Retention — confirmed | **30 days** (`CONFIRMED_RETENTION_DAYS`); Stage 5D not built, so unreachable today |
+| Structured data after screenshot cleanup | **Always retained** — only the images/rows in `intake_screenshots` are deleted |
+| Cleanup mechanism | `?action=cleanup-expired` on the existing `api/admin/intake.js`, triggered by Vercel Cron (`vercel.json`), auth'd by `CRON_SECRET` — zero new functions |

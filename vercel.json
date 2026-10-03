@@ -40,5 +40,8 @@
 
     { "source": "/api/admin/login", "destination": "/api/admin/auth?action=login" },
     { "source": "/api/admin/logout", "destination": "/api/admin/auth?action=logout" }
+  ],
+  "crons": [
+    { "path": "/api/admin/intake?action=cleanup-expired", "schedule": "0 9 * * *" }
   ]
 }

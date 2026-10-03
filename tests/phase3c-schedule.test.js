@@ -839,12 +839,16 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls â
       // tests/phase3c-batch5-intake-endpoint.test.js's own dedicated
       // read-only guard for that, and
       // tests/phase3a-admin-status-write.test.js's matching comment for the
-      // full per-handler breakdown. See
+      // full per-handler breakdown. The screenshot-retention hardening pass
+      // added exactly one more update â€” handleCleanupExpired()'s
+      // screenshots_expired_at/updated_at write (the Vercel Cron target that
+      // ages out un-reviewed intakes' screenshots). See
       // docs/phase-3/batch5-screenshot-intake-proposal.md.
       "api/admin/intake.js: .delete(",
       "api/admin/intake.js: .delete(",
       "api/admin/intake.js: .insert(",
       "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",

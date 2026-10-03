@@ -883,12 +883,19 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // handleLinkExistingBooking(), handleDiscard()'s status flip). None of
       // these ever touch customers or bookings — see
       // tests/phase3c-batch5-intake-endpoint.test.js's own dedicated
-      // read-only guard for that. See
+      // read-only guard for that. The screenshot-retention hardening pass
+      // (before any of this was deployed) added exactly one more update —
+      // handleCleanupExpired()'s screenshots_expired_at/updated_at write,
+      // the Vercel Cron target that ages out un-reviewed intakes' screenshots
+      // — insert/delete counts are unchanged (the retry-on-unique-violation
+      // and shared-cleanup-helper refactors each still have exactly one
+      // literal .insert(/.delete( call apiece). See
       // docs/phase-3/batch5-screenshot-intake-proposal.md.
       "api/admin/intake.js: .delete(",
       "api/admin/intake.js: .delete(",
       "api/admin/intake.js: .insert(",
       "api/admin/intake.js: .insert(",
+      "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",

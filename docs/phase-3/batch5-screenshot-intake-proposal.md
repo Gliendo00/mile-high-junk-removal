@@ -1,10 +1,11 @@
 # Phase 3C Batch 5 — Screenshot AI Intake (Proposal)
 
-Status: **5A/5B/5C implemented and tested locally. Nothing pushed, nothing
-deployed, no SQL executed against any real Supabase, no credential added.**
-Stopping here for review per Rocky's instruction — see §13 for the exact
-rollout steps still needed before any of this is live. Following the same
-proposal-first pattern as
+Status: **5A/5B/5C implemented and tested locally, plus a hardening pass
+(mock vision provider, screenshot retention/cleanup, upload-ordering
+concurrency safety). Nothing pushed, nothing deployed, no SQL executed
+against any real Supabase, no credential added.** Stopping here for review
+per Rocky's instruction — see §13 for the exact rollout steps still needed
+before any of this is live. Following the same proposal-first pattern as
 [stage2.1-new-job-proposal.md](./stage2.1-new-job-proposal.md) and
 [stage2.4-calendar-address-proposal.md](./stage2.4-calendar-address-proposal.md).
 
@@ -36,6 +37,31 @@ Batch 5 is explicitly prioritized **above** the UI redesign work.
   never drift from the adapter's own exported constants, and that no
   Confirm/create-booking/create-client action exists anywhere client-side
   yet).
+- **Hardening pass — done.** Three small changes requested before Preview
+  rollout:
+  1. A deterministic **mock vision provider** (`INTAKE_VISION_PROVIDER=mock`,
+     default stays `openai`) so the full upload → extract → pending_review →
+     review/edit → discard flow can be exercised in Preview with no
+     `OPENAI_API_KEY` and no manual SQL. Refuses outright when
+     `VERCEL_ENV=production`; the `openai` provider has no code path that
+     can reach it on its own failure (§6).
+  2. **Screenshot retention**: discarded = immediate (unchanged); pending/
+     processing/extraction_failed = 7 days; confirmed = 30 days
+     (Stage 5D not built, so unreachable today); structured
+     `extracted_data`/`ai_raw_extraction`/classification always survive
+     screenshot cleanup. Swept by a new `?action=cleanup-expired` action on
+     the *existing* `api/admin/intake.js` file via Vercel Cron — zero new
+     functions. Needs a second new env var, `CRON_SECRET`, also not yet
+     added (see `docs/phase-3/batch5-storage-design.md`).
+  3. **`UNIQUE(intake_session_id, sort_order)`** added to
+     `intake_screenshots`, plus a one-retry self-heal in
+     `insertScreenshotWithRetry()` on the 23505 it can now raise — chosen
+     over redesigning the ordering scheme entirely (see
+     `sql/2026-10-04_phase3c-batch5-intake-sessions.sql` §2 for the full
+     reasoning).
+
+  25 new tests across the three affected suites (vision provider, intake
+  endpoint, UI) — 1,196 total assertions, still 12/12 functions.
 - **Not built: Stage 5D (confirm).** No code path anywhere — server or
   client — creates or updates a `customers` or `bookings` row from an
   intake. That is the explicit boundary of this stop-for-review point.
@@ -210,6 +236,18 @@ this is an owner-only tool.
 | `PATCH` | `?action=discard`, body `{ id }` | Marks `discarded`, deletes its screenshots from Storage. Nothing else is touched — no customer/booking ever existed for a discarded session. |
 | `POST` | `?action=confirm`, body `{ id, customerChoice, bookingFields?, linkBookingId? }` | The only action that ever creates/updates a real `customers`/`bookings` row. See §5.5. |
 
+**As actually implemented**, two actions also exist beyond this original
+table (`?action=set-client-match` and `?action=link-existing-booking`, both
+PATCH — see §5.3/§5.4's own implementation notes below), and `confirm` does
+**not** exist — that row describes Stage 5D's eventual contract, not
+anything built in this commit set.
+
+**Hardening pass addendum:**
+
+| Method | Query/body | Does |
+|---|---|---|
+| `GET`/`POST` | `?action=cleanup-expired` | **Not gated by `requireAdmin()`** — authenticated by a `CRON_SECRET` bearer token instead, since the caller is a Vercel Cron job with no admin session. Deletes screenshots (Storage + rows) for sessions past the retention window (§14/`batch5-storage-design.md`), marks `screenshots_expired_at`, never touches `extracted_data`/classification/match state, never touches a `discarded` or already-expired session. 401s unconditionally until `CRON_SECRET` is set. |
+
 This stays a single-purpose file for one resource (Intake) — not a dumping
 ground for unrelated admin actions, consistent with
 [stage2-decisions.md §1](./stage2-decisions.md)'s "never by building one
@@ -375,12 +413,39 @@ deterministic code.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `OPENAI_API_KEY` | Yes, for the `openai` provider | none — extraction fails safely without it | The only credential this adapter needs today. **Not added to any environment yet** — blocked on Rocky's explicit go-ahead, per CLAUDE.md's environment-variable rule. |
-| `INTAKE_VISION_PROVIDER` | No | `"openai"` | Reserved for a future `"claude"`/`"gemini"` value once another branch exists in the adapter's internal provider map. |
+| `INTAKE_VISION_PROVIDER` | No | `"openai"` | `"openai"` or `"mock"` (hardening pass — see below). Reserved for a future `"claude"`/`"gemini"` value once another branch exists in the adapter's internal provider map. |
 | `INTAKE_VISION_MODEL` | No | `"gpt-4o"` | Lets the exact model be tuned (cost/quality) without a code change. |
 
 Until `OPENAI_API_KEY` is set, calling `extractFromScreenshots()` always
 rejects with a generic "not available right now" error — verified by test,
 never a crash, never a silent no-op that could be mistaken for success.
+
+### Mock provider (hardening pass, Preview/test only)
+
+`INTAKE_VISION_PROVIDER=mock` routes to `callMock()` — a fixed, deterministic
+extraction (no network call, no credential) returning a fake client
+("Mock Client", phone normalizing to `3035550199`), a mock service
+description, and — when more than one screenshot is given — a manufactured
+`date` conflict across two screenshots, specifically so the Conflicts UI has
+something real to render in Preview. This exists so the whole upload →
+extract → pending_review → review/edit → discard pipeline can be verified
+end-to-end in Preview before `OPENAI_API_KEY` is ever added (per Rocky's
+revised rollout order, step 7) — client matching (existing_exact/
+new_candidate/needs_confirmation) is driven by what Preview customer rows
+share (or don't share) that same deterministic phone number.
+
+Two safety properties, both verified by test:
+- `PROVIDERS` is a flat, single-entry-by-name lookup — the `openai` branch
+  has no code path that references `callMock()` at all. A failing or
+  unconfigured `openai` call never silently returns mock data; it rejects,
+  same as always.
+- `callMock()` refuses outright when `VERCEL_ENV === "production"` —
+  defense in depth beyond "nobody would configure it that way," since a
+  stray `INTAKE_VISION_PROVIDER=mock` in Production must never fabricate
+  fake client data into a real intake record.
+
+The default remains `"openai"` either way — `mock` only ever runs when an
+environment's own config explicitly asks for it.
 
 ## 7. Extracted fields (per the brief, unchanged)
 
@@ -490,73 +555,69 @@ before the next starts:
 
 ## 13. Current test/commit/function-count status (for this review)
 
-- **Tests:** 1,171 assertions across 42 test files, all passing locally
+- **Tests:** 1,196 assertions across 42 test files, all passing locally
   (`node tests/<file>.test.js` per file — this project has no test
-  runner/CI beyond that). Batch 5 added four new files: 17 tests
-  (vision adapter), 44 tests (`api/admin/intake.js`, including the static
-  guard that it never writes to `customers`/`bookings`), 31 tests (the
-  three new admin pages + nav integration), plus small, explained edits to
-  five pre-existing test files whose expectations the 5A/5B function-count
-  and write-surface changes legitimately moved (two stage-local "exactly
-  12 functions" snapshots now read 12 again after dipping to 11 between 5A
-  and 5B; two cross-file write-audit arrays gained `intake.js`'s 11 write
-  calls; one `.update(` count assertion in `booking.js` went from 18 to 19).
+  runner/CI beyond that).
 - **Function count:** 12/12 (`api/admin/auth.js`, `booking.js`,
   `bookings.js`, `client.js`, `clients.js`, `intake.js` — six; plus the six
-  pre-existing direct `api/*.js` files). Confirmed by the existing `<=12`
-  guard in `tests/phase3c-schedule.test.js` and by direct inspection.
-- **Commits:** **none made.** Every file below is modified or new in the
-  working tree only — nothing has been committed, so Rocky can review the
-  actual diff (or ask for it split differently) before anything is
-  recorded in git history:
-  - New: `sql/2026-10-04_phase3c-batch5-intake-sessions.sql`,
-    `api/_lib/intake-vision-provider.js`, `api/admin/intake.js`,
-    `admin/intakes/index.html` + `admin/intakes-list.js`,
-    `admin/intake-new/index.html` + `admin/intake-new.js`,
-    `admin/intake/index.html` + `admin/intake-detail.js`,
-    `tests/phase3c-batch5-intake-vision-provider.test.js`,
-    `tests/phase3c-batch5-intake-endpoint.test.js`,
-    `tests/phase3c-batch5-intake-ui.test.js`,
-    `docs/phase-3/batch5-screenshot-intake-proposal.md` (this file).
-  - Modified: `api/admin/booking.js` (status-write consolidation),
-    `admin/booking-detail.js`, `admin/status-ui.js` (status-endpoint URL
-    update), `admin/nav-badge.js` (Intake badge), `admin/admin.css`
-    (confidence-dot styles), the nine pre-existing admin page `index.html`
-    files (Intake nav tab), `docs/phase-3/README.md` (index entry), and the
-    five test files listed above.
-  - Deleted: `api/admin/booking-status.js`.
-- **Nothing pushed, nothing deployed.** Per CLAUDE.md, this stays on the
-  local working tree (current branch: whatever Rocky has checked out) until
-  he explicitly says to commit and/or push.
+  pre-existing direct `api/*.js` files). The hardening pass's
+  `?action=cleanup-expired` and the Vercel Cron pointed at it add zero new
+  functions — same existing `intake.js` file, confirmed by the existing
+  `<=12` guard in `tests/phase3c-schedule.test.js` and by direct inspection.
+- **Commits:** 6, all local, nothing pushed (5A; the vision adapter; the
+  schema/migration + storage design; `api/admin/intake.js` + server tests;
+  the review UI + nav; the proposal/docs writeup) — approved structure, see
+  chat history for exact hashes. **The hardening pass (mock provider,
+  retention/cleanup, the `UNIQUE` constraint + retry) landed as working-tree
+  changes on top of those 6, not yet its own commit(s)** — Rocky's call on
+  how to split or fold it in before pushing.
+- **New environment variables, both documented, NEITHER set anywhere:**
+  `OPENAI_API_KEY` (§6) and, as of the hardening pass, `CRON_SECRET` (§14,
+  `batch5-storage-design.md`) for authenticating the cleanup cron trigger.
+- **Nothing pushed, nothing deployed, no SQL executed, no Storage bucket
+  created.** Per CLAUDE.md, every one of those stays blocked on Rocky's
+  explicit go-ahead, taken one at a time per §14 below.
 
-## 14. Rollout plan — what has to happen, in order, before this is live
+## 14. Rollout plan — Rocky's revised order (2026-10-03)
 
-Nothing below has been done. Each step needs Rocky's explicit go-ahead;
-none of them happen automatically as a side effect of this review.
+Supersedes this proposal's earlier draft order. Nothing below has been done
+except where marked; each remaining step needs Rocky's explicit go-ahead
+before it happens.
 
-1. **Review this diff.** Everything in §13 is sitting in the working tree,
-   uncommitted. Decide whether to commit as-is, request changes, or split
-   it into multiple commits (e.g. 5A separately from 5B/5C/UI).
-2. **Run `sql/2026-10-04_phase3c-batch5-intake-sessions.sql`** against
-   Supabase (Rocky, or Claude with explicit go-ahead) — creates
-   `intake_sessions`/`intake_screenshots` and their `service_role` grants.
-   Nothing in this batch works end-to-end without it.
-3. **Create the `intake-screenshots` Storage bucket** (private, same
-   posture as the existing `booking-photos` bucket) in the Supabase
-   dashboard. `api/admin/intake.js` assumes it already exists, the same way
-   `api/upload-photo.js` already assumes `booking-photos` exists — no code
-   path creates a bucket.
-4. **Decide on and add `OPENAI_API_KEY`** as a Vercel environment variable
-   (Preview and/or Production, Rocky's call) — the one credential this
-   batch is still deliberately missing. `INTAKE_VISION_PROVIDER`/
-   `INTAKE_VISION_MODEL` are optional (§6) and can be left at their
-   defaults (`openai`/`gpt-4o`).
-5. **Commit and push to a feature branch, verify on Preview** — upload a
-   real test screenshot or two against the real OpenAI key, confirm
-   extraction/matching/review/discard all work against real (Preview)
-   Supabase, before merging to `main`. Per CLAUDE.md, merging/deploying to
-   production still needs Rocky's separate explicit go-ahead even after a
-   clean Preview run.
-6. **Stage 5D (confirm)** is the next unit of work after rollout — not a
-   rollout step itself, but the reason this is still "Pending Intake" and
-   not yet a way to actually create clients/jobs from a screenshot.
+1. **Commit locally.** Done — 6 commits (§13), hardening pass still
+   uncommitted on top.
+2. **Run final targeted + full tests.** Done — 1,196/1,196 passing.
+3. **Run a read-only migration safety audit.** Done (text review only, no
+   DB connection used or possible from this environment): the migration is
+   purely additive (`CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`/
+   `REVOKE`-then-`GRANT` on brand-new tables, no backfill `UPDATE`s at all),
+   safe to re-run any number of times. One non-migration, app-level
+   observation noted and already addressed: see §2/the `UNIQUE` constraint
+   discussion.
+4. **Create the `intake-screenshots` Storage bucket** (private, policies per
+   `batch5-storage-design.md`) — only after the migration is approved, per
+   Rocky's explicit ordering. Not done.
+5. **Apply the migration** (`sql/2026-10-04_phase3c-batch5-intake-sessions.sql`)
+   to the target environment. Not done — blocked on Rocky running it or
+   explicitly asking Claude to.
+6. **Push to a Preview branch, not Production.** Not done.
+7. **Verify the full intake flow in Preview** with `INTAKE_VISION_PROVIDER=mock`
+   (no `OPENAI_API_KEY` needed) — create intake, upload one/multiple
+   screenshots, reload and confirm persistence, Pending list/detail, client
+   matching (seed a Preview customer with phone `303-555-0199` for
+   `existing_exact`, omit it for `new_candidate`, duplicate it across two
+   customers for `needs_confirmation`), the manufactured multi-screenshot
+   date conflict, existing-job-candidate display (seed an upcoming booking
+   for the matched customer, reclassify to `existing_job_update`), edit/save
+   pending, discard, and the static/runtime guarantee that nothing writes to
+   `customers`/`bookings`. `?action=cleanup-expired` can be exercised
+   directly (curl with the `CRON_SECRET` bearer token) since Vercel Cron
+   itself only fires against Production, not Preview. Not done.
+8. **Only after that non-AI pipeline is clean, add `OPENAI_API_KEY` to
+   Preview.** Not done.
+9. **Run real screenshot extraction tests in Preview** (`INTAKE_VISION_PROVIDER`
+   back to its `openai` default, or unset). Not done.
+10. **Stop before Production and before Stage 5D.** This proposal's explicit
+    boundary — confirming the real client/booking write (Stage 5D) and the
+    Production push are both separate, future, explicitly-approved steps,
+    not a continuation of this rollout.

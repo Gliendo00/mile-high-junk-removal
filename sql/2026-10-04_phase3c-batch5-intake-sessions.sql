@@ -9,10 +9,12 @@
 -- Adds, and nothing else:
 --   1. intake_sessions — new table. One row per upload session (one or more
 --      screenshots from the same client conversation). Tracks extraction
---      results, classification, client-match state, and (reserved, UNUSED
---      until Stage 5D) the eventual confirm outcome.
+--      results, classification, client-match state, a screenshot-retention
+--      marker (screenshots_expired_at), and (reserved, UNUSED until Stage
+--      5D) the eventual confirm outcome.
 --   2. intake_screenshots — new table. One row per uploaded screenshot
---      image, FK'd to its session.
+--      image, FK'd to its session, with a UNIQUE(intake_session_id,
+--      sort_order) constraint (see §2's own comment for why).
 --   3. service_role grants for both — a newly created table has NO
 --      privileges granted to service_role by default in this project
 --      (confirmed repeatedly — see
@@ -24,6 +26,25 @@
 -- customer/booking row is created or modified by anything this migration
 -- enables; that write capability does not exist in the application yet
 -- (Stage 5D, not built).
+--
+-- Screenshot retention (hardening pass, before this migration was ever
+-- executed — see docs/phase-3/batch5-storage-design.md for the full
+-- writeup): a screenshot is Storage data, not a business record — it is
+-- deleted (row + Storage object) when:
+--   - the intake is discarded (immediate, unconditional — already the
+--     application's behavior since 5B/5C, unchanged here), or
+--   - the intake has sat in processing/pending_review/extraction_failed for
+--     more than 7 days, or
+--   - the intake has been confirmed (Stage 5D, not built yet) for more than
+--     30 days.
+-- The intake_sessions row and its extracted_data/ai_raw_extraction/
+-- classification/match columns are NEVER deleted by this — only the
+-- screenshots. screenshots_expired_at records when the 7/30-day cleanup
+-- (as opposed to an explicit discard) removed them, so the review UI can
+-- show "screenshots expired" instead of a silently-empty grid that looks
+-- like a bug. Cleanup mechanism: see api/admin/intake.js's
+-- ?action=cleanup-expired (a Vercel Cron job hitting the EXISTING
+-- intake.js file — see vercel.json's "crons" entry — not a new function).
 --
 -- gen_random_uuid() is core PostgreSQL (13+) — no extension required.
 
@@ -102,6 +123,14 @@ CREATE TABLE IF NOT EXISTS public.intake_sessions (
 
   linked_existing_booking_id uuid NULL REFERENCES public.bookings(id),
 
+  -- Set by the ?action=cleanup-expired cron sweep (never by discard, which
+  -- stays an immediate, unconditional delete with no marker) when this
+  -- session's screenshots were removed for aging past the 7/30-day
+  -- retention window rather than because an admin explicitly discarded the
+  -- intake. NULL means either "still has its screenshots" or "was
+  -- discarded" — the `status` column already distinguishes those two.
+  screenshots_expired_at timestamptz NULL,
+
   -- Reserved for Stage 5D. NULL/unused until that stage; not written by
   -- any code shipped in Batch 5 (5B/5C).
   confirmed_at timestamptz NULL,
@@ -133,6 +162,27 @@ ALTER TABLE public.intake_sessions ENABLE ROW LEVEL SECURITY;
 --    Storage object), not a soft-delete/status flag, since a still-pending
 --    intake's screenshot list is draft state with no audit requirement —
 --    same reasoning as the CASCADE above.
+--
+--    UNIQUE(intake_session_id, sort_order) (hardening pass): the upload
+--    handler assigns sort_order via a read-count-then-insert — a plain
+--    TOCTOU race if two uploads to the SAME session's SAME intake somehow
+--    overlap (a double-click, a flaky-network retry, two tabs). Without
+--    this constraint that race would silently produce two screenshots
+--    sharing one sort_order, which would then sort ambiguously and throw
+--    off the vision adapter's sourceIndex (an array position, derived from
+--    this same ORDER BY sort_order). Considered instead: dropping
+--    sort_order entirely and ordering by (created_at, id) — created_at
+--    alone can't collide in practice given this project's sequential
+--    client-side upload loop (book/book.js's own pattern, reused by
+--    admin/intake-new.js), but that's a larger, riskier change to this
+--    stage's already-working read paths for a benefit the UNIQUE
+--    constraint already delivers more cheaply: the constraint converts a
+--    silent corruption into a loud, debuggable 500 instead, with zero
+--    application-code risk. api/admin/intake.js's handleUploadScreenshot()
+--    now also retries once with a freshly recomputed sort_order on a
+--    23505 (unique_violation) from this constraint, so the admin-facing
+--    behavior is "it just works" even in the rare case this actually
+--    fires, not a surfaced error.
 -- =======================================================================
 CREATE TABLE IF NOT EXISTS public.intake_screenshots (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -145,7 +195,8 @@ CREATE TABLE IF NOT EXISTS public.intake_screenshots (
   -- adapter) never depends on string-parsing a file path.
   content_type text NOT NULL CHECK (content_type IN ('image/jpeg', 'image/png', 'image/webp')),
   sort_order int NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT intake_screenshots_session_sort_order_uniq UNIQUE (intake_session_id, sort_order)
 );
 
 CREATE INDEX IF NOT EXISTS intake_screenshots_session_idx ON public.intake_screenshots (intake_session_id);
@@ -176,7 +227,8 @@ GRANT SELECT, INSERT ON public.intake_sessions TO service_role;
 GRANT UPDATE (
   updated_at, status, ai_raw_extraction, extracted_data, extraction_error,
   classification, classification_confidence, match_status,
-  matched_customer_id, extracted_phone_normalized, linked_existing_booking_id
+  matched_customer_id, extracted_phone_normalized, linked_existing_booking_id,
+  screenshots_expired_at
 ) ON public.intake_sessions TO service_role;
 
 REVOKE ALL ON public.intake_screenshots FROM service_role;
@@ -191,6 +243,10 @@ GRANT SELECT, INSERT, DELETE ON public.intake_screenshots TO service_role;
 --
 -- select conname, contype, pg_get_constraintdef(oid) from pg_constraint
 --   where conrelid in ('public.intake_sessions'::regclass, 'public.intake_screenshots'::regclass);
+-- -- expect intake_screenshots_session_sort_order_uniq as a 'u' (UNIQUE)
+-- -- constraint on (intake_session_id, sort_order) among the results.
+--
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'screenshots_expired_at', 'UPDATE'); -- expect true
 --
 -- -- DECISIVE RLS check (service_role must have BYPASSRLS — same posture
 -- -- confirmed live for every other RLS-enabled, zero-policy table in this

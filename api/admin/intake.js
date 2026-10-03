@@ -14,8 +14,19 @@
 // and `matched_customer_id` are intake-session metadata recording what the
 // admin decided to attach, not a mutation of the customer/booking itself.
 //
-// requireAdmin() gates every action below, same as every other /api/admin/*
-// route, before any query/body/header is ever inspected.
+// requireAdmin() gates every action below EXCEPT ?action=cleanup-expired,
+// which is invoked by a Vercel Cron job rather than a logged-in admin and
+// authenticates via CRON_SECRET instead — see module.exports's own comment
+// and handleCleanupExpired()'s header for the full reasoning.
+//
+// Screenshot retention (hardening pass, before anything here was ever
+// deployed): discarded intakes are cleaned up immediately (unchanged);
+// processing/pending_review/extraction_failed intakes age out after
+// PENDING_RETENTION_DAYS, confirmed ones (Stage 5D, not built) after
+// CONFIRMED_RETENTION_DAYS — see handleCleanupExpired(). Cleanup only ever
+// removes screenshots (Storage objects + rows); extracted_data/
+// ai_raw_extraction/classification/match state on intake_sessions is never
+// touched by it.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { normalizePhone } = require("../_lib/customer-identity");
@@ -34,8 +45,37 @@ const INTAKE_STATUSES = ["processing", "pending_review", "confirmed", "discarded
 // still in the sales pipeline (new/contacted/quoted) and not one already
 // completed or lost.
 const EXISTING_JOB_CANDIDATE_STATUSES = ["booked", "rental_out"];
+// A screenshot upload racing another upload to the SAME session (a
+// double-click, a flaky-network retry, two tabs) can read the same
+// existing-screenshot count before either insert lands, producing a
+// duplicate sort_order — now a hard 23505 (unique_violation) against
+// intake_screenshots_session_sort_order_uniq instead of silent corruption.
+// One retry (two attempts total) with a freshly recomputed sort_order
+// self-heals the rare case rather than surfacing it as an error. See
+// sql/2026-10-04_phase3c-batch5-intake-sessions.sql §2 for the full
+// reasoning, including why this was chosen over redesigning the ordering
+// scheme entirely.
+const MAX_SORT_ORDER_INSERT_ATTEMPTS = 2;
+const POSTGRES_UNIQUE_VIOLATION = "23505";
+// Screenshot retention (hardening pass; see docs/phase-3/batch5-storage-design.md).
+// Discarded intakes are cleaned up immediately and unconditionally
+// (unchanged, see handleDiscard) — these two are for intakes nobody acted
+// on. Swept by ?action=cleanup-expired below, never by any other action.
+const PENDING_RETENTION_DAYS = 7; // processing / pending_review / extraction_failed
+const CONFIRMED_RETENTION_DAYS = 30; // Stage 5D isn't built yet, so this can't fire on a real row today — implemented now so 5D needs no follow-up change here.
 
 module.exports = async (req, res) => {
+  // ?action=cleanup-expired is the one action on this file NOT gated by
+  // requireAdmin() — it's invoked by a Vercel Cron job (see vercel.json),
+  // which carries no admin session cookie at all. Authenticated instead by
+  // a shared CRON_SECRET bearer token, Vercel's own documented pattern for
+  // securing cron-triggered endpoints. This branch is checked FIRST and
+  // returns before requireAdmin() or anything else runs, same as every
+  // other narrow pre-dispatch carve-out in this codebase (compare
+  // api/upload-photo.js's bearer-token scheme for the same reason: the
+  // caller here structurally cannot present an admin cookie either).
+  if (req.query.action === "cleanup-expired") return handleCleanupExpired(req, res);
+
   const session = await requireAdmin(req, res);
   if (!session) return;
 
@@ -105,6 +145,54 @@ async function safeDeleteStorageObject(supabase, path) {
   } catch (err) {
     console.error("Intake: rollback failed deleting storage object " + path + ":", err);
   }
+}
+
+// Deletes every screenshot (Storage object + row) for one session. Shared
+// by handleDiscard() (immediate, admin-triggered) and
+// handleCleanupExpired() (age-triggered) — the two are the only places
+// screenshots are ever bulk-removed, and both must behave identically:
+// best-effort Storage cleanup (a failure is logged, never blocks the row
+// delete — same posture as safeDeleteStorageObject() itself), then the rows.
+// Never touches intake_sessions itself — callers decide what (if anything)
+// to update there afterward.
+async function cleanupSessionScreenshots(supabase, sessionId) {
+  const screenshotsRes = await supabase.from("intake_screenshots").select("id, storage_path").eq("intake_session_id", sessionId);
+  if (screenshotsRes.error) throw screenshotsRes.error;
+
+  for (const shot of screenshotsRes.data || []) {
+    await safeDeleteStorageObject(supabase, shot.storage_path);
+  }
+
+  const { error: deleteRowsError } = await supabase.from("intake_screenshots").delete().eq("intake_session_id", sessionId);
+  if (deleteRowsError) throw deleteRowsError;
+}
+
+// Inserts one intake_screenshots row, retrying once with a freshly
+// recomputed sort_order if the UNIQUE(intake_session_id, sort_order)
+// constraint fires (see sql/2026-10-04_phase3c-batch5-intake-sessions.sql
+// §2) — converts the rare concurrent-upload race into a self-healing retry
+// instead of a surfaced 500. Any OTHER error (including a second
+// unique_violation — vanishingly unlikely, since by then a THIRD concurrent
+// insert would have to land in the exact gap) is still thrown as-is.
+async function insertScreenshotWithRetry(supabase, sessionId, storagePath, declaredType) {
+  let lastError = null;
+  for (let attempt = 0; attempt < MAX_SORT_ORDER_INSERT_ATTEMPTS; attempt++) {
+    const countRes = await supabase.from("intake_screenshots").select("id", { count: "exact", head: true }).eq("intake_session_id", sessionId);
+    if (countRes.error) throw countRes.error;
+    const nextSortOrder = countRes.count || 0;
+
+    const { data, error } = await supabase
+      .from("intake_screenshots")
+      .insert({ intake_session_id: sessionId, storage_path: storagePath, content_type: declaredType, sort_order: nextSortOrder })
+      .select("id, sort_order")
+      .single();
+    if (!error) return data;
+
+    lastError = error;
+    if (error.code !== POSTGRES_UNIQUE_VIOLATION) throw error;
+    // Falls through to retry with a freshly recomputed count.
+  }
+  throw lastError;
 }
 
 // Phone-first client match, per docs/phase-3/batch5-screenshot-intake-proposal.md
@@ -230,12 +318,10 @@ async function handleUploadScreenshot(req, res) {
     });
     if (uploadError) throw uploadError;
 
-    const { data: screenshotRow, error: insertError } = await supabase
-      .from("intake_screenshots")
-      .insert({ intake_session_id: sessionId, storage_path: storagePath, content_type: declaredType, sort_order: existingCount })
-      .select("id, sort_order")
-      .single();
-    if (insertError) {
+    let screenshotRow;
+    try {
+      screenshotRow = await insertScreenshotWithRetry(supabase, sessionId, storagePath, declaredType);
+    } catch (insertError) {
       await safeDeleteStorageObject(supabase, storagePath);
       throw insertError;
     }
@@ -431,7 +517,7 @@ async function handleDetail(req, res, id) {
     const sessionRes = await supabase
       .from("intake_sessions")
       .select(
-        "id, created_at, updated_at, status, extraction_error, extracted_data, classification, classification_confidence, match_status, matched_customer_id, linked_existing_booking_id"
+        "id, created_at, updated_at, status, extraction_error, extracted_data, classification, classification_confidence, match_status, matched_customer_id, linked_existing_booking_id, screenshots_expired_at"
       )
       .eq("id", id)
       .maybeSingle();
@@ -515,6 +601,7 @@ async function handleDetail(req, res, id) {
         linkedExistingBookingId: row.linked_existing_booking_id,
         existingJobCandidates: existingJobCandidates,
         screenshots: screenshots,
+        screenshotsExpiredAt: row.screenshots_expired_at,
       },
     });
   } catch (err) {
@@ -852,15 +939,7 @@ async function handleDiscard(req, res, body) {
       return;
     }
 
-    const screenshotsRes = await supabase.from("intake_screenshots").select("id, storage_path").eq("intake_session_id", id);
-    if (screenshotsRes.error) throw screenshotsRes.error;
-
-    for (const shot of screenshotsRes.data || []) {
-      await safeDeleteStorageObject(supabase, shot.storage_path);
-    }
-
-    const { error: deleteRowsError } = await supabase.from("intake_screenshots").delete().eq("intake_session_id", id);
-    if (deleteRowsError) throw deleteRowsError;
+    await cleanupSessionScreenshots(supabase, id);
 
     const { error: updateError } = await supabase
       .from("intake_sessions")
@@ -872,5 +951,87 @@ async function handleDiscard(req, res, body) {
   } catch (err) {
     console.error("Intake discard failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not discard intake." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// GET/POST /api/admin/intake?action=cleanup-expired — Vercel Cron target
+// (see vercel.json's "crons" entry), authenticated by CRON_SECRET instead
+// of an admin session (see module.exports's own comment for why). NOT
+// gated by requireAdmin() — this function performs its own auth check
+// first, before touching the database, and fails closed (401) whenever
+// CRON_SECRET isn't configured — exactly like api/_lib/intake-vision-
+// provider.js's OPENAI_API_KEY: documented, inert until explicitly set.
+//
+// Sweeps two independent sets, per docs/phase-3/batch5-storage-design.md:
+//   - processing/pending_review/extraction_failed older than
+//     PENDING_RETENTION_DAYS (nobody reviewed it in time)
+//   - confirmed older than CONFIRMED_RETENTION_DAYS (Stage 5D isn't built,
+//     so no row can be 'confirmed' yet — this branch is a no-op today,
+//     included so 5D needs no follow-up change here)
+// Never touches a session that already has screenshots_expired_at set
+// (nothing left to clean up) or one that's 'discarded' (already cleaned up
+// immediately, by a different code path, for a different reason — see
+// handleDiscard()). Only ever deletes screenshots (rows + Storage) and sets
+// screenshots_expired_at/updated_at — extracted_data, ai_raw_extraction,
+// classification, and every other column survive untouched, per the
+// explicit requirement that the structured record outlives its source
+// images.
+// ---------------------------------------------------------------------
+async function handleCleanupExpired(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = String(req.headers["authorization"] || "");
+  if (!cronSecret || authHeader !== "Bearer " + cronSecret) {
+    res.status(401).json({ error: "Not authorized." });
+    return;
+  }
+
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  try {
+    const nowIso = new Date().toISOString();
+    const pendingCutoff = new Date(Date.now() - PENDING_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const confirmedCutoff = new Date(Date.now() - CONFIRMED_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    const pendingRes = await supabase
+      .from("intake_sessions")
+      .select("id")
+      .in("status", ["processing", "pending_review", "extraction_failed"])
+      .lt("created_at", pendingCutoff)
+      .is("screenshots_expired_at", null);
+    if (pendingRes.error) throw pendingRes.error;
+
+    const confirmedRes = await supabase
+      .from("intake_sessions")
+      .select("id")
+      .eq("status", "confirmed")
+      .lt("created_at", confirmedCutoff)
+      .is("screenshots_expired_at", null);
+    if (confirmedRes.error) throw confirmedRes.error;
+
+    const sessionIds = (pendingRes.data || []).concat(confirmedRes.data || []).map((r) => r.id);
+
+    let cleanedCount = 0;
+    for (const sessionId of sessionIds) {
+      await cleanupSessionScreenshots(supabase, sessionId);
+      const { error: markError } = await supabase
+        .from("intake_sessions")
+        .update({ screenshots_expired_at: nowIso, updated_at: nowIso })
+        .eq("id", sessionId);
+      if (markError) throw markError;
+      cleanedCount++;
+    }
+
+    res.status(200).json({ ok: true, cleaned: cleanedCount });
+  } catch (err) {
+    console.error("Intake cleanup-expired failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Cleanup failed." });
   }
 }

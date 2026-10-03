@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var candidatesSection = document.getElementById('candidates-section');
   var candidatesList = document.getElementById('candidates-list');
   var notesFieldsEl = document.getElementById('notes-fields');
+  var screenshotsExpiredNote = document.getElementById('screenshots-expired-note');
   var screenshotGrid = document.getElementById('screenshot-grid');
   var saveBtn = document.getElementById('save-btn');
   var discardBtn = document.getElementById('discard-btn');
@@ -286,6 +287,30 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  function formatExpiredDate(iso) {
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  // Screenshot retention (hardening pass): a session's screenshots can be
+  // gone not because anyone discarded it, but because nobody reviewed it
+  // within the retention window (see
+  // docs/phase-3/batch5-storage-design.md) — an empty grid in that case is
+  // expected, not a bug, and should say so rather than looking broken.
+  function renderScreenshotsExpiredNote(screenshotsExpiredAt) {
+    if (!screenshotsExpiredAt) {
+      screenshotsExpiredNote.style.display = 'none';
+      return;
+    }
+    screenshotsExpiredNote.textContent = 'The original screenshots were automatically removed on ' + formatExpiredDate(screenshotsExpiredAt) + ' (retention window expired). The extracted information below was kept.';
+    screenshotsExpiredNote.style.display = 'block';
+  }
+
   function renderScreenshots(screenshots, editable) {
     clear(screenshotGrid);
     (screenshots || []).forEach(function (shot) {
@@ -381,6 +406,7 @@ document.addEventListener('DOMContentLoaded', function () {
     renderCandidates(intake.existingJobCandidates, linkedBookingId);
 
     renderConflicts(intake.conflicts);
+    renderScreenshotsExpiredNote(intake.screenshotsExpiredAt);
     renderScreenshots(intake.screenshots, editable);
 
     [clientFieldsEl, jobFieldsEl, schedulingFieldsEl, notesFieldsEl, classificationSelect].forEach(function (node) {

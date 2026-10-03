@@ -71,6 +71,14 @@ class FakeQueryBuilder {
     this._filters.push((row) => row[field] >= val);
     return this;
   }
+  lt(field, val) {
+    this._filters.push((row) => row[field] < val);
+    return this;
+  }
+  is(field, val) {
+    this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
+    return this;
+  }
   order(field, opts) {
     this._order = { field: field, ascending: !opts || opts.ascending !== false };
     return this;
@@ -100,6 +108,17 @@ class FakeQueryBuilder {
   }
   async _resolve() {
     if (this._insertData !== undefined) {
+      // One-shot error: fires on the FIRST insert attempt to this table
+      // only, then clears itself — models a transient error (e.g. the real
+      // UNIQUE(intake_session_id, sort_order) constraint firing on a racing
+      // concurrent upload) that a retry with recomputed values would
+      // succeed past. db.__insertError (below) is the permanent/always-fails
+      // version, for testing exhaustion of the retry budget.
+      if (this._db.__insertErrorOnce && this._db.__insertErrorOnce[this._table]) {
+        const onceErr = this._db.__insertErrorOnce[this._table];
+        delete this._db.__insertErrorOnce[this._table];
+        return { data: null, error: onceErr };
+      }
       if (this._db.__insertError && this._db.__insertError[this._table]) {
         return { data: null, error: this._db.__insertError[this._table] };
       }
@@ -939,7 +958,190 @@ test("PATCH with an unknown action -> 400", async () => {
   assert.strictEqual(res.statusCode, 400);
 });
 
-// 14. THE critical guarantee: no customer/booking table write ----------------
+// 14. upload-screenshot: retry on UNIQUE(intake_session_id, sort_order)
+//     violation (hardening pass) ---------------------------------------
+test("upload-screenshot: a transient unique_violation (23505) on the sort_order insert is retried once and succeeds", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const id = await createSession(db);
+  db.__insertErrorOnce = { intake_screenshots: { code: "23505", message: "duplicate key value violates unique constraint" } };
+
+  const res = await uploadScreenshot(db, id);
+  assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+  assert.strictEqual(db.intake_screenshots.length, 1, "exactly one row must exist after the retry succeeds — never zero, never two");
+  assert.strictEqual(db.intake_screenshots[0].sort_order, 0);
+});
+
+test("upload-screenshot: a PERMANENT unique_violation (every attempt fails) still surfaces as a 500 and cleans up the orphaned Storage object", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const id = await createSession(db);
+  db.__insertError = { intake_screenshots: { code: "23505", message: "duplicate key value violates unique constraint" } };
+
+  const res = await uploadScreenshot(db, id);
+  assert.strictEqual(res.statusCode, 500);
+  assert.strictEqual(db.intake_screenshots.length, 0);
+  assert.strictEqual(Object.keys(db.__storage["intake-screenshots"] || {}).length, 0, "the uploaded Storage object must be rolled back when every insert attempt fails");
+});
+
+test("upload-screenshot: a non-unique-violation insert error is never retried — fails immediately", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const id = await createSession(db);
+  db.__insertErrorOnce = { intake_screenshots: { code: "23503", message: "foreign key violation" } };
+
+  const res = await uploadScreenshot(db, id);
+  // A one-shot error that ISN'T a unique_violation must propagate as a
+  // failure, not be silently retried past — the retry path narrowly checks
+  // error.code === "23505" only.
+  assert.strictEqual(res.statusCode, 500);
+  assert.strictEqual(db.intake_screenshots.length, 0);
+});
+
+// 15. ?action=cleanup-expired (Vercel Cron target, hardening pass) -----------
+function cleanupRequest(db, overrides) {
+  currentFakeService = createFakeServiceClient(db);
+  const opts = Object.assign({ method: "GET", query: { action: "cleanup-expired" } }, overrides || {});
+  return run(makeReq(opts));
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test("cleanup-expired: no CRON_SECRET configured -> 401, nothing touched, no admin session needed or used", async () => {
+  delete process.env.CRON_SECRET;
+  const db = freshDb();
+  const res = await cleanupRequest(db);
+  assert.strictEqual(res.statusCode, 401);
+});
+
+test("cleanup-expired: wrong bearer token -> 401, nothing touched", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const res = await cleanupRequest(db, { headers: { authorization: "Bearer wrong-value" } });
+  assert.strictEqual(res.statusCode, 401);
+  delete process.env.CRON_SECRET;
+});
+
+test("cleanup-expired: GET and POST are both accepted; any other method -> 405", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const authHeaders = { headers: { authorization: "Bearer test-cron-secret" } };
+  const getRes = await cleanupRequest(db, Object.assign({ method: "GET" }, authHeaders));
+  const postRes = await cleanupRequest(db, Object.assign({ method: "POST" }, authHeaders));
+  const deleteRes = await cleanupRequest(db, Object.assign({ method: "DELETE" }, authHeaders));
+  assert.strictEqual(getRes.statusCode, 200);
+  assert.strictEqual(postRes.statusCode, 200);
+  assert.strictEqual(deleteRes.statusCode, 405);
+  delete process.env.CRON_SECRET;
+});
+
+test("cleanup-expired: removes screenshots for pending_review older than 7 days, leaves recent ones alone", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const oldId = await createSession(db);
+  await uploadScreenshot(db, oldId);
+  const oldStoragePath = db.intake_screenshots[0].storage_path;
+  db.intake_sessions.find((s) => s.id === oldId).status = "pending_review";
+  db.intake_sessions.find((s) => s.id === oldId).created_at = new Date(Date.now() - 8 * DAY_MS).toISOString();
+
+  const recentId = await createSession(db);
+  await uploadScreenshot(db, recentId);
+  db.intake_sessions.find((s) => s.id === recentId).status = "pending_review";
+  db.intake_sessions.find((s) => s.id === recentId).created_at = new Date(Date.now() - 1 * DAY_MS).toISOString();
+
+  const res = await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.cleaned, 1);
+
+  const remaining = db.intake_screenshots.map((s) => s.intake_session_id);
+  assert.ok(!remaining.includes(oldId), "the 8-day-old session's screenshot must be gone");
+  assert.ok(remaining.includes(recentId), "the 1-day-old session's screenshot must remain untouched");
+  assert.ok(!db.__storage["intake-screenshots"][oldStoragePath], "the old session's Storage object must be removed too");
+
+  const oldRow = db.intake_sessions.find((s) => s.id === oldId);
+  assert.ok(oldRow.screenshots_expired_at, "must be marked with screenshots_expired_at");
+  assert.strictEqual(oldRow.status, "pending_review", "status itself is untouched by expiry — only screenshots and the marker change");
+
+  const recentRow = db.intake_sessions.find((s) => s.id === recentId);
+  assert.ok(recentRow.screenshots_expired_at == null, "a recent session must not be marked expired");
+});
+
+test("cleanup-expired: retains extracted_data/classification/match state on an expired session — only screenshots are removed", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const id = await createSession(db);
+  await uploadScreenshot(db, id);
+  fetchImpl = okFetch(openAiEnvelope(extractionFixture({ classification: "quote_discussion" })));
+  await extract(db, id);
+  const row = db.intake_sessions.find((r) => r.id === id);
+  row.created_at = new Date(Date.now() - 10 * DAY_MS).toISOString();
+  const extractedDataBefore = JSON.parse(JSON.stringify(row.extracted_data));
+
+  await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+
+  const after = db.intake_sessions.find((r) => r.id === id);
+  assert.deepStrictEqual(after.extracted_data, extractedDataBefore, "extracted_data must survive screenshot expiry untouched");
+  assert.strictEqual(after.classification, "quote_discussion");
+  assert.strictEqual(after.status, "pending_review");
+  assert.strictEqual(db.intake_screenshots.filter((s) => s.intake_session_id === id).length, 0);
+});
+
+test("cleanup-expired: never touches a discarded intake (already cleaned up immediately, for a different reason)", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const id = await createSession(db);
+  db.intake_sessions.find((s) => s.id === id).created_at = new Date(Date.now() - 100 * DAY_MS).toISOString();
+  await patch(db, { id: id, action: "discard" });
+
+  const res = await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+  assert.strictEqual(res.body.cleaned, 0);
+  assert.strictEqual(db.intake_sessions.find((s) => s.id === id).screenshots_expired_at, undefined, "discard's own marker-less cleanup must not be re-marked by the sweep");
+});
+
+test("cleanup-expired: never re-processes an already-expired session (idempotent sweep)", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const id = await createSession(db);
+  await uploadScreenshot(db, id);
+  db.intake_sessions.find((s) => s.id === id).status = "pending_review";
+  db.intake_sessions.find((s) => s.id === id).created_at = new Date(Date.now() - 30 * DAY_MS).toISOString();
+
+  const res1 = await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+  assert.strictEqual(res1.body.cleaned, 1);
+  const res2 = await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+  assert.strictEqual(res2.body.cleaned, 0, "a session already marked screenshots_expired_at must not be swept again");
+});
+
+test("cleanup-expired: a confirmed session older than 30 days is swept; one older than 7 but under 30 days is not (different window than pending)", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const db = freshDb();
+  const youngConfirmedId = await createSession(db);
+  await uploadScreenshot(db, youngConfirmedId);
+  db.intake_sessions.find((s) => s.id === youngConfirmedId).status = "confirmed"; // simulates a future Stage 5D outcome
+  db.intake_sessions.find((s) => s.id === youngConfirmedId).created_at = new Date(Date.now() - 15 * DAY_MS).toISOString();
+
+  const oldConfirmedId = await createSession(db);
+  await uploadScreenshot(db, oldConfirmedId);
+  db.intake_sessions.find((s) => s.id === oldConfirmedId).status = "confirmed";
+  db.intake_sessions.find((s) => s.id === oldConfirmedId).created_at = new Date(Date.now() - 31 * DAY_MS).toISOString();
+
+  const res = await cleanupRequest(db, { headers: { authorization: "Bearer test-cron-secret" } });
+  assert.strictEqual(res.body.cleaned, 1);
+  assert.ok(db.intake_screenshots.some((s) => s.intake_session_id === youngConfirmedId), "15-day-old confirmed session must be untouched (30-day window, not 7)");
+  assert.ok(!db.intake_screenshots.some((s) => s.intake_session_id === oldConfirmedId), "31-day-old confirmed session must be swept");
+});
+
+test("cleanup-expired: requireAdmin's session machinery is never invoked — an admin cookie alone (no CRON_SECRET header) is not sufficient", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  adminAuthed();
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(makeReq({ method: "GET", cookie: AUTH_COOKIE, query: { action: "cleanup-expired" } }));
+  assert.strictEqual(res.statusCode, 401, "an admin cookie must not substitute for the CRON_SECRET bearer token");
+  delete process.env.CRON_SECRET;
+});
+
+// 16. THE critical guarantee: no customer/booking table write ----------------
 test("api/admin/intake.js never writes to customers or bookings — read-only access to both tables", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/intake.js"), "utf8");
   const writeVerbs = /\.(insert|update|upsert|delete)\s*\(/;
@@ -960,7 +1162,13 @@ test("write-audit: intake.js's write calls are only ever against intake_sessions
   const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/intake.js"), "utf8");
   const writeCallRe = /\.(insert|update|upsert|delete)\s*\(/g;
   const count = (src.match(writeCallRe) || []).length;
-  assert.strictEqual(count, 11, "expected exactly 11 write calls (2 insert, 7 update, 2 delete) — see docs/phase-3/batch5-screenshot-intake-proposal.md; a new one needs deliberate review");
+  // Hardening pass added exactly one more .update( — handleCleanupExpired()'s
+  // screenshots_expired_at/updated_at write. insert/delete counts are
+  // unchanged (insertScreenshotWithRetry()/cleanupSessionScreenshots() each
+  // still have exactly one literal .insert(/.delete( call apiece, just
+  // extracted into shared helpers — handleDiscard() lost its own inline
+  // .delete( when it started calling cleanupSessionScreenshots() instead).
+  assert.strictEqual(count, 12, "expected exactly 12 write calls (2 insert, 8 update, 2 delete) — see docs/phase-3/batch5-screenshot-intake-proposal.md; a new one needs deliberate review");
 });
 
 // ---------------------------------------------------------------------
