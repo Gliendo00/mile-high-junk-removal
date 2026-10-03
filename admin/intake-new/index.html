@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Mile High Admin — Clients</title>
+<title>Mile High Admin — New Intake</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
@@ -27,38 +27,42 @@
 <nav class="admin-nav-tabs" aria-label="Admin sections">
   <a href="/admin/" class="admin-nav-tab">Schedule</a>
   <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
-  <a href="/admin/intakes/" class="admin-nav-tab">Intake<span class="admin-nav-badge" id="nav-badge-intake" hidden>0</span></a>
-  <a href="/admin/clients/" class="admin-nav-tab is-active" aria-current="page">Clients</a>
+  <a href="/admin/intakes/" class="admin-nav-tab is-active" aria-current="page">Intake<span class="admin-nav-badge" id="nav-badge-intake" hidden>0</span></a>
+  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
   <a href="/admin/expenses/" class="admin-nav-tab">Expenses</a>
 </nav>
 
 <main class="admin-main">
-  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+  <a href="/admin/intakes/" class="admin-back-link">&larr; Pending Intake</a>
 
   <div class="admin-list-heading">
-    <h1>Clients</h1>
+    <h1>New Intake</h1>
   </div>
 
-  <div class="admin-search-bar">
-    <input type="search" id="client-search" class="admin-search-input" placeholder="Search name, phone, or email" aria-label="Search clients" autocomplete="off">
+  <div id="error-banner" class="admin-error-banner" style="display:none"></div>
+
+  <section class="admin-section">
+    <h2>Screenshots</h2>
+    <p class="admin-field-hint">Add one or more screenshots from the same client conversation. The CRM will combine them into a single intake.</p>
+
+    <ul id="shot-list" class="admin-photo-grid" style="display:none"></ul>
+    <div id="shot-empty" class="admin-empty">No screenshots added yet.</div>
+
+    <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    <div class="admin-form-actions">
+      <button type="button" id="add-btn" class="admin-btn admin-btn-outline">+ Add Screenshots</button>
+    </div>
+  </section>
+
+  <div class="admin-form-actions">
+    <button type="button" id="extract-btn" class="admin-btn admin-btn-primary" disabled>Extract Information</button>
   </div>
 
-  <div style="margin-bottom:14px">
-    <button type="button" id="show-archived-btn" class="admin-btn admin-btn-outline" aria-pressed="false">Show Archived</button>
-  </div>
-
-  <div id="loading" class="admin-loading">Loading clients…</div>
-  <div id="empty" class="admin-empty" style="display:none">No clients yet.</div>
-  <ul id="client-list" class="admin-booking-list" style="display:none"></ul>
-
-  <div id="load-more-wrap" class="admin-load-more" style="display:none">
-    <button type="button" id="load-more-btn" class="admin-btn admin-btn-outline">Load more</button>
-  </div>
+  <div id="progress" class="admin-alert admin-alert-neutral" style="display:none"></div>
 </main>
 
 <script src="../admin-fetch.js"></script>
 <script src="../nav-badge.js"></script>
-<script src="../phone-format.js"></script>
-<script src="../clients-list.js"></script>
+<script src="../intake-new.js"></script>
 </body>
 </html>

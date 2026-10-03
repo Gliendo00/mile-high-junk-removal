@@ -2071,4 +2071,61 @@ button.admin-financial-card:focus-visible {
   color: var(--color-neutral-600, #82796a);
   margin-bottom: 2px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Batch 5 — Screenshot AI Intake review screen. A per-field confidence
+   indicator (a small colored dot + word, never a percentage — see
+   docs/phase-3/batch5-screenshot-intake-proposal.md §9) sits inline with
+   each field's label, reusing .admin-sheet-dot's existing 10px round shape
+   with four new color-only variants below, same pattern as
+   .admin-status-dot-*. */
+.admin-alert-warning { background: #fff7ed; color: #92400e; }
+.admin-intake-field label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.admin-intake-confidence {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-neutral-600, #82796a);
+  flex: none;
+}
+.admin-confidence-dot-confirmed { background: #2f6f13; }
+.admin-confidence-dot-likely { background: #1d4ed8; }
+.admin-confidence-dot-uncertain { background: #b45309; }
+.admin-confidence-dot-missing { background: #9ca3af; }
+
+.admin-intake-conflict {
+  border-left: 3px solid #b45309;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  background: #fff7ed;
+  border-radius: 0 8px 8px 0;
+}
+.admin-intake-conflict-field { font-weight: 700; margin-bottom: 2px; }
+
+.admin-intake-candidate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-intake-candidate-row:last-child { border-bottom: none; }
+
+.admin-intake-search-results {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .admin-expense-history-desc { font-size: 13.5px; color: var(--color-text, #201e1d); }

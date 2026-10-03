@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Review Intake</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <a class="admin-brand" href="/admin/">
+    <img class="admin-brand-logo" src="../../images/mile-high-junk-removal-logo.webp" alt="">
+    <span class="admin-brand-word">Mile High Admin</span>
+  </a>
+  <div class="admin-topbar-actions">
+    <button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>
+  </div>
+</div>
+
+<nav class="admin-nav-tabs" aria-label="Admin sections">
+  <a href="/admin/" class="admin-nav-tab">Schedule</a>
+  <a href="/admin/requests/" class="admin-nav-tab">Requests<span class="admin-nav-badge" id="nav-badge-requests" hidden>0</span></a>
+  <a href="/admin/intakes/" class="admin-nav-tab is-active" aria-current="page">Intake<span class="admin-nav-badge" id="nav-badge-intake" hidden>0</span></a>
+  <a href="/admin/clients/" class="admin-nav-tab">Clients</a>
+  <a href="/admin/expenses/" class="admin-nav-tab">Expenses</a>
+</nav>
+
+<main class="admin-main">
+  <a href="/admin/intakes/" class="admin-back-link">&larr; Pending Intake</a>
+
+  <div id="error-banner" class="admin-error-banner" style="display:none"></div>
+  <div id="loading" class="admin-loading">Loading intake…</div>
+
+  <div id="detail" style="display:none">
+    <div class="admin-detail-hero">
+      <h1>Review Intake</h1>
+      <div class="admin-detail-sub" id="status-sub">—</div>
+    </div>
+
+    <div id="status-banner" class="admin-alert" style="display:none"></div>
+
+    <!-- 1. Client -->
+    <section class="admin-section">
+      <h2>Client</h2>
+      <div id="match-banner" class="admin-alert admin-alert-neutral" style="display:none"></div>
+      <div id="matched-client-summary" class="admin-client-summary" style="display:none">
+        <div>
+          <div class="admin-client-summary-name" id="matched-client-name">—</div>
+          <div class="admin-client-summary-meta" id="matched-client-meta">—</div>
+        </div>
+        <button type="button" id="change-client-btn" class="admin-btn admin-btn-outline">Change</button>
+      </div>
+      <div id="client-search-wrap" style="display:none">
+        <input type="search" id="client-search-input" class="admin-search-input" placeholder="Search existing clients by name, phone, or email" autocomplete="off">
+        <div id="client-search-results" class="admin-intake-search-results"></div>
+      </div>
+      <div id="client-fields"></div>
+    </section>
+
+    <!-- 2. Job / Lead -->
+    <section class="admin-section">
+      <h2>Job / Lead</h2>
+      <div class="admin-field">
+        <label for="classification-select">Classification</label>
+        <select id="classification-select">
+          <option value="lead_only">Lead Only</option>
+          <option value="quote_discussion">Quote Discussion</option>
+          <option value="booking_confirmed">Booking Confirmed</option>
+          <option value="follow_up">Follow-Up</option>
+          <option value="existing_job_update">Existing Job Update</option>
+          <option value="unclear">Unclear</option>
+        </select>
+      </div>
+      <div id="job-fields"></div>
+    </section>
+
+    <!-- 3. Scheduling -->
+    <section class="admin-section">
+      <h2>Scheduling</h2>
+      <div id="scheduling-fields"></div>
+    </section>
+
+    <!-- 4. Conflicts -->
+    <section class="admin-section" id="conflicts-section" style="display:none">
+      <h2>Flagged Conflicts</h2>
+      <div id="conflicts-list"></div>
+    </section>
+
+    <!-- 5. Existing job candidates -->
+    <section class="admin-section" id="candidates-section" style="display:none">
+      <h2>Existing Upcoming Jobs</h2>
+      <p class="admin-field-hint">This looks like an update to one of this client's existing jobs. Link it instead of creating a new one.</p>
+      <div id="candidates-list"></div>
+    </section>
+
+    <!-- 6. Notes -->
+    <section class="admin-section">
+      <h2>Notes</h2>
+      <div id="notes-fields"></div>
+    </section>
+
+    <!-- 7. Source screenshots -->
+    <section class="admin-section">
+      <h2>Source Screenshots</h2>
+      <ul id="screenshot-grid" class="admin-photo-grid"></ul>
+    </section>
+
+    <!-- 8. Actions -->
+    <section class="admin-section">
+      <div class="admin-form-actions">
+        <button type="button" id="save-btn" class="admin-btn admin-btn-primary">Save Changes</button>
+        <button type="button" id="discard-btn" class="admin-btn admin-btn-danger">Discard Intake</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="admin-toast" class="admin-toast" role="status" aria-live="polite"></div>
+
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../phone-format.js"></script>
+<script src="../intake-detail.js"></script>
+</body>
+</html>

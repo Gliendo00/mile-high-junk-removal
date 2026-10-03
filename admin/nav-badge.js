@@ -29,23 +29,47 @@
 // *this* request specifically before retrying.
 document.addEventListener('DOMContentLoaded', function () {
   var badge = document.getElementById('nav-badge-requests');
-  if (!badge) return;
-
-  adminFetch('/api/admin/bookings?countsOnly=1')
-    .then(function (res) {
-      if (!res.ok) return null;
-      return res.json().catch(function () { return null; });
-    })
-    .then(function (body) {
-      var count = body && body.summary && typeof body.summary.new === 'number' ? body.summary.new : 0;
-      if (count > 0) {
-        badge.textContent = count > 99 ? '99+' : String(count);
-        badge.hidden = false;
-      } else {
+  if (badge) {
+    adminFetch('/api/admin/bookings?countsOnly=1')
+      .then(function (res) {
+        if (!res.ok) return null;
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (body) {
+        var count = body && body.summary && typeof body.summary.new === 'number' ? body.summary.new : 0;
+        if (count > 0) {
+          badge.textContent = count > 99 ? '99+' : String(count);
+          badge.hidden = false;
+        } else {
+          badge.hidden = true;
+        }
+      })
+      .catch(function () {
         badge.hidden = true;
-      }
-    })
-    .catch(function () {
-      badge.hidden = true;
-    });
+      });
+  }
+
+  // Batch 5 — Pending Intake count. Same countsOnly folding trick, same
+  // fail-safe-hidden behavior as the Requests badge above, just against
+  // api/admin/intake.js's own list action instead of bookings.js.
+  var intakeBadge = document.getElementById('nav-badge-intake');
+  if (intakeBadge) {
+    adminFetch('/api/admin/intake?countsOnly=1')
+      .then(function (res) {
+        if (!res.ok) return null;
+        return res.json().catch(function () { return null; });
+      })
+      .then(function (body) {
+        var count = body && typeof body.pendingCount === 'number' ? body.pendingCount : 0;
+        if (count > 0) {
+          intakeBadge.textContent = count > 99 ? '99+' : String(count);
+          intakeBadge.hidden = false;
+        } else {
+          intakeBadge.hidden = true;
+        }
+      })
+      .catch(function () {
+        intakeBadge.hidden = true;
+      });
+  }
 });
