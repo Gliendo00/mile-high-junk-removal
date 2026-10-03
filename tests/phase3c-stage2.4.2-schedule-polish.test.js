@@ -476,7 +476,11 @@ test("admin/schedule.js: each job in the list gets its own distinct outer job-ca
 test("admin/schedule.js: renderJobCard()'s outer wrapper (.admin-schedule-card) contains the entire job — the info section AND the Call/Text/Directions actions row, as siblings inside the same card", () => {
   const src = read("admin/schedule.js");
   const body = src.slice(src.indexOf("function renderJobCard(job)"), src.indexOf("function render(jobs)"));
-  const cardIdx = body.indexOf("var card = el('div', 'admin-schedule-card");
+  // CRM visual redesign (2026-10): the card's class string moved into a
+  // `cardClass` variable (built conditionally, to add an Elevated modifier
+  // on the Today view only) instead of being inlined directly in the el()
+  // call — same outer .admin-schedule-card wrapper either way.
+  const cardIdx = body.indexOf("var cardClass = 'admin-schedule-card");
   const mainAppendIdx = body.indexOf("card.appendChild(main)");
   const actionsAppendIdx = body.indexOf("card.appendChild(actions)");
   assert.ok(cardIdx !== -1 && mainAppendIdx !== -1 && actionsAppendIdx !== -1, "the outer card must exist and both the info block and the actions row must be appended directly to it");

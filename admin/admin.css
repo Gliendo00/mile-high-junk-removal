@@ -704,20 +704,38 @@
 /* words (Revenue/Booked/Expenses/Net) at every width — the owner           */
 /* explicitly rejected the REV/EXP-style mobile abbreviation from the       */
 /* previous pass as unprofessional-looking, even though there was room     */
-/* for it. Still ALWAYS a single row of four equal segments, even at        */
-/* ~375px (no 2-column fallback); each segment stacks two tight lines       */
-/* (label, then value). The label shrinks its font-size on very narrow      */
-/* screens instead of abbreviating the word. Presentation only —            */
-/* admin/schedule-financials.js's calculation logic is untouched, and       */
-/* this intentionally does not touch the separate "Could not load the       */
-/* schedule" error-banner styling. Hidden entirely on Year (see             */
-/* admin/calendar-views.js's hideFinancials()).                             */
+/* for it. The label shrinks its font-size on very narrow screens instead  */
+/* of abbreviating the word. Presentation only — admin/schedule-            */
+/* financials.js's calculation logic is untouched, and this intentionally  */
+/* does not touch the separate "Could not load the schedule" error-banner  */
+/* styling. Hidden entirely on Year (see admin/calendar-views.js's          */
+/* hideFinancials()).                                                       */
+/*                                                                           */
+/* CRM visual redesign (2026-10): mobile now locks to a 2x2 grid rather     */
+/* than the single always-4-across row the Stage 4 pass above shipped —     */
+/* reviewed side-by-side against the single row during the Figma pass and   */
+/* found clearly more legible at phone width without shrinking numbers.     */
+/* Desktop (>=860px) keeps the single row. The 1px grid `gap` + a shared    */
+/* background color standing in for the row's old border-right dividers is  */
+/* what keeps clean lines between cells in BOTH layouts without the        */
+/* border-right approach producing an odd trailing edge on a 2-column       */
+/* grid's top-right cell (see .admin-financial-card below).                 */
 /* ------------------------------------------------------------------ */
 .admin-schedule-financials {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.28);
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 16px;
+}
+@media (min-width: 860px) {
+  .admin-schedule-financials {
+    display: flex;
+    gap: 0;
+    background: none;
+  }
 }
 /* Same guard this file already uses for every other class that sets
    `display` directly on an element also toggled via the `hidden` attribute
@@ -741,8 +759,12 @@
   padding: 4px 3px;
   line-height: 1.15;
 }
-.admin-financial-card:not(:last-child) {
-  border-right: 1px solid rgba(255, 255, 255, 0.28);
+/* Desktop-only — mobile's grid `gap` (see .admin-schedule-financials above)
+   already draws the lines between cells; adding this too would double them. */
+@media (min-width: 860px) {
+  .admin-financial-card:not(:last-child) {
+    border-right: 1px solid rgba(255, 255, 255, 0.28);
+  }
 }
 .admin-financial-label {
   font-size: 9.5px;
@@ -937,6 +959,15 @@ button.admin-financial-card:focus-visible {
   border-radius: 12px;
   box-shadow: 0 2px 6px rgba(20, 21, 15, 0.12);
   overflow: hidden;
+}
+/* CRM visual redesign — Elevated treatment for the Today view only (see
+   schedule.js's renderJobCard: currentRange === 'today'). Deliberately
+   only strengthens the shadow rather than touching `border`/`border-left`
+   — the left edge is job.status's accent-color stripe (.admin-card-accent-*
+   below), which a blanket `border: none` (the generic .admin-card-elevated
+   primitive) would wipe out along with the rest of the border. */
+.admin-schedule-card.is-today-elevated {
+  box-shadow: var(--admin-shadow-elevated);
 }
 /* Comfortable, clearly-visible breathing room between jobs — more than the
    denser Requests list (.admin-booking-list) uses, so each card's own

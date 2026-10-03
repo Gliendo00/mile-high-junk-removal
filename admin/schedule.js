@@ -148,7 +148,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function renderJobCard(job) {
     var li = document.createElement('li');
-    var card = el('div', 'admin-schedule-card admin-card-accent-' + job.status);
+    // Elevated (real shadow, see .admin-card-elevated in admin.css) only
+    // for the Today view specifically — the one place "what needs my
+    // attention right now" applies. Every other range (Yesterday,
+    // Tomorrow, a day reached via the day-nav arrows, Week/Month) keeps
+    // the existing flatter bordered treatment, same as Leads/Clients/
+    // Expenses' own routine-scanning cards.
+    var cardClass = 'admin-schedule-card admin-card-accent-' + job.status;
+    if (currentRange === 'today') cardClass += ' is-today-elevated';
+    var card = el('div', cardClass);
 
     var main = document.createElement('a');
     main.className = 'admin-schedule-card-main';
