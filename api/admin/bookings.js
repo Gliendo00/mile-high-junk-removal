@@ -14,6 +14,7 @@ const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = 
 const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
 const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS } = require("../_lib/job-payments-ledger");
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
+const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -577,7 +578,7 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
   const bookingsRes = await supabase
     .from("bookings")
     .select(
-      "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, customer_id, service_address, service_city, service_state, service_zip"
+      "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip"
     )
     .in("status", SCHEDULABLE_STATUSES)
     .gte("appointment_date", startDate)
@@ -630,6 +631,17 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
       estimatedPrice: b.estimated_price,
       estimatedPriceMax: b.estimated_price_max,
       finalPrice: b.final_price,
+      // Batch 3 addendum — complimentary/free job tracking. isComplimentary
+      // is what admin/schedule-financials.js's completedRevenueAmount()
+      // checks FIRST, before ever looking at finalPrice/estimatedPrice (see
+      // that function's own comment) — complimentaryValue/Reason/Note are
+      // purely informational, read only by the separate, non-summed
+      // Complimentary Service breakdown, never by any revenue/Net math.
+      isComplimentary: !!b.is_complimentary,
+      complimentaryValue: b.complimentary_value,
+      complimentaryReason: b.complimentary_reason,
+      complimentaryReasonLabel: b.complimentary_reason ? complimentaryReasonLabel(b.complimentary_reason) : null,
+      complimentaryNote: b.complimentary_note,
       customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
       serviceAddress: {
         address: b.service_address || null,

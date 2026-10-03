@@ -19,6 +19,7 @@ const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
 const { mirrorStripePaymentToLedger, effectiveRevenue, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
+const { ALL_COMPLIMENTARY_REASON_KEYS, complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -127,7 +128,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
       )
       .eq("id", id)
       .maybeSingle();
@@ -229,6 +230,11 @@ module.exports = async (req, res) => {
         finalPrice: booking.final_price,
         tipAmount: booking.tip_amount,
         internalNotes: booking.internal_notes,
+        isComplimentary: booking.is_complimentary,
+        complimentaryValue: booking.complimentary_value,
+        complimentaryReason: booking.complimentary_reason,
+        complimentaryReasonLabel: booking.complimentary_reason ? complimentaryReasonLabel(booking.complimentary_reason) : null,
+        complimentaryNote: booking.complimentary_note,
         status: normalizedStatus(booking.status),
         statusLabel: statusLabel(booking.status),
         createdAt: booking.created_at,
@@ -593,6 +599,31 @@ async function handleCreate(req, res) {
     }
   }
 
+  // Complimentary/free job tracking (Batch 3 addendum) — Past Job only,
+  // since a complimentary job must already BE a completed job (New Job
+  // creates status="booked"; there's no completed job yet to mark free).
+  // Forcing finalPrice to 0 here — unconditionally overriding whatever was
+  // submitted — is what makes Job Revenue correctly read $0 for this job
+  // everywhere in the codebase without any complimentary-aware logic
+  // needed in admin/schedule-financials.js's completedRevenueAmount() or
+  // api/_lib/job-payments-ledger.js's effectiveRevenue(): both already
+  // treat a real, intentional $0 final_price as $0, never falling back to
+  // estimatedPrice (see the regression tests for that exact rule).
+  let complimentary = { isComplimentary: false, complimentaryValue: null, complimentaryReason: null, complimentaryNote: null };
+  if (body.isComplimentary === true && !isPast) {
+    res.status(400).json({ error: "Only a completed job can be marked complimentary. Use Past Job, or mark it complimentary after completing it." });
+    return;
+  }
+  if (isPast) {
+    const parsed = parseComplimentary(body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    complimentary = parsed;
+    if (complimentary.isComplimentary) finalPrice = 0;
+  }
+
   const status = isPast ? "completed" : "booked";
 
   // Batch 2C — dumpster rental fields, admin-created jobs only (the public
@@ -654,6 +685,10 @@ async function handleCreate(req, res) {
         final_price: finalPrice,
         tip_amount: tipAmount,
         internal_notes: internalNotes,
+        is_complimentary: complimentary.isComplimentary,
+        complimentary_value: complimentary.complimentaryValue,
+        complimentary_reason: complimentary.complimentaryReason,
+        complimentary_note: complimentary.complimentaryNote,
         // Frozen job-location snapshot — written once, here, and never
         // re-derived from the customer's profile address later, matching
         // every existing booking everywhere else in this codebase.
@@ -663,7 +698,7 @@ async function handleCreate(req, res) {
         service_zip: serviceZip,
       })
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip, created_at"
       )
       .single();
 
@@ -716,6 +751,11 @@ async function handleCreate(req, res) {
         finalPrice: created.final_price,
         tipAmount: created.tip_amount,
         internalNotes: created.internal_notes,
+        isComplimentary: created.is_complimentary,
+        complimentaryValue: created.complimentary_value,
+        complimentaryReason: created.complimentary_reason,
+        complimentaryReasonLabel: created.complimentary_reason ? complimentaryReasonLabel(created.complimentary_reason) : null,
+        complimentaryNote: created.complimentary_note,
         status: normalizedStatus(created.status),
         statusLabel: statusLabel(created.status),
         createdAt: created.created_at,
@@ -1071,6 +1111,33 @@ async function handleUpdate(req, res) {
       }
     }
 
+    // Complimentary/free job tracking (Batch 3 addendum) — completed-only,
+    // same gating as tip_amount above, and for the same underlying reason:
+    // a complimentary job must already BE a completed job. Forcing
+    // pricingUpdate.final_price to 0 here — AFTER the normal finalPrice
+    // handling above, so it unconditionally wins — is what makes Job
+    // Revenue correctly read $0 everywhere without any complimentary-aware
+    // logic in the actual revenue calculations themselves (see
+    // handleCreate's matching comment for the full reasoning). Un-marking
+    // a job (isComplimentary omitted/false) clears all four fields back to
+    // null/false via parseComplimentary() and leaves final_price exactly
+    // as the normal handling above already computed it — no special case
+    // needed for "no longer complimentary."
+    if (body.isComplimentary === true && !isCompleted) {
+      res.status(400).json({ error: "Only a completed job can be marked complimentary." });
+      return;
+    }
+    const complimentary = parseComplimentary(body);
+    if (!complimentary.ok) {
+      res.status(400).json({ error: complimentary.error });
+      return;
+    }
+    pricingUpdate.is_complimentary = complimentary.isComplimentary;
+    pricingUpdate.complimentary_value = complimentary.complimentaryValue;
+    pricingUpdate.complimentary_reason = complimentary.complimentaryReason;
+    pricingUpdate.complimentary_note = complimentary.complimentaryNote;
+    if (complimentary.isComplimentary) pricingUpdate.final_price = 0;
+
     const updatePayload = Object.assign(
       {
         service_type: serviceType,
@@ -1096,7 +1163,7 @@ async function handleUpdate(req, res) {
 
     const { data: updated, error } = await updateQuery
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, customer_id, service_address, service_city, service_state, service_zip, created_at, updated_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip, created_at, updated_at"
       )
       .maybeSingle();
     if (error) throw error;
@@ -1168,6 +1235,11 @@ async function handleUpdate(req, res) {
         finalPrice: updated.final_price,
         tipAmount: updated.tip_amount,
         internalNotes: updated.internal_notes,
+        isComplimentary: updated.is_complimentary,
+        complimentaryValue: updated.complimentary_value,
+        complimentaryReason: updated.complimentary_reason,
+        complimentaryReasonLabel: updated.complimentary_reason ? complimentaryReasonLabel(updated.complimentary_reason) : null,
+        complimentaryNote: updated.complimentary_note,
         status: normalizedStatus(updated.status),
         statusLabel: statusLabel(updated.status),
         createdAt: updated.created_at,
@@ -2428,6 +2500,47 @@ function sanitizeText(value, maxLen) {
     if (!isControl) stripped += value[i];
   }
   return stripped.replace(/<[^>]*>/g, "").trim().slice(0, maxLen);
+}
+
+// Batch 3 addendum — complimentary/free job tracking. Shared by
+// handleCreate() (Past Job, isPast only) and handleUpdate() (Edit Job, an
+// already-completed job only) — see each call site's own comment for why
+// it's gated that way. Returns { ok: true, isComplimentary, complimentaryValue,
+// complimentaryReason, complimentaryNote } or { ok: false, error }, never
+// throws. When isComplimentary is false (the default — body.isComplimentary
+// is anything other than the literal boolean true), every complimentary_*
+// field resolves to null: un-marking a job (or never marking it in the
+// first place) always clears stale complimentary metadata rather than
+// leaving a previous reason/value/note stranded on a now-normal job.
+function parseComplimentary(body) {
+  const isComplimentary = body.isComplimentary === true;
+  if (!isComplimentary) {
+    return { ok: true, isComplimentary: false, complimentaryValue: null, complimentaryReason: null, complimentaryNote: null };
+  }
+
+  const reason = typeof body.complimentaryReason === "string" ? body.complimentaryReason.trim() : "";
+  if (!ALL_COMPLIMENTARY_REASON_KEYS.includes(reason)) {
+    return { ok: false, error: "Please choose a valid reason for the complimentary job." };
+  }
+
+  const note = sanitizeText(body.complimentaryNote, MAX.long) || null;
+  // "other" is the one reason that tells a future reader nothing on its
+  // own — every other reason is already self-describing. Same requirement
+  // shape as job_payments' "other" payment method requiring a description.
+  if (reason === "other" && !note) {
+    return { ok: false, error: "Please enter a note explaining this complimentary job." };
+  }
+
+  let complimentaryValue = null;
+  if (body.complimentaryValue !== undefined && body.complimentaryValue !== null && body.complimentaryValue !== "") {
+    const n = Number(body.complimentaryValue);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      return { ok: false, error: "Please enter a valid complimentary service value." };
+    }
+    complimentaryValue = Math.round(n * 100) / 100;
+  }
+
+  return { ok: true, isComplimentary: true, complimentaryValue: complimentaryValue, complimentaryReason: reason, complimentaryNote: note };
 }
 
 // True only for a real calendar date in YYYY-MM-DD form — same small,
