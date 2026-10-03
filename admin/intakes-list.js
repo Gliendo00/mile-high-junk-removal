@@ -59,10 +59,14 @@ document.addEventListener('DOMContentLoaded', function () {
     a.className = 'admin-booking-card';
     a.href = '/admin/intake/?id=' + encodeURIComponent(intake.id);
 
-    var title = intake.matchedClientName || 'Unidentified client';
+    // Priority: an existing client's real name > the name the extraction
+    // found > phone > email. Only falls through to "Unidentified client"
+    // when none of those exist at all.
+    var title = intake.matchedClientName || intake.extractedClientName || intake.extractedPhone || intake.extractedEmail || 'Unidentified client';
     a.appendChild(el('div', 'admin-card-name', title));
 
     var classificationText = CLASSIFICATION_TEXT[intake.classification] || 'Unclassified';
+    if (intake.extractedServiceType) classificationText += ' · ' + intake.extractedServiceType;
     a.appendChild(el('div', 'admin-card-service', classificationText));
 
     var metaParts = [MATCH_STATUS_TEXT[intake.matchStatus] || 'Unresolved client match'];

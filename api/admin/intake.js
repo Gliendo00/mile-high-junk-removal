@@ -460,7 +460,7 @@ async function handleList(req, res) {
 
     const listRes = await supabase
       .from("intake_sessions")
-      .select("id, created_at, updated_at, status, classification, classification_confidence, match_status, matched_customer_id")
+      .select("id, created_at, updated_at, status, classification, classification_confidence, match_status, matched_customer_id, extracted_data")
       .eq("status", statusFilter)
       .order("created_at", { ascending: false });
     if (listRes.error) throw listRes.error;
@@ -480,6 +480,17 @@ async function handleList(req, res) {
 
     const intakes = rows.map((r) => {
       const customer = r.matched_customer_id ? customersById[r.matched_customer_id] : null;
+      // extracted_data.fields.<key>.value is already null when the model
+      // (or an admin correction) found nothing for that field — see
+      // intake-vision-provider.js's normalizeExtractionResult(). No
+      // confidence gate here: even a "likely"/"uncertain" OCR read is a
+      // better list-card label than "Unidentified client", and the review
+      // screen is where confidence actually gets corrected.
+      const extractedFields = (r.extracted_data && r.extracted_data.fields) || {};
+      const extractedName = [extractedFields.firstName, extractedFields.lastName]
+        .map((f) => (f && f.value ? f.value : null))
+        .filter(Boolean)
+        .join(" ");
       return {
         id: r.id,
         createdAt: r.created_at,
@@ -488,7 +499,14 @@ async function handleList(req, res) {
         classification: r.classification,
         classificationConfidence: r.classification_confidence,
         matchStatus: r.match_status,
+        // Priority: a matched existing client's real name (authoritative,
+        // from `customers`) > a name the extraction found > phone > email.
+        // "Unidentified client" is now only shown when NONE of those exist.
         matchedClientName: customer ? [customer.first_name, customer.last_name].filter(Boolean).join(" ") : null,
+        extractedClientName: extractedName || null,
+        extractedPhone: extractedFields.phone && extractedFields.phone.value ? extractedFields.phone.value : null,
+        extractedEmail: extractedFields.email && extractedFields.email.value ? extractedFields.email.value : null,
+        extractedServiceType: extractedFields.serviceType && extractedFields.serviceType.value ? extractedFields.serviceType.value : null,
       };
     });
 

@@ -660,6 +660,43 @@ test("list: defaults to pending_review only, newest first, with the matched clie
   assert.strictEqual(res.body.intakes[0].matchedClientName, "Jamie Rivera");
 });
 
+test("list: no customer match falls back to the extracted name (never 'Unidentified client' when one exists)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const id = await createSession(db);
+  await uploadScreenshot(db, id);
+  const fields = emptyFields();
+  fields.firstName = { value: "Morgan", confidence: "likely", sourceIndex: 0 };
+  fields.lastName = { value: "Lee", confidence: "likely", sourceIndex: 0 };
+  // Deliberately NOT one of freshDb()'s seeded phone numbers, so this
+  // resolves to match_status new_candidate (no customers row to join).
+  fields.phone = { value: "303-555-0199", confidence: "confirmed", sourceIndex: 0 };
+  fields.serviceType = { value: "Junk Removal", confidence: "likely", sourceIndex: 0 };
+  fetchImpl = okFetch(openAiEnvelope(extractionFixture({ fields: fields })));
+  await extract(db, id);
+
+  const res = await list(db);
+  assert.strictEqual(res.body.intakes[0].matchStatus, "new_candidate");
+  assert.strictEqual(res.body.intakes[0].matchedClientName, null);
+  assert.strictEqual(res.body.intakes[0].extractedClientName, "Morgan Lee");
+  assert.strictEqual(res.body.intakes[0].extractedServiceType, "Junk Removal");
+});
+
+test("list: with no name, phone, or email extracted, matchedClientName and extractedClientName are both null (card falls back to 'Unidentified client')", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const id = await createSession(db);
+  await uploadScreenshot(db, id);
+  fetchImpl = okFetch(openAiEnvelope(extractionFixture({ fields: emptyFields() })));
+  await extract(db, id);
+
+  const res = await list(db);
+  assert.strictEqual(res.body.intakes[0].matchedClientName, null);
+  assert.strictEqual(res.body.intakes[0].extractedClientName, null);
+  assert.strictEqual(res.body.intakes[0].extractedPhone, null);
+  assert.strictEqual(res.body.intakes[0].extractedEmail, null);
+});
+
 test("list: ?countsOnly=1 returns just the pending count", async () => {
   adminAuthed();
   const db = freshDb();
