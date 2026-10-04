@@ -32,14 +32,34 @@
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { normalizePhone } = require("../_lib/customer-identity");
+const { serviceLabel } = require("../_lib/booking-format");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const POSTGRES_UNIQUE_VIOLATION = "23505";
 const MAX_TEXT = 2000;
 
+// UI batch (lead-detail navigation fix): the Leads workspace bucket labels,
+// duplicated from api/admin/bookings.js's LEADS_BUCKET_LABELS rather than
+// imported — this project's established per-file convention (see this
+// file's own header re: not sharing api/admin/intake.js's helpers). Only
+// the 7 values leads.status's own CHECK constraint allows are here.
+const LEAD_STATUS_LABELS = {
+  new: "New",
+  contacted: "Contacted",
+  waiting_on_photos: "Waiting on Photos",
+  estimate_sent: "Estimate Sent",
+  follow_up: "Follow Up",
+  booked: "Booked/Won",
+  lost: "Lost",
+};
+
 module.exports = async (req, res) => {
   const session = await requireAdmin(req, res);
   if (!session) return;
+
+  if (req.method === "GET") {
+    return handleGet(req, res);
+  }
 
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -241,5 +261,90 @@ async function handleConfirm(req, res, session) {
   } catch (err) {
     console.error("Admin lead confirm failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not confirm this intake as a lead." });
+  }
+}
+
+const LEAD_DETAIL_COLS =
+  "id, created_at, created_by, updated_at, updated_by, source, source_intake_id, status, first_name, last_name, phone, email, address, city, state, zip, service_type, service_details, estimated_load_size, quoted_amount, notes, next_follow_up_date, matched_customer_id";
+
+// ---------------------------------------------------------------------
+// GET /api/admin/lead?id=<uuid> — UI batch (lead-detail navigation fix).
+// This file's existing POST write path (handleConfirm above) is the only
+// place a `leads` row is created; nothing here writes anything. A lead's
+// own matched client (if any) is read-only enrichment, exactly like every
+// other admin detail endpoint's customer lookup (api/admin/booking.js,
+// api/admin/intake.js) — never a second source of truth for the match.
+// ---------------------------------------------------------------------
+async function handleGet(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    // Same "malformed id reads as not found" posture as api/admin/client.js
+    // and api/admin/booking.js — never confirms anything about id format.
+    res.status(404).json({ error: "Lead not found." });
+    return;
+  }
+
+  try {
+    const leadRes = await supabase.from("leads").select(LEAD_DETAIL_COLS).eq("id", id).maybeSingle();
+    if (leadRes.error) throw leadRes.error;
+    const lead = leadRes.data;
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found." });
+      return;
+    }
+
+    let matchedClient = null;
+    if (lead.matched_customer_id) {
+      const custRes = await supabase
+        .from("customers")
+        .select("id, first_name, last_name, phone, email, city")
+        .eq("id", lead.matched_customer_id)
+        .maybeSingle();
+      // Non-fatal: an unresolved match (e.g. the customer was since
+      // archived/deleted — customers are never hard-deleted today, but this
+      // stays defensive either way) just means matchedClient renders null
+      // rather than failing the whole lead view over a secondary lookup.
+      if (!custRes.error && custRes.data) {
+        const c = custRes.data;
+        matchedClient = { id: c.id, firstName: c.first_name, lastName: c.last_name, phone: c.phone, email: c.email, city: c.city };
+      }
+    }
+
+    res.status(200).json({
+      ok: true,
+      lead: {
+        id: lead.id,
+        source: lead.source,
+        sourceIntakeId: lead.source_intake_id,
+        status: lead.status,
+        statusLabel: LEAD_STATUS_LABELS[lead.status] || lead.status,
+        firstName: lead.first_name,
+        lastName: lead.last_name,
+        phone: lead.phone,
+        email: lead.email,
+        address: lead.address,
+        city: lead.city,
+        state: lead.state,
+        zip: lead.zip,
+        serviceType: lead.service_type,
+        serviceLabel: lead.service_type ? serviceLabel(lead.service_type) : null,
+        serviceDetails: lead.service_details,
+        estimatedLoadSize: lead.estimated_load_size,
+        quotedAmount: lead.quoted_amount,
+        notes: lead.notes,
+        nextFollowUpDate: lead.next_follow_up_date,
+        createdAt: lead.created_at,
+        createdBy: lead.created_by,
+        updatedAt: lead.updated_at,
+        updatedBy: lead.updated_by,
+        matchedClient: matchedClient,
+      },
+    });
+  } catch (err) {
+    console.error("Admin lead detail failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load this lead." });
   }
 }

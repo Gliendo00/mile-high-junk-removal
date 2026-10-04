@@ -147,7 +147,7 @@ test("login page: already authenticated on load -> redirects via location.replac
   page.queueResponse("action=session", { status: 200 });
   page.fireLoad();
   await tick();
-  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/"]);
+  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/home/"]);
   assert.strictEqual(page.locationCalls.hrefSets.length, 0, "must never fall back to location.href for this redirect");
 });
 
@@ -189,7 +189,10 @@ test("login page: bfcache restore (pageshow, persisted=true) while still authent
   await tick();
 
   assert.strictEqual(page.fetchCalls.length, 1, "a bfcache restore must re-check the session");
-  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/"]);
+  // UPDATED for the Home dashboard UI batch: an authenticated redirect now
+  // lands on /admin/home/, not /admin/ directly — see login.js's own
+  // comment.
+  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/home/"]);
 });
 
 test("login page: a normal pageshow (persisted=false) does not re-check — only a real bfcache restore does", async () => {
@@ -216,7 +219,7 @@ test("login page: successful login redirects via location.replace, never locatio
   page.submit();
   await tick();
 
-  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/"]);
+  assert.deepStrictEqual(page.locationCalls.replace, ["/admin/home/"]);
   assert.strictEqual(page.locationCalls.hrefSets.length, 0, "must never fall back to location.href on a successful login");
 });
 

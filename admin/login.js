@@ -36,8 +36,11 @@ document.addEventListener('DOMContentLoaded', function () {
         if (res.status === 200) {
           // replace(), not href: this page shouldn't become a Back
           // destination again immediately after this redirect — see the
-          // matching change in the submit handler below.
-          window.location.replace('/admin/');
+          // matching change in the submit handler below. Lands on the Home
+          // dashboard (UI batch, Home page) rather than Schedule directly —
+          // Home is now the app's operational-overview landing spot; the
+          // Schedule/Leads/Clients/Expenses nav items are unaffected.
+          window.location.replace('/admin/home/');
         }
       })
       .catch(function () {});
@@ -83,7 +86,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // sitting in browser history as a Back destination — see
         // redirectIfAlreadyAuthenticated() above, which is the backstop for
         // the rare case this page is reached via Back/bfcache regardless.
-        window.location.replace('/admin/');
+        window.location.replace('/admin/home/');
       })
       .catch(function (err) {
         showError(err && err.message ? err.message : 'Could not log in. Please try again.');

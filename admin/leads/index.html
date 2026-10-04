@@ -17,102 +17,129 @@
 <div id="admin-chrome"></div>
 
 <main class="admin-main">
-  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+  <div class="admin-dash-shell">
+    <button type="button" id="dash-sidebar-toggle" class="admin-dash-sidebar-toggle" aria-expanded="false" aria-controls="dash-sidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <span id="dash-sidebar-toggle-label">Needs Attention</span>
+    </button>
+    <div id="dash-sidebar-backdrop" class="admin-dash-sidebar-backdrop" hidden></div>
 
-  <div class="admin-list-heading">
-    <h1>Leads</h1>
-  </div>
-
-  <div id="loading" class="admin-loading">Loading leads…</div>
-  <div id="empty" class="admin-empty-state" style="display:none">
-    <img class="admin-empty-state-mascot" src="/images/mile-high-cleanup-mascot.png" alt="">
-    <div class="admin-empty-state-title">All caught up</div>
-    <div class="admin-empty-state-subtext">Nothing waiting in any Leads section right now.</div>
-  </div>
-
-  <!-- Batch 6 follow-up — sub-tabs/pills, one bucket visible at a time.
-       Pending Intake is the EXISTING GET /api/admin/intake list
-       (status=pending_review), fetched alongside the merged GET
-       /api/admin/bookings?view=leads response that backs the other 8 —
-       see admin/leads-list.js. Static, always-present buttons (same
-       convention as .admin-range-tab on Schedule): JS toggles .is-active
-       and each count badge's hidden state, never builds the tab bar
-       itself. Horizontally scrollable at phone width — see
-       .admin-leads-tabs in admin.css.
-
-       CRM visual redesign — real desktop slider: the tabs row is wrapped
-       in left/right arrow controls (hidden by default; leads-list.js
-       shows/enables each only when the row actually overflows in that
-       direction) and the active tab auto-scrolls into view on selection.
-       Mouse wheel/trackpad and touch scrolling both still work natively
-       since .admin-leads-tabs itself is unchanged (just now one flex
-       child of the row below instead of the page's direct child). -->
-  <div id="leads-sections" style="display:none">
-    <div class="admin-leads-tabs-row">
-      <button type="button" id="leads-tabs-prev" class="admin-leads-tab-arrow" aria-label="Scroll tabs left" hidden>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4 7 12l8 8"/></svg>
+    <!-- Leads status sidebar — replaces the old horizontal 9-pill tab row.
+         Buttons (not links): this is a client-side view toggle within one
+         page, exactly like the tabs it replaces (leads-list.js owns
+         selection/visibility; nothing here navigates). -->
+    <aside class="admin-dash-sidebar" id="dash-sidebar" role="tablist" aria-label="Leads sections">
+      <button type="button" class="admin-dash-nav-link" data-bucket="needsAttention" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 2.5 17a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <span class="admin-dash-nav-link-label">Needs Attention</span>
+        <span class="admin-nav-badge" id="sidebar-count-needsAttention" hidden>0</span>
       </button>
-      <div class="admin-leads-tabs" id="leads-tabs" role="tablist" aria-label="Leads sections">
-        <button type="button" class="admin-leads-tab" data-bucket="pendingIntake" role="tab">Pending Intake<span class="admin-nav-badge" id="tab-count-pendingIntake" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="websiteRequests" role="tab">Website Requests<span class="admin-nav-badge" id="tab-count-websiteRequests" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="new" role="tab">New<span class="admin-nav-badge" id="tab-count-new" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="contacted" role="tab">Contacted<span class="admin-nav-badge" id="tab-count-contacted" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="waitingOnPhotos" role="tab">Waiting on Photos<span class="admin-nav-badge" id="tab-count-waitingOnPhotos" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="estimateSent" role="tab">Estimate Sent<span class="admin-nav-badge" id="tab-count-estimateSent" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="followUp" role="tab">Follow Up<span class="admin-nav-badge" id="tab-count-followUp" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="bookedWon" role="tab">Booked/Won<span class="admin-nav-badge" id="tab-count-bookedWon" hidden>0</span></button>
-        <button type="button" class="admin-leads-tab" data-bucket="lost" role="tab">Lost<span class="admin-nav-badge" id="tab-count-lost" hidden>0</span></button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="pendingIntake" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        <span class="admin-dash-nav-link-label">Pending Intake</span>
+        <span class="admin-nav-badge" id="sidebar-count-pendingIntake" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="new" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+        <span class="admin-dash-nav-link-label">New</span>
+        <span class="admin-nav-badge" id="sidebar-count-new" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="contacted" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-8.9 8.5 9 9 0 0 1-3.9-.9L3 20l1-5a9 9 0 0 1-1-4.1A8.4 8.4 0 0 1 11.9 2a8.3 8.3 0 0 1 9 8.5Z"/></svg>
+        <span class="admin-dash-nav-link-label">Contacted</span>
+        <span class="admin-nav-badge" id="sidebar-count-contacted" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="waitingOnPhotos" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M8 5l1.5-2h5L16 5"/></svg>
+        <span class="admin-dash-nav-link-label">Waiting on Photos</span>
+        <span class="admin-nav-badge" id="sidebar-count-waitingOnPhotos" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="estimateSent" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v2.2M12 19.8V22M4.2 4.2l1.5 1.5M18.3 18.3l1.5 1.5M2 12h2.2M19.8 12H22M4.2 19.8l1.5-1.5M18.3 5.7l1.5-1.5"/><circle cx="12" cy="12" r="4.5"/></svg>
+        <span class="admin-dash-nav-link-label">Estimate Sent</span>
+        <span class="admin-nav-badge" id="sidebar-count-estimateSent" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="followUp" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span class="admin-dash-nav-link-label">Follow Up</span>
+        <span class="admin-nav-badge" id="sidebar-count-followUp" hidden>0</span>
+      </button>
+
+      <div class="admin-dash-sidebar-divider"></div>
+
+      <button type="button" class="admin-dash-nav-link" data-bucket="bookedWon" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        <span class="admin-dash-nav-link-label">Booked / Won</span>
+        <span class="admin-nav-badge" id="sidebar-count-bookedWon" hidden>0</span>
+      </button>
+      <button type="button" class="admin-dash-nav-link" data-bucket="lost" role="tab">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <span class="admin-dash-nav-link-label">Lost</span>
+        <span class="admin-nav-badge" id="sidebar-count-lost" hidden>0</span>
+      </button>
+    </aside>
+
+    <div class="admin-dash-content">
+      <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+      <div class="admin-list-heading">
+        <h1>Leads</h1>
+        <span class="admin-list-count" id="leads-total-count"></span>
       </div>
-      <button type="button" id="leads-tabs-next" class="admin-leads-tab-arrow" aria-label="Scroll tabs right" hidden>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4l8 8-8 8"/></svg>
-      </button>
+
+      <div class="admin-leads-toolbar">
+        <div class="admin-search-bar admin-search-bar-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="search" id="leads-search" class="admin-search-input" placeholder="Search name or phone" aria-label="Search leads in this view" autocomplete="off">
+        </div>
+      </div>
+
+      <div id="loading" class="admin-loading">Loading leads…</div>
+      <div id="empty" class="admin-empty-state" style="display:none">
+        <img class="admin-empty-state-mascot" src="/images/mile-high-cleanup-mascot.png" alt="">
+        <div class="admin-empty-state-title">All caught up</div>
+        <div class="admin-empty-state-subtext">Nothing waiting in any Leads section right now.</div>
+      </div>
+
+      <div id="leads-sections" style="display:none">
+        <div class="admin-section-header">
+          <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+          <span class="admin-section-header-label" id="bucket-section-header-label">Needs Attention</span>
+          <span class="admin-section-header-count" id="bucket-section-header-count"></span>
+        </div>
+
+        <!-- Needs Attention — a composite, UI-only view (never a database
+             status): grouped clones of whatever's currently in Pending
+             Intake/New/Waiting on Photos/Follow Up, each under its own
+             small group label. See leads-list.js's renderNeedsAttention(). -->
+        <section id="section-needsAttention" hidden role="tabpanel"></section>
+
+        <section class="admin-leads-section" id="section-pendingIntake" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-pendingIntake"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-new" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-new"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-contacted" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-contacted"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-waitingOnPhotos" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-waitingOnPhotos"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-estimateSent" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-estimateSent"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-followUp" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-followUp"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-bookedWon" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-bookedWon"></ul>
+        </section>
+        <section class="admin-leads-section" id="section-lost" hidden role="tabpanel">
+          <ul class="admin-booking-list admin-leads-grid" id="list-lost"></ul>
+        </section>
+      </div>
     </div>
-
-    <!-- One shared section header, repositioned (its label/count updated)
-         to match whichever bucket is current — same "exactly one bucket
-         visible" model the sections themselves already use, see
-         leads-list.js's selectBucket(). -->
-    <div class="admin-section-header">
-      <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
-      <span class="admin-section-header-label" id="bucket-section-header-label">Pending Intake</span>
-      <span class="admin-section-header-count" id="bucket-section-header-count"></span>
-    </div>
-
-    <section class="admin-leads-section" id="section-pendingIntake" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-pendingIntake"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-websiteRequests" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-websiteRequests"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-new" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-new"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-contacted" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-contacted"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-waitingOnPhotos" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-waitingOnPhotos"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-estimateSent" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-estimateSent"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-followUp" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-followUp"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-bookedWon" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-bookedWon"></ul>
-    </section>
-
-    <section class="admin-leads-section" id="section-lost" hidden role="tabpanel">
-      <ul class="admin-booking-list admin-leads-grid" id="list-lost"></ul>
-    </section>
   </div>
 </main>
 

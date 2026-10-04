@@ -1,5 +1,5 @@
-// /admin/leads — the Leads workspace shell (Batch 6, Leads consolidation).
-// Assembles 9 sections from TWO existing, unchanged read-only endpoints:
+// /admin/leads — the Leads workspace shell. Assembles sections from TWO
+// existing, unchanged read-only endpoints:
 //   - GET /api/admin/intake (default, status=pending_review) -> Pending
 //     Intake. The exact same endpoint/shape admin/intakes-list.js already
 //     renders — this file duplicates its name-fallback priority
@@ -7,24 +7,36 @@
 //     "Unidentified client") rather than importing it, matching this
 //     project's established small-per-file-helper convention.
 //   - GET /api/admin/bookings?view=leads -> the other 8 sections, a
-//     READ-ONLY merge of website-origin `bookings` rows and the new
-//     `leads` table (not yet migrated anywhere) — see that endpoint's own
-//     header comment in api/admin/bookings.js for the full contract.
+//     READ-ONLY merge of website-origin `bookings` rows and the `leads`
+//     table (screenshot-intake/phone/manual leads) — see that endpoint's
+//     own header comment in api/admin/bookings.js for the full contract.
 //
 // Neither fetch writes anything.
 //
-// Follow-up (same batch, still Batch 6) — sub-tabs/pills: exactly ONE of
-// the 9 sections is shown at a time, selected via the horizontally-
-// scrollable .admin-leads-tabs row. Every section's data is still fetched
-// and rendered up front (so switching tabs is instant, no re-fetch); only
-// VISIBILITY is tab-driven. Default-selection cascade is simply "first
-// non-empty bucket in SECTION_ORDER" — which, given that order, already
-// satisfies every rule asked for: Pending Intake first, then Website
-// Requests, then the active-lead-pipeline buckets (new through
-// followUp), with Booked/Won and Lost last — so they only ever become
-// the default when everything ahead of them is empty. If literally every
-// bucket is empty, the first tab (Pending Intake) is still selected, just
-// showing its own empty state.
+// UI batch (Leads sidebar redesign): the old horizontal 9-pill tab row is
+// replaced by a dark sidebar (shared layout with /admin/home/ — see
+// admin.css's .admin-dash-* rules; this file wires its own mobile-drawer
+// toggle independently rather than sharing a script with admin/home.js,
+// matching this project's established per-file-duplication convention).
+// Two structural changes to the bucket model itself, both UI-only (no new
+// database status, see api/admin/bookings.js — completely unchanged):
+//   1. "Website Requests" is no longer its own sidebar destination —
+//      Website Request is a SOURCE (like Screenshot Intake/Phone/Manual),
+//      not a lead stage, so its items are folded into the "New" bucket
+//      here (merged client-side with the existing sections.new) and shown
+//      via the same source badge every other card already has.
+//   2. "Needs Attention" is a new smart combined view — Pending Intake +
+//      New + Waiting on Photos + Follow Up, rendered side by side under
+//      small group labels. Purely a different arrangement of the exact
+//      same items the 4 individual buckets already show; selecting it
+//      never changes what's fetched or how any other bucket renders.
+//
+// UI batch (lead-detail navigation fix): a lead-kind card's main area used
+// to be a plain non-interactive <div> (no detail page existed for a
+// `leads` table row). It is now a real link to the new canonical
+// /admin/lead/?id= route (see admin/lead-detail.js + api/admin/lead.js's
+// new GET), exactly like a booking-kind card already links to
+// /admin/booking/?id=.
 //
 // Every dynamic value below is written with textContent (never innerHTML/
 // insertAdjacentHTML with a concatenated string) — same discipline as
@@ -34,18 +46,49 @@ document.addEventListener('DOMContentLoaded', function () {
   var loadingEl = document.getElementById('loading');
   var emptyEl = document.getElementById('empty');
   var sectionsEl = document.getElementById('leads-sections');
-  var tabsEl = document.getElementById('leads-tabs');
-  var tabsPrevBtn = document.getElementById('leads-tabs-prev');
-  var tabsNextBtn = document.getElementById('leads-tabs-next');
   var logoutBtn = document.getElementById('logout-btn');
+  var searchInput = document.getElementById('leads-search');
+  var totalCountEl = document.getElementById('leads-total-count');
 
-  // Fixed tab order — see the header comment above for why this single
-  // array is also the entire default-selection rule.
-  var SECTION_ORDER = ['pendingIntake', 'websiteRequests', 'new', 'contacted', 'waitingOnPhotos', 'estimateSent', 'followUp', 'bookedWon', 'lost'];
+  // -----------------------------------------------------------------
+  // Sidebar drawer (mobile only — see admin.css's .admin-dash-sidebar).
+  // Duplicated from admin/home.js rather than shared — see this file's
+  // header.
+  // -----------------------------------------------------------------
+  var sidebarToggle = document.getElementById('dash-sidebar-toggle');
+  var sidebarToggleLabel = document.getElementById('dash-sidebar-toggle-label');
+  var sidebar = document.getElementById('dash-sidebar');
+  var sidebarBackdrop = document.getElementById('dash-sidebar-backdrop');
+  function openSidebar() {
+    sidebar.classList.add('is-open');
+    sidebarBackdrop.hidden = false;
+    sidebarToggle.setAttribute('aria-expanded', 'true');
+  }
+  function closeSidebar() {
+    sidebar.classList.remove('is-open');
+    sidebarBackdrop.hidden = true;
+    sidebarToggle.setAttribute('aria-expanded', 'false');
+  }
+  sidebarToggle.addEventListener('click', function () {
+    if (sidebar.classList.contains('is-open')) closeSidebar();
+    else openSidebar();
+  });
+  sidebarBackdrop.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeSidebar();
+  });
+
+  // Fixed sidebar order — also the entire default-selection cascade (see
+  // defaultBucket() below): "Needs Attention" first (it's the smart view
+  // combining the 4 most actionable buckets), then Pending Intake, then
+  // the active-lead-pipeline buckets (New through Follow Up), with
+  // Booked/Won and Lost last.
+  var SECTION_ORDER = ['needsAttention', 'pendingIntake', 'new', 'contacted', 'waitingOnPhotos', 'estimateSent', 'followUp', 'bookedWon', 'lost'];
+  var NEEDS_ATTENTION_KEYS = ['pendingIntake', 'new', 'waitingOnPhotos', 'followUp'];
 
   var BUCKET_LABELS = {
+    needsAttention: 'Needs Attention',
     pendingIntake: 'Pending Intake',
-    websiteRequests: 'Website Requests',
     new: 'New',
     contacted: 'Contacted',
     waitingOnPhotos: 'Waiting on Photos',
@@ -57,18 +100,10 @@ document.addEventListener('DOMContentLoaded', function () {
   var bucketHeaderLabel = document.getElementById('bucket-section-header-label');
   var bucketHeaderCount = document.getElementById('bucket-section-header-count');
 
-  // Maps each Leads bucket (not a `bookings.status` value — waitingOnPhotos/
-  // estimateSent/followUp/pendingIntake/websiteRequests have no equivalent
-  // among the 7 admin-status-* booking statuses) to its own chip color, via
-  // admin.css's .admin-lead-bucket-* classes — reusing hues from the
-  // existing status/source palette where the meaning lines up (new/
-  // contacted/bookedWon/lost), picking a distinct existing hue for the
-  // lead-only stages otherwise. This is what the status chip in the Lead
-  // Card's top row (replacing the old plain-text status in the actions
-  // row) is colored by.
+  // Maps each Leads bucket (not a `bookings.status` value) to its own chip
+  // color, via admin.css's .admin-lead-bucket-* classes.
   var BUCKET_CHIP_CLASS = {
     pendingIntake: 'admin-lead-bucket-pendingIntake',
-    websiteRequests: 'admin-lead-bucket-websiteRequests',
     new: 'admin-lead-bucket-new',
     contacted: 'admin-lead-bucket-contacted',
     waitingOnPhotos: 'admin-lead-bucket-waitingOnPhotos',
@@ -148,8 +183,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Same safe digit-only tel: normalization as admin/booking-detail.js's
   // buildTelHref — duplicated rather than imported, matching this
-  // project's established per-file convention (see this file's own header
-  // comment re: renderIntakeCard above).
+  // project's established per-file convention.
   function buildTelHref(phone) {
     var digits = String(phone || '').replace(/\D/g, '');
     if (!digits) return null;
@@ -177,29 +211,23 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
-  // Shared card renderer for every section except Pending Intake (which has
+  // Shared card renderer for every bucket except Pending Intake (which has
   // its own shape — see renderIntakeCard below). `item` is one entry from
   // GET /api/admin/bookings?view=leads's sections.*, already carrying
   // {id, kind, source, name, phone, serviceLabel, city, statusLabel,
-  // updatedAt, nextFollowUpDate}.
+  // updatedAt, nextFollowUpDate}. `kind` ('booking' or 'lead') decides the
+  // canonical detail route — UI batch (lead-detail navigation fix): both
+  // kinds are clickable now, the main link just points at a different
+  // route depending on which table the row actually lives in.
   function renderLeadCard(item, bucketKey) {
     var li = document.createElement('li');
     var card = el('div', 'admin-booking-card admin-lead-card');
 
-    // A website booking already has a real detail page; a leads-table row
-    // doesn't yet (Lead -> Booking conversion, and a lead detail screen,
-    // are both out of scope for this batch) — so only booking-kind cards'
-    // main area is a link; a lead-kind card's is a plain non-interactive
-    // div instead (same information, just not yet clickable).
-    var main = item.kind === 'booking' ? document.createElement('a') : document.createElement('div');
+    var main = document.createElement('a');
     main.className = 'admin-lead-card-main';
-    if (item.kind === 'booking') main.href = '/admin/booking/?id=' + encodeURIComponent(item.id);
+    main.href = item.kind === 'booking' ? '/admin/booking/?id=' + encodeURIComponent(item.id) : '/admin/lead/?id=' + encodeURIComponent(item.id);
 
-    // Exactly 2 chips, never more: source + status — the status chip
-    // replaces what used to be a second, plain-text copy of the same
-    // information down in the actions row. No separate "updated Xh ago"
-    // timestamp either — not one of the essentials, and one more element
-    // than a calmer card needs (de-densification pass).
+    // Exactly 2 chips, never more: source + status.
     var top = el('div', 'admin-card-top admin-lead-card-chips');
     top.appendChild(el('span', 'admin-source-badge admin-source-badge-' + item.source, SOURCE_LABELS[item.source] || item.source));
     var statusChipClass = BUCKET_CHIP_CLASS[bucketKey] || 'admin-lead-bucket-new';
@@ -227,15 +255,11 @@ document.addEventListener('DOMContentLoaded', function () {
     // One quiet secondary link + one clear primary action — status is
     // already shown as a chip above, not repeated here.
     var actions = el('div', 'admin-lead-card-actions');
-    if (item.kind === 'booking') {
-      var viewLink = document.createElement('a');
-      viewLink.className = 'admin-card-view admin-lead-card-view';
-      viewLink.href = main.href;
-      viewLink.textContent = 'View details';
-      actions.appendChild(viewLink);
-    } else {
-      actions.appendChild(el('span', 'admin-lead-card-view'));
-    }
+    var viewLink = document.createElement('a');
+    viewLink.className = 'admin-card-view admin-lead-card-view';
+    viewLink.href = main.href;
+    viewLink.textContent = 'View details';
+    actions.appendChild(viewLink);
     var telHref = buildTelHref(item.phone);
     if (telHref) {
       var callBtn = document.createElement('a');
@@ -309,16 +333,21 @@ document.addEventListener('DOMContentLoaded', function () {
     return li;
   }
 
-  var counts = {}; // key -> item count, filled in as each section renders
+  // key -> item count. key -> raw items array (kept so Needs Attention and
+  // the search filter can both re-derive from the same source data rather
+  // than re-reading already-rendered DOM).
+  var counts = {};
+  var itemsByBucket = {};
 
-  // Renders a section's cards (or a small inline empty notice) and its
-  // tab's count badge. Visibility is handled separately by selectBucket()
+  // Renders a bucket's cards (or a small inline empty notice) and its
+  // sidebar count badge. Visibility is handled separately by selectBucket()
   // — this never shows/hides the section itself.
   function renderSection(key, items, renderFn) {
     var listEl = document.getElementById('list-' + key);
-    var countBadge = document.getElementById('tab-count-' + key);
+    var countBadge = document.getElementById('sidebar-count-' + key);
     var n = items ? items.length : 0;
     counts[key] = n;
+    itemsByBucket[key] = items || [];
 
     if (n > 0) {
       countBadge.textContent = n > 99 ? '99+' : String(n);
@@ -328,107 +357,141 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     } else {
       countBadge.hidden = true;
-      // Reuses .admin-empty's existing dashed-box styling (defined for
-      // the page-level #empty banner) rather than a new class — same
-      // look, just scoped to one bucket's own content area.
       listEl.appendChild(el('li', 'admin-empty', 'Nothing here yet.'));
     }
   }
 
-  // Tab slider — desktop left/right controls wrapping the existing
-  // horizontally-scrollable .admin-leads-tabs row (admin.css's
-  // .admin-leads-tabs-row). Arrows are plain scroll-by-a-page buttons, not
-  // a carousel with discrete "pages" of tabs — simplest correct behavior
-  // for a row whose items have very different widths ("New" vs. "Waiting
-  // on Photos"). Each arrow's `hidden` attribute reflects whether there's
-  // actually more content in that direction right now, recomputed on every
-  // scroll/resize so it never shows a dead-end arrow.
-  function updateTabArrows() {
-    var maxScroll = tabsEl.scrollWidth - tabsEl.clientWidth;
-    // Sub-pixel rounding from zoom/fractional scaling can leave scrollLeft
-    // a hair short of 0 or maxScroll — 1px tolerance avoids a flickering
-    // arrow that never quite reaches hidden.
-    tabsPrevBtn.hidden = tabsEl.scrollLeft <= 1;
-    tabsNextBtn.hidden = tabsEl.scrollLeft >= maxScroll - 1;
-  }
+  // Needs Attention — a composite view, built directly from the same
+  // source arrays each individual bucket already rendered from (never from
+  // cloned/queried DOM, so it can never disagree with what those buckets
+  // themselves show). Grouped under small labels rather than one flat list
+  // so it's still obvious which stage each card is actually in.
+  var NEEDS_ATTENTION_GROUP_LABELS = { pendingIntake: 'Pending Intake', new: 'New', waitingOnPhotos: 'Waiting on Photos', followUp: 'Follow Up' };
+  function renderNeedsAttention() {
+    var container = document.getElementById('section-needsAttention');
+    while (container.firstChild) container.removeChild(container.firstChild);
 
-  function scrollTabsBy(delta) {
-    tabsEl.scrollBy({ left: delta, behavior: 'smooth' });
-  }
+    var total = 0;
+    NEEDS_ATTENTION_KEYS.forEach(function (key) {
+      var items = itemsByBucket[key] || [];
+      total += items.length;
+    });
+    counts.needsAttention = total;
 
-  tabsPrevBtn.addEventListener('click', function () { scrollTabsBy(-160); });
-  tabsNextBtn.addEventListener('click', function () { scrollTabsBy(160); });
-  tabsEl.addEventListener('scroll', updateTabArrows);
-  window.addEventListener('resize', updateTabArrows);
-
-  // A plain vertical mouse wheel (no shift, no trackpad's native horizontal
-  // delta) over the tab row scrolls it horizontally instead of doing
-  // nothing — trackpad/touch horizontal scrolling already works natively
-  // via the row's own overflow-x and needs no help here.
-  tabsEl.addEventListener('wheel', function (e) {
-    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // already a horizontal gesture
-    tabsEl.scrollLeft += e.deltaY;
-    e.preventDefault();
-  }, { passive: false });
-
-  function scrollActiveTabIntoView(key) {
-    var tabEl = tabsEl.querySelector('[data-bucket="' + key + '"]');
-    if (!tabEl) return;
-    var tabsRect = tabsEl.getBoundingClientRect();
-    var tabRect = tabEl.getBoundingClientRect();
-    if (tabRect.left < tabsRect.left || tabRect.right > tabsRect.right) {
-      tabEl.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    var badge = document.getElementById('sidebar-count-needsAttention');
+    if (total > 0) {
+      badge.textContent = total > 99 ? '99+' : String(total);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
     }
+
+    if (!total) {
+      container.appendChild(el('div', 'admin-empty', 'Nothing needs attention right now.'));
+      return;
+    }
+
+    NEEDS_ATTENTION_KEYS.forEach(function (key) {
+      var items = itemsByBucket[key] || [];
+      if (!items.length) return;
+      var group = el('div', 'admin-leads-needs-attention-group');
+      group.appendChild(el('div', 'admin-leads-needs-attention-group-label', NEEDS_ATTENTION_GROUP_LABELS[key] + ' (' + items.length + ')'));
+      var ul = el('ul', 'admin-booking-list admin-leads-grid');
+      items.forEach(function (item) {
+        ul.appendChild(key === 'pendingIntake' ? renderIntakeCard(item) : renderLeadCard(item, key));
+      });
+      group.appendChild(ul);
+      container.appendChild(group);
+    });
   }
 
   // Exactly one bucket visible at a time: unhide the selected section (and
-  // hide every other), mark its tab .is-active, clear the rest.
+  // hide every other), mark its sidebar item active, clear the rest.
   function selectBucket(key) {
     SECTION_ORDER.forEach(function (k) {
       var sectionEl = document.getElementById('section-' + k);
-      var tabEl = tabsEl.querySelector('[data-bucket="' + k + '"]');
+      var navEl = sidebar.querySelector('[data-bucket="' + k + '"]');
       sectionEl.hidden = k !== key;
-      if (tabEl) {
-        tabEl.classList.toggle('is-active', k === key);
-        tabEl.setAttribute('aria-selected', k === key ? 'true' : 'false');
+      if (navEl) {
+        navEl.classList.toggle('is-active', k === key);
+        navEl.setAttribute('aria-selected', k === key ? 'true' : 'false');
       }
     });
     bucketHeaderLabel.textContent = BUCKET_LABELS[key] || key;
     bucketHeaderCount.textContent = counts[key] ? String(counts[key]) : '';
-    scrollActiveTabIntoView(key);
+    sidebarToggleLabel.textContent = BUCKET_LABELS[key] || key;
+    // A bucket switch always starts from a clean, unfiltered view of the
+    // newly-selected section rather than silently carrying over a filter
+    // typed for a different bucket.
+    if (searchInput.value) {
+      searchInput.value = '';
+    }
+    applySearchFilter('');
+    closeSidebar();
   }
 
   function defaultBucket() {
     for (var i = 0; i < SECTION_ORDER.length; i++) {
       if (counts[SECTION_ORDER[i]] > 0) return SECTION_ORDER[i];
     }
-    return SECTION_ORDER[0]; // every bucket empty — still land on Pending Intake
+    return SECTION_ORDER[0]; // every bucket empty — still land on Needs Attention
   }
 
   // Stage 5D — Confirm Booking/Confirm as Lead redirects here with
-  // ?bucket=new so the admin lands on the bucket their just-created lead
-  // actually appears in, instead of the generic non-empty-bucket default.
-  // Any other/missing value is silently ignored (falls through to
+  // ?bucket=new (etc.) so the admin lands on the bucket their just-created
+  // lead actually appears in, instead of the generic non-empty-bucket
+  // default. Any other/missing value is silently ignored (falls through to
   // defaultBucket()) rather than erroring — this is a convenience only.
   function requestedBucket() {
     var requested = new URLSearchParams(window.location.search).get('bucket');
     return requested && SECTION_ORDER.indexOf(requested) !== -1 ? requested : null;
   }
 
+  // Client-side, name/phone-only filter over whichever section is
+  // currently visible — never a server round-trip, never changes which
+  // bucket is selected. Matches against the card's own name/phone text
+  // nodes (.admin-card-name / .admin-metadata-item), so it works the same
+  // way for every bucket's cards, Needs Attention's grouped clones
+  // included (they're just more renderLeadCard()/renderIntakeCard() output,
+  // same markup).
+  function applySearchFilter(term) {
+    var normalized = term.trim().toLowerCase();
+    var activeKey = SECTION_ORDER.filter(function (k) {
+      var sectionEl = document.getElementById('section-' + k);
+      return sectionEl && !sectionEl.hidden;
+    })[0];
+    if (!activeKey) return;
+    var container = document.getElementById('section-' + activeKey);
+    var cards = container.querySelectorAll('li');
+    cards.forEach(function (li) {
+      if (!normalized) {
+        li.hidden = false;
+        return;
+      }
+      var nameEl = li.querySelector('.admin-card-name');
+      var phoneEl = li.querySelector('.admin-metadata-item');
+      var haystack = ((nameEl ? nameEl.textContent : '') + ' ' + (phoneEl ? phoneEl.textContent : '')).toLowerCase();
+      li.hidden = haystack.indexOf(normalized) === -1;
+    });
+  }
+  searchInput.addEventListener('input', function () {
+    applySearchFilter(searchInput.value);
+  });
+
   function finish() {
     loadingEl.style.display = 'none';
     sectionsEl.style.display = 'block';
-    var total = SECTION_ORDER.reduce(function (sum, k) { return sum + (counts[k] || 0); }, 0);
+    renderNeedsAttention();
+    var total = NEEDS_ATTENTION_KEYS.concat(['contacted', 'estimateSent', 'bookedWon', 'lost']).reduce(function (sum, k) {
+      return sum + (counts[k] || 0);
+    }, 0);
     emptyEl.style.display = total === 0 ? 'block' : 'none';
+    totalCountEl.textContent = total === 0 ? '' : total + (total === 1 ? ' lead' : ' leads');
     selectBucket(requestedBucket() || defaultBucket());
-    // Only meaningful once the row is actually laid out (it was
-    // display:none until sectionsEl.style.display = 'block' just above) —
-    // no 'scroll' event fires for a display-toggle to trigger this itself.
-    updateTabArrows();
   }
 
-  tabsEl.addEventListener('click', function (e) {
-    var btn = e.target.closest ? e.target.closest('.admin-leads-tab') : null;
+  sidebar.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-bucket]') : null;
     if (!btn) return;
     selectBucket(btn.getAttribute('data-bucket'));
   });
@@ -468,8 +531,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
       renderSection('pendingIntake', intakeBody.intakes, renderIntakeCard);
       var sections = leadsBody.sections || {};
-      renderSection('websiteRequests', sections.websiteRequests, renderLeadCard);
-      renderSection('new', sections.new, renderLeadCard);
+      // "New" merges the lead-table new rows with website-origin requests
+      // — Website Request is a source, not a stage (see this file's
+      // header); the merge is a plain array concat, each item keeps its
+      // own real id/kind/source, so it still opens via the correct
+      // canonical route.
+      renderSection('new', (sections.new || []).concat(sections.websiteRequests || []), renderLeadCard);
       renderSection('contacted', sections.contacted, renderLeadCard);
       renderSection('waitingOnPhotos', sections.waitingOnPhotos, renderLeadCard);
       renderSection('estimateSent', sections.estimateSent, renderLeadCard);
@@ -480,13 +547,11 @@ document.addEventListener('DOMContentLoaded', function () {
       finish();
 
       // Partial-failure honesty (Preview QA finding, 2026-10): api/admin/
-      // bookings.js's ?view=leads now degrades per-query rather than
-      // failing the whole response — every section backed by a query that
-      // DID succeed is rendered above exactly as always. This just makes
-      // sure a section that failed is never silently indistinguishable
-      // from "genuinely empty" — the empty-state message above would
-      // otherwise read as "nothing waiting" when something actually
-      // failed to load.
+      // bookings.js's ?view=leads degrades per-query rather than failing
+      // the whole response — every section backed by a query that DID
+      // succeed is rendered above exactly as always. This just makes sure
+      // a section that failed is never silently indistinguishable from
+      // "genuinely empty."
       if (leadsBody.sectionErrors && leadsBody.sectionErrors.length) {
         showError('Some sections failed to load: ' + leadsBody.sectionErrors.join(', ') + '. Other sections above are showing correctly.');
       }
