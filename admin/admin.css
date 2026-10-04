@@ -2883,6 +2883,22 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   flex-direction: column;
   gap: 2px;
 }
+/* Desktop: always at least a full viewport tall (never just as tall as
+   the content happens to be) and pinned in place as the content column
+   scrolls — the "sidebar never leaves a gap, however you zoom/scroll"
+   behavior of a typical dashboard. .admin-header's own real rendered
+   height (60px, confirmed — its own layout isn't driven by a variable)
+   is the fixed offset both the sticky top and the height floor subtract,
+   so the sidebar's bottom edge lines up with the viewport's, not 60px
+   past it. align-items:stretch above still wins when actual content is
+   TALLER than one viewport — min-height is only ever a floor. */
+@media (min-width: 860px) {
+  .admin-dash-sidebar {
+    position: sticky;
+    top: 60px;
+    min-height: calc(100vh - 60px);
+  }
+}
 /* Mobile: an off-canvas drawer, hidden until .is-open toggles the
    transform. Fixed (not absolute) so it overlays the page content
    regardless of scroll position. */
