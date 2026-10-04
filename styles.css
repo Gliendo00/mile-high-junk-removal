@@ -49,7 +49,6 @@
   --font-heading-weight: 700;
   --font-body: "Figtree", system-ui, sans-serif;
 
-  --space-1: 4.4px;
   --space-2: 8.8px;
   --space-3: 13.2px;
   --space-4: 17.6px;
@@ -105,8 +104,6 @@ img { display: block; max-width: 100%; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
-
-.washed { filter: none; }
 
 .skip-link {
   position: absolute; left: 8px; top: -60px; z-index: 100;
@@ -218,7 +215,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 
 /* two-tier header: dark bar (phone + links + CTA) stays pinned, logo band scrolls away normally */
 .nav-utility {
-  background: #000; color: var(--color-neutral-100);
+  background: var(--color-dark); color: var(--color-neutral-100);
   position: sticky; top: 0; z-index: 20;
   box-shadow: 0 2px 12px color-mix(in srgb, var(--color-neutral-900) 10%, transparent);
 }
@@ -240,12 +237,12 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 @media (prefers-reduced-motion: reduce) { .nav-utility-cta { animation: none; } }
 
 .nav-brand-row {
-  background: linear-gradient(120deg, #ddffa8 0%, #c9ffd0 60%, #bdf7e0 100%);
+  background: var(--color-neutral-100);
 }
 .nav-brand-row-inner {
   display: flex; justify-content: center; align-items: center; padding-block: 20px;
   background:
-    linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
+    linear-gradient(color-mix(in srgb, var(--color-neutral-100) 74%, transparent), color-mix(in srgb, var(--color-neutral-100) 74%, transparent)),
     url("images/denver-skyline-illustration.webp") center / cover no-repeat;
 }
 .nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
@@ -280,7 +277,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
   .nav-utility-phone { display: none; }
   .nav-brand-row-inner {
     background:
-      linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.5)),
+      linear-gradient(color-mix(in srgb, var(--color-neutral-100) 74%, transparent), color-mix(in srgb, var(--color-neutral-100) 74%, transparent)),
       url("images/denver-skyline-illustration-900w.webp") center / cover no-repeat;
   }
 }
@@ -493,6 +490,45 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
   .social-arrow { display: none; }
 }
 
+/* — layout utilities —
+   Promoted from the most-repeated inline `style=""` patterns across the
+   pages (see design-cleanup audit). Pages still carrying the old inline
+   version are being migrated onto these classes incrementally; an inline
+   style alongside one of these classes is a deliberate one-off override,
+   not leftover duplication. */
+.section { padding-block: var(--section-pad); }
+.section-surface { background: var(--color-surface); padding-block: var(--section-pad); }
+.trust-band { background: var(--color-surface); padding-block: var(--trust-pad); }
+.cta-band { background: var(--color-accent-800); color: var(--color-neutral-100); padding-block: var(--cta-pad); }
+
+.row { display: flex; align-items: center; gap: 14px; }
+.row-wrap { flex-wrap: wrap; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+
+.hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+.why-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+.services-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+
+.lede { font-size: 17px; opacity: 0.85; margin-bottom: 20px; }
+.media-cover { width: 100%; object-fit: cover; border-radius: var(--radius-lg); }
+
+.icon-badge {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--color-accent-100); color: var(--color-accent-700);
+  font-family: var(--font-heading); font-size: 13px;
+}
+.icon-badge-md { width: 34px; height: 34px; }
+.icon-badge-lg { width: 40px; height: 40px; }
+.icon-badge-xl { width: 56px; height: 56px; }
+.icon-badge-accent2 { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex: none; }
+
+.btn-lg { padding: 14px 26px; font-size: 15px; }
+.btn-sm { padding: 12px 22px; font-size: 14px; }
+.btn-secondary-invert { border-color: var(--color-neutral-100); color: var(--color-neutral-100); }
+.btn-secondary-invert:hover { background: color-mix(in srgb, var(--color-neutral-100) 12%, transparent); }
+
 /* — layout — */
 .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 32px; }
 .site-footer { background: var(--color-dark); color: var(--color-neutral-100); }
@@ -557,7 +593,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
   display: none;
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
   gap: 10px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-  background: #000;
+  background: var(--color-dark);
   box-shadow: 0 -2px 12px color-mix(in srgb, var(--color-neutral-900) 18%, transparent);
 }
 .sticky-cta-bar .btn { flex: 1; padding: 12px 10px; font-size: 14px; }
