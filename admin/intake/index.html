@@ -39,8 +39,17 @@
           <div class="admin-client-summary-name" id="matched-client-name">—</div>
           <div class="admin-client-summary-meta" id="matched-client-meta">—</div>
         </div>
-        <button type="button" id="change-client-btn" class="admin-btn admin-btn-outline">Change</button>
       </div>
+      <!-- Stage 5D fix (finding C): this button used to live INSIDE
+           matched-client-summary above, so it was display:none right along
+           with it whenever no client was matched yet — making it
+           impossible to manually search for an existing client on a
+           new_candidate (or needs_confirmation) intake. Now a sibling, so
+           its own visibility (set in intake-detail.js's render(), purely
+           on `editable`) is independent of whether a client is matched.
+           Reuses the exact same #client-search-wrap search/select flow
+           either way — no second search implementation. -->
+      <button type="button" id="change-client-btn" class="admin-btn admin-btn-outline" style="display:none; margin-bottom:16px">Change</button>
       <div id="client-search-wrap" style="display:none">
         <input type="search" id="client-search-input" class="admin-search-input" placeholder="Search existing clients by name, phone, or email" autocomplete="off">
         <div id="client-search-results" class="admin-intake-search-results"></div>

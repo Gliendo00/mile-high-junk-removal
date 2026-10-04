@@ -707,7 +707,7 @@ async function handleConfirmBooking(req, res, body, session) {
   try {
     const sessionRes = await supabase
       .from("intake_sessions")
-      .select("id, status, resulting_booking_id, resulting_customer_id")
+      .select("id, status, match_status, resulting_booking_id, resulting_customer_id")
       .eq("id", id)
       .maybeSingle();
     if (sessionRes.error) throw sessionRes.error;
@@ -727,6 +727,18 @@ async function handleConfirmBooking(req, res, body, session) {
     }
     if (row.status !== "pending_review") {
       res.status(400).json({ error: "This intake cannot be confirmed right now." });
+      return;
+    }
+    // Defense in depth (failure-mode audit finding B) — the browser is
+    // supposed to refuse this itself (admin/intake-detail.js's
+    // resolveCustomerId()) whenever match_status is still
+    // 'needs_confirmation' (multiple existing clients share this intake's
+    // phone), rather than ever guessing which one. Re-checked here too so
+    // a bypassed/buggy client can never slip an ambiguous intake through —
+    // same "never trust the browser alone for the one fact that actually
+    // matters" posture as the booking-ownership check just below.
+    if (row.match_status === "needs_confirmation") {
+      res.status(400).json({ error: "This intake's client match is still ambiguous (multiple existing clients share its phone). Choose the correct existing client before confirming." });
       return;
     }
 

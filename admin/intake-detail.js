@@ -177,6 +177,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var fieldInputs = {}; // key -> { el, original }
   var matchedCustomerId = null; // current (possibly just-picked) value
   var originalMatchedCustomerId = null;
+  // Stage 5D fix (finding B): tracks the intake's match_status as loaded,
+  // so Confirm Booking's client-resolution step can tell "no match
+  // because nobody matched (new_candidate)" apart from "no match because
+  // MULTIPLE clients share this phone (needs_confirmation)" — the two look
+  // identical from matchedCustomerId alone (both null), but only the first
+  // is safe to silently auto-create a client for.
+  var currentMatchStatus = null;
   var pickedClientPreview = null; // { firstName, lastName, phone, email } when freshly picked, for the optimistic summary
   var linkedBookingId = null;
   var originalLinkedBookingId = null;
@@ -252,9 +259,14 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderMatchedClient(client) {
     if (!client) {
       matchedSummary.style.display = 'none';
+      // Stage 5D fix (finding C): the button's own label reflects which
+      // action it actually performs right now — there's nothing to
+      // "change" away from yet.
+      changeClientBtn.textContent = 'Find Existing Client';
       return;
     }
     matchedSummary.style.display = 'flex';
+    changeClientBtn.textContent = 'Change';
     matchedName.textContent = [client.firstName, client.lastName].filter(Boolean).join(' ') || 'Unnamed client';
     var metaParts = [];
     if (client.phone) metaParts.push(formatPhone(client.phone));
@@ -594,6 +606,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     matchedCustomerId = intake.matchedClient ? intake.matchedClient.id : null;
     originalMatchedCustomerId = matchedCustomerId;
+    currentMatchStatus = intake.matchStatus || null;
     pickedClientPreview = null;
     if (intake.matchStatus) renderMatchBanner(intake.matchStatus);
     renderMatchedClient(intake.matchedClient);
@@ -812,6 +825,16 @@ document.addEventListener('DOMContentLoaded', function () {
     // reuses it instead of creating another one.
     function resolveCustomerId() {
       if (matchedCustomerId) return Promise.resolve(matchedCustomerId);
+
+      // Stage 5D fix (finding B): matchedCustomerId is ALSO null when the
+      // match is genuinely ambiguous (multiple existing clients share this
+      // phone) — that must never silently fall through to creating yet
+      // another new client. The admin has to look at the candidates and
+      // pick the right one (or explicitly decide it's really a new client)
+      // via Find Existing Client/Change first.
+      if (currentMatchStatus === 'needs_confirmation') {
+        return Promise.reject(new Error('This intake\'s phone number matches more than one existing client. Use Find Existing Client/Change (in the Client section above) to choose the correct one before confirming.'));
+      }
 
       var firstName = (fieldInputs.firstName ? fieldInputs.firstName.el.value : '').trim();
       if (!firstName) {

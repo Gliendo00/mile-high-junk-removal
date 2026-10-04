@@ -257,6 +257,42 @@ test("confirm-booking: refused when the intake is not pending_review (e.g. extra
   assert.strictEqual(res.statusCode, 400);
 });
 
+// Failure-mode audit finding B (Rocky's review of the Preview smoke test):
+// the browser is supposed to refuse this itself (admin/intake-detail.js's
+// resolveCustomerId()) whenever match_status is still 'needs_confirmation'
+// — this is the server-side defense-in-depth half of that same fix. A
+// syntactically valid bookingId/customerId (even one that legitimately
+// owns each other, per handleCreate's own BOOKING_ID/CUSTOMER_ID fixture
+// below) must never be enough to confirm an intake whose client identity
+// was never actually resolved.
+test("confirm-booking: refused when match_status is still needs_confirmation, even with an otherwise-valid booking/client pair — nothing written", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.intake_sessions[0].match_status = "needs_confirmation";
+  const res = await patch(db, { id: INTAKE_ID, action: "confirm-booking", bookingId: BOOKING_ID, customerId: CUSTOMER_ID });
+  assert.strictEqual(res.statusCode, 400);
+  assert.ok(/ambiguous/i.test(res.body.error), "error must clearly explain the match is ambiguous, not a generic failure");
+  assert.strictEqual(db.intake_sessions[0].status, "pending_review", "must not be confirmed while the match is still ambiguous");
+  assert.strictEqual(db.intake_sessions[0].resulting_booking_id, null);
+});
+
+test("confirm-booking: succeeds once match_status has been resolved away from needs_confirmation (e.g. via set-client-match)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  db.intake_sessions[0].match_status = "needs_confirmation";
+  const blocked = await patch(db, { id: INTAKE_ID, action: "confirm-booking", bookingId: BOOKING_ID, customerId: CUSTOMER_ID });
+  assert.strictEqual(blocked.statusCode, 400);
+
+  // Admin resolves the ambiguity the normal way.
+  const resolved = await patch(db, { id: INTAKE_ID, action: "set-client-match", matchedCustomerId: CUSTOMER_ID });
+  assert.strictEqual(resolved.statusCode, 200);
+  assert.strictEqual(db.intake_sessions[0].match_status, "existing_exact");
+
+  const res = await patch(db, { id: INTAKE_ID, action: "confirm-booking", bookingId: BOOKING_ID, customerId: CUSTOMER_ID });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(db.intake_sessions[0].status, "confirmed");
+});
+
 test("confirm-booking: a booking id that does not exist -> 400, nothing written", async () => {
   adminAuthed();
   const db = freshDb();

@@ -197,6 +197,68 @@ test("admin/intake-detail.js: Stage 5D's Confirm Booking calls the SAME two alre
   assert.ok(/postJson\(['"]\/api\/admin\/lead['"]/.test(src), "Confirm as Lead must call the dedicated api/admin/lead.js endpoint");
 });
 
+// Failure-mode audit finding B (Preview smoke test, Rocky's review): Confirm
+// Booking's client-resolution step must refuse — never silently create an
+// additional new client — when the intake's match is still ambiguous
+// (match_status 'needs_confirmation'). Pure source-order check, same
+// technique every other client-side assertion in this file already uses
+// (no DOM harness in this project).
+test("admin/intake-detail.js: resolveCustomerId() refuses to create a client when the match is still ambiguous (needs_confirmation), BEFORE ever reaching the create-client call", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function resolveCustomerId()");
+  assert.ok(start !== -1, "resolveCustomerId() not found");
+  const end = src.indexOf("\n    }", src.indexOf("return postJson('/api/admin/client'", start));
+  const body = src.slice(start, end === -1 ? start + 1500 : end);
+
+  const ambiguousCheckIdx = body.search(/currentMatchStatus\s*===\s*['"]needs_confirmation['"]/);
+  const createClientCallIdx = body.indexOf("postJson('/api/admin/client'");
+  assert.ok(ambiguousCheckIdx !== -1, "must check currentMatchStatus === 'needs_confirmation' somewhere in resolveCustomerId()");
+  assert.ok(createClientCallIdx !== -1, "the create-client call must still exist for the legitimate new_candidate case");
+  assert.ok(ambiguousCheckIdx < createClientCallIdx, "the ambiguous-match check must run BEFORE the create-client call, not after");
+
+  // The matchedCustomerId-is-set early return must still come first of all
+  // — an admin who already resolved the match (via Find Existing Client/
+  // Change) must never be blocked by this guard.
+  const matchedIdCheckIdx = body.indexOf("if (matchedCustomerId)");
+  assert.ok(matchedIdCheckIdx !== -1 && matchedIdCheckIdx < ambiguousCheckIdx, "the already-matched short-circuit must come before the ambiguous-match guard");
+});
+
+test("admin/intake-detail.js: currentMatchStatus is loaded from the intake on every render(), so the ambiguous-match guard reflects real server state, not stale/undefined data", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  assert.ok(/currentMatchStatus\s*=\s*intake\.matchStatus/.test(src), "render() must assign currentMatchStatus from the loaded intake");
+});
+
+// Failure-mode audit finding C: the Change/search button must be reachable
+// regardless of whether a client is already matched — structurally
+// verified here as "the button element is not nested inside
+// matched-client-summary", since that's exactly the bug (the summary box
+// is display:none whenever there's no match, which used to take the
+// button down with it no matter what its OWN display was set to).
+test("admin/intake/index.html: the Change/Find-Existing-Client button is a SIBLING of matched-client-summary, not nested inside it (so it's independently visible when no client is matched yet)", () => {
+  const html = readNormalized("admin/intake/index.html");
+  const summaryMatch = html.match(/<div id="matched-client-summary"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
+  assert.ok(summaryMatch, "matched-client-summary block not found");
+  assert.ok(!/id="change-client-btn"/.test(summaryMatch[0]), "change-client-btn must NOT be inside matched-client-summary — that's the exact bug this fix removes");
+  assert.ok(/id="change-client-btn"/.test(html), "change-client-btn must still exist on the page, just relocated");
+});
+
+test("admin/intake-detail.js: renderMatchedClient() relabels the button contextually ('Find Existing Client' vs 'Change') and reuses the one existing search/select flow — no second search implementation", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function renderMatchedClient(client)");
+  const end = src.indexOf("\n  }", start);
+  const body = src.slice(start, end);
+  assert.ok(/changeClientBtn\.textContent\s*=\s*['"]Find Existing Client['"]/.test(body), "no-match branch must relabel the button");
+  assert.ok(/changeClientBtn\.textContent\s*=\s*['"]Change['"]/.test(body), "matched branch must relabel the button back");
+
+  // Only ONE client-search input/results pair must exist on this page —
+  // proves the fix reuses #client-search-wrap rather than introducing a
+  // second picker (e.g. AdminClientPicker) alongside it.
+  const html = readNormalized("admin/intake/index.html");
+  assert.strictEqual((html.match(/id="client-search-input"/g) || []).length, 1);
+  assert.strictEqual((html.match(/id="client-search-results"/g) || []).length, 1);
+  assert.ok(!/client-picker\.js/.test(html), "must not load a second client-picker implementation");
+});
+
 test("admin/intake-detail.js: its FIELD_LABELS keys exactly match the adapter's FIELD_KEYS (no drift between client and server field lists)", () => {
   const { FIELD_KEYS } = require("../api/_lib/intake-vision-provider.js");
   const src = readNormalized("admin/intake-detail.js");
