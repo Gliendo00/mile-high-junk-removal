@@ -237,12 +237,12 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 @media (prefers-reduced-motion: reduce) { .nav-utility-cta { animation: none; } }
 
 .nav-brand-row {
-  background: var(--color-neutral-100);
+  background: var(--color-accent-100);
 }
 .nav-brand-row-inner {
   display: flex; justify-content: center; align-items: center; padding-block: 20px;
   background:
-    linear-gradient(color-mix(in srgb, var(--color-neutral-100) 74%, transparent), color-mix(in srgb, var(--color-neutral-100) 74%, transparent)),
+    linear-gradient(color-mix(in srgb, var(--color-accent-100) 78%, transparent), color-mix(in srgb, var(--color-accent-100) 78%, transparent)),
     url("images/denver-skyline-illustration.webp") center / cover no-repeat;
 }
 .nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
@@ -277,7 +277,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
   .nav-utility-phone { display: none; }
   .nav-brand-row-inner {
     background:
-      linear-gradient(color-mix(in srgb, var(--color-neutral-100) 74%, transparent), color-mix(in srgb, var(--color-neutral-100) 74%, transparent)),
+      linear-gradient(color-mix(in srgb, var(--color-accent-100) 78%, transparent), color-mix(in srgb, var(--color-accent-100) 78%, transparent)),
       url("images/denver-skyline-illustration-900w.webp") center / cover no-repeat;
   }
 }
