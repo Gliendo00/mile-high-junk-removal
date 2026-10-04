@@ -1,53 +1,57 @@
 /* Mile High Junk Removal — production stylesheet.
-   Built from the "Organic" design system (project/ds/styles.css) with the
-   site's chosen tweaks (lime-green accent, sharp corners, compact spacing)
-   baked in as fixed tokens instead of a runtime props panel.
-   Brand fonts (Antonio, Figtree) are loaded via <link rel="preconnect"> +
+   "High Country" design system: deep pine/forest green as the structural
+   color, the brand's lime green kept as a lively accent, a soft sky-blue
+   page ground, rounded pill-shaped buttons/cards instead of sharp corners.
+   Supersedes the earlier "Organic" lime-dominant system — same token
+   names throughout, so every page's markup needed zero changes, only
+   the values here and the Google Fonts link in each <head>.
+   Brand fonts (Fredoka, Work Sans) are loaded via <link rel="preconnect"> +
    <link rel="stylesheet"> in each page's <head> rather than @import here,
    since @import blocks discovery until this file itself has downloaded. */
 
 :root {
-  --color-bg: #ffffff;
+  --color-bg: #eaf4fb;
   --color-surface: #ffffff;
-  --color-text: #201e1d;
-  --color-accent: #69c22a;
-  --color-accent-2: #7a8a5e;
-  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
-  --color-dark: #14150f;
+  --color-text: #1b2b20;
+  --color-accent: #5fb52a;
+  --color-accent-2: #3f6b4a;
+  --color-divider: color-mix(in srgb, #1b2b20 14%, transparent);
+  --color-dark: #153320;
+  --color-footer: #2a2d2b;
 
-  --color-neutral-100: #f9f4ed;
-  --color-neutral-200: #eee7db;
-  --color-neutral-300: #dcd3c4;
-  --color-neutral-400: #c0b6a5;
-  --color-neutral-500: #a19786;
-  --color-neutral-600: #82796a;
-  --color-neutral-700: #645c50;
-  --color-neutral-800: #474238;
-  --color-neutral-900: #2e2b25;
+  --color-neutral-100: #eef6f1;
+  --color-neutral-200: #dfeade;
+  --color-neutral-300: #c7d9c9;
+  --color-neutral-400: #a9c2ac;
+  --color-neutral-500: #8ba88e;
+  --color-neutral-600: #6c8a70;
+  --color-neutral-700: #4f6a53;
+  --color-neutral-800: #37493a;
+  --color-neutral-900: #223024;
 
-  --color-accent-100: color-mix(in srgb, #69c22a 12%, white);
-  --color-accent-200: color-mix(in srgb, #69c22a 22%, white);
-  --color-accent-300: #ffc6a5;
-  --color-accent-400: #f6a06b;
-  --color-accent-500: #d67f48;
-  --color-accent-600: color-mix(in srgb, #69c22a 85%, black);
-  --color-accent-700: color-mix(in srgb, #69c22a 65%, black);
-  --color-accent-800: color-mix(in srgb, #69c22a 48%, black);
-  --color-accent-900: #402310;
+  --color-accent-100: color-mix(in srgb, #5fb52a 14%, white);
+  --color-accent-200: color-mix(in srgb, #5fb52a 26%, white);
+  --color-accent-300: color-mix(in srgb, #5fb52a 40%, white);
+  --color-accent-400: color-mix(in srgb, #5fb52a 55%, white);
+  --color-accent-500: color-mix(in srgb, #5fb52a 70%, white);
+  --color-accent-600: color-mix(in srgb, #5fb52a 85%, black);
+  --color-accent-700: color-mix(in srgb, #5fb52a 65%, black);
+  --color-accent-800: color-mix(in srgb, #5fb52a 48%, black);
+  --color-accent-900: color-mix(in srgb, #5fb52a 30%, black);
 
-  --color-accent-2-100: #f0fae1;
-  --color-accent-2-200: #e1eecc;
-  --color-accent-2-300: #ccdbb2;
-  --color-accent-2-400: #aebf92;
-  --color-accent-2-500: #8fa073;
-  --color-accent-2-600: #728157;
-  --color-accent-2-700: #56633f;
-  --color-accent-2-800: #3d472b;
-  --color-accent-2-900: #272e1b;
+  --color-accent-2-100: color-mix(in srgb, #3f6b4a 14%, white);
+  --color-accent-2-200: color-mix(in srgb, #3f6b4a 26%, white);
+  --color-accent-2-300: color-mix(in srgb, #3f6b4a 40%, white);
+  --color-accent-2-400: color-mix(in srgb, #3f6b4a 55%, white);
+  --color-accent-2-500: color-mix(in srgb, #3f6b4a 70%, white);
+  --color-accent-2-600: color-mix(in srgb, #3f6b4a 85%, black);
+  --color-accent-2-700: color-mix(in srgb, #3f6b4a 65%, black);
+  --color-accent-2-800: color-mix(in srgb, #3f6b4a 48%, black);
+  --color-accent-2-900: color-mix(in srgb, #3f6b4a 30%, black);
 
-  --font-heading: "Antonio", system-ui, sans-serif;
+  --font-heading: "Fredoka", system-ui, sans-serif;
   --font-heading-weight: 700;
-  --font-body: "Figtree", system-ui, sans-serif;
+  --font-body: "Work Sans", system-ui, sans-serif;
 
   --space-2: 8.8px;
   --space-3: 13.2px;
@@ -55,14 +59,14 @@
   --space-6: 26.4px;
   --space-8: 35.2px;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 14px;
-  --pill-radius: 10px;
+  --radius-sm: 7px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --pill-radius: 999px;
 
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --shadow-sm: 0 1px 3px color-mix(in srgb, #1b2b20 12%, transparent);
+  --shadow-md: 0 6px 18px color-mix(in srgb, #1b2b20 14%, transparent);
+  --shadow-lg: 0 18px 40px color-mix(in srgb, #1b2b20 20%, transparent);
 
   /* baked-in density tweak (compact) */
   --section-pad: 52px;
@@ -82,8 +86,8 @@ body {
 }
 *, *::before, *::after { box-sizing: border-box; }
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading); font-weight: 900; font-style: italic;
-  line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
+  font-family: var(--font-heading); font-weight: 700;
+  line-height: 1.12; letter-spacing: -0.005em; margin: 0 0 var(--space-2);
 }
 h1 { font-size: 42px; }
 h2 { font-size: 32px; }
@@ -94,8 +98,8 @@ h6 { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
 p { margin: 0 0 var(--space-3); }
 .eyebrow {
   display: block;
-  font-family: var(--font-heading); font-weight: 900; font-style: italic;
-  line-height: 1.12; letter-spacing: 0.08em; text-transform: uppercase;
+  font-family: var(--font-heading); font-weight: 600;
+  line-height: 1.12; letter-spacing: 0.06em; text-transform: uppercase;
   font-size: 13px; margin: 0 0 var(--space-2);
 }
 a { color: var(--color-accent); text-underline-offset: 3px; }
@@ -130,9 +134,9 @@ img { display: block; max-width: 100%; }
   border-radius: var(--pill-radius);
 }
 .btn svg { display: block; }
-.btn-primary { background: #357019; color: #fff; box-shadow: var(--shadow-md); }
-.btn-primary:hover { background: #2c5c14; }
-.btn-primary:active { background: #244b10; }
+.btn-primary { background: #3f8a19; color: #fff; box-shadow: var(--shadow-md); }
+.btn-primary:hover { background: #326e14; }
+.btn-primary:active { background: #285710; }
 .btn-secondary { border-width: 2px; border-color: var(--color-text); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
@@ -196,7 +200,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 @media (prefers-reduced-motion: reduce) { .btn-urgent-pulse { animation: none; } }
 
 /* — navigation — */
-.nav-brand { font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 22px; margin-right: auto; white-space: nowrap; }
+.nav-brand { font-family: var(--font-heading); font-weight: 700; font-size: 22px; margin-right: auto; white-space: nowrap; }
 .nav-brand .accent { color: var(--color-accent-700); }
 .nav-brand img, .nav-brand-logo { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-neutral-900) 12%, transparent); }
 
@@ -248,10 +252,8 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 .nav-brand-centered { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; }
 .nav-brand-logo { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; flex: none; }
 .nav-brand-word {
-  font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 46px; white-space: nowrap;
-  letter-spacing: -0.01em;
-  -webkit-text-stroke: 0.6px currentColor;
-  text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+  font-family: var(--font-heading); font-weight: 700; font-size: 42px; white-space: nowrap;
+  letter-spacing: -0.005em;
 }
 .nav-brand-word-plain { color: var(--color-text); }
 
@@ -415,7 +417,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 .ba-slider-before { clip-path: inset(0 calc(100% - var(--ba-pos)) 0 0); }
 .ba-slider-label {
   position: absolute; top: 14px; z-index: 2;
-  font-family: var(--font-heading); font-weight: 900; font-style: italic;
+  font-family: var(--font-heading); font-weight: 700;
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
   color: #fff; background: color-mix(in srgb, #000 55%, transparent);
   padding: 5px 12px; border-radius: var(--pill-radius);
@@ -531,7 +533,7 @@ a.tag-outline:hover { background: var(--color-accent-2-200); }
 
 /* — layout — */
 .wrap { max-width: 1180px; margin: 0 auto; padding-inline: 32px; }
-.site-footer { background: var(--color-dark); color: var(--color-neutral-100); }
+.site-footer { background: var(--color-footer); color: var(--color-neutral-100); }
 .site-footer a { color: var(--color-neutral-100); }
 .site-footer .text-muted { color: inherit; opacity: 0.7; }
 .site-footer .hr { background: rgba(245,244,238,0.14); }
