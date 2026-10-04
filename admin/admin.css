@@ -114,6 +114,11 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Italic text's slant overhangs its own box on the right — without this
+     the hard overflow:hidden edge (needed so the wordmark truncates
+     instead of overlapping LEAD/Log Out on narrow phones) clips the tail
+     of the last glyph. */
+  padding-right: 4px;
 }
 
 /* Icon nav lives inline in the header on desktop only; mobile relies on
