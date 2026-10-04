@@ -56,10 +56,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // Greeting — adjusts to the browser's own local time of day (this is a
   // personal greeting, not a business-day boundary, so unlike "today" on
   // Schedule it deliberately does NOT use the server's Denver-local clock).
+  // "Junkers" rather than a specific name — more than one person logs into
+  // this same admin session (Gerardo's wife included), per explicit
+  // request.
   // -----------------------------------------------------------------
   var hour = new Date().getHours();
   var timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  document.getElementById('dash-greeting').textContent = timeGreeting + ', Gerardo.';
+  document.getElementById('dash-greeting').textContent = timeGreeting + ', Junkers.';
 
   var errorBanner = document.getElementById('error-banner');
   var loadingEl = document.getElementById('loading');

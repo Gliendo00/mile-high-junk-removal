@@ -2875,28 +2875,43 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   .admin-main.admin-main-wide { max-width: 1440px; }
 }
 
+/* Mobile only: the toggle used to be a small white pill sitting alone in
+   the pale-green body area, inset by a margin that lined it up with
+   nothing else on the page — it read as a stray, disconnected control.
+   It's now a full-width dark/neon-green bar flush under the header
+   (matching the sidebar's own palette, per explicit request), achieved by
+   letting it take the whole first flex line of .admin-dash-shell
+   (flex-wrap:wrap + flex-basis:100%) and pushing .admin-dash-content onto
+   its own line below — simpler and more robust than fighting the row's
+   normal no-wrap layout with positioning. */
+@media (max-width: 859px) {
+  .admin-dash-shell { flex-wrap: wrap; }
+}
 .admin-dash-sidebar-toggle {
   /* .admin-dash-shell's own align-items:stretch (see above) is meant for
      the sidebar/content columns — this button is a flex-row sibling too
      (mobile-only markup placed inline), so it needs to opt back out or it
      stretches to the full row height instead of staying a compact button. */
   align-self: flex-start;
+  flex: 1 1 100%;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: 48px;
   padding: 0 16px;
-  margin: 14px 14px 12px;
-  border-radius: var(--admin-radius-md);
-  border: 1px solid var(--color-neutral-300, #dcd3c4);
-  background: #fff;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(57, 255, 20, 0.18);
+  border-radius: 0;
+  background: var(--color-dark, #14150f);
   font-family: var(--font-body);
   font-weight: 700;
   font-size: 14px;
-  color: var(--color-text, #201e1d);
+  color: #39ff14;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+.admin-dash-sidebar-toggle:active { background: #1d1f16; }
 @media (min-width: 860px) {
   .admin-dash-sidebar-toggle { display: none; }
 }
