@@ -16,7 +16,7 @@
 
 <div id="admin-chrome"></div>
 
-<main class="admin-main">
+<main class="admin-main admin-main-wide">
   <div class="admin-dash-shell">
     <button type="button" id="dash-sidebar-toggle" class="admin-dash-sidebar-toggle" aria-expanded="false" aria-controls="dash-sidebar">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -48,19 +48,19 @@
 
       <div class="admin-dash-sidebar-divider"></div>
       <div class="admin-dash-sidebar-label">Quick Actions</div>
-      <a class="admin-dash-nav-link" href="/admin/booking-new/">
+      <a class="admin-dash-nav-link admin-dash-quick-action" href="/admin/booking-new/">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         <span class="admin-dash-nav-link-label">New Job</span>
       </a>
-      <a class="admin-dash-nav-link" href="/admin/intake-new/">
+      <a class="admin-dash-nav-link admin-dash-quick-action" href="/admin/intake-new/">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         <span class="admin-dash-nav-link-label">Drop a Lead</span>
       </a>
-      <a class="admin-dash-nav-link" id="qa-add-expense" href="/admin/expenses/">
+      <a class="admin-dash-nav-link admin-dash-quick-action" id="qa-add-expense" href="/admin/expenses/">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         <span class="admin-dash-nav-link-label">Add Expense</span>
       </a>
-      <a class="admin-dash-nav-link" id="qa-new-client" href="/admin/clients/">
+      <a class="admin-dash-nav-link admin-dash-quick-action" id="qa-new-client" href="/admin/clients/">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         <span class="admin-dash-nav-link-label">New Client</span>
       </a>
@@ -79,45 +79,53 @@
       <div id="dash-body" style="display:none">
         <div class="admin-dash-stats-grid">
           <a href="/admin/" class="admin-dash-stat-card">
+            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
             <div class="admin-dash-stat-label">Today's Jobs</div>
             <div class="admin-dash-stat-value" id="stat-today-jobs">0</div>
             <div class="admin-dash-stat-sub" id="stat-today-jobs-sub">—</div>
           </a>
           <a href="/admin/leads/" class="admin-dash-stat-card is-attention">
+            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg></span>
             <div class="admin-dash-stat-label">Leads Need Attention</div>
             <div class="admin-dash-stat-value" id="stat-leads-attention">0</div>
             <div class="admin-dash-stat-sub" id="stat-leads-attention-sub">—</div>
           </a>
           <a href="/admin/" class="admin-dash-stat-card">
+            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 6.5c0-1.9-2.2-3.5-5-3.5s-5 1.4-5 3.5S9.2 10 12 10s5 1.6 5 3.5-2.2 3.5-5 3.5-5-1.6-5-3.5"/></svg></span>
             <div class="admin-dash-stat-label">Revenue Today</div>
             <div class="admin-dash-stat-value" id="stat-revenue-today">$0</div>
             <div class="admin-dash-stat-sub" id="stat-revenue-today-sub">—</div>
           </a>
           <a href="/admin/leads/?bucket=followUp" class="admin-dash-stat-card is-attention">
+            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
             <div class="admin-dash-stat-label">Follow Ups Due</div>
             <div class="admin-dash-stat-value" id="stat-followups">0</div>
             <div class="admin-dash-stat-sub" id="stat-followups-sub">—</div>
           </a>
         </div>
 
-        <div class="admin-dash-section">
-          <div class="admin-section-header">
-            <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            <span class="admin-section-header-label">Today's Schedule</span>
+        <div class="admin-dash-card">
+          <div class="admin-dash-card-header">
+            <h2 class="admin-dash-card-title">
+              <svg class="admin-dash-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Today's Schedule
+            </h2>
+            <a href="/admin/" class="admin-dash-card-link">View Schedule &rarr;</a>
           </div>
           <div id="today-schedule-list" class="admin-dash-row-list"></div>
           <div id="today-schedule-empty" class="admin-dash-empty-note" style="display:none">No jobs scheduled today.</div>
-          <div class="admin-dash-section-foot"><a href="/admin/">View Schedule &rarr;</a></div>
         </div>
 
-        <div class="admin-dash-section">
-          <div class="admin-section-header">
-            <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
-            <span class="admin-section-header-label">Leads Needing Attention</span>
+        <div class="admin-dash-card">
+          <div class="admin-dash-card-header">
+            <h2 class="admin-dash-card-title">
+              <svg class="admin-dash-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+              Leads Needing Attention
+            </h2>
+            <a href="/admin/leads/" class="admin-dash-card-link">View Leads &rarr;</a>
           </div>
           <div id="attention-list" class="admin-dash-row-list"></div>
           <div id="attention-empty" class="admin-dash-empty-note" style="display:none">All caught up — nothing needs attention right now.</div>
-          <div class="admin-dash-section-foot"><a href="/admin/leads/">View Leads &rarr;</a></div>
         </div>
 
         <div class="admin-dash-bottom-grid">

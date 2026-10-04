@@ -2809,18 +2809,39 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    bleed to the edges of the centered content column instead of sitting
    inset inside it; .admin-dash-content below reintroduces that same
    padding for the actual page content so nothing else about .admin-main
-   (its max-width/centering) needs to change for these two pages. */
+   (its max-width/centering) needs to change for these two pages.
+
+   Visual polish pass: align-items stretch (not flex-start) is what makes
+   the dark sidebar's own background extend down to match the content
+   column's real height — a plain CSS flex behavior, no JS/height math
+   needed — so it reads as one attached structural panel instead of a
+   short floating card next to a much taller content column. */
 .admin-dash-shell {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0;
   margin: -14px -14px -88px;
 }
 @media (min-width: 860px) {
-  .admin-dash-shell { margin: -24px -28px -56px; gap: 24px; }
+  .admin-dash-shell { margin: -24px -28px -56px; gap: 0; }
+}
+
+/* Home dashboard only (admin/home/index.html's <main> carries this
+   modifier alongside .admin-main) — a meaningfully wider desktop column
+   than every other admin page's own 1240px cap, per explicit "use more of
+   the available viewport width" feedback. Leads keeps .admin-main's
+   existing 1240px cap untouched (not part of this pass) even though it
+   shares the same .admin-dash-shell/.admin-dash-sidebar components. */
+@media (min-width: 860px) {
+  .admin-main.admin-main-wide { max-width: 1440px; }
 }
 
 .admin-dash-sidebar-toggle {
+  /* .admin-dash-shell's own align-items:stretch (see above) is meant for
+     the sidebar/content columns — this button is a flex-row sibling too
+     (mobile-only markup placed inline), so it needs to opt back out or it
+     stretches to the full row height instead of staying a compact button. */
+  align-self: flex-start;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2854,7 +2875,7 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 
 .admin-dash-sidebar {
   flex: none;
-  width: 240px;
+  width: 252px;
   background: var(--color-dark, #14150f);
   padding: 20px 14px 24px;
   box-sizing: border-box;
@@ -2879,9 +2900,11 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   }
   .admin-dash-sidebar.is-open { transform: translateX(0); }
 }
-@media (min-width: 860px) {
-  .admin-dash-sidebar { border-radius: 0 var(--admin-radius-lg) var(--admin-radius-lg) 0; margin-top: 24px; }
-}
+/* Visual polish pass: desktop no longer gets its own one-sided rounded
+   corner + top offset — that combination was exactly what made the
+   sidebar read as a short floating card next to the page instead of an
+   attached structural panel. Flush top/left, square corners, full height
+   (via the shell's own align-items:stretch above). */
 
 .admin-dash-nav-link {
   display: flex;
@@ -2889,14 +2912,19 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   gap: 10px;
   width: 100%;
   min-height: 44px;
-  padding: 0 12px;
-  border: 0;
+  padding: 0 12px 0 9px;
+  border: 0 solid transparent;
+  border-left-width: 3px;
   border-radius: var(--admin-radius-md);
   background: transparent;
   font-family: var(--font-body);
   font-weight: 700;
   font-size: 14.5px;
-  color: rgba(255, 255, 255, 0.72);
+  /* Explicit request: sidebar words (and, via currentColor, their icons)
+     read as neon green rather than a neutral white/gray — dimmed for an
+     inactive row, full brightness for the active one (see .is-active
+     below), so there's still a clear hierarchy between the two. */
+  color: rgba(57, 255, 20, 0.75);
   text-decoration: none;
   white-space: nowrap;
   text-align: left;
@@ -2907,13 +2935,31 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 }
 .admin-dash-nav-link svg { flex: none; }
 .admin-dash-nav-link span.admin-dash-nav-link-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
-.admin-dash-nav-link:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.admin-dash-nav-link:hover { background: rgba(255, 255, 255, 0.06); color: #39ff14; }
+/* Darker charcoal highlight + a brand-green left accent bar, replacing the
+   previous solid bright-green fill — a calmer "this row is selected"
+   treatment, closer to the approved mockup than a loud green pill. */
 .admin-dash-nav-link.is-active {
-  background: var(--color-accent-700, #2f6f13);
-  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  color: #39ff14;
+  border-left-color: var(--color-accent-700, #2f6f13);
 }
-.admin-dash-nav-link .admin-nav-badge { background: rgba(255, 255, 255, 0.22); }
-.admin-dash-nav-link.is-active .admin-nav-badge { background: rgba(255, 255, 255, 0.3); }
+.admin-dash-nav-link .admin-nav-badge { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.admin-dash-nav-link.is-active .admin-nav-badge { background: rgba(255, 255, 255, 0.16); color: #39ff14; }
+
+/* Quick Actions — distinct button-like rows (subtle border + fill), so
+   they read as actions rather than more nav destinations. */
+.admin-dash-quick-action {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 3px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 6px;
+}
+.admin-dash-quick-action:last-child { margin-bottom: 0; }
+.admin-dash-quick-action:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.26);
+}
 
 .admin-dash-sidebar-divider {
   height: 1px;
@@ -2926,7 +2972,7 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(57, 255, 20, 0.4);
 }
 
 .admin-dash-content {
@@ -2935,7 +2981,12 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   padding: 14px 14px 88px;
 }
 @media (min-width: 860px) {
-  .admin-dash-content { padding: 24px 28px 56px; max-width: 1000px; }
+  /* No separate max-width here anymore — .admin-main(.admin-main-wide)
+     is the one place a page's overall column width is capped now, so this
+     never silently narrows the content below what that cap already
+     allows (previously 1000px, double-capping inside an already-1240px
+     .admin-main and wasting the sidebar's own width as dead space). */
+  .admin-dash-content { padding: 24px 28px 56px; }
 }
 
 /* ---------------------------------------------------------------------
@@ -2946,33 +2997,50 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
-  font-size: clamp(20px, 5vw, 26px);
+  font-size: clamp(20px, 5vw, 28px);
   margin: 0 0 4px;
 }
 .admin-dash-greeting-sub {
   font-size: 14px;
   color: var(--color-neutral-700, #645c50);
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .admin-dash-stats-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  margin-bottom: 28px;
+  gap: 14px;
+  margin-bottom: 22px;
 }
 @media (min-width: 620px) {
   .admin-dash-stats-grid { grid-template-columns: repeat(4, 1fr); }
 }
+/* Taller, more substantial KPI cards (visual polish pass): more generous
+   padding plus a small icon badge above the label give these real weight
+   instead of reading as thin stat chips. */
 .admin-dash-stat-card {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
   border-radius: var(--admin-radius-lg);
-  padding: 14px 16px;
+  padding: 20px 20px 18px;
   box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
   text-decoration: none;
   color: inherit;
   display: block;
+}
+.admin-dash-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--admin-radius-md);
+  background: var(--admin-tint);
+  color: var(--color-accent-700, #2f6f13);
+  margin-bottom: 12px;
+}
+.admin-dash-stat-card.is-attention .admin-dash-stat-icon {
+  background: color-mix(in srgb, var(--color-accent-700, #2f6f13) 14%, white);
 }
 .admin-dash-stat-label {
   font-size: 11.5px;
@@ -2986,12 +3054,12 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
-  font-size: 26px;
+  font-size: 30px;
   color: var(--color-text, #201e1d);
   line-height: 1.1;
 }
 .admin-dash-stat-sub {
-  margin-top: 4px;
+  margin-top: 6px;
   font-size: 12.5px;
   color: var(--color-neutral-600, #82796a);
 }
@@ -3000,33 +3068,69 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    as a different weight than the two informational ones. */
 .admin-dash-stat-card.is-attention .admin-dash-stat-value { color: var(--color-accent-700, #2f6f13); }
 
-.admin-dash-section { margin-bottom: 28px; }
-.admin-dash-section-foot { margin-top: 12px; text-align: right; }
-.admin-dash-section-foot a {
+/* ---------------------------------------------------------------------
+   Dashboard panel — the white card shell for Today's Schedule / Leads
+   Needing Attention (and shared, via .admin-dash-bottom-card below, by
+   the bottom summary row) — title + "View X →" sit together in one header
+   row instead of the title up top and the link stranded at the bottom.
+   --------------------------------------------------------------------- */
+.admin-dash-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 18px 20px 20px;
+  margin-bottom: 18px;
+}
+.admin-dash-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-neutral-100, #f9f4ed);
+}
+.admin-dash-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--color-text, #201e1d);
+}
+.admin-dash-card-title-icon { flex: none; color: var(--color-accent-700, #2f6f13); }
+.admin-dash-card-link {
+  flex: none;
   font-size: 13px;
   font-weight: 700;
   color: var(--color-accent-700, #2f6f13);
   text-decoration: none;
+  white-space: nowrap;
 }
+.admin-dash-card-link:hover { text-decoration: underline; }
 
-/* Compact rows — Today's Schedule / Leads Needing Attention. Deliberately
-   lighter than a full .admin-booking-card (no border-left accent, tighter
-   padding) — these are a glanceable preview, not the canonical list; "View
-   Schedule"/"View Leads" is where the full card treatment lives. */
+/* Compact rows — Today's Schedule / Leads Needing Attention. Rendered as a
+   plain divided list inside the new card panel (no per-row border/shadow
+   of their own anymore — that read as boxes-within-a-box once the panel
+   itself became a bordered white card) rather than a stack of independent
+   mini-cards. */
 .admin-dash-row-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
 }
 .admin-dash-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #fff;
-  border: 1px solid var(--color-neutral-200, #eee7db);
-  border-radius: var(--admin-radius-md);
-  padding: 10px 12px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--color-neutral-100, #f9f4ed);
 }
+.admin-dash-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+.admin-dash-row:first-child { padding-top: 2px; }
 .admin-dash-row-main {
   flex: 1 1 auto;
   min-width: 0;
@@ -3082,16 +3186,20 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-dash-bottom-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 16px;
+  gap: 18px;
 }
 @media (min-width: 760px) {
   .admin-dash-bottom-grid { grid-template-columns: repeat(3, 1fr); }
 }
+/* Same card treatment as .admin-dash-card above (padding/shadow), kept as
+   its own class since its header is a plain <h3> rather than the title+
+   link row the two upper panels use. */
 .admin-dash-bottom-card {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);
   border-radius: var(--admin-radius-lg);
-  padding: 16px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 18px 20px 20px;
 }
 .admin-dash-bottom-card h3 {
   font-size: 12px;
