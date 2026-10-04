@@ -449,6 +449,23 @@ async function handleCreate(req, res) {
     return;
   }
 
+  // Phase 3C Stage 5D (failure-mode audit follow-up) — optional idempotency
+  // key for Confirm Booking's multi-request sequence (admin's browser:
+  // POST /api/admin/client -> POST /api/admin/booking (here) -> PATCH
+  // /api/admin/intake?action=confirm-booking). Every OTHER caller of this
+  // endpoint ("+ New Job", "+ Past Job") never sends this field, so it's
+  // always null for them — zero behavior change. See the insert below and
+  // bookings_source_intake_id_uniq
+  // (sql/2026-10-07_phase3c-stage5d-booking-source-intake.sql) for the
+  // actual guarantee: at most one booking can ever exist per intake,
+  // enforced by Postgres, not by any client-side state surviving a reload/
+  // network failure/race.
+  const intakeSessionId = typeof body.intakeSessionId === "string" ? body.intakeSessionId.trim() : "";
+  if (intakeSessionId && !UUID_RE.test(intakeSessionId)) {
+    res.status(400).json({ error: "Invalid intake session id." });
+    return;
+  }
+
   const serviceType = typeof body.serviceType === "string" ? body.serviceType.trim() : "";
   if (!SERVICE_TYPES.includes(serviceType)) {
     res.status(400).json({ error: "Please choose a valid service type." });
@@ -684,7 +701,10 @@ async function handleCreate(req, res) {
       return;
     }
 
-    const { data: created, error } = await supabase
+    const BOOKING_SELECT_COLS =
+      "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip, created_at";
+
+    const insertRes = await supabase
       .from("bookings")
       .insert({
         customer_id: customerId,
@@ -710,16 +730,61 @@ async function handleCreate(req, res) {
         service_city: serviceCity,
         service_state: serviceState,
         service_zip: serviceZip,
+        source_intake_id: intakeSessionId || null,
       })
-      .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip, created_at"
-      )
+      .select(BOOKING_SELECT_COLS)
       .single();
 
-    if (error || !created) throw error || new Error("Insert returned no row.");
+    // isReplay: true only when this exact call is a retry/race of an
+    // earlier Confirm Booking attempt for the SAME intake that already
+    // succeeded — bookings_source_intake_id_uniq fired, so `created` below
+    // is the ORIGINAL booking, not a new one. Never true for "+ New Job"/
+    // "+ Past Job" (they never send intakeSessionId, so this branch can't
+    // be reached for them at all).
+    let created;
+    let isReplay = false;
+    if (insertRes.error) {
+      if (intakeSessionId && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
+        const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("source_intake_id", intakeSessionId).maybeSingle();
+        if (existingRes.error || !existingRes.data) throw insertRes.error;
+        created = existingRes.data;
+        isReplay = true;
+      } else {
+        throw insertRes.error;
+      }
+    } else if (!insertRes.data) {
+      throw new Error("Insert returned no row.");
+    } else {
+      created = insertRes.data;
+    }
 
     let dumpsterResponse = null;
-    if (dumpsterFields) {
+    if (isReplay) {
+      // A second dumpster_rentals INSERT against an already-existing
+      // booking would either duplicate it or violate whatever constraint
+      // (if any) ties one to the other — never attempted on replay.
+      // Reads back whatever the ORIGINAL attempt created (or didn't, if
+      // that original attempt's own dumpster step is what failed) instead
+      // — checked against the EXISTING row's own service_type, not this
+      // retry's request body, in case the two ever disagree.
+      if (created.service_type === "dumpster_rental") {
+        const existingDumpsterRes = await supabase
+          .from("dumpster_rentals")
+          .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes")
+          .eq("booking_id", created.id)
+          .maybeSingle();
+        if (existingDumpsterRes.error) throw existingDumpsterRes.error;
+        if (existingDumpsterRes.data) {
+          dumpsterResponse = {
+            deliveryDate: existingDumpsterRes.data.delivery_date,
+            pickupDate: existingDumpsterRes.data.pickup_date,
+            pickupDateIsManual: !!existingDumpsterRes.data.pickup_date_is_manual,
+            materialType: existingDumpsterRes.data.material_type,
+            placementNotes: existingDumpsterRes.data.placement_notes,
+          };
+        }
+      }
+    } else if (dumpsterFields) {
       const { data: dumpsterCreated, error: dumpsterError } = await supabase
         .from("dumpster_rentals")
         .insert({
@@ -2589,6 +2654,11 @@ const VALID_TIME_WINDOWS = Object.keys(TIME_WINDOW_DEFS);
 
 const MAX = { address: 200, city: 80, zip: 10, long: 2000, short: 200 };
 const MAX_PRICE = 999999;
+// Phase 3C Stage 5D — the Postgres error code handleCreate() checks for
+// against bookings_source_intake_id_uniq (see that migration + the
+// intakeSessionId handling above) to detect a Confirm Booking retry/race
+// instead of erroring or duplicating.
+const POSTGRES_UNIQUE_VIOLATION = "23505";
 // Batch 2C — the business's own "5 days included" rental policy (confirmed
 // against dumpster-rental.html's copy: "$349 flat rate includes...
 // up to 5 days"/"extra days are $15 each"): the default pickup date is

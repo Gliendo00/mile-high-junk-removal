@@ -1,0 +1,95 @@
+-- Phase 3C Stage 5D (failure-mode audit follow-up) — bookings.source_intake_id:
+-- a deterministic idempotency key for Confirm Booking's multi-request
+-- orchestration (POST /api/admin/client -> POST /api/admin/booking ->
+-- PATCH /api/admin/intake?action=confirm-booking). To be run manually in
+-- the Supabase SQL editor, same convention as every prior migration in
+-- this directory. NOT executed by this session.
+--
+-- Why this exists: Rocky's review of the first Stage 5D draft asked for
+-- proof the Confirm Booking sequence is safe against a retry/reload/race
+-- AFTER a booking has already been created but BEFORE the browser learns
+-- that (network death, the final confirm-booking PATCH failing, a page
+-- reload, two tabs). It is not, as originally built — POST
+-- /api/admin/booking has no idempotency concept at all; every call
+-- unconditionally inserts a new row. Nothing already in the schema links
+-- a booking back to the intake session that produced it, so there is no
+-- existing-schema way to detect "a booking already exists for this
+-- intake" before inserting a second one. See the Stage 5D failure-mode
+-- audit (this session) for the full case-by-case analysis.
+--
+-- The fix mirrors a pattern THIS SAME PROJECT already proved for exactly
+-- this problem: sql/2026-10-05_phase3c-batch6-leads.sql's
+-- leads.source_intake_id + leads_source_intake_id_uniq, which already
+-- makes Confirm as Lead's `leads` insert idempotent per intake. This file
+-- gives `bookings` the identical column + constraint shape, and
+-- api/admin/booking.js's handleCreate() gets the identical "insert; on a
+-- unique_violation against THIS constraint, fetch and return the row that
+-- already exists instead of erroring or duplicating" handling
+-- api/admin/lead.js's handleConfirm() already uses. No new table, no new
+-- Vercel function, no new write-path concept — the EXISTING booking-
+-- creation endpoint just becomes safely retriable when (and only when)
+-- the caller supplies the intake id it's confirming.
+--
+-- Nothing in this file touches intake_sessions, leads, customers,
+-- dumpster_rentals, job_payments, expenses, or any other table.
+-- source_intake_id is NULL for every booking created any other way
+-- ("+ New Job", "+ Past Job", the public /book flow) — those callers never
+-- send an intakeSessionId, so this column is simply never populated for
+-- them, and their behavior is completely unchanged (confirmed in
+-- tests/phase3c-stage2-new-job.test.js and
+-- tests/phase3c-stage2.2-past-job.test.js, both still green with zero
+-- edits after this change).
+--
+-- No new GRANT needed: `bookings` has never used this project's later
+-- REVOKE-ALL-then-GRANT-exact convention (confirmed — no migration in this
+-- directory grants service_role access to `bookings` at all; it predates
+-- that convention, from Phase 1, with table-wide grants already in place).
+-- A table-wide GRANT INSERT/UPDATE with no column list already covers any
+-- column added later, including this one — nothing to add here.
+
+-- =======================================================================
+-- 0. PREFLIGHT — run this FIRST, by itself. Read-only.
+-- =======================================================================
+-- select column_name from information_schema.columns
+--   where table_schema = 'public' and table_name = 'bookings' and column_name = 'source_intake_id';
+-- -- expect: zero rows (the column doesn't exist yet)
+--
+-- select has_table_privilege('service_role', 'public.bookings', 'INSERT'); -- expect true (already, from Phase 1)
+
+-- =======================================================================
+-- 1. The column + its idempotency constraint.
+--
+--    Nullable: every booking NOT created via Confirm Booking (the
+--    overwhelming majority — "+ New Job", "+ Past Job", the public /book
+--    flow) has no intake to point at.
+--
+--    Partial UNIQUE (WHERE source_intake_id IS NOT NULL), same shape as
+--    leads_source_intake_id_uniq: any number of NULLs coexist freely; at
+--    most one booking can ever exist per intake. This is the actual
+--    safety guarantee — enforced by Postgres, not by application
+--    discipline, so it holds even across a retry, a reload, two tabs, or
+--    a genuinely concurrent race, with zero dependence on any client-side
+--    state surviving the gap.
+-- =======================================================================
+ALTER TABLE public.bookings
+  ADD COLUMN IF NOT EXISTS source_intake_id uuid NULL REFERENCES public.intake_sessions(id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS bookings_source_intake_id_uniq ON public.bookings (source_intake_id) WHERE source_intake_id IS NOT NULL;
+
+-- =======================================================================
+-- Verification
+-- =======================================================================
+-- select column_name, data_type, is_nullable from information_schema.columns
+--   where table_schema = 'public' and table_name = 'bookings' and column_name = 'source_intake_id';
+-- -- expect: uuid, YES (nullable)
+--
+-- select indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = 'bookings' and indexname = 'bookings_source_intake_id_uniq';
+-- -- expect indexdef to show "WHERE (source_intake_id IS NOT NULL)"
+--
+-- select has_column_privilege('service_role', 'public.bookings', 'source_intake_id', 'INSERT'); -- expect true, with no new grant run
+
+-- =======================================================================
+-- Rollback (reference only — not executed as part of this file)
+-- =======================================================================
+-- DROP INDEX IF EXISTS public.bookings_source_intake_id_uniq;
+-- ALTER TABLE public.bookings DROP COLUMN IF EXISTS source_intake_id;

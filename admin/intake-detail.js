@@ -800,6 +800,16 @@ document.addEventListener('DOMContentLoaded', function () {
     confirmBookingBtn.disabled = true;
     clearError();
 
+    // Failure-mode audit (Rocky's review): a new client created here but
+    // never persisted onto the intake would be re-created a SECOND time by
+    // any retry/reload that follows (this file's own in-memory
+    // `matchedCustomerId` would still read null) — client.js's own
+    // duplicate check only catches an EXACT phone+email match, and phone/
+    // email are both optional on a client. Persisting via the EXISTING
+    // ?action=set-client-match immediately after creation (before ever
+    // attempting to create the booking) closes that gap: any later retry,
+    // even after a full page reload, sees the already-matched client and
+    // reuses it instead of creating another one.
     function resolveCustomerId() {
       if (matchedCustomerId) return Promise.resolve(matchedCustomerId);
 
@@ -815,7 +825,12 @@ document.addEventListener('DOMContentLoaded', function () {
       };
       return postJson('/api/admin/client', clientPayload)
         .then(function (body) {
-          return body.client.id;
+          var newCustomerId = body.client.id;
+          return patchAction({ id: intakeId, action: 'set-client-match', matchedCustomerId: newCustomerId }).then(function () {
+            matchedCustomerId = newCustomerId;
+            originalMatchedCustomerId = newCustomerId;
+            return newCustomerId;
+          });
         })
         .catch(function (err) {
           if (err.response && err.response.status === 409) {
@@ -834,6 +849,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
       var bookingPayload = {
         customerId: customerId,
+        // Lets POST /api/admin/booking itself detect a retry/race of THIS
+        // exact Confirm Booking attempt (bookings_source_intake_id_uniq)
+        // and return the already-created booking instead of creating a
+        // second one — see that endpoint's own handleCreate() header.
+        intakeSessionId: intakeId,
         serviceType: confirmBookingServiceTypeSelect.value,
         appointmentDate: confirmBookingDateInput.value,
         timeWindow: timeWindow,
@@ -858,7 +878,16 @@ document.addEventListener('DOMContentLoaded', function () {
       }
 
       return postJson('/api/admin/booking', bookingPayload).then(function (body) {
-        return { bookingId: body.booking.id, customerId: customerId };
+        // Uses the server's OWN answer for which client this booking
+        // belongs to, not the locally-computed `customerId` above — on a
+        // replay (bookings_source_intake_id_uniq fired) the booking
+        // returned is the ORIGINAL one, which may belong to a different
+        // (the FIRST) client than whatever this particular attempt just
+        // resolved, e.g. after a reload that led to a second client being
+        // created. Trusting the server here keeps the final confirm step
+        // below always pointed at a client/booking pair that is actually
+        // consistent, rather than one this attempt merely assumed.
+        return { bookingId: body.booking.id, customerId: body.booking.customerId };
       });
     }
 
