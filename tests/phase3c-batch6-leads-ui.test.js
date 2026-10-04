@@ -114,7 +114,12 @@ test("admin/leads/index.html: the status sidebar collapses into a drawer on mobi
   assert.ok(/id="dash-sidebar-toggle"/.test(html), "must have a mobile toggle button that opens the drawer");
   assert.ok(!/admin-leads-tabs/.test(html), "the old horizontal .admin-leads-tabs pill row must not come back");
   const css = readNormalized("admin/admin.css");
-  const block = css.slice(css.indexOf(".admin-dash-sidebar {"), css.indexOf(".admin-dash-sidebar {") + 1300);
+  // Window widened (visual polish pass, 2026-10): a new desktop-only
+  // sticky/min-height block (full-viewport-height sidebar, never a visible
+  // gap below it regardless of content height or zoom) was inserted
+  // between the base rule and the mobile off-canvas block this assertion
+  // reads, pushing the latter further from the slice's start index.
+  const block = css.slice(css.indexOf(".admin-dash-sidebar {"), css.indexOf(".admin-dash-sidebar {") + 1800);
   assert.ok(/transform:\s*translateX\(-100%\)/.test(block), ".admin-dash-sidebar must be off-canvas by default below the desktop breakpoint");
 });
 
