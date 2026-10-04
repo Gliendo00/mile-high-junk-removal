@@ -44,6 +44,14 @@
 .admin-body {
   background: var(--admin-tint);
   min-height: 100vh;
+  /* Guards against the few stray px of horizontal overflow the Home/Leads
+     full-bleed sidebar trick can introduce (calc(50% - 50vw) margins vs. a
+     scrollbar's own width — a well-known mismatch: 100vw/vw units include
+     the scrollbar gutter, plain layout widths don't) — never a real
+     horizontal-scroll need anywhere in this admin app; every individual
+     horizontally-scrolling row (.admin-leads-tabs, .admin-week-overview,
+     etc.) already contains its own scroll via its own overflow-x:auto. */
+  overflow-x: hidden;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2805,11 +2813,11 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    above the page content.
    =========================================================================== */
 /* Negative margins exactly cancel .admin-main's own padding (14/14/88
-   mobile, 24/28/56 desktop — see .admin-main above) so the dark sidebar can
-   bleed to the edges of the centered content column instead of sitting
-   inset inside it; .admin-dash-content below reintroduces that same
-   padding for the actual page content so nothing else about .admin-main
-   (its max-width/centering) needs to change for these two pages.
+   mobile — see .admin-main above) so the dark sidebar can bleed to the
+   edges of the content column instead of sitting inset inside it;
+   .admin-dash-content below reintroduces that same padding for the actual
+   page content. Mobile only now — see the desktop override just below for
+   why desktop needs a different technique entirely.
 
    Visual polish pass: align-items stretch (not flex-start) is what makes
    the dark sidebar's own background extend down to match the content
@@ -2822,8 +2830,33 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   gap: 0;
   margin: -14px -14px -88px;
 }
+/* Second visual-polish correction: a plain negative-margin cancel (the
+   mobile technique above) only bleeds the shell to the edge of .admin-
+   main's own PADDING box — .admin-main is still itself centered with a
+   fixed max-width (1440px .admin-main-wide on Home, 1240px plain
+   .admin-main on Leads), so on any viewport wider than that cap (a large
+   monitor, or just the page zoomed out — CSS vh/viewport units grow in
+   effective size as the browser zooms out) real, equal dead margin
+   reappears on BOTH sides of the whole shell, sidebar included — visible
+   as a stripe of plain page background to the sidebar's left that makes
+   it look un-attached all over again, the exact thing this pass set out
+   to fix. Fix: a standard CSS "full-bleed" break-out (`calc(50% - 50vw)`
+   margins) that escapes .admin-main's max-width/centering ENTIRELY at
+   this breakpoint, so the shell always spans the true viewport width no
+   matter how wide the window or how far it's zoomed out — the sidebar
+   below sits flush at its true left edge; .admin-dash-content supplies
+   its own padding and a separate, more generous max-width so the cards/
+   text inside it don't go edge-to-edge on an ultrawide monitor, without
+   that cap ever again pulling the sidebar away from the real edge. */
 @media (min-width: 860px) {
-  .admin-dash-shell { margin: -24px -28px -56px; gap: 0; }
+  .admin-dash-shell {
+    gap: 0;
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+    margin-top: -24px;
+    margin-bottom: -56px;
+  }
 }
 
 /* Home dashboard only (admin/home/index.html's <main> carries this
@@ -2831,7 +2864,13 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    than every other admin page's own 1240px cap, per explicit "use more of
    the available viewport width" feedback. Leads keeps .admin-main's
    existing 1240px cap untouched (not part of this pass) even though it
-   shares the same .admin-dash-shell/.admin-dash-sidebar components. */
+   shares the same .admin-dash-shell/.admin-dash-sidebar components.
+   NOTE: now that .admin-dash-shell itself breaks out of .admin-main's
+   width at desktop (directly above), this max-width no longer actually
+   constrains either dash page's rendered width — left in place harmlessly
+   since .admin-main still wraps other markup (none, currently) and so a
+   future page reusing plain .admin-main without .admin-dash-shell is
+   unaffected either way. */
 @media (min-width: 860px) {
   .admin-main.admin-main-wide { max-width: 1440px; }
 }
@@ -2997,12 +3036,16 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   padding: 14px 14px 88px;
 }
 @media (min-width: 860px) {
-  /* No separate max-width here anymore — .admin-main(.admin-main-wide)
-     is the one place a page's overall column width is capped now, so this
-     never silently narrows the content below what that cap already
-     allows (previously 1000px, double-capping inside an already-1240px
-     .admin-main and wasting the sidebar's own width as dead space). */
-  .admin-dash-content { padding: 24px 28px 56px; }
+  /* .admin-dash-shell now breaks fully out of .admin-main's own max-width
+     at this breakpoint (see .admin-dash-shell's own comment above), so
+     THIS is the one place left that caps a dash page's content width on
+     an ultrawide/zoomed-out screen — scoped to content only, never the
+     sidebar, which stays flush at the true viewport edge regardless.
+     Narrower default (matches Leads' plain .admin-main, ~988px of content
+     after its 252px sidebar) with a wider override for Home's own
+     .admin-main-wide modifier. */
+  .admin-dash-content { padding: 24px 28px 56px; max-width: 1000px; }
+  .admin-main-wide .admin-dash-content { max-width: 1200px; }
 }
 
 /* ---------------------------------------------------------------------
