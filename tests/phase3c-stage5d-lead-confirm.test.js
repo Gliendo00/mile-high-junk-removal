@@ -236,11 +236,24 @@ test("401 without a valid admin session", async () => {
   assert.strictEqual(db.leads.length, 0);
 });
 
-test("unsupported method -> 405", async () => {
+// UPDATED — lead-detail navigation fix (UI batch, 2026-10): GET is no
+// longer unsupported on this file — it now backs the canonical Lead
+// detail page (admin/lead/, see api/admin/lead.js's handleGet()). DELETE
+// is still genuinely unsupported and exercises the same 405 path this
+// test originally meant to cover.
+test("GET without an id -> 404 (same 'malformed/missing id reads as not found' posture as the other admin detail endpoints), never 405", async () => {
   adminAuthed();
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
   const res = await run(makeReq({ method: "GET", cookie: AUTH_COOKIE }));
+  assert.strictEqual(res.statusCode, 404);
+});
+
+test("unsupported method (DELETE) -> 405", async () => {
+  adminAuthed();
+  const db = freshDb();
+  currentFakeService = createFakeServiceClient(db);
+  const res = await run(makeReq({ method: "DELETE", cookie: AUTH_COOKIE }));
   assert.strictEqual(res.statusCode, 405);
 });
 

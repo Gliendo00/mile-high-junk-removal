@@ -74,35 +74,48 @@ test("admin/requests/index.html: the route itself is still a real, normal page (
 
 // =======================================================================
 // admin/leads/index.html — the shell itself
+//
+// UPDATED for the Leads sidebar redesign (UI batch, 2026-10): the old
+// horizontal 9-pill tab row is gone, replaced by a dark sidebar shared
+// with /admin/home/ (admin.css's .admin-dash-* rules). Two structural
+// changes to the bucket model, both reflected below:
+//   - "websiteRequests" is no longer its own section/list/sidebar item —
+//     its items are merged client-side into "New" (Website Request is a
+//     source, not a stage — see leads-list.js's own header).
+//   - "needsAttention" is a new smart combined view (Pending Intake + New
+//     + Waiting on Photos + Follow Up) with its own sidebar item and count
+//     badge, but no "list-needsAttention" <ul> of its own — it's a
+//     composite <section> filled with grouped clones of the real buckets'
+//     own cards (see leads-list.js's renderNeedsAttention()).
 // =======================================================================
-const LEADS_SECTION_KEYS = [
-  "pendingIntake",
-  "websiteRequests",
-  "new",
-  "contacted",
-  "waitingOnPhotos",
-  "estimateSent",
-  "followUp",
-  "bookedWon",
-  "lost",
-];
+const LEADS_REAL_BUCKET_KEYS = ["pendingIntake", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"];
+const LEADS_SIDEBAR_KEYS = ["needsAttention"].concat(LEADS_REAL_BUCKET_KEYS);
 
-test("admin/leads/index.html: has all 9 section containers, each starting hidden, plus a tab button + count badge per bucket (sub-tabs follow-up)", () => {
+test("admin/leads/index.html: has all 8 real section containers (each starting hidden, with its own <ul> + sidebar count badge) plus the needsAttention composite section", () => {
   const html = readNormalized("admin/leads/index.html");
-  LEADS_SECTION_KEYS.forEach((key) => {
+  LEADS_REAL_BUCKET_KEYS.forEach((key) => {
     assert.ok(new RegExp('id="section-' + key + '"[^>]*hidden').test(html), "missing hidden section-" + key);
     assert.ok(new RegExp('id="list-' + key + '"').test(html), "missing list-" + key);
-    assert.ok(new RegExp('data-bucket="' + key + '"').test(html), "missing the tab button for " + key);
-    assert.ok(new RegExp('id="tab-count-' + key + '"[^>]*hidden').test(html), "missing the hidden-by-default count badge for " + key);
   });
+  LEADS_SIDEBAR_KEYS.forEach((key) => {
+    assert.ok(new RegExp('data-bucket="' + key + '"').test(html), "missing the sidebar button for " + key);
+    assert.ok(new RegExp('id="sidebar-count-' + key + '"[^>]*hidden').test(html), "missing the hidden-by-default count badge for " + key);
+  });
+  assert.ok(/id="section-needsAttention"[^>]*hidden/.test(html), "missing hidden section-needsAttention");
+  assert.ok(!/id="list-websiteRequests"/.test(html), "websiteRequests must no longer have its own <ul> — it's merged into New");
 });
 
-test("admin/leads/index.html: the tabs container is horizontally scrollable (mobile) via .admin-leads-tabs", () => {
+test("admin/leads/index.html: the status sidebar collapses into a drawer on mobile (admin.css's .admin-dash-sidebar) rather than reproducing the old horizontal pill strip", () => {
   const html = readNormalized("admin/leads/index.html");
-  assert.ok(/id="leads-tabs"[^>]*class="admin-leads-tabs"|class="admin-leads-tabs"[^>]*id="leads-tabs"/.test(html), "the tab bar must use .admin-leads-tabs");
+  assert.ok(
+    /id="dash-sidebar"[^>]*class="admin-dash-sidebar"|class="admin-dash-sidebar"[^>]*id="dash-sidebar"/.test(html),
+    "the sidebar must use .admin-dash-sidebar"
+  );
+  assert.ok(/id="dash-sidebar-toggle"/.test(html), "must have a mobile toggle button that opens the drawer");
+  assert.ok(!/admin-leads-tabs/.test(html), "the old horizontal .admin-leads-tabs pill row must not come back");
   const css = readNormalized("admin/admin.css");
-  const block = css.slice(css.indexOf(".admin-leads-tabs {"), css.indexOf(".admin-leads-tabs {") + 400);
-  assert.ok(/overflow-x:\s*auto/.test(block), ".admin-leads-tabs must scroll horizontally rather than wrap");
+  const block = css.slice(css.indexOf(".admin-dash-sidebar {"), css.indexOf(".admin-dash-sidebar {") + 1300);
+  assert.ok(/transform:\s*translateX\(-100%\)/.test(block), ".admin-dash-sidebar must be off-canvas by default below the desktop breakpoint");
 });
 
 test("admin/leads/index.html: loads admin-fetch.js, nav-badge.js, and leads-list.js", () => {
@@ -135,9 +148,43 @@ test("admin/leads-list.js: Pending Intake card name fallback matches admin/intak
   assert.ok(/intake\.matchedClientName \|\| intake\.extractedClientName \|\| intake\.extractedPhone \|\| intake\.extractedEmail \|\| 'Unidentified client'/.test(src));
 });
 
-test("admin/leads-list.js: a booking-kind card links to the existing /admin/booking/ detail page; a lead-kind card does not (no lead detail page exists yet)", () => {
+// UPDATED — lead-detail navigation fix (UI batch, 2026-10): a lead-kind
+// card used to render its main area as a plain non-interactive <div>
+// because no detail page existed for a `leads` table row. The new
+// canonical /admin/lead/ route (admin/lead-detail.js + api/admin/lead.js's
+// GET) now backs it, exactly like a booking-kind card already links to
+// /admin/booking/.
+test("admin/leads-list.js: both a booking-kind and a lead-kind card are real links, each to its own canonical detail route", () => {
   const src = readNormalized("admin/leads-list.js");
-  assert.ok(/item\.kind === 'booking' \? document\.createElement\('a'\) : document\.createElement\('div'\)/.test(src));
+  const fnBody = src.slice(src.indexOf("function renderLeadCard("), src.indexOf("// Pending Intake card"));
+  assert.ok(/var main = document\.createElement\('a'\);/.test(fnBody), "the card's main area must always be a real <a>, never a plain <div>");
+  assert.ok(
+    /main\.href = item\.kind === 'booking' \? '\/admin\/booking\/\?id=' \+ encodeURIComponent\(item\.id\) : '\/admin\/lead\/\?id=' \+ encodeURIComponent\(item\.id\);/.test(fnBody),
+    "a booking-kind card must link to /admin/booking/, a lead-kind card to the new /admin/lead/"
+  );
+});
+
+test("admin/lead/index.html + admin/lead-detail.js: the canonical Lead detail page exists, fetches GET /api/admin/lead?id=, and never writes anything", () => {
+  const html = readNormalized("admin/lead/index.html");
+  assert.ok(/<div id="admin-chrome"><\/div>/.test(html), "must load the shared admin chrome");
+  assert.ok(/src="\.\.\/lead-detail\.js"/.test(html));
+  const src = readNormalized("admin/lead-detail.js");
+  assert.ok(/adminFetch\('\/api\/admin\/lead\?id=' \+ encodeURIComponent\(id\)\)/.test(src));
+  assert.ok(!/\.innerHTML\s*=/.test(src), "must not assign innerHTML");
+  // Excludes the one shared logout POST every detail page's own Log Out
+  // button makes — not a write to `leads`, same exclusion the existing
+  // leads-list.js fetch test above already applies.
+  assert.ok(
+    !/method:\s*['"](POST|PATCH|DELETE|PUT)['"]/.test(src.replace(/fetch\('\/api\/admin\/logout', \{ method: 'POST' \}\)/, "")),
+    "the Lead detail page must be read-only in this batch"
+  );
+});
+
+test("api/admin/lead.js: GET is read-only (never inserts/updates/deletes `leads`) and is scoped by id", () => {
+  const src = readNormalized("api/admin/lead.js");
+  const fnBody = src.slice(src.indexOf("async function handleGet("), src.indexOf("async function handleGet(") + 2500);
+  assert.ok(/\.select\(LEAD_DETAIL_COLS\)\.eq\("id", id\)/.test(fnBody), "must select the one requested lead by id");
+  assert.ok(!/\.insert\(/.test(fnBody) && !/\.update\(/.test(fnBody) && !/\.delete\(/.test(fnBody), "GET must never write to `leads`");
 });
 
 test("admin.css: defines the Leads section wrapper and all four source-badge color variants", () => {
@@ -152,14 +199,30 @@ test("admin.css: defines the Leads section wrapper and all four source-badge col
 // Cross-check against api/admin/bookings.js's own bucket keys, so the UI
 // and the server can never silently drift apart on section names — same
 // discipline as Batch 5's FIELD_LABELS/FIELD_KEYS cross-check test.
+//
+// UPDATED for the Leads sidebar redesign: the UI's own real section keys
+// (LEADS_REAL_BUCKET_KEYS, minus pendingIntake) are no longer a 1:1 match
+// with the server's 8 LEADS_BUCKET_LABELS keys — "websiteRequests" is a
+// real server bucket (the merged ?view=leads response still tags a
+// website-origin row that way) but has no section/list of its own in the
+// UI anymore; it's merged into "new" client-side. So this now asserts the
+// weaker, still-meaningful guarantee: every server bucket key is either a
+// real UI section OR is explicitly the one known client-side merge
+// (websiteRequests -> new), and leads-list.js actually performs that
+// merge (checked by the next test).
 // =======================================================================
-test("admin/leads/index.html's section keys exactly match api/admin/bookings.js's LEADS_BUCKET_LABELS keys (plus pendingIntake, which is intake.js's own list, not a bucket)", () => {
+test("admin/leads/index.html's real section keys plus the known websiteRequests->new merge exactly cover api/admin/bookings.js's LEADS_BUCKET_LABELS keys", () => {
   const serverSrc = readNormalized("api/admin/bookings.js");
   const match = serverSrc.match(/const LEADS_BUCKET_LABELS = \{([^}]*)\}/);
   assert.ok(match, "LEADS_BUCKET_LABELS must be defined in api/admin/bookings.js");
   const serverKeys = Array.from(match[1].matchAll(/^\s*(\w+):/gm)).map((m) => m[1]);
-  const uiKeysWithoutIntake = LEADS_SECTION_KEYS.filter((k) => k !== "pendingIntake");
+  const uiKeysWithoutIntake = LEADS_REAL_BUCKET_KEYS.filter((k) => k !== "pendingIntake").concat(["websiteRequests"]);
   assert.deepStrictEqual(serverKeys.sort(), uiKeysWithoutIntake.sort());
+});
+
+test("admin/leads-list.js: the New bucket is rendered from sections.new concatenated with sections.websiteRequests (the one client-side merge the cross-check above relies on)", () => {
+  const src = readNormalized("admin/leads-list.js");
+  assert.ok(/renderSection\('new', \(sections\.new \|\| \[\]\)\.concat\(sections\.websiteRequests \|\| \[\]\), renderLeadCard\)/.test(src));
 });
 
 // Preview QA finding (2026-10): api/admin/bookings.js's ?view=leads now
@@ -179,12 +242,16 @@ test("admin/leads-list.js: surfaces leadsBody.sectionErrors via the existing err
 // harness, so the tab-switching logic is verified by reading the actual
 // source text, same as every other client-side test in this suite.
 // =======================================================================
-test("admin/leads-list.js: SECTION_ORDER is exactly the 9 requested tabs, in the requested order", () => {
+// UPDATED for the Leads sidebar redesign: 9 entries again, but
+// "needsAttention" (the new smart combined view) now leads, and
+// "websiteRequests" is gone (merged into "new" — see the cross-check
+// tests above).
+test("admin/leads-list.js: SECTION_ORDER is exactly the 9 sidebar entries, in sidebar order", () => {
   const src = readNormalized("admin/leads-list.js");
   const m = src.match(/var SECTION_ORDER = \[([^\]]+)\]/);
   assert.ok(m, "SECTION_ORDER must be defined");
   const keys = m[1].split(",").map((s) => s.trim().replace(/'/g, ""));
-  assert.deepStrictEqual(keys, ["pendingIntake", "websiteRequests", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"]);
+  assert.deepStrictEqual(keys, ["needsAttention", "pendingIntake", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"]);
 });
 
 test("admin/leads-list.js: selectBucket() shows exactly the selected section and hides every other one (one bucket visible at a time)", () => {
@@ -194,10 +261,10 @@ test("admin/leads-list.js: selectBucket() shows exactly the selected section and
   assert.ok(/sectionEl\.hidden = k !== key/.test(fnSrc), "every section not matching the selected key must be hidden");
 });
 
-test("admin/leads-list.js: clicking a tab calls selectBucket with that tab's data-bucket (delegated click handler on the tab bar)", () => {
+test("admin/leads-list.js: clicking a sidebar item calls selectBucket with its data-bucket (delegated click handler on the sidebar)", () => {
   const src = readNormalized("admin/leads-list.js");
-  assert.ok(/tabsEl\.addEventListener\('click'/.test(src));
-  assert.ok(/closest\(['"]\.admin-leads-tab['"]\)/.test(src));
+  assert.ok(/sidebar\.addEventListener\('click'/.test(src));
+  assert.ok(/closest\(['"]\[data-bucket\]['"]\)/.test(src));
   assert.ok(/selectBucket\(btn\.getAttribute\('data-bucket'\)\)/.test(src));
 });
 
@@ -208,17 +275,28 @@ test("admin/leads-list.js: count badges show the real count when non-zero and st
   assert.ok(/n > 99 \? '99\+' : String\(n\)/.test(fnSrc), "must cap the displayed count the same way nav-badge.js already does");
 });
 
-test("admin/leads-list.js: defaultBucket() picks the first non-empty bucket in SECTION_ORDER — satisfies the full cascade (Pending Intake, then Website Requests, then the active pipeline, Booked/Won and Lost last) from one simple rule", () => {
+test("admin/leads-list.js: renderNeedsAttention() sums the 4 actionable buckets (Pending Intake, New, Waiting on Photos, Follow Up) and toggles its own sidebar badge the same hidden-at-zero way", () => {
+  const src = readNormalized("admin/leads-list.js");
+  const fnSrc = src.slice(src.indexOf("function renderNeedsAttention"), src.indexOf("function renderNeedsAttention") + 1200);
+  assert.ok(/NEEDS_ATTENTION_KEYS\.forEach/.test(fnSrc));
+  assert.ok(/badge\.hidden = false/.test(fnSrc) && /badge\.hidden = true/.test(fnSrc));
+  const keysMatch = src.match(/var NEEDS_ATTENTION_KEYS = \[([^\]]+)\]/);
+  assert.ok(keysMatch, "NEEDS_ATTENTION_KEYS must be defined");
+  const keys = keysMatch[1].split(",").map((s) => s.trim().replace(/'/g, ""));
+  assert.deepStrictEqual(keys, ["pendingIntake", "new", "waitingOnPhotos", "followUp"]);
+});
+
+test("admin/leads-list.js: defaultBucket() picks the first non-empty bucket in SECTION_ORDER — satisfies the full cascade (Needs Attention first, then Pending Intake, then the active pipeline, Booked/Won and Lost last) from one simple rule", () => {
   const src = readNormalized("admin/leads-list.js");
   const fnSrc = src.slice(src.indexOf("function defaultBucket"), src.indexOf("function defaultBucket") + 400);
   assert.ok(/for \(var i = 0; i < SECTION_ORDER\.length; i\+\+\)/.test(fnSrc), "must walk SECTION_ORDER in order");
   assert.ok(/counts\[SECTION_ORDER\[i\]\] > 0/.test(fnSrc), "must return the first bucket with a non-zero count");
-  assert.ok(/return SECTION_ORDER\[0\]/.test(fnSrc), "must fall back to the first tab (Pending Intake) when every bucket is empty, rather than showing nothing selected");
+  assert.ok(/return SECTION_ORDER\[0\]/.test(fnSrc), "must fall back to the first sidebar item (Needs Attention) when every bucket is empty, rather than showing nothing selected");
 });
 
-test("admin/leads-list.js: finish() selects a bucket after rendering (a tab is always active once loading completes)", () => {
+test("admin/leads-list.js: finish() selects a bucket after rendering (a sidebar item is always active once loading completes)", () => {
   const src = readNormalized("admin/leads-list.js");
-  const fnSrc = src.slice(src.indexOf("function finish"), src.indexOf("function finish") + 400);
+  const fnSrc = src.slice(src.indexOf("function finish"), src.indexOf("function finish") + 700);
   // Phase 3C Stage 5D: selectBucket() now takes requestedBucket() ||
   // defaultBucket() — a Confirm Booking/Confirm as Lead redirect can land
   // on a specific bucket (e.g. ?bucket=new) — but defaultBucket() must

@@ -2790,3 +2790,393 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 }
 .admin-client-row-meta-text { text-align: right; }
 .admin-client-row-chevron { flex: none; color: var(--color-neutral-400, #c0b6a5); }
+
+/* ===========================================================================
+   UI batch — Home dashboard + Leads sidebar redesign. Shared dark-sidebar
+   shell used by both /admin/home/ and /admin/leads/ (two different pages,
+   same layout primitive — admin/home.js and admin/leads-list.js each wire
+   their own mobile-drawer toggle independently, matching this project's
+   established per-file convention rather than a shared script).
+
+   Desktop (>=860px, the same breakpoint .admin-header-nav/.admin-bottom-nav
+   already switch on): a fixed-width dark column on the left, content filling
+   the rest. Mobile: the sidebar becomes an off-canvas drawer (hidden by
+   default, slides in over a backdrop), reachable via a small toggle button
+   above the page content.
+   =========================================================================== */
+/* Negative margins exactly cancel .admin-main's own padding (14/14/88
+   mobile, 24/28/56 desktop — see .admin-main above) so the dark sidebar can
+   bleed to the edges of the centered content column instead of sitting
+   inset inside it; .admin-dash-content below reintroduces that same
+   padding for the actual page content so nothing else about .admin-main
+   (its max-width/centering) needs to change for these two pages. */
+.admin-dash-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin: -14px -14px -88px;
+}
+@media (min-width: 860px) {
+  .admin-dash-shell { margin: -24px -28px -56px; gap: 24px; }
+}
+
+.admin-dash-sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  margin: 14px 14px 12px;
+  border-radius: var(--admin-radius-md);
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  background: #fff;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text, #201e1d);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (min-width: 860px) {
+  .admin-dash-sidebar-toggle { display: none; }
+}
+
+.admin-dash-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 21, 15, 0.45);
+  z-index: 29;
+}
+.admin-dash-sidebar-backdrop[hidden] { display: none; }
+@media (min-width: 860px) {
+  .admin-dash-sidebar-backdrop { display: none !important; }
+}
+
+.admin-dash-sidebar {
+  flex: none;
+  width: 240px;
+  background: var(--color-dark, #14150f);
+  padding: 20px 14px 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Mobile: an off-canvas drawer, hidden until .is-open toggles the
+   transform. Fixed (not absolute) so it overlays the page content
+   regardless of scroll position. */
+@media (max-width: 859px) {
+  .admin-dash-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    overflow-y: auto;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+  }
+  .admin-dash-sidebar.is-open { transform: translateX(0); }
+}
+@media (min-width: 860px) {
+  .admin-dash-sidebar { border-radius: 0 var(--admin-radius-lg) var(--admin-radius-lg) 0; margin-top: 24px; }
+}
+
+.admin-dash-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--admin-radius-md);
+  background: transparent;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14.5px;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.admin-dash-nav-link svg { flex: none; }
+.admin-dash-nav-link span.admin-dash-nav-link-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.admin-dash-nav-link:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.admin-dash-nav-link.is-active {
+  background: var(--color-accent-700, #2f6f13);
+  color: #fff;
+}
+.admin-dash-nav-link .admin-nav-badge { background: rgba(255, 255, 255, 0.22); }
+.admin-dash-nav-link.is-active .admin-nav-badge { background: rgba(255, 255, 255, 0.3); }
+
+.admin-dash-sidebar-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 14px 10px;
+}
+.admin-dash-sidebar-label {
+  padding: 4px 12px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.admin-dash-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 14px 14px 88px;
+}
+@media (min-width: 860px) {
+  .admin-dash-content { padding: 24px 28px 56px; max-width: 1000px; }
+}
+
+/* ---------------------------------------------------------------------
+   Home dashboard — greeting header, 4 summary cards, compact Today's
+   Schedule / Leads Needing Attention lists, bottom 3-card summary row.
+   --------------------------------------------------------------------- */
+.admin-dash-greeting h1 {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: clamp(20px, 5vw, 26px);
+  margin: 0 0 4px;
+}
+.admin-dash-greeting-sub {
+  font-size: 14px;
+  color: var(--color-neutral-700, #645c50);
+  margin-bottom: 20px;
+}
+
+.admin-dash-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+@media (min-width: 620px) {
+  .admin-dash-stats-grid { grid-template-columns: repeat(4, 1fr); }
+}
+.admin-dash-stat-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.admin-dash-stat-label {
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 8px;
+}
+.admin-dash-stat-value {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 26px;
+  color: var(--color-text, #201e1d);
+  line-height: 1.1;
+}
+.admin-dash-stat-sub {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+}
+/* "Needs attention" cards get the brand-green treatment on their value so
+   the two actionable counters (Leads Need Attention / Follow Ups Due) read
+   as a different weight than the two informational ones. */
+.admin-dash-stat-card.is-attention .admin-dash-stat-value { color: var(--color-accent-700, #2f6f13); }
+
+.admin-dash-section { margin-bottom: 28px; }
+.admin-dash-section-foot { margin-top: 12px; text-align: right; }
+.admin-dash-section-foot a {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
+  text-decoration: none;
+}
+
+/* Compact rows — Today's Schedule / Leads Needing Attention. Deliberately
+   lighter than a full .admin-booking-card (no border-left accent, tighter
+   padding) — these are a glanceable preview, not the canonical list; "View
+   Schedule"/"View Leads" is where the full card treatment lives. */
+.admin-dash-row-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.admin-dash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-md);
+  padding: 10px 12px;
+}
+.admin-dash-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.admin-dash-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.admin-dash-row-time {
+  font-weight: 800;
+  font-size: 13.5px;
+  color: var(--color-accent-700, #2f6f13);
+  flex: none;
+}
+.admin-dash-row-name {
+  font-weight: 800;
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-dash-row-meta {
+  font-size: 12.5px;
+  color: var(--color-neutral-600, #82796a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-dash-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.admin-dash-row-call {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--admin-radius-full);
+  background: var(--admin-tint);
+  color: var(--color-accent-700, #2f6f13);
+  flex: none;
+}
+.admin-dash-row-call svg { flex: none; }
+
+.admin-dash-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 760px) {
+  .admin-dash-bottom-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.admin-dash-bottom-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 16px;
+}
+.admin-dash-bottom-card h3 {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-neutral-700, #645c50);
+  margin: 0 0 12px;
+}
+.admin-dash-week-total {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 24px;
+  margin-bottom: 10px;
+}
+/* A deliberately simple 7-bar sparkline — no charting dependency. Bars
+   sized by inline style (JS sets height %), this file only lays out the
+   row/baseline. */
+.admin-dash-sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 56px;
+}
+.admin-dash-sparkline-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--color-accent-700, #2f6f13);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.25;
+}
+.admin-dash-sparkline-bar.is-today { opacity: 1; }
+
+.admin-dash-pipeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--color-neutral-100, #f9f4ed);
+  font-size: 13.5px;
+}
+.admin-dash-pipeline-row:last-child { border-bottom: none; }
+.admin-dash-pipeline-row-label { display: flex; align-items: center; gap: 8px; color: var(--color-text, #201e1d); font-weight: 600; }
+.admin-dash-pipeline-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.admin-dash-pipeline-row-count { font-weight: 800; color: var(--color-text, #201e1d); }
+
+.admin-dash-empty-note {
+  font-size: 13px;
+  color: var(--color-neutral-600, #82796a);
+  text-align: center;
+  padding: 16px 0;
+}
+
+/* ---------------------------------------------------------------------
+   Leads sidebar redesign — replaces the old horizontal 9-pill tab row
+   (.admin-leads-tabs, left in place above for any page that still
+   references it, though admin/leads/index.html no longer does) with the
+   dark sidebar nav shared with Home. "Needs Attention" gets a distinct
+   accent-dot instead of the plain is-active fill so it reads as a smart
+   view, not just another status.
+   --------------------------------------------------------------------- */
+.admin-leads-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.admin-leads-toolbar .admin-search-bar { flex: 1 1 220px; margin-bottom: 0; }
+
+/* Needs Attention — the composite view combining Pending Intake/New/
+   Waiting on Photos/Follow Up (see leads-list.js's renderNeedsAttention()).
+   Each group is just a small eyebrow label above that bucket's own cards —
+   never a second card shape. */
+.admin-leads-needs-attention-group { margin-bottom: 28px; }
+.admin-leads-needs-attention-group:last-child { margin-bottom: 0; }
+.admin-leads-needs-attention-group-label {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 12px;
+}
+

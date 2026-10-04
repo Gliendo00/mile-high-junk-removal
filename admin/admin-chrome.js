@@ -19,6 +19,7 @@
 // (which must use textContent for anything server/user-derived).
 (function () {
   var ICONS = {
+    home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/>',
     calendar: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>',
     leads: '<path d="M3 4h18l-7 9v6l-4 2v-8z"/>',
     people: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
@@ -43,6 +44,7 @@
   // (just the icon) in both navs — currently just Other Revenue, per
   // explicit request ("only a money sign icon").
   var SECTIONS = [
+    { key: 'home', href: '/admin/home/', label: 'Home', icon: 'home' },
     { key: 'schedule', href: '/admin/', label: 'Schedule', icon: 'calendar' },
     { key: 'leads', href: '/admin/leads/', label: 'Leads', icon: 'leads' },
     { key: 'clients', href: '/admin/clients/', label: 'Clients', icon: 'people' },
@@ -51,11 +53,16 @@
   ];
 
   // Which section is "current" — by URL path, so no page needs a data
-  // attribute or any other per-page marker. Booking/intake/request detail
-  // and sub-flow pages roll up to the section they're reached from.
+  // attribute or any other per-page marker. Booking/intake/request/lead
+  // detail and sub-flow pages roll up to the section they're reached from.
+  // Checked BEFORE the schedule fallback's own '/admin/' prefix (which would
+  // otherwise swallow every other path, '/admin/home/' included, since
+  // every admin path starts with '/admin/').
   function currentSectionKey() {
     var path = window.location.pathname;
+    if (path.indexOf('/admin/home/') === 0) return 'home';
     if (path.indexOf('/admin/leads/') === 0 ||
+        path.indexOf('/admin/lead/') === 0 ||
         path.indexOf('/admin/intake') === 0 ||
         path.indexOf('/admin/requests/') === 0) return 'leads';
     if (path.indexOf('/admin/client') === 0) return 'clients'; // /admin/client/ and /admin/clients/

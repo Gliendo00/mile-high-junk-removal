@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-chrome"></div>
+
+<main class="admin-main">
+  <div class="admin-dash-shell">
+    <button type="button" id="dash-sidebar-toggle" class="admin-dash-sidebar-toggle" aria-expanded="false" aria-controls="dash-sidebar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      Menu
+    </button>
+    <div id="dash-sidebar-backdrop" class="admin-dash-sidebar-backdrop" hidden></div>
+
+    <aside class="admin-dash-sidebar" id="dash-sidebar">
+      <a class="admin-dash-nav-link is-active" href="/admin/home/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg>
+        <span class="admin-dash-nav-link-label">Dashboard</span>
+      </a>
+      <a class="admin-dash-nav-link" href="/admin/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+        <span class="admin-dash-nav-link-label">Schedule</span>
+      </a>
+      <a class="admin-dash-nav-link" href="/admin/leads/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+        <span class="admin-dash-nav-link-label">Leads</span>
+      </a>
+      <a class="admin-dash-nav-link" href="/admin/clients/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="admin-dash-nav-link-label">Clients</span>
+      </a>
+      <a class="admin-dash-nav-link" href="/admin/expenses/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
+        <span class="admin-dash-nav-link-label">Expenses</span>
+      </a>
+
+      <div class="admin-dash-sidebar-divider"></div>
+      <div class="admin-dash-sidebar-label">Quick Actions</div>
+      <a class="admin-dash-nav-link" href="/admin/booking-new/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="admin-dash-nav-link-label">New Job</span>
+      </a>
+      <a class="admin-dash-nav-link" href="/admin/intake-new/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="admin-dash-nav-link-label">Drop a Lead</span>
+      </a>
+      <a class="admin-dash-nav-link" id="qa-add-expense" href="/admin/expenses/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="admin-dash-nav-link-label">Add Expense</span>
+      </a>
+      <a class="admin-dash-nav-link" id="qa-new-client" href="/admin/clients/">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span class="admin-dash-nav-link-label">New Client</span>
+      </a>
+    </aside>
+
+    <div class="admin-dash-content">
+      <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+      <div class="admin-dash-greeting">
+        <h1 id="dash-greeting">Good morning.</h1>
+        <div class="admin-dash-greeting-sub">Here's what's happening with Mile High Junk Removal today.</div>
+      </div>
+
+      <div id="loading" class="admin-loading">Loading dashboard…</div>
+
+      <div id="dash-body" style="display:none">
+        <div class="admin-dash-stats-grid">
+          <a href="/admin/" class="admin-dash-stat-card">
+            <div class="admin-dash-stat-label">Today's Jobs</div>
+            <div class="admin-dash-stat-value" id="stat-today-jobs">0</div>
+            <div class="admin-dash-stat-sub" id="stat-today-jobs-sub">—</div>
+          </a>
+          <a href="/admin/leads/" class="admin-dash-stat-card is-attention">
+            <div class="admin-dash-stat-label">Leads Need Attention</div>
+            <div class="admin-dash-stat-value" id="stat-leads-attention">0</div>
+            <div class="admin-dash-stat-sub" id="stat-leads-attention-sub">—</div>
+          </a>
+          <a href="/admin/" class="admin-dash-stat-card">
+            <div class="admin-dash-stat-label">Revenue Today</div>
+            <div class="admin-dash-stat-value" id="stat-revenue-today">$0</div>
+            <div class="admin-dash-stat-sub" id="stat-revenue-today-sub">—</div>
+          </a>
+          <a href="/admin/leads/?bucket=followUp" class="admin-dash-stat-card is-attention">
+            <div class="admin-dash-stat-label">Follow Ups Due</div>
+            <div class="admin-dash-stat-value" id="stat-followups">0</div>
+            <div class="admin-dash-stat-sub" id="stat-followups-sub">—</div>
+          </a>
+        </div>
+
+        <div class="admin-dash-section">
+          <div class="admin-section-header">
+            <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <span class="admin-section-header-label">Today's Schedule</span>
+          </div>
+          <div id="today-schedule-list" class="admin-dash-row-list"></div>
+          <div id="today-schedule-empty" class="admin-dash-empty-note" style="display:none">No jobs scheduled today.</div>
+          <div class="admin-dash-section-foot"><a href="/admin/">View Schedule &rarr;</a></div>
+        </div>
+
+        <div class="admin-dash-section">
+          <div class="admin-section-header">
+            <svg class="admin-section-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+            <span class="admin-section-header-label">Leads Needing Attention</span>
+          </div>
+          <div id="attention-list" class="admin-dash-row-list"></div>
+          <div id="attention-empty" class="admin-dash-empty-note" style="display:none">All caught up — nothing needs attention right now.</div>
+          <div class="admin-dash-section-foot"><a href="/admin/leads/">View Leads &rarr;</a></div>
+        </div>
+
+        <div class="admin-dash-bottom-grid">
+          <div class="admin-dash-bottom-card">
+            <h3>Revenue This Week</h3>
+            <div class="admin-dash-week-total" id="week-revenue-total">$0</div>
+            <div class="admin-dash-sparkline" id="week-sparkline"></div>
+          </div>
+          <div class="admin-dash-bottom-card">
+            <h3>Lead Pipeline</h3>
+            <div id="pipeline-list"></div>
+          </div>
+          <div class="admin-dash-bottom-card">
+            <h3>Pending Intake</h3>
+            <div id="pending-intake-summary"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../phone-format.js"></script>
+<script src="../home.js"></script>
+</body>
+</html>

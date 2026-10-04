@@ -21,10 +21,17 @@ function test(name, fn) {
 // =======================================================================
 // Leads — 2-column desktop grid, exactly 2 chips, no redundant status text
 // =======================================================================
-test("admin/leads/index.html: all 9 bucket <ul> lists carry .admin-leads-grid", () => {
+// UPDATED for the Leads sidebar redesign (UI batch, 2026-10): "Website
+// Requests" is no longer its own bucket <ul> — its items are merged
+// client-side into "New" (a source, not a stage; see leads-list.js's own
+// header) — leaving 8 real bucket <ul> lists. "Needs Attention" (the new
+// smart combined view) has no <ul id="list-...">  of its own at all: it's
+// a composite <section> leads-list.js's renderNeedsAttention() fills with
+// grouped clones of the SAME 8 buckets' own cards, not a 9th data source.
+test("admin/leads/index.html: all 8 real bucket <ul> lists carry .admin-leads-grid", () => {
   const html = read("admin/leads/index.html");
   const matches = html.match(/<ul class="admin-booking-list admin-leads-grid" id="list-\w+">/g) || [];
-  assert.strictEqual(matches.length, 9, "expected all 9 bucket lists to carry the grid class, found " + matches.length);
+  assert.strictEqual(matches.length, 8, "expected all 8 real bucket lists to carry the grid class, found " + matches.length);
 });
 
 test("admin/admin.css: .admin-leads-grid is a single column by default and exactly 2 columns above its breakpoint (not 1, not 3)", () => {
@@ -45,9 +52,13 @@ test("admin/leads-list.js: renderLeadCard() renders exactly 2 chips (source + st
   assert.ok(!/admin-lead-card-status/.test(fnBody), "the old redundant plain-text status span must be gone");
 });
 
-test("admin/leads-list.js: BUCKET_CHIP_CLASS covers all 9 Leads buckets, each mapped to its own admin-lead-bucket-* chip color", () => {
+// UPDATED for the Leads sidebar redesign: "websiteRequests" is no longer a
+// chip-color key of its own — a merged website-origin card now renders
+// with bucketKey 'new' (it still carries its own distinct SOURCE badge,
+// "Website", which is what actually communicates where it came from).
+test("admin/leads-list.js: BUCKET_CHIP_CLASS covers all 8 real Leads buckets, each mapped to its own admin-lead-bucket-* chip color", () => {
   const src = read("admin/leads-list.js");
-  const buckets = ["pendingIntake", "websiteRequests", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"];
+  const buckets = ["pendingIntake", "new", "contacted", "waitingOnPhotos", "estimateSent", "followUp", "bookedWon", "lost"];
   buckets.forEach((b) => {
     assert.ok(new RegExp(b + ": 'admin-lead-bucket-" + b + "'").test(src), "missing chip-class mapping for bucket: " + b);
   });

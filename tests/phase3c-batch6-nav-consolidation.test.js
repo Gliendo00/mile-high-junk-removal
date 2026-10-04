@@ -84,12 +84,16 @@ ALL_NAV_PAGES.forEach((rel) => {
 // admin.css). This is a real, intentional addition, not a regression of
 // this test's own Batch 6 guarantee — Requests/Intakes are still not nav
 // destinations, which remains the actual thing this test protects.
-test("admin/admin-chrome.js: nav is exactly Schedule, Leads, Clients, Expenses, Other Revenue, in that order, with no Requests/Intakes destination", () => {
+//
+// UPDATED AGAIN (Home dashboard UI batch, 2026-10): a 6th destination,
+// Home, was added FIRST (before Schedule) — the new /admin/home/
+// operational-overview landing page. Same non-regression note applies.
+test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, in that order, with no Requests/Intakes destination", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
   const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(labels, ["Schedule", "Leads", "Clients", "Expenses", "Other Revenue"]);
+  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue"]);
   assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
