@@ -78,14 +78,28 @@ ALL_NAV_PAGES.forEach((rel) => {
   });
 });
 
-test("admin/admin-chrome.js: nav is exactly Schedule, Leads, Clients, Expenses, in that order, with no Requests/Intakes destination", () => {
+// UPDATED (2026-10, money-mascot nav icon): a 5th destination, Other
+// Revenue, was deliberately added after Expenses — icon-only (the branded
+// mascot image, no text label; see .admin-nav-item-icon-only in
+// admin.css). This is a real, intentional addition, not a regression of
+// this test's own Batch 6 guarantee — Requests/Intakes are still not nav
+// destinations, which remains the actual thing this test protects.
+test("admin/admin-chrome.js: nav is exactly Schedule, Leads, Clients, Expenses, Other Revenue, in that order, with no Requests/Intakes destination", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
   const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(labels, ["Schedule", "Leads", "Clients", "Expenses"]);
+  assert.deepStrictEqual(labels, ["Schedule", "Leads", "Clients", "Expenses", "Other Revenue"]);
   assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
+});
+
+test("admin/admin-chrome.js: Other Revenue's nav entry is icon-only (iconOnly: true) — the mascot image stands alone with no visible text label", () => {
+  const src = readNormalized("admin/admin-chrome.js");
+  const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
+  const otherRevenueEntry = sectionsMatch[1].split(/\},?\s*\n/).find((line) => /key:\s*'other-revenue'/.test(line));
+  assert.ok(otherRevenueEntry, "other-revenue entry not found in SECTIONS");
+  assert.ok(/iconOnly:\s*true/.test(otherRevenueEntry));
 });
 
 // =======================================================================

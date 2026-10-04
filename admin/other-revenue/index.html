@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Other Revenue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-chrome"></div>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <!-- Moved out of /admin/expenses/ onto its own page/nav destination
+       (was a same-page tab, admin-range-tabs, alongside Expenses) — see
+       admin/admin-chrome.js's SECTIONS entry for the nav side of this.
+       Markup/ids are otherwise unchanged from the panel this replaces, so
+       admin/other-revenue.js (split out of admin/expenses.js) needed no
+       id renaming. -->
+  <div class="admin-list-heading">
+    <h1>Other Revenue</h1>
+    <div class="admin-list-heading-actions">
+      <button type="button" id="add-other-revenue-btn" class="admin-btn admin-btn-primary">+ Add Revenue</button>
+    </div>
+  </div>
+
+  <div id="other-revenue-total-summary" class="admin-expense-total-summary">Loading…</div>
+
+  <button type="button" id="other-revenue-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
+  <div id="other-revenue-filters-backdrop" class="admin-sheet-overlay" hidden></div>
+  <div class="admin-expense-filters" id="other-revenue-filters">
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="or-filter-start-date">From</label>
+        <input type="date" id="or-filter-start-date" class="admin-expense-filter-input">
+      </div>
+      <div class="admin-field">
+        <label for="or-filter-end-date">To</label>
+        <input type="date" id="or-filter-end-date" class="admin-expense-filter-input">
+      </div>
+    </div>
+    <div class="admin-field">
+      <label for="or-filter-type">Type</label>
+      <select id="or-filter-type" class="admin-expense-filter-input">
+        <option value="">All types</option>
+      </select>
+    </div>
+    <label class="admin-expense-voided-toggle">
+      <input type="checkbox" id="or-filter-include-voided">
+      Show voided entries
+    </label>
+  </div>
+
+  <div id="or-loading" class="admin-loading">Loading other revenue…</div>
+  <div id="or-empty" class="admin-empty" style="display:none">No other revenue entries match these filters.</div>
+  <ul id="other-revenue-list" class="admin-booking-list" style="display:none"></ul>
+</main>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../other-revenue.js"></script>
+</body>
+</html>

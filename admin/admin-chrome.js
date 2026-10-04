@@ -30,13 +30,24 @@
       'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
   }
 
+  // Other Revenue's nav icon is the branded money mascot (a raster image),
+  // not a line-art SVG like the other 4 — deliberately different, per
+  // Rocky's own choice. Kept as its own small builder rather than forcing
+  // it through icon()'s SVG-only signature.
+  function mascotIcon(cls) {
+    return '<img class="' + cls + '" src="/images/mile-high-money-mascot.png" alt="" width="26" height="26">';
+  }
+
   // Section destinations — single source of truth for both the desktop nav
-  // and the mobile bottom nav.
+  // and the mobile bottom nav. iconOnly sections render with no text label
+  // (just the icon) in both navs — currently just Other Revenue, per
+  // explicit request ("only a money sign icon").
   var SECTIONS = [
     { key: 'schedule', href: '/admin/', label: 'Schedule', icon: 'calendar' },
     { key: 'leads', href: '/admin/leads/', label: 'Leads', icon: 'leads' },
     { key: 'clients', href: '/admin/clients/', label: 'Clients', icon: 'people' },
-    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses', icon: 'receipt' }
+    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses', icon: 'receipt' },
+    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue', icon: 'mascot', iconOnly: true }
   ];
 
   // Which section is "current" — by URL path, so no page needs a data
@@ -48,27 +59,32 @@
         path.indexOf('/admin/intake') === 0 ||
         path.indexOf('/admin/requests/') === 0) return 'leads';
     if (path.indexOf('/admin/client') === 0) return 'clients'; // /admin/client/ and /admin/clients/
+    if (path.indexOf('/admin/other-revenue/') === 0) return 'other-revenue';
     if (path.indexOf('/admin/expenses/') === 0) return 'expenses';
     return 'schedule'; // /admin/, /admin/booking*/
+  }
+
+  function sectionIcon(s, cls) {
+    return s.icon === 'mascot' ? mascotIcon(cls) : icon(s.icon, cls);
   }
 
   function buildDesktopNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + '"' +
-        (active ? ' aria-current="page"' : '') + '>' +
-        icon(s.icon, 'admin-nav-item-icon') +
-        '<span>' + s.label + '</span></a>';
+      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + (s.iconOnly ? ' admin-nav-item-icon-only' : '') + '"' +
+        (active ? ' aria-current="page"' : '') + (s.iconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
+        sectionIcon(s, 'admin-nav-item-icon') +
+        (s.iconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
     }).join('');
   }
 
   function buildBottomNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + '"' +
-        (active ? ' aria-current="page"' : '') + '>' +
-        icon(s.icon, 'admin-bottom-nav-item-icon') +
-        '<span>' + s.label + '</span></a>';
+      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + (s.iconOnly ? ' admin-bottom-nav-item-icon-only' : '') + '"' +
+        (active ? ' aria-current="page"' : '') + (s.iconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
+        sectionIcon(s, 'admin-bottom-nav-item-icon') +
+        (s.iconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
     }).join('');
   }
 

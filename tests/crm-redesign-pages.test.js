@@ -75,19 +75,31 @@ test("admin/clients-list.js: never uses innerHTML/insertAdjacentHTML (icon built
 // =======================================================================
 // Expenses — compact filter bar, mobile Filters(N) sheet
 // =======================================================================
-["expense", "other-revenue"].forEach((prefix) => {
-  test("admin/expenses/index.html: " + prefix + " panel has a Filters toggle + .admin-sheet-overlay backdrop wired to the unchanged filter fields", () => {
-    const html = read("admin/expenses/index.html");
+// Other Revenue moved off this page onto its own (admin/other-revenue/ +
+// admin/other-revenue.js) — see admin/admin-chrome.js's SECTIONS entry.
+// Each file keeps the exact same ids/wiring it always had, just split
+// across two pages instead of one tab row.
+[
+  { prefix: "expense", htmlRel: "admin/expenses/index.html" },
+  { prefix: "other-revenue", htmlRel: "admin/other-revenue/index.html" },
+].forEach(({ prefix, htmlRel }) => {
+  test(htmlRel + ": " + prefix + " panel has a Filters toggle + .admin-sheet-overlay backdrop wired to the unchanged filter fields", () => {
+    const html = read(htmlRel);
     assert.ok(new RegExp('id="' + prefix + '-filters-toggle"').test(html));
     assert.ok(new RegExp('id="' + prefix + '-filters-backdrop" class="admin-sheet-overlay" hidden').test(html), "must reuse the existing .admin-sheet-overlay class as-is for the backdrop");
     assert.ok(new RegExp('id="' + prefix + '-filters"').test(html));
   });
 });
 
-test("admin/expenses.js: wireFilterSheet() opens/closes via the toggle + backdrop and recomputes an active-filter count — the existing filter-apply listeners (loadList/loadOtherRevenueList) are untouched", () => {
+test("admin/expenses.js: wireFilterSheet() opens/closes via the toggle + backdrop and recomputes an active-filter count — the existing loadList filter-apply listener is untouched", () => {
   const src = read("admin/expenses.js");
   assert.ok(/function wireFilterSheet\(/.test(src));
   assert.ok(/input\.addEventListener\('change', loadList\);/.test(src), "the original filter -> loadList wiring must still be present, unchanged");
+});
+
+test("admin/other-revenue.js: wireFilterSheet() (its own copy) opens/closes via the toggle + backdrop and recomputes an active-filter count — the loadOtherRevenueList filter-apply listener is untouched", () => {
+  const src = read("admin/other-revenue.js");
+  assert.ok(/function wireFilterSheet\(/.test(src));
   assert.ok(/input\.addEventListener\('change', loadOtherRevenueList\);/.test(src));
 });
 

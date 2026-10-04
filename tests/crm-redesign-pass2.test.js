@@ -89,10 +89,18 @@ test("admin/admin.css: desktop .admin-main widened past the original 1040px", ()
 // =======================================================================
 // Expenses — structured totals hierarchy, Expenses vs Other Revenue color
 // =======================================================================
-test("admin/expenses.js: both totals handlers build structured label/value/count nodes instead of one plain-text string", () => {
+test("admin/expenses.js: its totals handler builds structured label/value/count nodes instead of one plain-text string", () => {
   const src = read("admin/expenses.js");
   assert.ok(/admin-expense-total-label/.test(src));
   assert.ok(/admin-expense-total-value/.test(src));
+});
+
+// Other Revenue's own totals handler (same structured-nodes pattern, plus
+// the distinct revenue color modifier) now lives in admin/other-revenue.js
+// — split out of admin/expenses.js onto its own page.
+test("admin/other-revenue.js: its totals handler builds structured label/value/count nodes, with the distinct revenue color modifier", () => {
+  const src = read("admin/other-revenue.js");
+  assert.ok(/admin-expense-total-label/.test(src));
   assert.ok(/admin-expense-total-value-revenue/.test(src), "Other Revenue's total must carry the distinct revenue color modifier");
 });
 

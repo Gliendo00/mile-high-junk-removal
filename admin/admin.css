@@ -134,6 +134,20 @@
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
 }
+/* Other Revenue's nav entry — icon only (the branded money mascot image),
+   no text label. Square/centered instead of the icon+label pill the other
+   4 destinations use. */
+.admin-nav-item-icon-only {
+  gap: 0;
+  padding: 0;
+  width: 40px;
+  justify-content: center;
+}
+.admin-nav-item-icon-only .admin-nav-item-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
 
 .admin-header-right {
   display: flex;
@@ -199,6 +213,13 @@
 .admin-bottom-nav-item-icon { flex: none; }
 .admin-bottom-nav-item.is-active {
   color: var(--color-accent-700, #2f6f13);
+}
+/* Other Revenue's bottom-nav entry — icon only (the branded money mascot
+   image), no text label, same reasoning as .admin-nav-item-icon-only. */
+.admin-bottom-nav-item-icon-only .admin-bottom-nav-item-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
 }
 
 /* Requests nav badge — a small restrained count, not an alert. Deliberately

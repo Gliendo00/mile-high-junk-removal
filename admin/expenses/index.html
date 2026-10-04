@@ -19,139 +19,83 @@
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-  <!-- Phase 3C Stage 6 (Batch 3): Other Revenue (Metal Recycling, Resale
-       Sales) is a sibling ledger to Expenses, managed on this same page —
-       reuses .admin-range-tabs/.admin-range-tab (the same tab-row component
-       admin/schedule.js's Today/Tomorrow/Week tabs already use) as a
-       within-page switcher rather than a second nav entry or a new page. -->
-  <div class="admin-range-tabs" role="tablist" aria-label="Financial ledger">
-    <button type="button" class="admin-range-tab is-active" id="ledger-tab-expenses" role="tab" aria-selected="true">Expenses</button>
-    <button type="button" class="admin-range-tab" id="ledger-tab-other-revenue" role="tab" aria-selected="false">Other Revenue</button>
+  <div class="admin-list-heading">
+    <h1>Expenses</h1>
+    <div class="admin-list-heading-actions">
+      <button type="button" id="add-expense-btn" class="admin-btn admin-btn-primary">+ Add Expense</button>
+    </div>
   </div>
 
-  <div id="expenses-panel">
-    <div class="admin-list-heading">
-      <h1>Expenses</h1>
-      <div class="admin-list-heading-actions">
-        <button type="button" id="add-expense-btn" class="admin-btn admin-btn-primary">+ Add Expense</button>
-      </div>
-    </div>
+  <div id="expense-total-summary" class="admin-expense-total-summary">Loading…</div>
 
-    <div id="expense-total-summary" class="admin-expense-total-summary">Loading…</div>
-
-    <!-- Filters — Date range, Category, Payment Method, Job, Search. Kept as
-         plain native form controls (real <select>/<input type="date">,
-         already a genuine dropdown/date-picker — not a hand-built popover)
-         since several of these are free text/date inputs, not a small
-         fixed set of pill choices. CRM visual redesign: laid out as one
-         compact flex-wrap row on desktop (admin.css visually hides each
-         <label>, read by a screen reader); collapses into a real bottom
-         sheet on mobile (reusing .admin-sheet-overlay as-is for the
-         backdrop), opened via the "Filters" button below — see
-         admin/expenses.js for the open/close + active-count wiring. -->
-    <button type="button" id="expense-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
-    <div id="expense-filters-backdrop" class="admin-sheet-overlay" hidden></div>
-    <div class="admin-expense-filters" id="expense-filters">
-      <div class="admin-field-row">
-        <div class="admin-field">
-          <label for="filter-start-date">From</label>
-          <input type="date" id="filter-start-date" class="admin-expense-filter-input">
-        </div>
-        <div class="admin-field">
-          <label for="filter-end-date">To</label>
-          <input type="date" id="filter-end-date" class="admin-expense-filter-input">
-        </div>
-      </div>
-      <div class="admin-field-row">
-        <div class="admin-field">
-          <label for="filter-category">Category</label>
-          <select id="filter-category" class="admin-expense-filter-input">
-            <option value="">All categories</option>
-          </select>
-        </div>
-        <div class="admin-field">
-          <label for="filter-payment-method">Payment Method</label>
-          <select id="filter-payment-method" class="admin-expense-filter-input">
-            <option value="">All methods</option>
-          </select>
-        </div>
+  <!-- Filters — Date range, Category, Payment Method, Job, Search. Kept as
+       plain native form controls (real <select>/<input type="date">,
+       already a genuine dropdown/date-picker — not a hand-built popover)
+       since several of these are free text/date inputs, not a small
+       fixed set of pill choices. CRM visual redesign: laid out as one
+       compact flex-wrap row on desktop (admin.css visually hides each
+       <label>, read by a screen reader); collapses into a real bottom
+       sheet on mobile (reusing .admin-sheet-overlay as-is for the
+       backdrop), opened via the "Filters" button below — see
+       admin/expenses.js for the open/close + active-count wiring. -->
+  <button type="button" id="expense-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
+  <div id="expense-filters-backdrop" class="admin-sheet-overlay" hidden></div>
+  <div class="admin-expense-filters" id="expense-filters">
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="filter-start-date">From</label>
+        <input type="date" id="filter-start-date" class="admin-expense-filter-input">
       </div>
       <div class="admin-field">
-        <label for="filter-search">Search</label>
-        <input type="search" id="filter-search" class="admin-expense-filter-input" placeholder="Vendor or note" autocomplete="off">
-      </div>
-      <div class="admin-field-row">
-        <div class="admin-field">
-          <label for="filter-sort">Sort by</label>
-          <select id="filter-sort" class="admin-expense-filter-input">
-            <option value="expenseDate">Date</option>
-            <option value="amount">Amount</option>
-            <option value="category">Category</option>
-            <option value="vendor">Vendor</option>
-          </select>
-        </div>
-        <div class="admin-field">
-          <label for="filter-sort-dir">Order</label>
-          <select id="filter-sort-dir" class="admin-expense-filter-input">
-            <option value="desc">Newest / highest first</option>
-            <option value="asc">Oldest / lowest first</option>
-          </select>
-        </div>
-      </div>
-      <label class="admin-expense-voided-toggle">
-        <input type="checkbox" id="filter-include-voided">
-        Show voided expenses
-      </label>
-    </div>
-
-    <div id="loading" class="admin-loading">Loading expenses…</div>
-    <div id="empty" class="admin-empty" style="display:none">No expenses match these filters.</div>
-    <ul id="expense-list" class="admin-booking-list" style="display:none"></ul>
-  </div>
-
-  <!-- Phase 3C Stage 6 (Batch 3): Other Revenue panel — money received that
-       is NOT a job's own amount (Metal Recycling, Resale Sales). Hidden by
-       default; admin/expenses.js's tab switcher shows exactly one panel at
-       a time and loads that panel's own list on first switch. -->
-  <div id="other-revenue-panel" hidden>
-    <div class="admin-list-heading">
-      <h1>Other Revenue</h1>
-      <div class="admin-list-heading-actions">
-        <button type="button" id="add-other-revenue-btn" class="admin-btn admin-btn-primary">+ Add Revenue</button>
+        <label for="filter-end-date">To</label>
+        <input type="date" id="filter-end-date" class="admin-expense-filter-input">
       </div>
     </div>
-
-    <div id="other-revenue-total-summary" class="admin-expense-total-summary">Loading…</div>
-
-    <button type="button" id="other-revenue-filters-toggle" class="admin-btn admin-btn-outline admin-expense-filters-toggle">Filters</button>
-    <div id="other-revenue-filters-backdrop" class="admin-sheet-overlay" hidden></div>
-    <div class="admin-expense-filters" id="other-revenue-filters">
-      <div class="admin-field-row">
-        <div class="admin-field">
-          <label for="or-filter-start-date">From</label>
-          <input type="date" id="or-filter-start-date" class="admin-expense-filter-input">
-        </div>
-        <div class="admin-field">
-          <label for="or-filter-end-date">To</label>
-          <input type="date" id="or-filter-end-date" class="admin-expense-filter-input">
-        </div>
-      </div>
+    <div class="admin-field-row">
       <div class="admin-field">
-        <label for="or-filter-type">Type</label>
-        <select id="or-filter-type" class="admin-expense-filter-input">
-          <option value="">All types</option>
+        <label for="filter-category">Category</label>
+        <select id="filter-category" class="admin-expense-filter-input">
+          <option value="">All categories</option>
         </select>
       </div>
-      <label class="admin-expense-voided-toggle">
-        <input type="checkbox" id="or-filter-include-voided">
-        Show voided entries
-      </label>
+      <div class="admin-field">
+        <label for="filter-payment-method">Payment Method</label>
+        <select id="filter-payment-method" class="admin-expense-filter-input">
+          <option value="">All methods</option>
+        </select>
+      </div>
     </div>
-
-    <div id="or-loading" class="admin-loading">Loading other revenue…</div>
-    <div id="or-empty" class="admin-empty" style="display:none">No other revenue entries match these filters.</div>
-    <ul id="other-revenue-list" class="admin-booking-list" style="display:none"></ul>
+    <div class="admin-field">
+      <label for="filter-search">Search</label>
+      <input type="search" id="filter-search" class="admin-expense-filter-input" placeholder="Vendor or note" autocomplete="off">
+    </div>
+    <div class="admin-field-row">
+      <div class="admin-field">
+        <label for="filter-sort">Sort by</label>
+        <select id="filter-sort" class="admin-expense-filter-input">
+          <option value="expenseDate">Date</option>
+          <option value="amount">Amount</option>
+          <option value="category">Category</option>
+          <option value="vendor">Vendor</option>
+        </select>
+      </div>
+      <div class="admin-field">
+        <label for="filter-sort-dir">Order</label>
+        <select id="filter-sort-dir" class="admin-expense-filter-input">
+          <option value="desc">Newest / highest first</option>
+          <option value="asc">Oldest / lowest first</option>
+        </select>
+      </div>
+    </div>
+    <label class="admin-expense-voided-toggle">
+      <input type="checkbox" id="filter-include-voided">
+      Show voided expenses
+    </label>
   </div>
+
+  <div id="loading" class="admin-loading">Loading expenses…</div>
+  <div id="empty" class="admin-empty" style="display:none">No expenses match these filters.</div>
+  <ul id="expense-list" class="admin-booking-list" style="display:none"></ul>
 </main>
 
 <script src="../admin-chrome.js"></script>
