@@ -23,7 +23,8 @@
     calendar: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>',
     leads: '<path d="M3 4h18l-7 9v6l-4 2v-8z"/>',
     people: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    receipt: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>'
+    receipt: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>',
+    arrowDown: '<line x1="12" y1="4" x2="12" y2="18"/><polyline points="6 12 12 18 18 12"/>'
   };
 
   function icon(name, cls) {
@@ -106,12 +107,12 @@
         '<div class="admin-header-left">' +
           '<a class="admin-brand" href="/admin/">' +
             '<img class="admin-brand-logo" src="/images/mile-high-junk-removal-logo.webp" alt="">' +
-            '<span class="admin-brand-word">Mile High Admin</span>' +
+            '<span class="admin-brand-word">Admin</span>' +
           '</a>' +
           '<nav class="admin-header-nav" aria-label="Admin sections">' + buildDesktopNav(activeKey) + '</nav>' +
         '</div>' +
         '<div class="admin-header-right">' +
-          '<a href="/admin/intake-new/" class="admin-btn admin-btn-primary admin-drop-lead-btn">Drop a Lead</a>' +
+          '<a href="/admin/intake-new/" class="admin-btn admin-btn-primary admin-drop-lead-btn">LEAD' + icon('arrowDown', 'admin-drop-lead-arrow') + '</a>' +
           '<button type="button" id="logout-btn" class="admin-btn admin-btn-ghost">Log Out</button>' +
         '</div>' +
       '</div>';

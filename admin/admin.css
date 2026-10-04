@@ -107,6 +107,9 @@
   font-weight: 900;
   font-style: italic;
   font-size: 18px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #39ff14;
   white-space: nowrap;
   min-width: 0;
   overflow: hidden;
@@ -133,14 +136,15 @@
   font-family: var(--font-body);
   font-weight: 700;
   font-size: 14px;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(57, 255, 20, 0.7);
   text-decoration: none;
   white-space: nowrap;
 }
+.admin-nav-item:hover { color: #39ff14; background: rgba(255, 255, 255, 0.06); }
 .admin-nav-item-icon { flex: none; }
 .admin-nav-item.is-active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: rgba(57, 255, 20, 0.12);
+  color: #39ff14;
 }
 /* Other Revenue's nav entry — icon only (the branded money mascot image),
    no text label. Square/centered instead of the icon+label pill the other
@@ -166,9 +170,27 @@
 }
 /* The global primary action stays compact on narrow phones so it never
    crowds Log Out out of the header; full padding returns once there's room. */
-.admin-drop-lead-btn { padding: 0 12px; }
+.admin-drop-lead-btn {
+  padding: 0 12px;
+}
+.admin-btn-primary.admin-drop-lead-btn {
+  background: #39ff14;
+  color: #0b0c08;
+  border-color: #39ff14;
+}
+.admin-btn-primary.admin-drop-lead-btn:hover { background: #5dff40; filter: none; }
+.admin-drop-lead-arrow { width: 14px; height: 14px; }
 @media (min-width: 420px) {
   .admin-drop-lead-btn { padding: 0 16px; }
+}
+.admin-header .admin-btn-ghost {
+  border-color: rgba(57, 255, 20, 0.4);
+  color: rgba(57, 255, 20, 0.85);
+}
+.admin-header .admin-btn-ghost:hover {
+  background: rgba(57, 255, 20, 0.1);
+  border-color: #39ff14;
+  color: #39ff14;
 }
 
 .admin-main {
@@ -194,8 +216,8 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: #fff;
-  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  background: var(--color-dark, #14150f);
+  border-top: 1px solid rgba(57, 255, 20, 0.18);
   padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px));
   z-index: 20;
 }
@@ -214,13 +236,14 @@
   font-family: var(--font-body);
   font-weight: 700;
   font-size: 10.5px;
-  color: var(--color-neutral-600, #82796a);
+  color: rgba(57, 255, 20, 0.55);
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
 }
 .admin-bottom-nav-item-icon { flex: none; }
 .admin-bottom-nav-item.is-active {
-  color: var(--color-accent-700, #2f6f13);
+  background: rgba(57, 255, 20, 0.12);
+  color: #39ff14;
 }
 /* Other Revenue's bottom-nav entry — icon only (the branded money mascot
    image), no text label, same reasoning as .admin-nav-item-icon-only. */
@@ -3005,6 +3028,7 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 }
 .admin-dash-nav-link svg { flex: none; }
 .admin-dash-nav-link span.admin-dash-nav-link-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.admin-lead-arrow-inline { vertical-align: -1px; margin-left: 1px; }
 .admin-dash-nav-link:hover { background: rgba(255, 255, 255, 0.06); color: #39ff14; }
 /* Darker charcoal highlight + a brand-green left accent bar, replacing the
    previous solid bright-green fill — a calmer "this row is selected"
