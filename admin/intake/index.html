@@ -97,10 +97,110 @@
       <ul id="screenshot-grid" class="admin-photo-grid"></ul>
     </section>
 
-    <!-- 8. Actions -->
+    <!-- 8. Confirm / Convert — Stage 5D. Exactly one of the three panels
+         below is shown, picked by the Classification select above. -->
+    <section class="admin-section" id="confirm-section">
+      <h2>Confirm</h2>
+
+      <!-- Booking Confirmed -->
+      <div id="confirm-booking-panel" style="display:none">
+        <p class="admin-field-hint">Creates a real booking on the Schedule using the client above plus the job details below — same as "+ New Job".</p>
+        <p class="admin-field-hint" id="confirm-booking-ai-hint"></p>
+
+        <div class="admin-field">
+          <label for="confirm-booking-appointment-date">Appointment Date</label>
+          <input type="date" id="confirm-booking-appointment-date">
+        </div>
+
+        <div class="admin-field">
+          <label id="confirm-booking-time-mode-label">Appointment Time</label>
+          <div class="admin-segmented" id="confirm-booking-time-mode-toggle">
+            <button type="button" class="admin-segmented-btn" data-mode="exact">Exact Time</button>
+            <button type="button" class="admin-segmented-btn is-active" data-mode="window">Time Window</button>
+          </div>
+          <select id="confirm-booking-time-window">
+            <option value="" selected disabled>Select time</option>
+          </select>
+          <input type="time" id="confirm-booking-exact-time" step="60" style="display:none">
+        </div>
+
+        <div class="admin-field">
+          <label for="confirm-booking-service-type">Service Type</label>
+          <select id="confirm-booking-service-type">
+            <option value="junk_removal">Junk Removal</option>
+            <option value="dumpster_rental">15-Yard Dumpster Rental</option>
+            <option value="light_demo">Light Demo</option>
+          </select>
+        </div>
+
+        <div id="confirm-booking-dumpster-fields" style="display:none">
+          <div class="admin-field">
+            <label for="confirm-booking-pickup-date">Pickup Date</label>
+            <input type="date" id="confirm-booking-pickup-date">
+            <span class="admin-field-hint">Defaults to 5 days after the delivery date unless set here.</span>
+          </div>
+          <div class="admin-field">
+            <label for="confirm-booking-material-type">Material Type</label>
+            <input type="text" id="confirm-booking-material-type" maxlength="200">
+          </div>
+          <div class="admin-field">
+            <label for="confirm-booking-placement-notes">Placement Notes</label>
+            <input type="text" id="confirm-booking-placement-notes" maxlength="200">
+          </div>
+        </div>
+
+        <div class="admin-field">
+          <label for="confirm-booking-address">Street Address</label>
+          <input type="text" id="confirm-booking-address" autocomplete="off">
+        </div>
+        <div class="admin-field-row">
+          <div class="admin-field">
+            <label for="confirm-booking-city">City</label>
+            <input type="text" id="confirm-booking-city" autocomplete="off">
+          </div>
+          <div class="admin-field">
+            <label for="confirm-booking-state">State</label>
+            <input type="text" id="confirm-booking-state" maxlength="2" autocomplete="off">
+          </div>
+          <div class="admin-field">
+            <label for="confirm-booking-zip">ZIP</label>
+            <input type="text" id="confirm-booking-zip" inputmode="numeric" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="admin-field">
+          <label for="confirm-booking-estimated-price">Quoted Amount (optional)</label>
+          <div class="admin-quote-input-wrap">
+            <span class="admin-quote-dollar">$</span>
+            <input type="number" id="confirm-booking-estimated-price" inputmode="decimal" min="0" step="0.01">
+          </div>
+        </div>
+
+        <div class="admin-field">
+          <label for="confirm-booking-internal-notes">Private Notes (optional)</label>
+          <textarea id="confirm-booking-internal-notes" rows="2"></textarea>
+        </div>
+
+        <button type="button" id="confirm-booking-btn" class="admin-btn admin-btn-primary">Confirm Booking</button>
+      </div>
+
+      <!-- Lead Only / Quote Discussion -->
+      <div id="confirm-lead-panel" style="display:none">
+        <p class="admin-field-hint">Creates a Lead in the Leads pipeline using the reviewed Client/Job/Notes fields above.</p>
+        <button type="button" id="confirm-lead-btn" class="admin-btn admin-btn-primary">Confirm as Lead</button>
+      </div>
+
+      <!-- Existing Job Update -->
+      <div id="confirm-attach-panel" style="display:none">
+        <p class="admin-field-hint">Records this screenshot against the existing job linked above. The job itself is never changed automatically — review and edit it separately if anything needs updating.</p>
+        <button type="button" id="confirm-attach-btn" class="admin-btn admin-btn-primary">Attach to Existing Job</button>
+      </div>
+    </section>
+
+    <!-- 9. Actions -->
     <section class="admin-section">
       <div class="admin-form-actions">
-        <button type="button" id="save-btn" class="admin-btn admin-btn-primary">Save Changes</button>
+        <button type="button" id="save-btn" class="admin-btn admin-btn-outline">Save Changes</button>
         <button type="button" id="discard-btn" class="admin-btn admin-btn-danger">Discard Intake</button>
       </div>
     </section>

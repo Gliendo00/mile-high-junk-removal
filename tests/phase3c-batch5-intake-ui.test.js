@@ -151,7 +151,7 @@ test("admin/intake-new.js: redirects to the review page on success", () => {
 // =======================================================================
 // admin/intake/ (review/edit/save-pending)
 // =======================================================================
-test("admin/intake/index.html: has every required section container and the Save/Discard actions, but no Confirm action (Stage 5D not built)", () => {
+test("admin/intake/index.html: has every required section container, the Save/Discard actions, AND the three Stage 5D confirm panels/buttons", () => {
   const html = readNormalized("admin/intake/index.html");
   [
     "match-banner",
@@ -167,10 +167,17 @@ test("admin/intake/index.html: has every required section container and the Save
     "screenshot-grid",
     "save-btn",
     "discard-btn",
+    // Stage 5D — Confirm/Convert.
+    "confirm-section",
+    "confirm-booking-panel",
+    "confirm-booking-btn",
+    "confirm-lead-panel",
+    "confirm-lead-btn",
+    "confirm-attach-panel",
+    "confirm-attach-btn",
   ].forEach((id) => {
     assert.ok(new RegExp('id="' + id + '"').test(html), "missing #" + id);
   });
-  assert.ok(!/confirm-btn|id="confirm"/.test(html), "must not expose a Confirm action yet — that's Stage 5D");
 });
 
 test("admin/intake/index.html: the classification <select> offers exactly the six locked classification values", () => {
@@ -181,11 +188,13 @@ test("admin/intake/index.html: the classification <select> offers exactly the si
   assert.deepStrictEqual(values.sort(), ["booking_confirmed", "existing_job_update", "follow_up", "lead_only", "quote_discussion", "unclear"].sort());
 });
 
-test("admin/intake-detail.js: never calls a confirm/create-booking/create-client action — Stage 5D is genuinely not implemented client-side either", () => {
+test("admin/intake-detail.js: Stage 5D's Confirm Booking calls the SAME two already-reviewed endpoints '+ New Job' uses, never a bespoke write path", () => {
   const src = readNormalized("admin/intake-detail.js");
-  assert.ok(!/action:\s*['"]confirm['"]/.test(src));
-  assert.ok(!/\/api\/admin\/client['"]/.test(src), "must never call the client-creation endpoint directly");
-  assert.ok(!/\/api\/admin\/booking['"]/.test(src), "must never call the booking-creation endpoint directly");
+  assert.ok(/postJson\(['"]\/api\/admin\/client['"]/.test(src), "Confirm Booking must create a new client (when none is matched) via the existing POST /api/admin/client");
+  assert.ok(/postJson\(['"]\/api\/admin\/booking['"]/.test(src), "Confirm Booking must create the job via the existing POST /api/admin/booking");
+  assert.ok(/action:\s*['"]confirm-booking['"]/.test(src), "must tell api/admin/intake.js which booking/client ids resulted");
+  assert.ok(/action:\s*['"]confirm-attach-existing['"]/.test(src));
+  assert.ok(/postJson\(['"]\/api\/admin\/lead['"]/.test(src), "Confirm as Lead must call the dedicated api/admin/lead.js endpoint");
 });
 
 test("admin/intake-detail.js: its FIELD_LABELS keys exactly match the adapter's FIELD_KEYS (no drift between client and server field lists)", () => {

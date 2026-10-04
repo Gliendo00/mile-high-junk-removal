@@ -219,7 +219,12 @@ test("admin/leads-list.js: defaultBucket() picks the first non-empty bucket in S
 test("admin/leads-list.js: finish() selects a bucket after rendering (a tab is always active once loading completes)", () => {
   const src = readNormalized("admin/leads-list.js");
   const fnSrc = src.slice(src.indexOf("function finish"), src.indexOf("function finish") + 400);
-  assert.ok(/selectBucket\(defaultBucket\(\)\)/.test(fnSrc));
+  // Phase 3C Stage 5D: selectBucket() now takes requestedBucket() ||
+  // defaultBucket() — a Confirm Booking/Confirm as Lead redirect can land
+  // on a specific bucket (e.g. ?bucket=new) — but defaultBucket() must
+  // still be the fallback so "a tab is always active" still holds with no
+  // ?bucket= present (the overwhelmingly common case).
+  assert.ok(/selectBucket\((requestedBucket\(\) \|\| )?defaultBucket\(\)\)/.test(fnSrc));
 });
 
 test("admin/leads/index.html: every bucket's section only contains its own <ul> now (no redundant per-section heading/count — the tab itself carries the label and count)", () => {

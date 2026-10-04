@@ -805,9 +805,13 @@ test("deployment: total function-producing files under api/ are still within the
   // docs/phase-3/batch5-screenshot-intake-proposal.md §3. Batch 6 (Leads
   // consolidation) then retired api/admin/clients.js into api/admin/
   // client.js's own ?resource=list branch, freeing this slot again (11) —
-  // reserved for the still-unbuilt api/admin/lead.js. Stage 2.5's own
-  // guarantee (it added zero new endpoint files) still holds at today's count.
-  assert.strictEqual(total, 11, "Stage 2.5 itself adds zero new endpoint files — every change lands inside existing api/admin/booking.js, api/admin/bookings.js, and api/admin/client.js");
+  // reserved for api/admin/lead.js, which Phase 3C Stage 5D then added —
+  // bringing the total to 12, the Hobby plan's hard ceiling (see the <=12
+  // assertion just above, which this does not change or weaken). Stage
+  // 2.5's own guarantee (it added zero new endpoint files) still holds —
+  // the total only grew because a LATER stage used the one slot this
+  // stage's own count had already accounted for as free.
+  assert.strictEqual(total, 12, "Stage 2.5 itself still adds zero new endpoint files — every Stage 2.5 change lands inside existing api/admin/booking.js, api/admin/bookings.js, and api/admin/client.js; the total of 12 reflects Stage 5D's later, separate api/admin/lead.js");
 });
 
 // =======================================================================

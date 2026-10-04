@@ -1,8 +1,13 @@
-// /admin/intake/?id=<uuid> — Screenshot AI Intake review screen (Batch 5,
-// Stage 5D NOT included: there is no Confirm action here, and nothing on
-// this page ever creates or updates a customers/bookings row — it only
-// edits intake_sessions metadata via api/admin/intake.js's PATCH actions.
-// See docs/phase-3/batch5-screenshot-intake-proposal.md.
+// /admin/intake/?id=<uuid> — Screenshot AI Intake review screen (Batch 5 +
+// Stage 5D). This page itself never creates/updates a customer or booking
+// row directly — Confirm Booking calls the existing POST /api/admin/client
+// and POST /api/admin/booking endpoints (same two calls "+ New Job" makes)
+// from the admin's own browser session, then tells api/admin/intake.js
+// which ids resulted; Confirm as Lead calls api/admin/lead.js, the one file
+// with a write grant on `leads`; Attach to Existing Job only ever records a
+// pointer to a booking the admin already picked, never modifies it. See
+// docs/phase-3/batch5-screenshot-intake-proposal.md (5B/5C) and each
+// confirm handler's own comment below (5D).
 //
 // Every dynamic value is written with textContent/DOM construction (never
 // innerHTML/insertAdjacentHTML with a concatenated string) — same
@@ -39,6 +44,83 @@ document.addEventListener('DOMContentLoaded', function () {
   var screenshotGrid = document.getElementById('screenshot-grid');
   var saveBtn = document.getElementById('save-btn');
   var discardBtn = document.getElementById('discard-btn');
+
+  // Stage 5D — Confirm / Convert panels.
+  var confirmSectionEl = document.getElementById('confirm-section');
+  var confirmBookingPanel = document.getElementById('confirm-booking-panel');
+  var confirmLeadPanel = document.getElementById('confirm-lead-panel');
+  var confirmAttachPanel = document.getElementById('confirm-attach-panel');
+  var confirmBookingAiHint = document.getElementById('confirm-booking-ai-hint');
+  var confirmBookingDateInput = document.getElementById('confirm-booking-appointment-date');
+  var confirmBookingTimeModeToggle = document.getElementById('confirm-booking-time-mode-toggle');
+  var confirmBookingTimeWindowSelect = document.getElementById('confirm-booking-time-window');
+  var confirmBookingExactTimeInput = document.getElementById('confirm-booking-exact-time');
+  var confirmBookingServiceTypeSelect = document.getElementById('confirm-booking-service-type');
+  var confirmBookingDumpsterFields = document.getElementById('confirm-booking-dumpster-fields');
+  var confirmBookingPickupDateInput = document.getElementById('confirm-booking-pickup-date');
+  var confirmBookingMaterialTypeInput = document.getElementById('confirm-booking-material-type');
+  var confirmBookingPlacementNotesInput = document.getElementById('confirm-booking-placement-notes');
+  var confirmBookingAddressInput = document.getElementById('confirm-booking-address');
+  var confirmBookingCityInput = document.getElementById('confirm-booking-city');
+  var confirmBookingStateInput = document.getElementById('confirm-booking-state');
+  var confirmBookingZipInput = document.getElementById('confirm-booking-zip');
+  var confirmBookingPriceInput = document.getElementById('confirm-booking-estimated-price');
+  var confirmBookingNotesInput = document.getElementById('confirm-booking-internal-notes');
+  var confirmBookingBtn = document.getElementById('confirm-booking-btn');
+  var confirmLeadBtn = document.getElementById('confirm-lead-btn');
+  var confirmAttachBtn = document.getElementById('confirm-attach-btn');
+
+  // Mirrors api/_lib/time-windows.js's TIME_WINDOW_DEFS labels — same
+  // deliberate client-side copy admin/booking-new.js already keeps (see
+  // that file's own header for why this isn't a shared cross-runtime
+  // module in this project).
+  var TIME_WINDOWS = [
+    { value: 'w_0400_0600', label: '4:00 AM – 6:00 AM' },
+    { value: 'w_0600_0800', label: '6:00 AM – 8:00 AM' },
+    { value: 'w_0800_1000', label: '8:00 AM – 10:00 AM' },
+    { value: 'w_1000_1200', label: '10:00 AM – 12:00 PM' },
+    { value: 'w_1200_1400', label: '12:00 PM – 2:00 PM' },
+    { value: 'w_1400_1600', label: '2:00 PM – 4:00 PM' },
+    { value: 'w_1600_1800', label: '4:00 PM – 6:00 PM' },
+    { value: 'w_1800_2000', label: '6:00 PM – 8:00 PM' },
+    { value: 'w_2000_2200', label: '8:00 PM – 10:00 PM' },
+  ];
+  TIME_WINDOWS.forEach(function (w) {
+    var opt = document.createElement('option');
+    opt.value = w.value;
+    opt.textContent = w.label;
+    confirmBookingTimeWindowSelect.appendChild(opt);
+  });
+
+  var confirmBookingTimeMode = 'window';
+  function setupSegmented(container, onSelect) {
+    var buttons = container.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(buttons, function (b) { b.classList.toggle('is-active', b === btn); });
+        onSelect(btn.getAttribute('data-mode'));
+      });
+    });
+  }
+  setupSegmented(confirmBookingTimeModeToggle, function (mode) {
+    confirmBookingTimeMode = mode;
+    var isExact = mode === 'exact';
+    confirmBookingExactTimeInput.style.display = isExact ? 'block' : 'none';
+    confirmBookingTimeWindowSelect.style.display = isExact ? 'none' : 'block';
+  });
+
+  function updateConfirmBookingDumpsterVisibility() {
+    confirmBookingDumpsterFields.style.display = confirmBookingServiceTypeSelect.value === 'dumpster_rental' ? 'block' : 'none';
+  }
+  confirmBookingServiceTypeSelect.addEventListener('change', updateConfirmBookingDumpsterVisibility);
+
+  // A previously-attempted Confirm Booking whose job/client write succeeded
+  // but whose final "mark this intake confirmed" step failed (a transient
+  // network/server error) — retrying must re-send ONLY that last step
+  // against the SAME already-created booking/client, never create a
+  // second booking. Cleared on success or when the admin navigates away
+  // from this classification/reloads.
+  var pendingBookingConfirmation = null;
 
   var CLIENT_FIELDS = ['firstName', 'lastName', 'phone', 'email'];
   var JOB_FIELDS = ['serviceType', 'serviceDetails', 'itemDescription', 'estimatedLoadSize', 'quotedAmount', 'address', 'city', 'state', 'zip'];
@@ -361,6 +443,110 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // Denver-local "today", matching admin/booking-new.js's own copy (see
+  // that file's header for why this is never the browser's own local
+  // time) — used only to default/floor the Confirm Booking date field.
+  function denverTodayIso() {
+    var fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' });
+    var parts = {};
+    fmt.formatToParts(new Date()).forEach(function (p) { parts[p.type] = p.value; });
+    return parts.year + '-' + parts.month + '-' + parts.day;
+  }
+
+  // Best-effort "what did the extracted date field actually mean" prefill
+  // — never trusted as-is; the admin can always correct it, and the server
+  // independently re-validates whatever ends up submitted. Returns ''
+  // (never a wrong-looking placeholder) when the raw text can't be
+  // confidently parsed as a real calendar date.
+  function guessIsoDate(raw) {
+    if (!raw) return '';
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) return '';
+    var yyyy = d.getFullYear();
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    return yyyy + '-' + mm + '-' + dd;
+  }
+
+  // Best-effort "which of our 3 service types is this" prefill from the
+  // extracted serviceType free text — a convenience default only; the
+  // select is always left fully editable. Falls back to Junk Removal
+  // (this business's most common job) rather than guessing wrong in a way
+  // that reads as confident.
+  function guessServiceType(raw) {
+    var text = (raw || '').toLowerCase();
+    if (text.indexOf('dumpster') !== -1 || text.indexOf('rental') !== -1) return 'dumpster_rental';
+    if (text.indexOf('demo') !== -1) return 'light_demo';
+    return 'junk_removal';
+  }
+
+  // Strips everything but digits/decimal point from a free-text quoted
+  // amount (e.g. "$350", "around $300") and parses it — an unparseable or
+  // ambiguous string (a range, "TBD") prefills blank rather than guessed.
+  function guessPrice(raw) {
+    if (!raw) return '';
+    var cleaned = raw.replace(/[^0-9.]/g, '');
+    if (!cleaned) return '';
+    var n = Number(cleaned);
+    return Number.isFinite(n) && n >= 0 ? String(n) : '';
+  }
+
+  function fieldRawValue(fields, key) {
+    var f = fields && fields[key];
+    return f && f.value ? f.value : '';
+  }
+
+  // Fills the Confirm Booking panel's structured inputs from the intake's
+  // extracted/reviewed fields — a one-time convenience prefill on load,
+  // never re-applied after (the admin's own edits always win; this never
+  // runs again on a later render() call within the same page view, see
+  // bookingPanelPrefilled below).
+  var bookingPanelPrefilled = false;
+  function prefillConfirmBookingPanel(fields) {
+    if (bookingPanelPrefilled) return;
+    bookingPanelPrefilled = true;
+
+    var todayIso = denverTodayIso();
+    var guessedDate = guessIsoDate(fieldRawValue(fields, 'date'));
+    confirmBookingDateInput.value = guessedDate && guessedDate >= todayIso ? guessedDate : todayIso;
+    confirmBookingDateInput.min = todayIso;
+
+    confirmBookingServiceTypeSelect.value = guessServiceType(fieldRawValue(fields, 'serviceType'));
+    updateConfirmBookingDumpsterVisibility();
+
+    confirmBookingAddressInput.value = fieldRawValue(fields, 'address');
+    confirmBookingCityInput.value = fieldRawValue(fields, 'city');
+    confirmBookingStateInput.value = fieldRawValue(fields, 'state');
+    confirmBookingZipInput.value = fieldRawValue(fields, 'zip');
+    confirmBookingPriceInput.value = guessPrice(fieldRawValue(fields, 'quotedAmount'));
+
+    var notesParts = [fieldRawValue(fields, 'internalNotes'), fieldRawValue(fields, 'clientConstraints')].filter(Boolean);
+    confirmBookingNotesInput.value = notesParts.join('\n\n');
+
+    var timeRaw = fieldRawValue(fields, 'appointmentTime');
+    var schedulingRaw = fieldRawValue(fields, 'schedulingStatus');
+    if (timeRaw || schedulingRaw) {
+      confirmBookingAiHint.textContent = 'AI found: ' + [timeRaw, schedulingRaw].filter(Boolean).join(' · ') + ' — pick the exact time or window below.';
+      confirmBookingAiHint.style.display = 'block';
+    } else {
+      confirmBookingAiHint.style.display = 'none';
+    }
+  }
+
+  // Shows exactly the one Confirm panel matching the current (possibly
+  // just-changed, not-yet-saved) classification — kept live on every
+  // classificationSelect change, not just on initial render, so switching
+  // classification during review immediately reflects which confirm action
+  // is available, same as the brief's "bottom action area should clearly
+  // reflect the classification" requirement.
+  function updateConfirmPanelVisibility() {
+    var cls = classificationSelect.value;
+    confirmBookingPanel.style.display = cls === 'booking_confirmed' ? 'block' : 'none';
+    confirmLeadPanel.style.display = cls === 'lead_only' || cls === 'quote_discussion' ? 'block' : 'none';
+    confirmAttachPanel.style.display = cls === 'existing_job_update' ? 'block' : 'none';
+  }
+  classificationSelect.addEventListener('change', updateConfirmPanelVisibility);
+
   function render(intake) {
     currentIntake = intake;
     loadingEl.style.display = 'none';
@@ -384,6 +570,24 @@ document.addEventListener('DOMContentLoaded', function () {
       statusBanner.className = 'admin-alert admin-alert-neutral';
       statusBanner.textContent = 'Extraction has not finished for this intake yet.';
       statusBanner.style.display = 'block';
+    } else if (intake.status === 'confirmed') {
+      statusBanner.className = 'admin-alert admin-alert-success';
+      var confirmedWhen = intake.confirmedAt ? new Date(intake.confirmedAt).toLocaleString('en-US') : 'unknown time';
+      var confirmedText = 'Confirmed on ' + confirmedWhen + (intake.confirmedBy ? ' by ' + intake.confirmedBy : '') + '.';
+      clear(statusBanner);
+      statusBanner.appendChild(document.createTextNode(confirmedText + ' '));
+      if (intake.resultingBookingId) {
+        var bookingLink = document.createElement('a');
+        bookingLink.href = '/admin/booking/?id=' + encodeURIComponent(intake.resultingBookingId);
+        bookingLink.textContent = 'View booking';
+        statusBanner.appendChild(bookingLink);
+      } else if (intake.resultingCustomerId) {
+        var clientLink = document.createElement('a');
+        clientLink.href = '/admin/client/?id=' + encodeURIComponent(intake.resultingCustomerId);
+        clientLink.textContent = 'View client';
+        statusBanner.appendChild(clientLink);
+      }
+      statusBanner.style.display = 'block';
     } else {
       statusBanner.style.display = 'none';
     }
@@ -400,6 +604,12 @@ document.addEventListener('DOMContentLoaded', function () {
     renderFieldGroup(notesFieldsEl, NOTES_FIELDS, intake.fields);
 
     classificationSelect.value = intake.classification || 'unclear';
+
+    confirmSectionEl.style.display = editable ? 'block' : 'none';
+    if (editable) {
+      prefillConfirmBookingPanel(intake.fields);
+      updateConfirmPanelVisibility();
+    }
 
     linkedBookingId = intake.linkedExistingBookingId || null;
     originalLinkedBookingId = linkedBookingId;
@@ -461,8 +671,43 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  saveBtn.addEventListener('click', function () {
-    saveBtn.disabled = true;
+  // Shared POST helper for the two Stage 5D confirm flows that call OTHER
+  // admin endpoints (POST /api/admin/client, POST /api/admin/booking,
+  // POST /api/admin/lead) — not /api/admin/intake, so patchAction() above
+  // doesn't fit. `res` is attached to a thrown error's `.response` so a
+  // caller can branch on status (e.g. 409 duplicate_client) without a
+  // second fetch.
+  function postJson(url, body) {
+    return adminFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/admin/login/';
+        return Promise.reject(new Error('Session expired.'));
+      }
+      return res.json().catch(function () { return null; }).then(function (respBody) {
+        if (!res.ok) {
+          var err = new Error((respBody && respBody.error) || 'Request failed.');
+          err.response = { status: res.status, body: respBody };
+          throw err;
+        }
+        return respBody;
+      });
+    });
+  }
+
+  // Builds (but does not start showing toasts for) the same diff-only save
+  // chain the Save button has always used — every edited field, a changed
+  // classification, a changed client match, a changed linked-existing-
+  // booking, each as its own patchAction() only when it actually changed.
+  // Shared with the three Stage 5D confirm handlers below: every one of
+  // them must persist whatever's currently on screen BEFORE converting,
+  // since the server-side confirm actions read matched_customer_id/
+  // linked_existing_booking_id/extracted_data straight off the
+  // intake_sessions row, not off the request body.
+  function buildSaveChain() {
     var chain = Promise.resolve();
 
     var fieldsDiff = {};
@@ -499,7 +744,12 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }
 
-    chain
+    return chain;
+  }
+
+  saveBtn.addEventListener('click', function () {
+    saveBtn.disabled = true;
+    buildSaveChain()
       .then(function () {
         showToast('Changes saved.');
         loadingEl.style.display = 'block';
@@ -534,6 +784,171 @@ document.addEventListener('DOMContentLoaded', function () {
         discardBtn.disabled = false;
         discardBtn.textContent = 'Discard Intake';
         showToast(err && err.message ? err.message : 'Could not discard intake.', 'error');
+      });
+  });
+
+  // ---------------------------------------------------------------------
+  // Stage 5D — Confirm Booking. Never writes a customer/booking from this
+  // file directly: it calls the SAME two already-reviewed endpoints
+  // "+ New Job" uses (POST /api/admin/client, then POST /api/admin/booking)
+  // from the admin's own authenticated browser session, then tells
+  // api/admin/intake.js which ids resulted so it can record the outcome.
+  // See api/admin/intake.js's handleConfirmBooking() for the server-side
+  // half of this contract.
+  // ---------------------------------------------------------------------
+  confirmBookingBtn.addEventListener('click', function () {
+    confirmBookingBtn.disabled = true;
+    clearError();
+
+    function resolveCustomerId() {
+      if (matchedCustomerId) return Promise.resolve(matchedCustomerId);
+
+      var firstName = (fieldInputs.firstName ? fieldInputs.firstName.el.value : '').trim();
+      if (!firstName) {
+        return Promise.reject(new Error('First name is required to create a new client. Fill it in above, or use Change to pick an existing client.'));
+      }
+      var clientPayload = {
+        firstName: firstName,
+        lastName: (fieldInputs.lastName ? fieldInputs.lastName.el.value : '').trim(),
+        phone: (fieldInputs.phone ? fieldInputs.phone.el.value : '').trim(),
+        email: (fieldInputs.email ? fieldInputs.email.el.value : '').trim(),
+      };
+      return postJson('/api/admin/client', clientPayload)
+        .then(function (body) {
+          return body.client.id;
+        })
+        .catch(function (err) {
+          if (err.response && err.response.status === 409) {
+            throw new Error('A client with this exact phone and email already exists. Use Change (in the Client section above) to search for and select them, then try again.');
+          }
+          throw err;
+        });
+    }
+
+    function createBooking(customerId) {
+      var timeWindow = confirmBookingTimeMode === 'window' ? confirmBookingTimeWindowSelect.value : '';
+      var exactTime = confirmBookingTimeMode === 'exact' ? confirmBookingExactTimeInput.value : '';
+      if (confirmBookingTimeMode === 'exact' && !exactTime) throw new Error('Please choose an exact time.');
+      if (confirmBookingTimeMode === 'window' && !timeWindow) throw new Error('Please select a time window.');
+      if (!confirmBookingDateInput.value) throw new Error('Please choose an appointment date.');
+
+      var bookingPayload = {
+        customerId: customerId,
+        serviceType: confirmBookingServiceTypeSelect.value,
+        appointmentDate: confirmBookingDateInput.value,
+        timeWindow: timeWindow,
+        exactTime: exactTime,
+        serviceAddress: {
+          address: confirmBookingAddressInput.value.trim(),
+          city: confirmBookingCityInput.value.trim(),
+          state: confirmBookingStateInput.value.trim(),
+          zip: confirmBookingZipInput.value.trim(),
+        },
+        internalNotes: confirmBookingNotesInput.value.trim(),
+      };
+      var priceRaw = confirmBookingPriceInput.value.trim();
+      if (priceRaw) bookingPayload.estimatedPrice = Number(priceRaw);
+      if (confirmBookingServiceTypeSelect.value === 'dumpster_rental') {
+        var pickupRaw = confirmBookingPickupDateInput.value.trim();
+        if (pickupRaw) bookingPayload.pickupDate = pickupRaw;
+        var materialRaw = confirmBookingMaterialTypeInput.value.trim();
+        if (materialRaw) bookingPayload.materialType = materialRaw;
+        var placementRaw = confirmBookingPlacementNotesInput.value.trim();
+        if (placementRaw) bookingPayload.placementNotes = placementRaw;
+      }
+
+      return postJson('/api/admin/booking', bookingPayload).then(function (body) {
+        return { bookingId: body.booking.id, customerId: customerId };
+      });
+    }
+
+    function markConfirmed(ids) {
+      return patchAction({ id: intakeId, action: 'confirm-booking', bookingId: ids.bookingId, customerId: ids.customerId })
+        .then(function () {
+          pendingBookingConfirmation = null;
+          window.location.href = '/admin/booking/?id=' + encodeURIComponent(ids.bookingId);
+        })
+        .catch(function (err) {
+          // The booking (and possibly a new client) now genuinely exist —
+          // only the final "mark this intake confirmed" step failed.
+          // Remembering the ids lets a retry skip straight back to just
+          // this step instead of ever creating a second booking.
+          pendingBookingConfirmation = ids;
+          throw new Error('The booking was created, but this intake could not be marked confirmed (' + (err.message || 'unknown error') + '). Click Confirm Booking again to retry — it will not create a duplicate.');
+        });
+    }
+
+    var flow;
+    if (pendingBookingConfirmation) {
+      flow = markConfirmed(pendingBookingConfirmation);
+    } else {
+      flow = buildSaveChain()
+        .then(resolveCustomerId)
+        .then(createBooking)
+        .then(markConfirmed);
+    }
+
+    flow
+      .catch(function (err) {
+        showError(err && err.message ? err.message : 'Could not confirm this booking.');
+      })
+      .then(function () {
+        confirmBookingBtn.disabled = false;
+      });
+  });
+
+  // ---------------------------------------------------------------------
+  // Stage 5D — Confirm as Lead. Saves any pending edits first (the server
+  // reads extracted_data/matched_customer_id straight off the row — see
+  // api/admin/lead.js), then creates the lead via the one write path that
+  // file owns. Idempotent against a double-click/retry at the server
+  // level (leads_source_intake_id_uniq) — this button has no special
+  // retry-state of its own to track.
+  // ---------------------------------------------------------------------
+  confirmLeadBtn.addEventListener('click', function () {
+    confirmLeadBtn.disabled = true;
+    clearError();
+    buildSaveChain()
+      .then(function () {
+        return postJson('/api/admin/lead', { intakeSessionId: intakeId });
+      })
+      .then(function () {
+        window.location.href = '/admin/leads/?bucket=new';
+      })
+      .catch(function (err) {
+        showError(err && err.message ? err.message : 'Could not confirm this as a lead.');
+      })
+      .then(function () {
+        confirmLeadBtn.disabled = false;
+      });
+  });
+
+  // ---------------------------------------------------------------------
+  // Stage 5D — Attach to Existing Job. The admin already picked which
+  // booking via the "Link" button in the Existing Upcoming Jobs section
+  // above; buildSaveChain() is what actually persists linkedBookingId
+  // (and anything else pending) before the server-side confirm reads it
+  // back off the row. Never modifies the linked booking itself.
+  // ---------------------------------------------------------------------
+  confirmAttachBtn.addEventListener('click', function () {
+    if (!linkedBookingId) {
+      showError('Select an existing job above (click Link) before confirming.');
+      return;
+    }
+    confirmAttachBtn.disabled = true;
+    clearError();
+    buildSaveChain()
+      .then(function () {
+        return patchAction({ id: intakeId, action: 'confirm-attach-existing' });
+      })
+      .then(function (body) {
+        window.location.href = '/admin/booking/?id=' + encodeURIComponent(body.resultingBookingId);
+      })
+      .catch(function (err) {
+        showError(err && err.message ? err.message : 'Could not confirm this attachment.');
+      })
+      .then(function () {
+        confirmAttachBtn.disabled = false;
       });
   });
 

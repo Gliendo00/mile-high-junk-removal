@@ -405,12 +405,22 @@ document.addEventListener('DOMContentLoaded', function () {
     return SECTION_ORDER[0]; // every bucket empty — still land on Pending Intake
   }
 
+  // Stage 5D — Confirm Booking/Confirm as Lead redirects here with
+  // ?bucket=new so the admin lands on the bucket their just-created lead
+  // actually appears in, instead of the generic non-empty-bucket default.
+  // Any other/missing value is silently ignored (falls through to
+  // defaultBucket()) rather than erroring — this is a convenience only.
+  function requestedBucket() {
+    var requested = new URLSearchParams(window.location.search).get('bucket');
+    return requested && SECTION_ORDER.indexOf(requested) !== -1 ? requested : null;
+  }
+
   function finish() {
     loadingEl.style.display = 'none';
     sectionsEl.style.display = 'block';
     var total = SECTION_ORDER.reduce(function (sum, k) { return sum + (counts[k] || 0); }, 0);
     emptyEl.style.display = total === 0 ? 'block' : 'none';
-    selectBucket(defaultBucket());
+    selectBucket(requestedBucket() || defaultBucket());
     // Only meaningful once the row is actually laid out (it was
     // display:none until sectionsEl.style.display = 'block' just above) —
     // no 'scroll' event fires for a display-toggle to trigger this itself.

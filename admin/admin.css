@@ -1240,6 +1240,9 @@ button.admin-financial-card:focus-visible {
 .admin-alert-error { background: #fdecea; color: #7a1f18; }
 /* Batch 2 — archived-job/client info banners: informational, not an error. */
 .admin-alert-neutral { background: #f3f4f6; color: #374151; }
+/* Stage 5D — a confirmed intake's banner (links to the resulting booking/client), positive rather than neutral or an error. */
+.admin-alert-success { background: #eafaf0; color: #1e5c3a; }
+.admin-alert-success a { color: #1e5c3a; font-weight: 700; text-decoration: underline; }
 
 /* ------------------------------------------------------------------ */
 /* Dashboard: filter bar (doubles as the summary — compact stat chips  */

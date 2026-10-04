@@ -78,3 +78,20 @@ during another failed Preview deploy:
 
 This is a cost/it's-your-call decision, not a technical one — flagged here
 for Rocky/the user to decide, not assumed.
+
+## Update — Phase 3C Stage 5D: the ceiling is now fully used
+
+Batch 5 (5B) and Batch 6 each consolidated an existing file specifically to
+*reserve* a slot for a known future need (`api/admin/intake.js`, then
+`api/admin/lead.js` — see each one's own header comment). Stage 5D spent
+that last reserved slot: `api/admin/lead.js` now exists (Confirm as Lead).
+
+Current count is **12 of 12** — every slot on the Hobby plan is now in use:
+`book.js`, `contact.js`, `instagram-feed.js`, `reviews.js`,
+`stripe-webhook.js`, `upload-photo.js` (6 direct) + `api/admin/auth.js`,
+`booking.js`, `bookings.js`, `client.js`, `intake.js`, `lead.js` (6 under
+`api/admin/`). There is no more consolidation trick left to play — the next
+new endpoint genuinely needs either (1) folding into one of the 12 existing
+files via a `?resource=`/`?action=` branch (the same pattern every stage
+above already uses), or (2) the Pro-plan upgrade discussed above. Decide
+before building that stage, not during a failed Preview deploy.

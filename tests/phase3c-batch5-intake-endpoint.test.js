@@ -1199,13 +1199,14 @@ test("write-audit: intake.js's write calls are only ever against intake_sessions
   const src = fs.readFileSync(path.join(__dirname, "..", "api/admin/intake.js"), "utf8");
   const writeCallRe = /\.(insert|update|upsert|delete)\s*\(/g;
   const count = (src.match(writeCallRe) || []).length;
-  // Hardening pass added exactly one more .update( — handleCleanupExpired()'s
-  // screenshots_expired_at/updated_at write. insert/delete counts are
-  // unchanged (insertScreenshotWithRetry()/cleanupSessionScreenshots() each
-  // still have exactly one literal .insert(/.delete( call apiece, just
-  // extracted into shared helpers — handleDiscard() lost its own inline
-  // .delete( when it started calling cleanupSessionScreenshots() instead).
-  assert.strictEqual(count, 12, "expected exactly 12 write calls (2 insert, 8 update, 2 delete) — see docs/phase-3/batch5-screenshot-intake-proposal.md; a new one needs deliberate review");
+  // Stage 5D added exactly two more .update( calls — handleConfirmBooking()
+  // and handleConfirmAttachExisting() each write exactly one
+  // intake_sessions.update({...}) recording the resulting pointer ids.
+  // Neither one ever calls .insert/.update/.upsert/.delete against
+  // customers or bookings — see the "never writes to customers or
+  // bookings" test above, which this count does not replace. insert/delete
+  // counts are unchanged from the prior hardening pass.
+  assert.strictEqual(count, 14, "expected exactly 14 write calls (2 insert, 10 update, 2 delete) — Stage 5D added 2 updates (confirm-booking, confirm-attach-existing); a new one needs deliberate review");
 });
 
 // ---------------------------------------------------------------------

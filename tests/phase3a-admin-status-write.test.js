@@ -903,6 +903,28 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
+      // Phase 3C Stage 5D added exactly two more updates —
+      // handleConfirmBooking() and handleConfirmAttachExisting(), each one
+      // literal intake_sessions.update({...}) recording the resulting
+      // customer/booking pointer ids. Neither one ever touches customers
+      // or bookings — both only READ those tables (to re-validate an id
+      // the admin's browser already produced via POST /api/admin/client /
+      // POST /api/admin/booking) — see
+      // tests/phase3c-batch5-intake-endpoint.test.js's "never writes to
+      // customers or bookings" guard, still green. See
+      // tests/phase3c-stage5d-intake-confirm.test.js for full coverage.
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      // Phase 3C Stage 5D added the new api/admin/lead.js file — the 12th
+      // and last Vercel Hobby-plan function slot, reserved for exactly
+      // this purpose since Batch 5/6 (see that file's own header). Two
+      // write calls total: one insert (Confirm as Lead's `leads` row) and
+      // one update (marking the source intake_sessions row confirmed).
+      // Never writes to customers — see
+      // tests/phase3c-stage5d-lead-confirm.test.js's own "never creates a
+      // customer" assertion.
+      "api/admin/lead.js: .insert(",
+      "api/admin/lead.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );

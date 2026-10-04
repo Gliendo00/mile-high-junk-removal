@@ -1,0 +1,95 @@
+-- Phase 3C Stage 5D — Intake Confirmation/Conversion: grants ONLY, no new
+-- table and no new column. To be run manually in the Supabase SQL editor,
+-- same convention as every prior migration in this directory. NOT executed
+-- by this session — drafted for Rocky's review.
+--
+-- Context: sql/2026-10-04_phase3c-batch5-intake-sessions.sql already added
+-- intake_sessions.confirmed_at/confirmed_by/resulting_customer_id/
+-- resulting_booking_id — RESERVED for this exact stage, deliberately left
+-- out of that migration's own UPDATE grant list (see its §3 comment: "Stage
+-- 5D must add its own explicit GRANT UPDATE for those when it actually
+-- needs them"). This migration is that explicit grant. Nothing else about
+-- intake_sessions/intake_screenshots changes.
+--
+-- Why this is NOT a REVOKE-ALL-then-GRANT-exact file (unlike every other
+-- migration in this directory, including the one that created this same
+-- table): REVOKE ALL ON intake_sessions would also wipe out the SELECT/
+-- INSERT/column-scoped-UPDATE grants sql/2026-10-04_...sql already put in
+-- place for the live Batch 5 intake flow currently in production — this
+-- file only ever ADDS four columns to the existing UPDATE privilege.
+-- Postgres column-level GRANTs are additive (confirmed against
+-- information_schema.column_privileges in any Postgres 13+): issuing
+-- GRANT UPDATE (col) a second time for a role that already has UPDATE on
+-- other columns of the same table adds `col` to that role's existing
+-- column set, it does not replace it. Verified below in the Verification
+-- block before AND after, so this is provable, not assumed.
+--
+-- What writes through these four columns, and nothing else does (see each
+-- call site's own comment in api/admin/intake.js):
+--   - confirmed_at / confirmed_by: set exactly once, when an intake
+--     transitions pending_review -> confirmed via ?action=confirm-booking,
+--     ?action=confirm-attach-existing, or (api/admin/lead.js) a successful
+--     Confirm-as-Lead. Never touched by anything else, never cleared.
+--   - resulting_customer_id: the customer the confirmation resolved to
+--     (matched or newly created) — a read-pointer only, exactly like
+--     matched_customer_id already is; this migration does not change
+--     matched_customer_id's own existing grant.
+--   - resulting_booking_id: the booking a Confirm Booking created, or the
+--     existing booking a Confirm Attach resolved to. NULL for a
+--     Confirm-as-Lead outcome (a lead is a `leads` row, not a booking).
+--
+-- Still true after this migration, unchanged: intake.js never gains INSERT/
+-- UPDATE/DELETE on customers or bookings themselves — see
+-- tests/phase3c-batch5-intake-endpoint.test.js's "never writes to customers
+-- or bookings" regression test, kept green by this stage's own design (the
+-- browser calls the existing POST /api/admin/client and POST
+-- /api/admin/booking endpoints directly; intake.js only ever records the
+-- resulting ids as pointers on its own table).
+
+-- =======================================================================
+-- 0. PREFLIGHT — run this FIRST, by itself. Read-only. Confirms the exact
+--    starting state this migration assumes before it adds anything.
+-- =======================================================================
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'status', 'UPDATE');               -- expect true (unchanged by this file)
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'confirmed_at', 'UPDATE');          -- expect FALSE — this is what §1 below adds
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'confirmed_by', 'UPDATE');          -- expect FALSE
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'resulting_customer_id', 'UPDATE'); -- expect FALSE
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'resulting_booking_id', 'UPDATE');  -- expect FALSE
+
+-- =======================================================================
+-- 1. The grant itself — additive only (see header for why no REVOKE ALL).
+-- =======================================================================
+GRANT UPDATE (
+  confirmed_at, confirmed_by, resulting_customer_id, resulting_booking_id
+) ON public.intake_sessions TO service_role;
+
+-- =======================================================================
+-- Verification (re-run any of these any time to re-confirm current state)
+-- =======================================================================
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'confirmed_at', 'UPDATE');          -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'confirmed_by', 'UPDATE');          -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'resulting_customer_id', 'UPDATE'); -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'resulting_booking_id', 'UPDATE');  -- expect true
+--
+-- -- Every column granted by the ORIGINAL migration must still be granted —
+-- -- proves this file was additive, not a silent regression of Batch 5's
+-- -- live write path:
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'status', 'UPDATE');              -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'extracted_data', 'UPDATE');      -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'matched_customer_id', 'UPDATE'); -- expect true
+-- select has_column_privilege('service_role', 'public.intake_sessions', 'linked_existing_booking_id', 'UPDATE'); -- expect true
+--
+-- -- DELETE must still be refused — this stage adds no delete capability:
+-- select has_table_privilege('service_role', 'public.intake_sessions', 'DELETE'); -- expect false
+--
+-- -- Full column-privilege listing, for an eyeball diff against the above:
+-- select column_name, privilege_type from information_schema.column_privileges
+--   where table_schema = 'public' and table_name = 'intake_sessions'
+--     and grantee = 'service_role' and privilege_type = 'UPDATE'
+--   order by column_name;
+
+-- =======================================================================
+-- Rollback (reference only — not executed as part of this file)
+-- =======================================================================
+-- REVOKE UPDATE (confirmed_at, confirmed_by, resulting_customer_id, resulting_booking_id)
+--   ON public.intake_sessions FROM service_role;

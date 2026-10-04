@@ -7,12 +7,19 @@
 // the swappable vision adapter, compute client/existing-job matches, and
 // let the admin review/correct/save the result as a Pending Intake record.
 //
-// Explicitly OUT of scope here, deferred to Stage 5D: creating or updating
-// any customers/bookings row. Nothing in this file ever writes to those two
-// tables — only reads (to compute a match or verify a picked id), and only
-// ever writes to intake_sessions/intake_screenshots. `linked_existing_booking_id`
-// and `matched_customer_id` are intake-session metadata recording what the
-// admin decided to attach, not a mutation of the customer/booking itself.
+// Stage 5D (confirm-booking/confirm-attach-existing, below): this file
+// STILL never creates or updates any customers/bookings row — only reads
+// (to compute a match, verify a picked id, or re-validate a booking/client
+// id the admin's browser just produced via the existing, independently-
+// authorized POST /api/admin/client and POST /api/admin/booking endpoints).
+// Every write here remains scoped to intake_sessions/intake_screenshots.
+// `linked_existing_booking_id`, `matched_customer_id`,
+// `resulting_customer_id`, and `resulting_booking_id` are all intake-
+// session metadata recording what the admin resolved/confirmed, never a
+// mutation of the customer/booking row itself. Confirm-as-Lead (lead_only/
+// quote_discussion -> the `leads` table) is a separate file,
+// api/admin/lead.js, for the same reason — this file has no grant on
+// `leads` and never needs one.
 //
 // requireAdmin() gates every action below EXCEPT ?action=cleanup-expired,
 // which is invoked by a Vercel Cron job rather than a logged-in admin and
@@ -22,11 +29,11 @@
 // Screenshot retention (hardening pass, before anything here was ever
 // deployed): discarded intakes are cleaned up immediately (unchanged);
 // processing/pending_review/extraction_failed intakes age out after
-// PENDING_RETENTION_DAYS, confirmed ones (Stage 5D, not built) after
-// CONFIRMED_RETENTION_DAYS — see handleCleanupExpired(). Cleanup only ever
-// removes screenshots (Storage objects + rows); extracted_data/
-// ai_raw_extraction/classification/match state on intake_sessions is never
-// touched by it.
+// PENDING_RETENTION_DAYS, confirmed ones (now reachable as of Stage 5D)
+// after CONFIRMED_RETENTION_DAYS — see handleCleanupExpired(). Cleanup only
+// ever removes screenshots (Storage objects + rows); extracted_data/
+// ai_raw_extraction/classification/match/confirmed state on intake_sessions
+// is never touched by it.
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { normalizePhone } = require("../_lib/customer-identity");
@@ -91,7 +98,7 @@ module.exports = async (req, res) => {
     return handleList(req, res);
   }
 
-  if (req.method === "PATCH") return handlePatch(req, res);
+  if (req.method === "PATCH") return handlePatch(req, res, session);
 
   res.status(405).json({ error: "Method not allowed" });
 };
@@ -535,7 +542,7 @@ async function handleDetail(req, res, id) {
     const sessionRes = await supabase
       .from("intake_sessions")
       .select(
-        "id, created_at, updated_at, status, extraction_error, extracted_data, classification, classification_confidence, match_status, matched_customer_id, linked_existing_booking_id, screenshots_expired_at"
+        "id, created_at, updated_at, status, extraction_error, extracted_data, classification, classification_confidence, match_status, matched_customer_id, linked_existing_booking_id, screenshots_expired_at, confirmed_at, confirmed_by, resulting_customer_id, resulting_booking_id"
       )
       .eq("id", id)
       .maybeSingle();
@@ -620,6 +627,10 @@ async function handleDetail(req, res, id) {
         existingJobCandidates: existingJobCandidates,
         screenshots: screenshots,
         screenshotsExpiredAt: row.screenshots_expired_at,
+        confirmedAt: row.confirmed_at,
+        confirmedBy: row.confirmed_by,
+        resultingCustomerId: row.resulting_customer_id,
+        resultingBookingId: row.resulting_booking_id,
       },
     });
   } catch (err) {
@@ -629,13 +640,24 @@ async function handleDetail(req, res, id) {
 }
 
 // ---------------------------------------------------------------------
-// PATCH /api/admin/intake — every review/edit/save-pending action,
+// PATCH /api/admin/intake — every review/edit/save-pending/confirm action,
 // discriminated by body.action (same convention as api/admin/client.js's
-// own PATCH). NONE of these write to customers or bookings — see the file
-// header. Confirming an intake into a real customer/booking is Stage 5D,
-// not implemented here.
+// own PATCH).
+//
+// Stage 5D (confirm-booking/confirm-attach-existing): still NEVER writes to
+// customers or bookings — see tests/phase3c-batch5-intake-endpoint.test.js's
+// "never writes to customers or bookings" regression test, deliberately
+// kept green. A booking/customer is created by the ADMIN'S BROWSER calling
+// the existing, already-reviewed POST /api/admin/client and POST
+// /api/admin/booking endpoints directly (exactly the same two calls the
+// "+ New Job" flow already makes) — this file only ever records the
+// resulting ids as read-pointers on its own intake_sessions row afterward.
+// AI never writes directly anywhere, and neither does this file: every
+// write below is either intake-session metadata (as always) or a pointer
+// to a row an authenticated admin's own browser action just created/
+// resolved through its own, independently-validated endpoint.
 // ---------------------------------------------------------------------
-async function handlePatch(req, res) {
+async function handlePatch(req, res, session) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const action = typeof body.action === "string" ? body.action.trim() : "";
 
@@ -645,8 +667,176 @@ async function handlePatch(req, res) {
   if (action === "link-existing-booking") return handleLinkExistingBooking(req, res, body);
   if (action === "remove-screenshot") return handleRemoveScreenshot(req, res, body);
   if (action === "discard") return handleDiscard(req, res, body);
+  if (action === "confirm-booking") return handleConfirmBooking(req, res, body, session);
+  if (action === "confirm-attach-existing") return handleConfirmAttachExisting(req, res, body, session);
 
   res.status(400).json({ error: "Unknown action." });
+}
+
+// Admin just created or resolved a real booking (via POST /api/admin/client
+// then POST /api/admin/booking, exactly like "+ New Job" — see this
+// function's own module-level header) and is now recording that outcome on
+// the intake. Body: { id, bookingId, customerId }. Re-validates bookingId
+// actually belongs to customerId (defense in depth against a caller
+// claiming an unrelated booking as this intake's outcome) before writing
+// anything — never trusts the browser's say-so alone for the one fact that
+// actually matters here.
+//
+// Idempotent against a double-click/retry: calling this again with the
+// SAME bookingId/customerId on an already-confirmed intake is a no-op
+// success (the booking was already created once; this merely re-records an
+// identical outcome). Calling it with a DIFFERENT bookingId/customerId on
+// an already-confirmed intake is refused — that would silently overwrite
+// which booking this intake resolved to, which must never happen silently.
+async function handleConfirmBooking(req, res, body, session) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+  const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+  if (!bookingId || !UUID_RE.test(bookingId) || !customerId || !UUID_RE.test(customerId)) {
+    res.status(400).json({ error: "A valid booking and client are required to confirm this intake." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase
+      .from("intake_sessions")
+      .select("id, status, resulting_booking_id, resulting_customer_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    const row = sessionRes.data;
+    if (!row) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+
+    if (row.status === "confirmed") {
+      if (row.resulting_booking_id === bookingId && row.resulting_customer_id === customerId) {
+        res.status(200).json({ ok: true, id: id, status: "confirmed", resultingBookingId: bookingId, resultingCustomerId: customerId });
+        return;
+      }
+      res.status(400).json({ error: "This intake has already been confirmed to a different booking." });
+      return;
+    }
+    if (row.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be confirmed right now." });
+      return;
+    }
+
+    const bookingRes = await supabase.from("bookings").select("id, customer_id").eq("id", bookingId).maybeSingle();
+    if (bookingRes.error) throw bookingRes.error;
+    if (!bookingRes.data || bookingRes.data.customer_id !== customerId) {
+      res.status(400).json({ error: "That booking does not belong to the given client." });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({
+        status: "confirmed",
+        confirmed_at: nowIso,
+        confirmed_by: session.email,
+        resulting_customer_id: customerId,
+        resulting_booking_id: bookingId,
+        // The booking just confirmed into existence IS the resolved client
+        // — any earlier needs_confirmation/new_candidate match state on
+        // this intake is now moot, same as handleSetClientMatch's own
+        // existing_exact transition.
+        matched_customer_id: customerId,
+        match_status: "existing_exact",
+        updated_at: nowIso,
+      })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, status: "confirmed", resultingBookingId: bookingId, resultingCustomerId: customerId });
+  } catch (err) {
+    console.error("Intake confirm-booking failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not confirm this intake." });
+  }
+}
+
+// Existing Job Update classification: the admin already picked which of the
+// matched client's existing bookings this screenshot is about (PATCH
+// ?action=link-existing-booking, unchanged, still the only way
+// linked_existing_booking_id gets set). Confirming here only ever records
+// that pointer onto the intake — it NEVER modifies the linked booking
+// itself, per the brief's explicit requirement ("any actual booking field
+// changes must be separately reviewed/confirmed"). Body: { id } only.
+async function handleConfirmAttachExisting(req, res, body, session) {
+  const supabase = getServiceClient();
+  if (!supabase) return serverNotConfigured(res);
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Intake not found." });
+    return;
+  }
+
+  try {
+    const sessionRes = await supabase
+      .from("intake_sessions")
+      .select("id, status, matched_customer_id, linked_existing_booking_id, resulting_booking_id, resulting_customer_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (sessionRes.error) throw sessionRes.error;
+    const row = sessionRes.data;
+    if (!row) {
+      res.status(404).json({ error: "Intake not found." });
+      return;
+    }
+
+    if (row.status === "confirmed") {
+      if (row.resulting_booking_id === row.linked_existing_booking_id && row.linked_existing_booking_id) {
+        res.status(200).json({ ok: true, id: id, status: "confirmed", resultingBookingId: row.resulting_booking_id, resultingCustomerId: row.resulting_customer_id });
+        return;
+      }
+      res.status(400).json({ error: "This intake has already been confirmed." });
+      return;
+    }
+    if (row.status !== "pending_review") {
+      res.status(400).json({ error: "This intake cannot be confirmed right now." });
+      return;
+    }
+    if (!row.linked_existing_booking_id) {
+      res.status(400).json({ error: "Select an existing job to attach before confirming." });
+      return;
+    }
+    if (!row.matched_customer_id) {
+      // Can't happen in practice — linking a booking already requires a
+      // matched client (see handleLinkExistingBooking) — but never trust
+      // that invariant blindly when writing a confirmed/terminal state.
+      res.status(400).json({ error: "Select a client before confirming." });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from("intake_sessions")
+      .update({
+        status: "confirmed",
+        confirmed_at: nowIso,
+        confirmed_by: session.email,
+        resulting_customer_id: row.matched_customer_id,
+        resulting_booking_id: row.linked_existing_booking_id,
+        updated_at: nowIso,
+      })
+      .eq("id", id);
+    if (updateError) throw updateError;
+
+    res.status(200).json({ ok: true, id: id, status: "confirmed", resultingBookingId: row.linked_existing_booking_id, resultingCustomerId: row.matched_customer_id });
+  } catch (err) {
+    console.error("Intake confirm-attach-existing failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not confirm this intake." });
+  }
 }
 
 // Admin corrections to extracted field values, before confirming. Only

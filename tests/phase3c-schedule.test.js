@@ -871,6 +871,17 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
       "api/admin/intake.js: .update(",
+      // Phase 3C Stage 5D added exactly two more updates —
+      // handleConfirmBooking() and handleConfirmAttachExisting() — plus the
+      // new api/admin/lead.js file (one insert, one update). See
+      // tests/phase3a-admin-status-write.test.js's copy of this same guard
+      // for the full per-call breakdown, and
+      // tests/phase3c-stage5d-intake-confirm.test.js /
+      // tests/phase3c-stage5d-lead-confirm.test.js for behavioral coverage.
+      "api/admin/intake.js: .update(",
+      "api/admin/intake.js: .update(",
+      "api/admin/lead.js: .insert(",
+      "api/admin/lead.js: .update(",
     ],
     "found: " + JSON.stringify(found)
   );
