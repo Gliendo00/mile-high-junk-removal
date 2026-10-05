@@ -253,6 +253,12 @@
   -webkit-tap-highlight-color: transparent;
 }
 .admin-bottom-nav-item-icon { flex: none; }
+/* Longer labels ("Other Revenue") shrink just enough to stay on one line,
+   matching the rest of the row, instead of wrapping to two. */
+.admin-bottom-nav-item-long-label span {
+  font-size: 8px;
+  white-space: nowrap;
+}
 .admin-bottom-nav-item.is-active {
   background: rgba(57, 255, 20, 0.12);
   color: #39ff14;

@@ -98,7 +98,11 @@
   function buildBottomNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + '"' +
+      // Longer labels (currently just "Other Revenue") get a smaller-text
+      // modifier so they stay on one line like every other item, instead of
+      // wrapping to two and standing out from the rest of the row.
+      var longLabel = s.label.length > 10;
+      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + (longLabel ? ' admin-bottom-nav-item-long-label' : '') + '"' +
         (active ? ' aria-current="page"' : '') + '>' +
         mascotIcon(s.key, 'admin-bottom-nav-item-icon') +
         '<span>' + s.label + '</span></a>';
