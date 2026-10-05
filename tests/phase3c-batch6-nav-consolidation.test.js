@@ -88,11 +88,12 @@ ALL_NAV_PAGES.forEach((rel) => {
 // Home, was added FIRST (before Schedule) — the new /admin/home/
 // operational-overview landing page. Same non-regression note applies.
 //
-// UPDATED AGAIN (bottom-nav mascot icon rollout, 2026-10): the BOTTOM nav
-// now gives every destination, Other Revenue included, its own branded
-// mascot icon plus a visible text label. The DESKTOP top nav is explicitly
-// untouched by this rollout — it keeps its original 5 line-art SVG icons
-// and Other Revenue's existing icon-only mascot treatment there.
+// UPDATED AGAIN (mascot icon rollout, 2026-10): every destination, Other
+// Revenue included, now gets its own branded mascot icon plus a visible
+// text label, in BOTH the desktop top nav and the mobile bottom nav —
+// first shipped bottom-nav-only, then extended to the desktop nav too at
+// Rocky's explicit request the same day. No more icon-only/SVG-only
+// special-casing anywhere in SECTIONS.
 test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, in that order, with no Requests/Intakes destination", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
@@ -103,27 +104,15 @@ test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expe
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
 
-test("admin/admin-chrome.js: Other Revenue's DESKTOP nav entry is still icon-only (desktopIconOnly: true) — untouched by the bottom-nav mascot rollout", () => {
+test("admin/admin-chrome.js: no SECTIONS entry carries an icon-only or desktop-specific-icon flag anymore", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
-  const otherRevenueEntry = sectionsMatch[1].split(/\},?\s*\n/).find((line) => /key:\s*'other-revenue'/.test(line));
-  assert.ok(otherRevenueEntry, "other-revenue entry not found in SECTIONS");
-  assert.ok(/desktopIconOnly:\s*true/.test(otherRevenueEntry));
-  assert.ok(/desktopIcon:\s*'mascot'/.test(otherRevenueEntry));
+  assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
+  assert.ok(!/iconOnly/.test(sectionsMatch[1]), "no SECTIONS entry should carry an iconOnly/desktopIconOnly flag");
+  assert.ok(!/desktopIcon/.test(sectionsMatch[1]), "no SECTIONS entry should carry a separate desktopIcon anymore");
 });
 
-test("admin/admin-chrome.js: the other 5 SECTIONS entries still use a desktop line-art SVG icon key, unchanged by the bottom-nav mascot rollout", () => {
-  const src = readNormalized("admin/admin-chrome.js");
-  const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
-  const expected = { home: "home", schedule: "calendar", leads: "leads", clients: "people", expenses: "receipt" };
-  Object.keys(expected).forEach((key) => {
-    const entry = sectionsMatch[1].split(/\},?\s*\n/).find((line) => new RegExp("key:\\s*'" + key + "'").test(line));
-    assert.ok(entry, key + " entry not found in SECTIONS");
-    assert.ok(new RegExp("desktopIcon:\\s*'" + expected[key] + "'").test(entry), key + " must keep its original desktopIcon");
-  });
-});
-
-test("admin/admin-chrome.js: every SECTIONS key has a mascot image in MASCOT_SRC, used by the bottom nav", () => {
+test("admin/admin-chrome.js: every SECTIONS key has a mascot image in MASCOT_SRC, used by both navs", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   const keys = Array.from(sectionsMatch[1].matchAll(/key:\s*'([^']+)'/g)).map((m) => m[1]);
@@ -145,13 +134,14 @@ test("admin/admin-chrome.js: buildBottomNav renders a mascot icon + visible <spa
   assert.ok(!/admin-bottom-nav-item-icon-only/.test(src), "the bottom nav no longer has an icon-only item");
 });
 
-test("admin/admin-chrome.js: buildDesktopNav still branches on desktopIconOnly (Other Revenue only) exactly like before this rollout", () => {
+test("admin/admin-chrome.js: buildDesktopNav renders a mascot icon + visible <span> label for every section (Other Revenue included), no icon-only branch left", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const buildDesktopNavMatch = src.match(/function buildDesktopNav[\s\S]*?\n {2}\}/);
   assert.ok(buildDesktopNavMatch, "buildDesktopNav function not found");
   const body = buildDesktopNavMatch[0];
-  assert.ok(/s\.desktopIconOnly/.test(body), "buildDesktopNav must still branch on desktopIconOnly");
-  assert.ok(/admin-nav-item-icon-only/.test(body), "buildDesktopNav must still apply the icon-only class");
+  assert.ok(/mascotIcon\(s\.key, 'admin-nav-item-icon'\)/.test(body));
+  assert.ok(/<span>' \+ s\.label \+ '<\/span>/.test(body), "desktop nav must render every section's label, unconditionally");
+  assert.ok(!/admin-nav-item-icon-only/.test(src), "the desktop nav no longer has an icon-only item");
 });
 
 // =======================================================================

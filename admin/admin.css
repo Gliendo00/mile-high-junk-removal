@@ -157,21 +157,6 @@
   background: rgba(57, 255, 20, 0.12);
   color: #39ff14;
 }
-/* Other Revenue's DESKTOP nav entry only — icon only (the branded money
-   mascot image), no text label. Square/centered instead of the icon+label
-   pill the other 5 destinations use. The bottom nav shows a label here
-   too — see .admin-bottom-nav-item below. */
-.admin-nav-item-icon-only {
-  gap: 0;
-  padding: 0;
-  width: 40px;
-  justify-content: center;
-}
-.admin-nav-item-icon-only .admin-nav-item-icon {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-}
 
 .admin-header-right {
   display: flex;

@@ -19,11 +19,6 @@
 // (which must use textContent for anything server/user-derived).
 (function () {
   var ICONS = {
-    home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/>',
-    calendar: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/>',
-    leads: '<path d="M3 4h18l-7 9v6l-4 2v-8z"/>',
-    people: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    receipt: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/>',
     arrowDown: '<line x1="12" y1="4" x2="12" y2="18"/><polyline points="6 12 12 18 18 12"/>'
   };
 
@@ -32,10 +27,9 @@
       'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
   }
 
-  // The branded mascot icons (raster images) — used for every destination in
-  // the MOBILE BOTTOM NAV only. The desktop top nav keeps its original
-  // line-art SVGs (via ICONS/icon() above) and Other Revenue's existing
-  // icon-only mascot treatment, untouched.
+  // Every section's nav icon is a branded mascot (a raster image), one per
+  // destination, all in the same sticker-badge art style — used in BOTH the
+  // desktop top nav and the mobile bottom nav.
   var MASCOT_SRC = {
     home: '/images/mile-high-nav-home-mascot.png',
     schedule: '/images/mile-high-nav-schedule-mascot.png',
@@ -50,19 +44,15 @@
   }
 
   // Section destinations — single source of truth for both the desktop nav
-  // and the mobile bottom nav. `desktopIcon` is the line-art icon used only
-  // in the desktop top nav; the bottom nav always uses the mascot image
-  // keyed by `key` in MASCOT_SRC, plus a label, for every section including
-  // Other Revenue. `desktopIconOnly` keeps Other Revenue's existing
-  // icon-only treatment in the desktop nav specifically (unchanged, per
-  // Rocky's earlier explicit choice there).
+  // and the mobile bottom nav. Every section shows its mascot icon + a text
+  // label in both navs.
   var SECTIONS = [
-    { key: 'home', href: '/admin/home/', label: 'Home', desktopIcon: 'home' },
-    { key: 'schedule', href: '/admin/', label: 'Schedule', desktopIcon: 'calendar' },
-    { key: 'leads', href: '/admin/leads/', label: 'Leads', desktopIcon: 'leads' },
-    { key: 'clients', href: '/admin/clients/', label: 'Clients', desktopIcon: 'people' },
-    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses', desktopIcon: 'receipt' },
-    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue', desktopIcon: 'mascot', desktopIconOnly: true }
+    { key: 'home', href: '/admin/home/', label: 'Home' },
+    { key: 'schedule', href: '/admin/', label: 'Schedule' },
+    { key: 'leads', href: '/admin/leads/', label: 'Leads' },
+    { key: 'clients', href: '/admin/clients/', label: 'Clients' },
+    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses' },
+    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue' }
   ];
 
   // Which section is "current" — by URL path, so no page needs a data
@@ -87,11 +77,10 @@
   function buildDesktopNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      var desktopIcon = s.desktopIcon === 'mascot' ? mascotIcon(s.key, 'admin-nav-item-icon') : icon(s.desktopIcon, 'admin-nav-item-icon');
-      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + (s.desktopIconOnly ? ' admin-nav-item-icon-only' : '') + '"' +
-        (active ? ' aria-current="page"' : '') + (s.desktopIconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
-        desktopIcon +
-        (s.desktopIconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
+      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + '"' +
+        (active ? ' aria-current="page"' : '') + '>' +
+        mascotIcon(s.key, 'admin-nav-item-icon') +
+        '<span>' + s.label + '</span></a>';
     }).join('');
   }
 
@@ -100,7 +89,8 @@
       var active = s.key === activeKey;
       // Longer labels (currently just "Other Revenue") get a smaller-text
       // modifier so they stay on one line like every other item, instead of
-      // wrapping to two and standing out from the rest of the row.
+      // wrapping to two and standing out from the rest of the row. The
+      // desktop nav has room to spare per item, so it doesn't need this.
       var longLabel = s.label.length > 10;
       return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + (longLabel ? ' admin-bottom-nav-item-long-label' : '') + '"' +
         (active ? ' aria-current="page"' : '') + '>' +
