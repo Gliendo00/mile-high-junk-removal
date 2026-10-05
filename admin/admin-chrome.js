@@ -32,25 +32,37 @@
       'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + '</svg>';
   }
 
-  // Other Revenue's nav icon is the branded money mascot (a raster image),
-  // not a line-art SVG like the other 4 — deliberately different, per
-  // Rocky's own choice. Kept as its own small builder rather than forcing
-  // it through icon()'s SVG-only signature.
-  function mascotIcon(cls) {
-    return '<img class="' + cls + '" src="/images/mile-high-money-mascot.png" alt="" width="26" height="26">';
+  // The branded mascot icons (raster images) — used for every destination in
+  // the MOBILE BOTTOM NAV only. The desktop top nav keeps its original
+  // line-art SVGs (via ICONS/icon() above) and Other Revenue's existing
+  // icon-only mascot treatment, untouched.
+  var MASCOT_SRC = {
+    home: '/images/mile-high-nav-home-mascot.png',
+    schedule: '/images/mile-high-nav-schedule-mascot.png',
+    leads: '/images/mile-high-nav-leads-mascot.png',
+    clients: '/images/mile-high-nav-clients-mascot.png',
+    expenses: '/images/mile-high-nav-expenses-mascot.png',
+    'other-revenue': '/images/mile-high-money-mascot.png'
+  };
+
+  function mascotIcon(key, cls) {
+    return '<img class="' + cls + '" src="' + MASCOT_SRC[key] + '" alt="" width="26" height="26">';
   }
 
   // Section destinations — single source of truth for both the desktop nav
-  // and the mobile bottom nav. iconOnly sections render with no text label
-  // (just the icon) in both navs — currently just Other Revenue, per
-  // explicit request ("only a money sign icon").
+  // and the mobile bottom nav. `desktopIcon` is the line-art icon used only
+  // in the desktop top nav; the bottom nav always uses the mascot image
+  // keyed by `key` in MASCOT_SRC, plus a label, for every section including
+  // Other Revenue. `desktopIconOnly` keeps Other Revenue's existing
+  // icon-only treatment in the desktop nav specifically (unchanged, per
+  // Rocky's earlier explicit choice there).
   var SECTIONS = [
-    { key: 'home', href: '/admin/home/', label: 'Home', icon: 'home' },
-    { key: 'schedule', href: '/admin/', label: 'Schedule', icon: 'calendar' },
-    { key: 'leads', href: '/admin/leads/', label: 'Leads', icon: 'leads' },
-    { key: 'clients', href: '/admin/clients/', label: 'Clients', icon: 'people' },
-    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses', icon: 'receipt' },
-    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue', icon: 'mascot', iconOnly: true }
+    { key: 'home', href: '/admin/home/', label: 'Home', desktopIcon: 'home' },
+    { key: 'schedule', href: '/admin/', label: 'Schedule', desktopIcon: 'calendar' },
+    { key: 'leads', href: '/admin/leads/', label: 'Leads', desktopIcon: 'leads' },
+    { key: 'clients', href: '/admin/clients/', label: 'Clients', desktopIcon: 'people' },
+    { key: 'expenses', href: '/admin/expenses/', label: 'Expenses', desktopIcon: 'receipt' },
+    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue', desktopIcon: 'mascot', desktopIconOnly: true }
   ];
 
   // Which section is "current" — by URL path, so no page needs a data
@@ -72,27 +84,24 @@
     return 'schedule'; // /admin/, /admin/booking*/
   }
 
-  function sectionIcon(s, cls) {
-    return s.icon === 'mascot' ? mascotIcon(cls) : icon(s.icon, cls);
-  }
-
   function buildDesktopNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + (s.iconOnly ? ' admin-nav-item-icon-only' : '') + '"' +
-        (active ? ' aria-current="page"' : '') + (s.iconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
-        sectionIcon(s, 'admin-nav-item-icon') +
-        (s.iconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
+      var desktopIcon = s.desktopIcon === 'mascot' ? mascotIcon(s.key, 'admin-nav-item-icon') : icon(s.desktopIcon, 'admin-nav-item-icon');
+      return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + (s.desktopIconOnly ? ' admin-nav-item-icon-only' : '') + '"' +
+        (active ? ' aria-current="page"' : '') + (s.desktopIconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
+        desktopIcon +
+        (s.desktopIconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
     }).join('');
   }
 
   function buildBottomNav(activeKey) {
     return SECTIONS.map(function (s) {
       var active = s.key === activeKey;
-      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + (s.iconOnly ? ' admin-bottom-nav-item-icon-only' : '') + '"' +
-        (active ? ' aria-current="page"' : '') + (s.iconOnly ? ' aria-label="' + s.label + '"' : '') + '>' +
-        sectionIcon(s, 'admin-bottom-nav-item-icon') +
-        (s.iconOnly ? '' : '<span>' + s.label + '</span>') + '</a>';
+      return '<a href="' + s.href + '" class="admin-bottom-nav-item' + (active ? ' is-active' : '') + '"' +
+        (active ? ' aria-current="page"' : '') + '>' +
+        mascotIcon(s.key, 'admin-bottom-nav-item-icon') +
+        '<span>' + s.label + '</span></a>';
     }).join('');
   }
 

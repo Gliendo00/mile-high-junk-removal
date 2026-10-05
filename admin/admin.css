@@ -157,9 +157,10 @@
   background: rgba(57, 255, 20, 0.12);
   color: #39ff14;
 }
-/* Other Revenue's nav entry — icon only (the branded money mascot image),
-   no text label. Square/centered instead of the icon+label pill the other
-   4 destinations use. */
+/* Other Revenue's DESKTOP nav entry only — icon only (the branded money
+   mascot image), no text label. Square/centered instead of the icon+label
+   pill the other 5 destinations use. The bottom nav shows a label here
+   too — see .admin-bottom-nav-item below. */
 .admin-nav-item-icon-only {
   gap: 0;
   padding: 0;
@@ -255,13 +256,6 @@
 .admin-bottom-nav-item.is-active {
   background: rgba(57, 255, 20, 0.12);
   color: #39ff14;
-}
-/* Other Revenue's bottom-nav entry — icon only (the branded money mascot
-   image), no text label, same reasoning as .admin-nav-item-icon-only. */
-.admin-bottom-nav-item-icon-only .admin-bottom-nav-item-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
 }
 
 /* Requests nav badge — a small restrained count, not an alert. Deliberately
