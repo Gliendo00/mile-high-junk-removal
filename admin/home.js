@@ -52,6 +52,16 @@ document.addEventListener('DOMContentLoaded', function () {
     if (e.key === 'Escape') closeSidebar();
   });
 
+  var logoutBtn = document.getElementById('logout-btn');
+  logoutBtn.addEventListener('click', function () {
+    logoutBtn.disabled = true;
+    fetch('/api/admin/logout', { method: 'POST' })
+      .catch(function () {})
+      .then(function () {
+        window.location.href = '/admin/login/';
+      });
+  });
+
   // -----------------------------------------------------------------
   // Greeting — adjusts to the browser's own local time of day (this is a
   // personal greeting, not a business-day boundary, so unlike "today" on
