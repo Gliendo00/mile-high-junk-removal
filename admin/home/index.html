@@ -16,135 +16,143 @@
 
 <div id="admin-chrome"></div>
 
-<main class="admin-main admin-main-wide">
-  <div class="admin-dash-shell">
-    <button type="button" id="dash-sidebar-toggle" class="admin-dash-sidebar-toggle" aria-expanded="false" aria-controls="dash-sidebar">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      Menu
-    </button>
-    <div id="dash-sidebar-backdrop" class="admin-dash-sidebar-backdrop" hidden></div>
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-    <aside class="admin-dash-sidebar" id="dash-sidebar">
-      <a class="admin-dash-nav-link is-active" href="/admin/home/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/></svg>
-        <span class="admin-dash-nav-link-label">Dashboard</span>
-      </a>
-      <a class="admin-dash-nav-link" href="/admin/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-        <span class="admin-dash-nav-link-label">Schedule</span>
-      </a>
-      <a class="admin-dash-nav-link" href="/admin/leads/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
-        <span class="admin-dash-nav-link-label">Leads</span>
-      </a>
-      <a class="admin-dash-nav-link" href="/admin/clients/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <span class="admin-dash-nav-link-label">Clients</span>
-      </a>
-      <a class="admin-dash-nav-link" href="/admin/expenses/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
-        <span class="admin-dash-nav-link-label">Expenses</span>
-      </a>
+  <div class="admin-home-greeting">
+    <h1 id="dash-greeting">Good morning.</h1>
+    <div class="admin-home-greeting-sub">Here's your Mile High snapshot for today.</div>
+  </div>
 
-      <div class="admin-dash-sidebar-divider"></div>
-      <div class="admin-dash-sidebar-label">Quick Actions</div>
-      <a class="admin-dash-nav-link admin-dash-quick-action" href="/admin/booking-new/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span class="admin-dash-nav-link-label">New Job</span>
-      </a>
-      <a class="admin-dash-nav-link admin-dash-quick-action" href="/admin/intake-new/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span class="admin-dash-nav-link-label">LEAD <svg class="admin-lead-arrow-inline" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="4" x2="12" y2="18"/><polyline points="6 12 12 18 18 12"/></svg></span>
-      </a>
-      <a class="admin-dash-nav-link admin-dash-quick-action" id="qa-add-expense" href="/admin/expenses/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span class="admin-dash-nav-link-label">Add Expense</span>
-      </a>
-      <a class="admin-dash-nav-link admin-dash-quick-action" id="qa-new-client" href="/admin/clients/">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span class="admin-dash-nav-link-label">New Client</span>
-      </a>
-    </aside>
+  <!-- Search Whisperer — visual shell only, deliberately real-looking but
+       inert (native disabled attributes, no click handler, no fetch). See
+       admin/home.js's header comment for why. Shown immediately, not
+       gated behind the data loading state below. A small "Coming soon"
+       badge replaces what was previously a full explanatory paragraph
+       (UI refinement pass) — still announced to screen readers via
+       aria-describedby, just not taking up a whole line of vertical space
+       for sighted users anymore. -->
+  <div class="admin-home-search">
+    <span class="admin-home-search-icon" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    </span>
+    <input type="text" class="admin-home-search-input" placeholder="Search CRM… (leads, clients, jobs, notes, etc.)" disabled aria-describedby="search-whisperer-note">
+    <button type="button" class="admin-home-search-ask" disabled>Ask</button>
+  </div>
+  <span id="search-whisperer-note" class="admin-home-search-badge">Coming soon</span>
 
-    <div class="admin-dash-content">
-      <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+  <div id="loading" class="admin-loading">Loading dashboard…</div>
 
-      <div class="admin-dash-greeting">
-        <h1 id="dash-greeting">Good morning.</h1>
-        <div class="admin-dash-greeting-sub">Here's what's happening with Mile High Junk Removal today.</div>
+  <div id="dash-body" style="display:none">
+
+    <div class="admin-home-metrics">
+      <a href="/admin/leads/" class="admin-home-metric-card is-attention">
+        <div class="admin-home-metric-label">Needs Attention</div>
+        <div class="admin-home-metric-value" id="stat-leads-attention">0</div>
+        <div class="admin-home-metric-sub" id="stat-leads-attention-sub">—</div>
+      </a>
+      <a href="/admin/" class="admin-home-metric-card">
+        <div class="admin-home-metric-label">Today</div>
+        <div class="admin-home-metric-value" id="stat-today-jobs">0</div>
+        <div class="admin-home-metric-sub" id="stat-today-jobs-sub">—</div>
+      </a>
+      <a href="/admin/" class="admin-home-metric-card">
+        <div class="admin-home-metric-label">Booked</div>
+        <div class="admin-home-metric-value" id="stat-booked-week">$0</div>
+        <div class="admin-home-metric-sub" id="stat-booked-week-sub">—</div>
+      </a>
+      <a href="/admin/" class="admin-home-metric-card">
+        <div class="admin-home-metric-label">Revenue</div>
+        <div class="admin-home-metric-value" id="stat-revenue-week">$0</div>
+        <div class="admin-home-metric-sub" id="stat-revenue-week-sub">—</div>
+      </a>
+    </div>
+
+    <div class="admin-home-card admin-home-card-priority">
+      <div class="admin-home-card-header">
+        <h2 class="admin-home-card-title">
+          <svg class="admin-home-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
+          Leads Need Your Attention <span class="admin-home-card-count" id="attention-count"></span>
+        </h2>
+        <a href="/admin/leads/" class="admin-home-card-link">View All Leads &rarr;</a>
       </div>
+      <div id="attention-list" class="admin-home-row-list"></div>
+      <div id="attention-empty" class="admin-home-empty-note" style="display:none">All caught up — nothing needs attention right now.</div>
+    </div>
 
-      <div id="loading" class="admin-loading">Loading dashboard…</div>
+    <div class="admin-home-card">
+      <div class="admin-home-card-header">
+        <h2 class="admin-home-card-title">
+          <svg class="admin-home-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Today's Schedule
+        </h2>
+        <a href="/admin/" class="admin-home-card-link">View Schedule &rarr;</a>
+      </div>
+      <div id="today-schedule-list" class="admin-home-row-list"></div>
+      <div id="today-schedule-empty" class="admin-home-empty-note" style="display:none">No jobs scheduled today.</div>
+    </div>
 
-      <div id="dash-body" style="display:none">
-        <div class="admin-dash-card">
-          <div class="admin-dash-card-header">
-            <h2 class="admin-dash-card-title">
-              <svg class="admin-dash-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-              Today's Schedule
-            </h2>
-            <a href="/admin/" class="admin-dash-card-link">View Schedule &rarr;</a>
-          </div>
-          <div id="today-schedule-list" class="admin-dash-row-list"></div>
-          <div id="today-schedule-empty" class="admin-dash-empty-note" style="display:none">No jobs scheduled today.</div>
+    <div class="admin-home-card">
+      <div class="admin-home-card-header">
+        <h2 class="admin-home-card-title">
+          <svg class="admin-home-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Quick Actions
+        </h2>
+      </div>
+      <div class="admin-home-quick-actions">
+        <a class="admin-home-qa-btn" href="/admin/booking-new/">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+          <span>New Job</span>
+        </a>
+        <a class="admin-home-qa-btn" href="/admin/intake-new/">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-4 4-3-3-5 5"/></svg>
+          <span>Scan Lead</span>
+        </a>
+        <button type="button" class="admin-home-qa-btn" id="qa-add-expense-btn" aria-expanded="false" aria-controls="home-quick-expense-mount">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
+          <span>Add Expense</span>
+        </button>
+        <a class="admin-home-qa-btn" href="/admin/other-revenue/">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 6.5c0-1.9-2.2-3.5-5-3.5s-5 1.4-5 3.5S9.2 10 12 10s5 1.6 5 3.5-2.2 3.5-5 3.5-5-1.6-5-3.5"/></svg>
+          <span>Other Revenue</span>
+        </a>
+      </div>
+      <div id="home-quick-expense-mount" class="admin-home-quick-expense-mount" hidden></div>
+    </div>
+
+    <div class="admin-home-card admin-home-pulse-card">
+      <div class="admin-home-card-header">
+        <h2 class="admin-home-card-title">
+          Business Pulse <span class="admin-home-card-subtitle">This Week</span>
+        </h2>
+      </div>
+      <!-- Booked/Revenue deliberately NOT repeated here — already shown in
+           the metrics row above; Business Pulse now focuses on the 3
+           figures that aren't shown anywhere else on this page. -->
+      <div class="admin-home-pulse-grid">
+        <div class="admin-home-pulse-item">
+          <div class="admin-home-pulse-label">Completed</div>
+          <div class="admin-home-pulse-value" id="pulse-completed">0 jobs</div>
         </div>
-
-        <div class="admin-dash-stats-grid">
-          <a href="/admin/" class="admin-dash-stat-card">
-            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
-            <div class="admin-dash-stat-label">Today's Jobs</div>
-            <div class="admin-dash-stat-value" id="stat-today-jobs">0</div>
-            <div class="admin-dash-stat-sub" id="stat-today-jobs-sub">—</div>
-          </a>
-          <a href="/admin/leads/" class="admin-dash-stat-card is-attention">
-            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg></span>
-            <div class="admin-dash-stat-label">Leads Need Attention</div>
-            <div class="admin-dash-stat-value" id="stat-leads-attention">0</div>
-            <div class="admin-dash-stat-sub" id="stat-leads-attention-sub">—</div>
-          </a>
-          <a href="/admin/" class="admin-dash-stat-card">
-            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 6.5c0-1.9-2.2-3.5-5-3.5s-5 1.4-5 3.5S9.2 10 12 10s5 1.6 5 3.5-2.2 3.5-5 3.5-5-1.6-5-3.5"/></svg></span>
-            <div class="admin-dash-stat-label">Revenue Today</div>
-            <div class="admin-dash-stat-value" id="stat-revenue-today">$0</div>
-            <div class="admin-dash-stat-sub" id="stat-revenue-today-sub">—</div>
-          </a>
-          <a href="/admin/leads/?bucket=followUp" class="admin-dash-stat-card is-attention">
-            <span class="admin-dash-stat-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
-            <div class="admin-dash-stat-label">Follow Ups Due</div>
-            <div class="admin-dash-stat-value" id="stat-followups">0</div>
-            <div class="admin-dash-stat-sub" id="stat-followups-sub">—</div>
-          </a>
+        <div class="admin-home-pulse-item">
+          <div class="admin-home-pulse-label">Expenses</div>
+          <div class="admin-home-pulse-value" id="pulse-expenses">$0</div>
         </div>
-
-        <div class="admin-dash-card">
-          <div class="admin-dash-card-header">
-            <h2 class="admin-dash-card-title">
-              <svg class="admin-dash-card-title-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 9v6l-4 2v-8z"/></svg>
-              Leads Needing Attention
-            </h2>
-            <a href="/admin/leads/" class="admin-dash-card-link">View Leads &rarr;</a>
-          </div>
-          <div id="attention-list" class="admin-dash-row-list"></div>
-          <div id="attention-empty" class="admin-dash-empty-note" style="display:none">All caught up — nothing needs attention right now.</div>
-        </div>
-
-        <div class="admin-dash-bottom-grid">
-          <div class="admin-dash-bottom-card">
-            <h3>Revenue This Week</h3>
-            <div class="admin-dash-week-total" id="week-revenue-total">$0</div>
-            <div class="admin-dash-sparkline" id="week-sparkline"></div>
-          </div>
-          <div class="admin-dash-bottom-card">
-            <h3>Lead Pipeline</h3>
-            <div id="pipeline-list"></div>
-          </div>
-          <div class="admin-dash-bottom-card">
-            <h3>Pending Intake</h3>
-            <div id="pending-intake-summary"></div>
-          </div>
+        <div class="admin-home-pulse-item admin-home-pulse-item-net">
+          <div class="admin-home-pulse-label">Net</div>
+          <div class="admin-home-pulse-value" id="pulse-net">$0</div>
         </div>
       </div>
     </div>
+
+    <!-- Website & Marketing Activity — a compact single row, not a full
+         card, since there is no real data source yet (see admin/home.js's
+         header). Never fabricates activity. -->
+    <div class="admin-home-marketing-row">
+      <span class="admin-home-marketing-row-label">Website &amp; Marketing Activity</span>
+      <span class="admin-home-marketing-row-status">Not connected yet</span>
+    </div>
+
   </div>
 </main>
 
@@ -152,6 +160,7 @@
 <script src="../admin-fetch.js"></script>
 <script src="../nav-badge.js"></script>
 <script src="../phone-format.js"></script>
+<script src="../quick-expense.js"></script>
 <script src="../home.js"></script>
 </body>
 </html>

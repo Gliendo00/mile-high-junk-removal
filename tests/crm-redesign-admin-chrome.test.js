@@ -44,10 +44,44 @@ test("admin-chrome.js never writes user/server-supplied data — only innerHTML'
   assert.ok(!/adminFetch|fetch\(/.test(chromeSrc), "admin-chrome.js must not fetch any data — it only renders the fixed nav shell");
 });
 
-test("admin-chrome.js: bottom nav mirrors the same 4 destinations in the same order as the desktop nav", () => {
-  const bottomFn = chromeSrc.match(/function buildBottomNav[\s\S]*?\n  \}/)[0];
+// UPDATED (mobile nav/More-menu refinement pass, 2026-10-11): the bottom
+// nav is no longer a 1:1 mirror of the desktop nav — it's now 4 direct
+// links (Home/Schedule/Leads/Clients) plus a "More" button that opens a
+// sheet containing Expenses/Other Revenue/Log Out. Desktop's inline nav is
+// completely unchanged (still all 6 SECTIONS via SECTIONS.map, same order).
+// The invariant this test protects — "bottom nav items are never
+// separately hardcoded, they're looked up from the same SECTIONS list" —
+// still holds, just via a SECTIONS-built lookup map (bySectionKey) instead
+// of a direct .map() over the whole list, since the bottom nav now shows
+// only a subset.
+test("admin-chrome.js: desktop nav still derives from the SECTIONS list (unchanged)", () => {
   const desktopFn = chromeSrc.match(/function buildDesktopNav[\s\S]*?\n  \}/)[0];
-  assert.ok(/SECTIONS\.map/.test(bottomFn) && /SECTIONS\.map/.test(desktopFn), "both nav builders must derive from the same SECTIONS list, not separately hardcoded markup");
+  assert.ok(/SECTIONS\.map/.test(desktopFn), "desktop nav must derive from the SECTIONS list, not hardcoded markup");
+});
+test("admin-chrome.js: bottom nav's 4 link items are looked up from a SECTIONS-built map, not separately hardcoded", () => {
+  const bottomFn = chromeSrc.match(/function buildBottomNav[\s\S]*?\n  \}/)[0];
+  assert.ok(/SECTIONS\.forEach/.test(bottomFn) && /bySectionKey\[/.test(bottomFn), "bottom nav must source its items from a map built off SECTIONS, not re-type their own href/label");
+});
+test("admin-chrome.js: bottom nav is exactly Home, Schedule, Leads, Clients (in order) plus a More button — Expenses/Other Revenue moved into the More sheet", () => {
+  const keysMatch = chromeSrc.match(/var BOTTOM_NAV_KEYS = \[([^\]]*)\];/);
+  assert.ok(keysMatch, "admin-chrome.js must define BOTTOM_NAV_KEYS");
+  const keys = Array.from(keysMatch[1].matchAll(/'([^']+)'/g)).map((m) => m[1]);
+  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients"]);
+  assert.ok(/id="admin-more-toggle"/.test(chromeSrc), "bottom nav must render a More button");
+});
+test("admin-chrome.js: the More sheet contains exactly Expenses + Other Revenue (from SECTIONS) plus Log Out, reusing the existing .admin-sheet-* chrome", () => {
+  const moreKeysMatch = chromeSrc.match(/var MORE_SHEET_KEYS = \[([^\]]*)\];/);
+  assert.ok(moreKeysMatch, "admin-chrome.js must define MORE_SHEET_KEYS");
+  const keys = Array.from(moreKeysMatch[1].matchAll(/'([^']+)'/g)).map((m) => m[1]);
+  assert.deepStrictEqual(keys, ["expenses", "other-revenue"]);
+  assert.ok(
+    /admin-sheet-overlay/.test(chromeSrc) && /admin-sheet-option/.test(chromeSrc) && /admin-sheet-cancel/.test(chromeSrc),
+    "the More sheet must reuse the existing .admin-sheet-overlay/.admin-sheet-option/.admin-sheet-cancel chrome, not a new modal pattern"
+  );
+  assert.ok(
+    /id="admin-more-logout"/.test(chromeSrc) && /realLogoutBtn\.click\(\)/.test(chromeSrc),
+    "the More sheet's Log Out row must trigger the real #logout-btn's own existing click handler (click()), never duplicate the logout fetch/redirect logic"
+  );
 });
 
 test("admin-chrome.js: Log Out button keeps id=\"logout-btn\" and admin-btn admin-btn-ghost classes (every page's own script wires its click handler by this id, unchanged)", () => {

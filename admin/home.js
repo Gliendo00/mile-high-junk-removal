@@ -1,19 +1,52 @@
-// /admin/home/ — operational-overview dashboard (UI batch). Deliberately
-// NOT an analytics page: every number here is either read straight off an
-// existing endpoint's response or computed with the exact same formula an
-// existing page already uses on that same data (see completedRevenueAmount
-// below, a duplicate of admin/schedule-financials.js's own function, same
-// per-file-duplication convention this project already follows throughout
-// admin/*-list.js/*-detail.js). Nothing here writes anything, and no new
-// API endpoint was added for this page — four existing, already-admin-
-// authenticated GETs, fetched in parallel:
+// /admin/home/ — "Morning Command Center" operational dashboard (redesign
+// pass, 2026-10-11). Replaces the previous dark-sidebar dashboard shell
+// with a single-column, mobile-first layout. Deliberately NOT an
+// analytics page: every number here is either read straight off an
+// existing endpoint's response or computed with the EXACT SAME formula an
+// existing page already uses on that same data — see completedRevenueAmount
+// and bookedJobAmount below, both byte-for-byte duplicates of admin/
+// schedule-financials.js's own functions (same per-file-duplication
+// convention this project already follows throughout admin/*-list.js/
+// *-detail.js), so Revenue/Booked here can never silently disagree with
+// what Schedule's own Business Pulse counters show for the same range.
+// Nothing here writes anything (except the inline Add Expense action,
+// which reuses admin/quick-expense.js's own existing, already-tested write
+// path unchanged), and no new API endpoint was added for this page — six
+// existing, already-admin-authenticated GETs, fetched in two stages:
+//
+//   Stage 1 (parallel, independent):
 //   - GET /api/admin/bookings?view=schedule&range=today  (Today's Jobs /
-//     Revenue Today / Today's Schedule)
-//   - GET /api/admin/bookings?view=schedule&range=week    (Revenue This
-//     Week + its sparkline)
+//     Today's Schedule)
+//   - GET /api/admin/bookings?view=schedule&range=week    (Booked This
+//     Week / Revenue This Week / Business Pulse — jobs + the week's real
+//     startDate/endDate, needed for stage 2 below)
 //   - GET /api/admin/intake                                (Pending Intake)
 //   - GET /api/admin/bookings?view=leads                   (Leads Need
-//     Attention / Follow Ups Due / Lead Pipeline / Leads Needing Attention)
+//     Attention / Leads Need Your Attention)
+//
+//   Stage 2 (parallel, fired only once the week's startDate/endDate are
+//   known from stage 1 — never guessed client-side, so the range can never
+//   drift from what Schedule itself queries for "This Week"):
+//   - GET /api/admin/bookings?view=expenses&startDate=&endDate=
+//   - GET /api/admin/bookings?view=other-revenue&startDate=&endDate=
+//
+// Revenue This Week = completed-job revenue (completedRevenueAmount, sum
+// over 'completed' jobs in the week) + Other Revenue's totalAmount for the
+// same week — the EXACT definition admin/schedule-financials.js's own
+// computeFromJobs()/show() use for its "Revenue" counter. Booked This Week
+// = SUM(estimatedPrice) over 'booked'+'rental_out' jobs in the week — same
+// exact rule as that file's bookedJobAmount(). Business Pulse's "Completed"
+// figure is deliberately a plain job COUNT, not a dollar amount — there is
+// no existing "completed dollar amount distinct from Revenue" definition in
+// this codebase, and inventing one was explicitly out of scope for this
+// pass; a count needs no formula at all, so it can't drift.
+//
+// If the week schedule fetch fails, stage 2 is skipped entirely rather than
+// guessing a week boundary client-side (which risks a Revenue/Booked number
+// that silently disagrees with Schedule's own, the one thing this pass was
+// told must never happen) — Business Pulse/Booked This Week/Revenue This
+// Week simply render "—" and the failure is named in the error banner,
+// same partial-failure honesty posture as every section below.
 //
 // "Needs Attention" here is the exact same UI-only bucket union as admin/
 // leads-list.js's own Needs Attention sidebar view (Pending Intake + New +
@@ -22,36 +55,20 @@
 // refactor gone wrong, matching this project's established convention.
 // "New" also merges in website-origin requests (sections.websiteRequests)
 // here exactly as it does there: Website Request is a source, not a lead
-// stage (see leads-list.js's own header for the full reasoning).
+// stage (see leads-list.js's own header for the full reasoning). Follow Up
+// is every lead currently in that status, not ones whose next_follow_up_date
+// has actually arrived — deliberately NOT relabeled "Due" or filtered by
+// date here, since that would be a lead-business-logic change, explicitly
+// out of scope for this pass.
+//
+// Search Whisperer is a disabled visual shell only — the input and button
+// both carry the native `disabled` attribute, there is no click handler,
+// no fetch, and no backend for it. It is wired to real search in a future
+// pass.
 //
 // Every dynamic value is written with textContent/DOM construction, never
 // innerHTML — same no-innerHTML discipline as every other admin/*.js file.
 document.addEventListener('DOMContentLoaded', function () {
-  // -----------------------------------------------------------------
-  // Sidebar drawer (mobile only — see admin.css's .admin-dash-sidebar).
-  // -----------------------------------------------------------------
-  var sidebarToggle = document.getElementById('dash-sidebar-toggle');
-  var sidebar = document.getElementById('dash-sidebar');
-  var sidebarBackdrop = document.getElementById('dash-sidebar-backdrop');
-  function openSidebar() {
-    sidebar.classList.add('is-open');
-    sidebarBackdrop.hidden = false;
-    sidebarToggle.setAttribute('aria-expanded', 'true');
-  }
-  function closeSidebar() {
-    sidebar.classList.remove('is-open');
-    sidebarBackdrop.hidden = true;
-    sidebarToggle.setAttribute('aria-expanded', 'false');
-  }
-  sidebarToggle.addEventListener('click', function () {
-    if (sidebar.classList.contains('is-open')) closeSidebar();
-    else openSidebar();
-  });
-  sidebarBackdrop.addEventListener('click', closeSidebar);
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') closeSidebar();
-  });
-
   var logoutBtn = document.getElementById('logout-btn');
   logoutBtn.addEventListener('click', function () {
     logoutBtn.disabled = true;
@@ -67,8 +84,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // personal greeting, not a business-day boundary, so unlike "today" on
   // Schedule it deliberately does NOT use the server's Denver-local clock).
   // "Junkers" rather than a specific name — more than one person logs into
-  // this same admin session (Gerardo's wife included), per explicit
-  // request.
+  // this same admin session.
   // -----------------------------------------------------------------
   var hour = new Date().getHours();
   var timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -104,9 +120,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var sign = v < 0 ? '-' : '';
     return sign + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
-
-  function formatPhone(p) {
-    return window.formatPhone ? window.formatPhone(p) : p;
+  // Business Pulse specifically mirrors admin/schedule-financials.js's own
+  // Revenue/Booked/Expenses/Net display, which always shows 2 decimals
+  // (see that file's own formatMoney()) — used only for the Business Pulse
+  // card below, so its figures look identical to Schedule's own breakdown,
+  // not just compute to the same value.
+  function formatMoneyFixed(n) {
+    var v = Number(n) || 0;
+    var sign = v < 0 ? '-' : '';
+    return sign + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function buildTelHref(phone) {
@@ -145,25 +167,25 @@ document.addEventListener('DOMContentLoaded', function () {
   function iconText() {
     return svgIcon([{ tag: 'path', attrs: { d: 'M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-8Z' } }]);
   }
+  function iconArrowRight() {
+    return svgIcon([{ tag: 'path', attrs: { d: 'M5 12h13M12 5l7 7-7 7' } }]);
+  }
 
-  // The exact Completed-Revenue rule, duplicated from admin/schedule-
-  // financials.js's own completedRevenueAmount() (see that file's header
-  // for the full reasoning) — never re-derived differently here.
+  // The exact Completed-Revenue / Booked rules, duplicated from admin/
+  // schedule-financials.js's own completedRevenueAmount()/bookedJobAmount()
+  // (see that file's header for the full reasoning) — never re-derived
+  // differently here.
   function completedRevenueAmount(job) {
     if (job.isComplimentary) return 0;
     var hasFinal = job.finalPrice !== null && job.finalPrice !== undefined && job.finalPrice !== '';
     var amount = Number(hasFinal ? job.finalPrice : job.estimatedPrice);
     return Number.isFinite(amount) ? amount : 0;
   }
+  function bookedJobAmount(job) {
+    return Number(job.estimatedPrice) || 0;
+  }
   function jobDisplayName(job) {
     return (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
-  }
-
-  function addDaysIso(iso, days) {
-    var parts = iso.split('-').map(Number);
-    var dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
-    dt.setUTCDate(dt.getUTCDate() + days);
-    return dt.toISOString().slice(0, 10);
   }
 
   function ageText(iso) {
@@ -180,7 +202,6 @@ document.addEventListener('DOMContentLoaded', function () {
     return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
-  var SOURCE_LABELS = { website: 'Website', screenshot_intake: 'Screenshot Intake', phone: 'Phone', manual: 'Manual' };
   var BUCKET_CHIP_CLASS = {
     pendingIntake: 'admin-lead-bucket-pendingIntake',
     new: 'admin-lead-bucket-new',
@@ -190,34 +211,41 @@ document.addEventListener('DOMContentLoaded', function () {
   var BUCKET_LABELS = { pendingIntake: 'Pending Review', new: 'New', waitingOnPhotos: 'Waiting on Photos', followUp: 'Follow Up' };
 
   // -----------------------------------------------------------------
-  // Today's Schedule — compact rows, up to 6, linking to the canonical
+  // Today's Schedule — compact rows, up to 4, linking to the canonical
   // booking detail page (same route Schedule's own cards use).
   // -----------------------------------------------------------------
-  var SCHEDULE_ROW_LIMIT = 6;
+  var SCHEDULE_ROW_LIMIT = 4;
   function buildScheduleRow(job) {
-    var row = el('div', 'admin-dash-row');
+    var row = el('div', 'admin-home-row');
     var main = document.createElement('a');
-    main.className = 'admin-dash-row-main';
+    main.className = 'admin-home-row-main';
     main.href = '/admin/booking/?id=' + encodeURIComponent(job.id);
+    main.style.textDecoration = 'none';
+    main.style.color = 'inherit';
+    main.style.display = 'block';
 
-    var top = el('div', 'admin-dash-row-top');
-    top.appendChild(el('span', 'admin-dash-row-time', job.timeLabel || '—'));
-    top.appendChild(el('span', 'admin-dash-row-name', jobDisplayName(job)));
+    // Status badge lives IN the wrapping top row (same pattern Leads Need
+    // Your Attention's rows already use) rather than as a separate flex
+    // sibling of the whole row — on a narrow phone with a long time+name,
+    // this lets the badge wrap onto its own line under the job info
+    // instead of getting squeezed/clipped against the row's action icons.
+    var top = el('div', 'admin-home-row-top');
+    top.appendChild(el('span', 'admin-home-row-time', job.timeLabel || '—'));
+    top.appendChild(el('span', 'admin-home-row-name', jobDisplayName(job)));
+    top.appendChild(el('span', 'admin-status-badge admin-status-' + (job.status || 'new'), job.statusLabel || job.status || '—'));
     main.appendChild(top);
 
     var metaParts = [job.serviceLabel || job.serviceType || '—'];
     var city = job.serviceAddress && job.serviceAddress.city;
     if (city) metaParts.push(city);
-    main.appendChild(el('div', 'admin-dash-row-meta', metaParts.join(' · ')));
+    main.appendChild(el('div', 'admin-home-row-meta', metaParts.join(' · ')));
     row.appendChild(main);
 
-    row.appendChild(el('span', 'admin-status-badge admin-status-' + (job.status || 'new'), job.statusLabel || job.status || '—'));
-
-    var actions = el('div', 'admin-dash-row-actions');
+    var actions = el('div', 'admin-home-row-actions');
     var telHref = buildTelHref(job.customer && job.customer.phone);
     if (telHref) {
       var callBtn = document.createElement('a');
-      callBtn.className = 'admin-dash-row-call';
+      callBtn.className = 'admin-home-row-icon-btn';
       callBtn.href = telHref;
       callBtn.setAttribute('aria-label', 'Call ' + jobDisplayName(job));
       callBtn.appendChild(iconPhone());
@@ -243,16 +271,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // -----------------------------------------------------------------
   // Leads Needing Attention — merges Pending Intake + New (lead + website)
-  // + Waiting on Photos + Follow Up, up to 6 rows, each linking to its own
-  // canonical detail route (intake / lead / booking, by kind).
+  // + Waiting on Photos + Follow Up, top 3 rows (the highest-priority
+  // section on this page), each with a truthful "short context" line built
+  // only from real fields (service type + city) — never a fabricated quote
+  // or note, since no free-text context field exists on this view's data —
+  // and an explicit Call / Text / Open row of actions.
   // -----------------------------------------------------------------
-  var ATTENTION_ROW_LIMIT = 6;
+  var ATTENTION_ROW_LIMIT = 3;
   function intakeToRow(intake) {
     var name = intake.matchedClientName || intake.extractedClientName || intake.extractedPhone || intake.extractedEmail || 'Unidentified client';
     return {
       href: '/admin/intake/?id=' + encodeURIComponent(intake.id),
       name: name,
-      sourceLabel: 'Screenshot Intake',
+      contextLabel: intake.extractedServiceType || null,
       bucketKey: 'pendingIntake',
       phone: intake.extractedPhone,
       createdAt: intake.createdAt,
@@ -262,7 +293,7 @@ document.addEventListener('DOMContentLoaded', function () {
     return {
       href: (item.kind === 'booking' ? '/admin/booking/?id=' : '/admin/lead/?id=') + encodeURIComponent(item.id),
       name: item.name || item.phone || 'Unidentified client',
-      sourceLabel: SOURCE_LABELS[item.source] || item.source,
+      contextLabel: [item.serviceLabel, item.city].filter(Boolean).join(' · ') || null,
       bucketKey: bucketKey,
       phone: item.phone,
       createdAt: item.updatedAt,
@@ -270,27 +301,27 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function buildAttentionRow(row) {
-    var wrap = el('div', 'admin-dash-row');
-    var main = document.createElement('a');
-    main.className = 'admin-dash-row-main';
-    main.href = row.href;
+    var wrap = el('div', 'admin-home-row');
+    var main = el('div', 'admin-home-row-main');
 
-    main.appendChild(el('div', 'admin-dash-row-name', row.name));
+    var top = el('div', 'admin-home-row-top');
+    top.appendChild(el('span', 'admin-home-row-name', row.name));
+    top.appendChild(el('span', 'admin-status-badge ' + (BUCKET_CHIP_CLASS[row.bucketKey] || 'admin-lead-bucket-new'), BUCKET_LABELS[row.bucketKey] || ''));
+    main.appendChild(top);
+
     var metaParts = [];
-    if (row.sourceLabel) metaParts.push(row.sourceLabel);
+    if (row.contextLabel) metaParts.push(row.contextLabel);
     var age = ageText(row.createdAt);
     if (age) metaParts.push(age);
-    main.appendChild(el('div', 'admin-dash-row-meta', metaParts.join(' · ')));
+    if (metaParts.length) main.appendChild(el('div', 'admin-home-row-meta', metaParts.join(' · ')));
     wrap.appendChild(main);
 
-    wrap.appendChild(el('span', 'admin-status-badge ' + (BUCKET_CHIP_CLASS[row.bucketKey] || 'admin-lead-bucket-new'), BUCKET_LABELS[row.bucketKey] || ''));
-
-    var actions = el('div', 'admin-dash-row-actions');
+    var actions = el('div', 'admin-home-row-actions');
     var telHref = buildTelHref(row.phone);
     var smsHref = buildSmsHref(row.phone);
     if (telHref) {
       var callBtn = document.createElement('a');
-      callBtn.className = 'admin-dash-row-call';
+      callBtn.className = 'admin-home-row-icon-btn';
       callBtn.href = telHref;
       callBtn.setAttribute('aria-label', 'Call ' + row.name);
       callBtn.appendChild(iconPhone());
@@ -298,13 +329,25 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     if (smsHref) {
       var textBtn = document.createElement('a');
-      textBtn.className = 'admin-dash-row-call';
+      textBtn.className = 'admin-home-row-icon-btn';
       textBtn.href = smsHref;
       textBtn.setAttribute('aria-label', 'Text ' + row.name);
       textBtn.appendChild(iconText());
       actions.appendChild(textBtn);
     }
-    if (actions.childNodes.length) wrap.appendChild(actions);
+    // An explicit arrow icon (always rendered) plus a text label that CSS
+    // hides below ~400px (see .admin-home-row-open-label), so Call/Text/
+    // Open stay three equally-compact circular buttons on a narrow phone
+    // instead of the full-width "Open" pill crowding them — the aria-label
+    // keeps it accessible either way, icon-only or with its label visible.
+    var openLink = document.createElement('a');
+    openLink.className = 'admin-home-row-open';
+    openLink.href = row.href;
+    openLink.setAttribute('aria-label', 'Open ' + row.name);
+    openLink.appendChild(iconArrowRight());
+    openLink.appendChild(el('span', 'admin-home-row-open-label', 'Open'));
+    actions.appendChild(openLink);
+    wrap.appendChild(actions);
     return wrap;
   }
 
@@ -323,89 +366,35 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
-  // Revenue This Week — total + a simple 7-bar sparkline, no charting
-  // dependency (per the brief's "without pulling in a heavy new
-  // dependency"). Each bar's height is a plain percentage of that week's
-  // own highest day; "today" (when it falls in this week) is highlighted.
+  // Quick Actions — New Job / Scan Lead / Other Revenue are plain
+  // links to their existing pages. Add Expense mounts the SAME
+  // window.AdminQuickExpense module admin/index.html already uses
+  // (identical write path, identical UI, just targeted at this page's own
+  // container instead of Schedule's #quick-expense-bar) rather than
+  // navigating away or rebuilding the flow.
+  //
+  // Deliberately NOT included: a "+ New Client" action. There is no
+  // standalone client-creation page today — Create Client only exists
+  // inline inside the client-picker used by New Job/Past Job/Intake
+  // confirmation, exactly the same gap "+ New Lead" has (see below) — so
+  // rather than link it to something that wouldn't actually create a
+  // client, it's left out of this pass.
   // -----------------------------------------------------------------
-  function renderSparkline(weekBody) {
-    var container = document.getElementById('week-sparkline');
-    clear(container);
-    if (!weekBody || !weekBody.weekStart) {
-      container.appendChild(el('div', 'admin-dash-empty-note', 'No data yet.'));
-      return;
-    }
-    var dayTotals = {};
-    (weekBody.jobs || []).forEach(function (job) {
-      if (job.status !== 'completed') return;
-      dayTotals[job.appointmentDate] = (dayTotals[job.appointmentDate] || 0) + completedRevenueAmount(job);
-    });
-    var maxVal = 1;
-    Object.keys(dayTotals).forEach(function (k) {
-      if (dayTotals[k] > maxVal) maxVal = dayTotals[k];
-    });
-    for (var i = 0; i < 7; i++) {
-      var dateIso = addDaysIso(weekBody.weekStart, i);
-      var val = dayTotals[dateIso] || 0;
-      var bar = el('div', 'admin-dash-sparkline-bar');
-      bar.style.height = Math.max(4, Math.round((val / maxVal) * 100)) + '%';
-      if (dateIso === weekBody.today) bar.classList.add('is-today');
-      bar.title = formatMoney(val);
-      container.appendChild(bar);
-    }
-  }
-
-  // -----------------------------------------------------------------
-  // Lead Pipeline — New/Contacted/Estimate Sent/Booked-Won/Lost counts,
-  // the exact same bucket counts the Leads sidebar shows.
-  // -----------------------------------------------------------------
-  function renderPipeline(sections, newMergedCount) {
-    var container = document.getElementById('pipeline-list');
-    clear(container);
-    var rows = [
-      { label: 'New', count: newMergedCount, color: '#2f6f13' },
-      { label: 'Contacted', count: (sections.contacted || []).length, color: '#b45309' },
-      { label: 'Estimate Sent', count: (sections.estimateSent || []).length, color: '#0891b2' },
-      { label: 'Booked/Won', count: (sections.bookedWon || []).length, color: '#1d4ed8' },
-      { label: 'Lost', count: (sections.lost || []).length, color: '#b91c1c' },
-    ];
-    rows.forEach(function (r) {
-      var row = el('div', 'admin-dash-pipeline-row');
-      var labelWrap = el('div', 'admin-dash-pipeline-row-label');
-      var dot = el('span', 'admin-dash-pipeline-dot');
-      dot.style.background = r.color;
-      labelWrap.appendChild(dot);
-      labelWrap.appendChild(document.createTextNode(r.label));
-      row.appendChild(labelWrap);
-      row.appendChild(el('span', 'admin-dash-pipeline-row-count', String(r.count)));
-      container.appendChild(row);
+  var quickExpenseBtn = document.getElementById('qa-add-expense-btn');
+  var quickExpenseMount = document.getElementById('home-quick-expense-mount');
+  if (quickExpenseBtn && quickExpenseMount) {
+    quickExpenseBtn.addEventListener('click', function () {
+      var opening = quickExpenseMount.hidden;
+      quickExpenseMount.hidden = !opening;
+      quickExpenseBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      if (opening && window.AdminQuickExpense) {
+        var todayIso = new Date().toISOString().slice(0, 10);
+        window.AdminQuickExpense.mount(quickExpenseMount, todayIso);
+      }
     });
   }
 
-  // Pending Intake — the bottom-row panel used in place of a "Recent
-  // Activity" feed: there is no single existing data source for a unified
-  // cross-entity activity log today (customer_audit_log/booking_audit_log/
-  // expense_audit_log are each scoped to one record's own detail page, not
-  // a business-wide feed), and building one is explicitly out of scope for
-  // this UI batch — see the delivery notes. This panel reuses data this
-  // page already fetched for the Leads Need Attention card, so it adds no
-  // new query.
-  function renderPendingIntakeSummary(intakes) {
-    var container = document.getElementById('pending-intake-summary');
-    clear(container);
-    if (!intakes.length) {
-      container.appendChild(el('div', 'admin-dash-empty-note', 'No pending intake right now.'));
-      return;
-    }
-    container.appendChild(el('div', 'admin-dash-pipeline-row', intakes.length === 1 ? '1 screenshot awaiting review' : intakes.length + ' screenshots awaiting review'));
-    var link = document.createElement('a');
-    link.className = 'admin-tap-link';
-    link.href = '/admin/leads/?bucket=pendingIntake';
-    link.textContent = 'Review now →';
-    container.appendChild(link);
-  }
-
-  function render(todayBody, weekBody, intakeBody, leadsBody) {
+  function render(todayBody, weekBody, intakeBody, leadsBody, expensesBody, otherRevenueBody) {
     var todayJobs = (todayBody && todayBody.jobs) || [];
     var weekJobs = (weekBody && weekBody.jobs) || [];
     var intakes = (intakeBody && intakeBody.intakes) || [];
@@ -415,30 +404,62 @@ document.addEventListener('DOMContentLoaded', function () {
     var followUp = sections.followUp || [];
 
     // Today's Jobs
-    var todayValue = todayJobs.reduce(function (sum, job) {
-      return sum + (job.status === 'completed' ? completedRevenueAmount(job) : Number(job.estimatedPrice) || 0);
-    }, 0);
     set('stat-today-jobs', String(todayJobs.length));
-    set('stat-today-jobs-sub', todayJobs.length ? formatMoney(todayValue) + ' estimated value' : 'Nothing booked yet');
+    set('stat-today-jobs-sub', todayJobs.length === 1 ? '1 job' : todayJobs.length + ' jobs');
 
     // Leads Need Attention
     var needsAttentionCount = intakes.length + newMerged.length + waitingOnPhotos.length + followUp.length;
     set('stat-leads-attention', String(needsAttentionCount));
-    set('stat-leads-attention-sub', intakes.length + ' pending intake · ' + newMerged.length + ' new');
+    set('stat-leads-attention-sub', intakes.length + ' intake · ' + newMerged.length + ' new');
+    // Deliberately bypasses set()'s empty-string-→-em-dash fallback: a
+    // zero count means no badge at all next to the heading, not a stray "—".
+    document.getElementById('attention-count').textContent = needsAttentionCount ? '(' + needsAttentionCount + ')' : '';
 
-    // Revenue Today
-    var revenueToday = todayJobs
-      .filter(function (j) { return j.status === 'completed'; })
-      .reduce(function (sum, j) { return sum + completedRevenueAmount(j); }, 0);
-    var revenueWeek = weekJobs
-      .filter(function (j) { return j.status === 'completed'; })
-      .reduce(function (sum, j) { return sum + completedRevenueAmount(j); }, 0);
-    set('stat-revenue-today', formatMoney(revenueToday));
-    set('stat-revenue-today-sub', 'This week: ' + formatMoney(revenueWeek));
+    // Booked This Week — SUM(estimatedPrice) over booked+rental_out jobs in
+    // the week, the exact Schedule/Business-Pulse "Booked" definition. A
+    // null weekBody (the week fetch failed) is surfaced honestly as
+    // "Unavailable" rather than silently showing $0, which would read as
+    // "genuinely nothing booked" instead of "unknown right now".
+    var weekKnown = !!weekBody;
+    var bookedJobsWeek = weekJobs.filter(function (j) { return j.status === 'booked' || j.status === 'rental_out'; });
+    var bookedWeekAmount = bookedJobsWeek.reduce(function (sum, j) { return sum + bookedJobAmount(j); }, 0);
+    set('stat-booked-week', weekKnown ? formatMoney(bookedWeekAmount) : '—');
+    set('stat-booked-week-sub', weekKnown ? 'This week' : 'Unavailable');
 
-    // Follow Ups Due
-    set('stat-followups', String(followUp.length));
-    set('stat-followups-sub', followUp.length === 1 ? '1 lead waiting' : followUp.length + ' leads waiting');
+    // Completed (Business Pulse) — a plain job count, not a dollar amount;
+    // see this file's header for why.
+    var completedJobsWeek = weekJobs.filter(function (j) { return j.status === 'completed'; });
+    set('pulse-completed', completedJobsWeek.length === 1 ? '1 job' : completedJobsWeek.length + ' jobs');
+
+    // Revenue This Week — completed-job revenue + Other Revenue, the exact
+    // Schedule/Business-Pulse "Revenue" definition. Other Revenue is only
+    // ever a known number when its own fetch succeeded (stage 2); a null
+    // weekBody or a failed Other Revenue fetch is surfaced honestly rather
+    // than silently treated as $0, which would understate Revenue relative
+    // to what Schedule itself would show for the same range.
+    var completedRevenueWeek = completedJobsWeek.reduce(function (sum, j) { return sum + completedRevenueAmount(j); }, 0);
+    var otherRevenueKnown = otherRevenueBody && typeof otherRevenueBody.totalAmount === 'number';
+    var otherRevenueWeek = otherRevenueKnown ? otherRevenueBody.totalAmount : 0;
+    var revenueWeek = completedRevenueWeek + otherRevenueWeek;
+    if (weekKnown) {
+      set('stat-revenue-week', formatMoney(revenueWeek));
+      set('stat-revenue-week-sub', otherRevenueKnown ? 'This week' : 'This week · partial');
+    } else {
+      set('stat-revenue-week', '—');
+      set('stat-revenue-week-sub', 'Unavailable');
+    }
+
+    // Expenses / Net (Business Pulse) — only ever rendered when the
+    // expenses fetch actually succeeded; never defaults to $0, which would
+    // silently overstate Net.
+    var expensesKnown = expensesBody && typeof expensesBody.totalAmount === 'number';
+    if (expensesKnown && weekBody) {
+      set('pulse-expenses', formatMoneyFixed(expensesBody.totalAmount));
+      set('pulse-net', formatMoneyFixed(revenueWeek - expensesBody.totalAmount));
+    } else {
+      set('pulse-expenses', '—');
+      set('pulse-net', '—');
+    }
 
     renderTodaySchedule(todayJobs);
 
@@ -449,21 +470,16 @@ document.addEventListener('DOMContentLoaded', function () {
       .concat(followUp.map(function (item) { return leadItemToRow(item, 'followUp'); }));
     renderAttentionList(attentionRows);
 
-    set('week-revenue-total', formatMoney(revenueWeek));
-    renderSparkline(weekBody);
-    renderPipeline(sections, newMerged.length);
-    renderPendingIntakeSummary(intakes);
-
     loadingEl.style.display = 'none';
     bodyEl.style.display = 'block';
   }
 
   // -----------------------------------------------------------------
-  // Fetch — 4 independent, already-admin-gated GETs. A single section
-  // failing never blanks the whole dashboard (same partial-failure
-  // honesty posture as admin/leads-list.js's own ?view=leads handling) —
-  // it just renders with that section empty and names it in the error
-  // banner.
+  // Fetch — stage 1 (4 independent, already-admin-gated GETs), then stage 2
+  // (2 more, dependent on stage 1's week range). A single section failing
+  // never blanks the whole dashboard (same partial-failure honesty posture
+  // as admin/leads-list.js's own ?view=leads handling) — it just renders
+  // with that section empty/unavailable and names it in the error banner.
   // -----------------------------------------------------------------
   var loginRedirected = false;
   function fetchJson(url) {
@@ -490,15 +506,37 @@ document.addEventListener('DOMContentLoaded', function () {
 
   Promise.all([
     safeFetch('/api/admin/bookings?view=schedule&range=today', "Today's schedule"),
-    safeFetch('/api/admin/bookings?view=schedule&range=week', "This week's revenue"),
+    safeFetch('/api/admin/bookings?view=schedule&range=week', "This week's jobs"),
     safeFetch('/api/admin/intake', 'Pending intake'),
     safeFetch('/api/admin/bookings?view=leads', 'Leads'),
-  ]).then(function (results) {
+  ]).then(function (stage1) {
     if (loginRedirected) return;
-    render(results[0], results[1], results[2], results[3]);
-    if (sectionFailures.length) {
-      showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
+    var todayBody = stage1[0], weekBody = stage1[1], intakeBody = stage1[2], leadsBody = stage1[3];
+
+    // Stage 2 depends on the real week startDate/endDate the server just
+    // returned — never computed client-side, so it can't drift from what
+    // Schedule's own "This Week" query would use for the same range. If
+    // the week fetch failed, stage 2 is skipped entirely (see this file's
+    // header) rather than guessing a range.
+    if (!weekBody || !weekBody.startDate || !weekBody.endDate) {
+      render(todayBody, weekBody, intakeBody, leadsBody, null, null);
+      if (sectionFailures.length) {
+        showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
+      }
+      return;
     }
+
+    var qs = 'startDate=' + encodeURIComponent(weekBody.startDate) + '&endDate=' + encodeURIComponent(weekBody.endDate);
+    return Promise.all([
+      safeFetch('/api/admin/bookings?view=expenses&' + qs, "This week's expenses"),
+      safeFetch('/api/admin/bookings?view=other-revenue&' + qs, "This week's other revenue"),
+    ]).then(function (stage2) {
+      if (loginRedirected) return;
+      render(todayBody, weekBody, intakeBody, leadsBody, stage2[0], stage2[1]);
+      if (sectionFailures.length) {
+        showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
+      }
+    });
   });
 
   window.addEventListener('pageshow', function (e) {
