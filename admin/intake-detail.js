@@ -60,12 +60,6 @@ document.addEventListener('DOMContentLoaded', function () {
   var confirmBookingPickupDateInput = document.getElementById('confirm-booking-pickup-date');
   var confirmBookingMaterialTypeInput = document.getElementById('confirm-booking-material-type');
   var confirmBookingPlacementNotesInput = document.getElementById('confirm-booking-placement-notes');
-  var confirmBookingAddressInput = document.getElementById('confirm-booking-address');
-  var confirmBookingCityInput = document.getElementById('confirm-booking-city');
-  var confirmBookingStateInput = document.getElementById('confirm-booking-state');
-  var confirmBookingZipInput = document.getElementById('confirm-booking-zip');
-  var confirmBookingPriceInput = document.getElementById('confirm-booking-estimated-price');
-  var confirmBookingNotesInput = document.getElementById('confirm-booking-internal-notes');
   var confirmBookingBtn = document.getElementById('confirm-booking-btn');
   var confirmLeadBtn = document.getElementById('confirm-lead-btn');
   var confirmAttachBtn = document.getElementById('confirm-attach-btn');
@@ -508,11 +502,14 @@ document.addEventListener('DOMContentLoaded', function () {
     return f && f.value ? f.value : '';
   }
 
-  // Fills the Confirm Booking panel's structured inputs from the intake's
-  // extracted/reviewed fields — a one-time convenience prefill on load,
-  // never re-applied after (the admin's own edits always win; this never
-  // runs again on a later render() call within the same page view, see
-  // bookingPanelPrefilled below).
+  // Fills the Confirm Booking panel's OWN booking-only inputs (date, service
+  // type guess, the AI time hint) from the intake's extracted/reviewed
+  // fields — a one-time convenience prefill on load, never re-applied after
+  // (this never runs again on a later render() call within the same page
+  // view, see bookingPanelPrefilled below). Deliberately does NOT prefill
+  // address/quoted amount/notes — those have no booking-only identity of
+  // their own; they're read live from the Job/Lead and Notes sections at
+  // submit time instead (see createBooking()'s liveFieldValue()).
   var bookingPanelPrefilled = false;
   function prefillConfirmBookingPanel(fields) {
     if (bookingPanelPrefilled) return;
@@ -526,14 +523,13 @@ document.addEventListener('DOMContentLoaded', function () {
     confirmBookingServiceTypeSelect.value = guessServiceType(fieldRawValue(fields, 'serviceType'));
     updateConfirmBookingDumpsterVisibility();
 
-    confirmBookingAddressInput.value = fieldRawValue(fields, 'address');
-    confirmBookingCityInput.value = fieldRawValue(fields, 'city');
-    confirmBookingStateInput.value = fieldRawValue(fields, 'state');
-    confirmBookingZipInput.value = fieldRawValue(fields, 'zip');
-    confirmBookingPriceInput.value = guessPrice(fieldRawValue(fields, 'quotedAmount'));
-
-    var notesParts = [fieldRawValue(fields, 'internalNotes'), fieldRawValue(fields, 'clientConstraints')].filter(Boolean);
-    confirmBookingNotesInput.value = notesParts.join('\n\n');
+    // Address/Quoted Amount/Notes are NOT duplicated here — Confirm Booking
+    // reads those live from the Job/Lead and Notes sections' own fieldInputs
+    // at submit time (see createBooking() below), the same already-correct
+    // pattern resolveCustomerId() uses for name/phone/email. A second,
+    // independent snapshot taken here would go stale the moment the admin
+    // corrects the value above, silently submitting the wrong one — exactly
+    // the "re-enter it twice" bug this fix removes.
 
     var timeRaw = fieldRawValue(fields, 'appointmentTime');
     var schedulingRaw = fieldRawValue(fields, 'schedulingStatus');
@@ -863,6 +859,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // Reads one review field's CURRENT (possibly just-corrected) value —
+    // never the original extraction — so a correction the admin makes in
+    // the Job/Lead or Notes sections above is always what actually gets
+    // submitted. Same live-read pattern resolveCustomerId() already uses
+    // for name/phone/email.
+    function liveFieldValue(key) {
+      return fieldInputs[key] ? fieldInputs[key].el.value.trim() : '';
+    }
+
     function createBooking(customerId) {
       var timeWindow = confirmBookingTimeMode === 'window' ? confirmBookingTimeWindowSelect.value : '';
       var exactTime = confirmBookingTimeMode === 'exact' ? confirmBookingExactTimeInput.value : '';
@@ -882,14 +887,14 @@ document.addEventListener('DOMContentLoaded', function () {
         timeWindow: timeWindow,
         exactTime: exactTime,
         serviceAddress: {
-          address: confirmBookingAddressInput.value.trim(),
-          city: confirmBookingCityInput.value.trim(),
-          state: confirmBookingStateInput.value.trim(),
-          zip: confirmBookingZipInput.value.trim(),
+          address: liveFieldValue('address'),
+          city: liveFieldValue('city'),
+          state: liveFieldValue('state'),
+          zip: liveFieldValue('zip'),
         },
-        internalNotes: confirmBookingNotesInput.value.trim(),
+        internalNotes: [liveFieldValue('internalNotes'), liveFieldValue('clientConstraints')].filter(Boolean).join('\n\n'),
       };
-      var priceRaw = confirmBookingPriceInput.value.trim();
+      var priceRaw = guessPrice(liveFieldValue('quotedAmount'));
       if (priceRaw) bookingPayload.estimatedPrice = Number(priceRaw);
       if (confirmBookingServiceTypeSelect.value === 'dumpster_rental') {
         var pickupRaw = confirmBookingPickupDateInput.value.trim();

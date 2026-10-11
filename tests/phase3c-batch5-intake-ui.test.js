@@ -375,6 +375,98 @@ test("api/_lib/intake-vision-provider.js: the openai provider has no code path t
   assert.ok(!/callMock/.test(openAiFnSrc), "callOpenAi() must never reference callMock() — no fallback chain of any kind");
 });
 
+// =======================================================================
+// Confirm Booking prefill-sync fix (duplicate-entry bug). The Confirm
+// Booking panel used to keep its OWN one-time snapshot of
+// address/city/state/zip/quoted-amount/notes, taken at initial page load
+// and never updated again. Any correction the admin made in the Job/Lead
+// or Notes review sections (the actual "verify/correct" step) was silently
+// ignored by Confirm Booking, which kept submitting the stale original
+// value instead — forcing the admin to effectively re-enter the same
+// information twice for a correction to actually take effect. Fixed by
+// removing the duplicate inputs and reading these fields live from the
+// SAME fieldInputs the admin already edits, at submit time — the same
+// pattern resolveCustomerId() already used correctly for name/phone/email.
+// =======================================================================
+test("admin/intake/index.html: Confirm Booking panel no longer has its own separate address/quoted-amount/notes inputs (removed duplicate-entry fields)", () => {
+  const html = readNormalized("admin/intake/index.html");
+  const panelMatch = html.match(/<div id="confirm-booking-panel"[\s\S]*?<button type="button" id="confirm-booking-btn"/);
+  assert.ok(panelMatch, "confirm-booking-panel not found");
+  const panelHtml = panelMatch[0];
+  ["confirm-booking-address", "confirm-booking-city", "confirm-booking-state", "confirm-booking-zip", "confirm-booking-estimated-price", "confirm-booking-internal-notes"].forEach((id) => {
+    assert.ok(!panelHtml.includes('id="' + id + '"'), "#" + id + " must be removed from the Confirm Booking panel — it duplicated a field already editable above");
+  });
+  // The genuinely booking-only fields (no equivalent above) must remain.
+  ["confirm-booking-appointment-date", "confirm-booking-time-window", "confirm-booking-exact-time", "confirm-booking-service-type"].forEach((id) => {
+    assert.ok(panelHtml.includes('id="' + id + '"'), "#" + id + " must still exist — it has no equivalent in the review sections above");
+  });
+});
+
+test("admin/intake-detail.js: createBooking() reads address/city/state/zip live from the SAME fieldInputs the admin corrects above, never a separate stale snapshot", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function createBooking(customerId)");
+  assert.ok(start !== -1, "createBooking() not found");
+  const end = src.indexOf("\n    }\n", src.indexOf("return postJson('/api/admin/booking'", start));
+  const body = src.slice(start, end === -1 ? start + 2500 : end);
+
+  assert.ok(/address:\s*liveFieldValue\('address'\)/.test(body), "serviceAddress.address must read liveFieldValue('address')");
+  assert.ok(/city:\s*liveFieldValue\('city'\)/.test(body), "serviceAddress.city must read liveFieldValue('city')");
+  assert.ok(/state:\s*liveFieldValue\('state'\)/.test(body), "serviceAddress.state must read liveFieldValue('state')");
+  assert.ok(/zip:\s*liveFieldValue\('zip'\)/.test(body), "serviceAddress.zip must read liveFieldValue('zip')");
+  assert.ok(!/confirmBookingAddressInput|confirmBookingCityInput|confirmBookingStateInput|confirmBookingZipInput/.test(body), "must not reference the removed stale address inputs");
+});
+
+test("admin/intake-detail.js: createBooking() derives notes and price live from the Notes/Job sections too, never a separate stale snapshot", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function createBooking(customerId)");
+  const end = src.indexOf("\n    }\n", src.indexOf("return postJson('/api/admin/booking'", start));
+  const body = src.slice(start, end === -1 ? start + 2500 : end);
+
+  assert.ok(/internalNotes:\s*\[liveFieldValue\('internalNotes'\), liveFieldValue\('clientConstraints'\)\]/.test(body), "internalNotes must be built live from internalNotes + clientConstraints");
+  assert.ok(/guessPrice\(liveFieldValue\('quotedAmount'\)\)/.test(body), "estimatedPrice must be parsed from the LIVE quotedAmount field, not a stale prefill");
+  assert.ok(!/confirmBookingPriceInput|confirmBookingNotesInput/.test(body), "must not reference the removed stale price/notes inputs");
+});
+
+test("admin/intake-detail.js: liveFieldValue() falls back to '' for any field with no admin correction and no extracted value — never fabricates, never throws on a missing key (covers full/partial/missing address alike)", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const match = src.match(/function liveFieldValue\(key\) \{\s*return ([^\n]+);\s*\}/);
+  assert.ok(match, "liveFieldValue() not found");
+  assert.ok(/fieldInputs\[key\]\s*\?\s*fieldInputs\[key\]\.el\.value\.trim\(\)\s*:\s*''/.test(match[1]), "must safely fall back to '' when the field has no value or doesn't exist");
+});
+
+test("admin/intake-detail.js: prefillConfirmBookingPanel() no longer snapshots address/quoted-amount/notes into separate inputs (the exact staleness bug) but still prefills the genuinely booking-only fields", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function prefillConfirmBookingPanel(fields)");
+  const end = src.indexOf("\n  }\n", start);
+  const body = src.slice(start, end);
+  assert.ok(!/confirmBookingAddressInput|confirmBookingCityInput|confirmBookingStateInput|confirmBookingZipInput|confirmBookingPriceInput|confirmBookingNotesInput/.test(body), "prefillConfirmBookingPanel() must not write a one-time snapshot of these fields into separate inputs");
+  assert.ok(/confirmBookingDateInput\.value/.test(body), "Appointment Date must still be prefilled — it has no stale-duplicate problem (a real date picker, not a raw-text duplicate)");
+  assert.ok(/confirmBookingServiceTypeSelect\.value/.test(body), "Service Type guess must still be prefilled — it's a necessary enum conversion, not a raw duplicate");
+});
+
+test("admin/intake-detail.js: Confirm Lead panel has no inputs of its own — it was never affected by the Confirm Booking staleness bug, since it always read the single live Job/Lead/Notes fields directly", () => {
+  const html = readNormalized("admin/intake/index.html");
+  const panelMatch = html.match(/<div id="confirm-lead-panel"[\s\S]*?<\/div>/);
+  assert.ok(panelMatch, "confirm-lead-panel not found");
+  assert.ok(!/<input|<textarea|<select/.test(panelMatch[0]), "confirm-lead-panel must contain no input of its own");
+});
+
+test("admin/intake-detail.js: the live-read keys createBooking() uses (address/city/state/zip/quotedAmount/internalNotes/clientConstraints) are all real FIELD_KEYS — no drift from the extraction schema", () => {
+  const { FIELD_KEYS } = require("../api/_lib/intake-vision-provider.js");
+  ["address", "city", "state", "zip", "quotedAmount", "internalNotes", "clientConstraints"].forEach((key) => {
+    assert.ok(FIELD_KEYS.indexOf(key) !== -1, key + " must be a real FIELD_KEYS entry — a typo'd key here would silently always read as missing");
+  });
+});
+
+test("admin/intake-detail.js: client fields (firstName/lastName/phone/email) still resolve live via fieldInputs in resolveCustomerId() — unaffected by this fix, confirming no regression to the pattern it extends", () => {
+  const src = readNormalized("admin/intake-detail.js");
+  const start = src.indexOf("function resolveCustomerId()");
+  const end = src.indexOf("\n    }\n", start);
+  const body = src.slice(start, end === -1 ? start + 2000 : end);
+  assert.ok(/fieldInputs\.firstName\s*\?\s*fieldInputs\.firstName\.el\.value/.test(body));
+  assert.ok(/fieldInputs\.phone\s*\?\s*fieldInputs\.phone\.el\.value/.test(body));
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   const settled = [];

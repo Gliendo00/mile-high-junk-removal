@@ -113,7 +113,7 @@
 
       <!-- Booking Confirmed -->
       <div id="confirm-booking-panel" style="display:none">
-        <p class="admin-field-hint">Creates a real booking on the Schedule using the client above plus the job details below — same as "+ New Job".</p>
+        <p class="admin-field-hint">Creates a real booking on the Schedule using the client above, the Address/Quoted Amount/Notes fields above, plus the appointment details below — same as "+ New Job".</p>
         <p class="admin-field-hint" id="confirm-booking-ai-hint"></p>
 
         <div class="admin-field">
@@ -156,38 +156,6 @@
             <label for="confirm-booking-placement-notes">Placement Notes</label>
             <input type="text" id="confirm-booking-placement-notes" maxlength="200">
           </div>
-        </div>
-
-        <div class="admin-field">
-          <label for="confirm-booking-address">Street Address</label>
-          <input type="text" id="confirm-booking-address" autocomplete="off">
-        </div>
-        <div class="admin-field-row">
-          <div class="admin-field">
-            <label for="confirm-booking-city">City</label>
-            <input type="text" id="confirm-booking-city" autocomplete="off">
-          </div>
-          <div class="admin-field">
-            <label for="confirm-booking-state">State</label>
-            <input type="text" id="confirm-booking-state" maxlength="2" autocomplete="off">
-          </div>
-          <div class="admin-field">
-            <label for="confirm-booking-zip">ZIP</label>
-            <input type="text" id="confirm-booking-zip" inputmode="numeric" autocomplete="off">
-          </div>
-        </div>
-
-        <div class="admin-field">
-          <label for="confirm-booking-estimated-price">Quoted Amount (optional)</label>
-          <div class="admin-quote-input-wrap">
-            <span class="admin-quote-dollar">$</span>
-            <input type="number" id="confirm-booking-estimated-price" inputmode="decimal" min="0" step="0.01">
-          </div>
-        </div>
-
-        <div class="admin-field">
-          <label for="confirm-booking-internal-notes">Private Notes (optional)</label>
-          <textarea id="confirm-booking-internal-notes" rows="2"></textarea>
         </div>
 
         <button type="button" id="confirm-booking-btn" class="admin-btn admin-btn-primary">Confirm Booking</button>
