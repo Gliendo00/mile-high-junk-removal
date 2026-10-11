@@ -18,13 +18,6 @@
 
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
-  <!-- TEMPORARY DIAGNOSTIC (added 2026-10-11) — shown only when the "This
-       week's other revenue" request fails, populated by
-       diagFetchOtherRevenue() in admin/home.js. Never shows
-       cookies/tokens/auth headers — only this endpoint's own status/JSON
-       error message. Remove this element (and its JS counterpart) once the
-       real cause is identified; do not ship. -->
-  <div id="diag-other-revenue" class="admin-error-banner" style="display:none;margin-bottom:16px;background:#fff3cd;border-color:#ffe69c;color:#664d03;"></div>
 
   <div class="admin-home-greeting">
     <h1 id="dash-greeting">Good morning.</h1>
@@ -34,19 +27,26 @@
   <!-- Search Whisperer — visual shell only, deliberately real-looking but
        inert (native disabled attributes, no click handler, no fetch). See
        admin/home.js's header comment for why. Shown immediately, not
-       gated behind the data loading state below. A small "Coming soon"
-       badge replaces what was previously a full explanatory paragraph
-       (UI refinement pass) — still announced to screen readers via
-       aria-describedby, just not taking up a whole line of vertical space
-       for sighted users anymore. -->
-  <div class="admin-home-search">
-    <span class="admin-home-search-icon" aria-hidden="true">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    </span>
-    <input type="text" class="admin-home-search-input" placeholder="Search CRM… (leads, clients, jobs, notes, etc.)" disabled aria-describedby="search-whisperer-note">
-    <button type="button" class="admin-home-search-ask" disabled>Ask</button>
+       gated behind the data loading state below. The "Coming soon" badge
+       is absolutely positioned against .admin-home-search-wrap (see
+       admin.css) — a small flag on the search bar's own corner rather than
+       a second row, so it adds zero extra vertical height (UI refinement
+       pass #2) — still announced to screen readers via aria-describedby.
+       The input's placeholder is shortened at narrow widths by
+       admin/home.js on load (not CSS — a placeholder's text can't be
+       swapped by a media query) so it never collides with/gets clipped
+       before the Ask button on a narrow phone; the richer placeholder is
+       kept on wider screens. -->
+  <div class="admin-home-search-wrap">
+    <div class="admin-home-search">
+      <span class="admin-home-search-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </span>
+      <input type="text" id="search-whisperer-input" class="admin-home-search-input" placeholder="Search CRM… (leads, clients, jobs, notes, etc.)" disabled aria-describedby="search-whisperer-note">
+      <button type="button" class="admin-home-search-ask" disabled>Ask</button>
+    </div>
+    <span id="search-whisperer-note" class="admin-home-search-badge">Coming soon</span>
   </div>
-  <span id="search-whisperer-note" class="admin-home-search-badge">Coming soon</span>
 
   <div id="loading" class="admin-loading">Loading dashboard…</div>
 

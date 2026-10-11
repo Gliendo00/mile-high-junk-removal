@@ -3170,17 +3170,18 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    references them.
    --------------------------------------------------------------------- */
 /* Tightened vertical rhythm pass: header -> greeting -> search -> metrics
-   now sits noticeably closer together — a slightly smaller/tighter clamp
-   floor (19px, not 20px) keeps "Good morning, Junkers." safely clear of
-   the viewport edge at 360px (confirmed via rendered screenshots, not just
-   scrollWidth — see admin/home.js's header for the general "verify
-   visually" lesson this pass re-learned) without shrinking it anywhere
-   it didn't need to. */
+   now sits noticeably closer together. UI refinement pass #2: sized down
+   another ~12% (clamp 19/25px -> 17/22px) — the authenticated Preview
+   screenshot showed the greeting dominating too much of the 360-430px
+   viewport relative to the dashboard below it; still comfortably legible,
+   still clear of the viewport edge at 360px (confirmed via rendered
+   screenshots, not just scrollWidth — see admin/home.js's header for the
+   general "verify visually" lesson this pass re-learned). */
 .admin-home-greeting h1 {
   font-family: var(--font-heading);
   font-weight: 900;
   font-style: italic;
-  font-size: clamp(19px, 5.4vw, 25px);
+  font-size: clamp(17px, 4.8vw, 22px);
   margin: 0 0 2px;
 }
 .admin-home-greeting-sub {
@@ -3193,7 +3194,20 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    Deliberately styled to look like a real, usable search bar rather than
    a grayed-out sketch, so it reads as "coming soon," not "broken" — the
    native disabled attribute on the input/button is the only thing
-   standing between this and a real search. */
+   standing between this and a real search.
+
+   UI refinement pass #2: .admin-home-search-wrap holds both the bar and
+   the "Coming soon" badge, positioned relatively so the badge (below) can
+   sit absolutely in its top-right corner — a small flag on the bar itself
+   instead of a second row underneath it, so it adds zero extra vertical
+   height. The input's placeholder text is shortened at narrow widths by
+   admin/home.js on load (a placeholder can't be swapped by a media query),
+   fixing the clipped-text-before-Ask-button problem the full sentence
+   caused on a real 360-430px phone. */
+.admin-home-search-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
 .admin-home-search {
   display: flex;
   align-items: center;
@@ -3202,7 +3216,6 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   border: 1px solid var(--color-neutral-200, #eee7db);
   border-radius: var(--admin-radius-full);
   padding: 4px 6px 4px 14px;
-  margin-bottom: 4px;
   box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
 }
 .admin-home-search-icon { flex: none; color: var(--color-neutral-500, #8ba88e); display: flex; }
@@ -3215,6 +3228,12 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   font-size: 13.5px;
   color: var(--color-text, #201e1d);
   padding: 8px 0;
+  /* Belt-and-suspenders alongside the shortened narrow-width placeholder
+     (set in JS): if the placeholder text is ever longer than the input's
+     own box for any reason, it truncates cleanly instead of overlapping
+     or pushing into the Ask button. */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .admin-home-search-input::placeholder { color: var(--color-neutral-500, #8ba88e); }
 .admin-home-search-input:disabled { cursor: not-allowed; }
@@ -3231,24 +3250,25 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   cursor: not-allowed;
 }
 .admin-home-search-ask:disabled { opacity: 0.55; }
-/* A small "Coming soon" badge replaces what was previously a full
-   explanatory sentence under the search bar (UI refinement pass) — still
-   paired to the input via aria-describedby (see admin/home/index.html),
-   just far more compact for sighted users. Reuses the same dashed/muted
-   "not yet active" visual language as .admin-calendar-jump-btn elsewhere
-   in this file rather than inventing a new "disabled" treatment. */
+/* Reuses the same dashed/muted "not yet active" visual language as
+   .admin-calendar-jump-btn elsewhere in this file rather than inventing a
+   new "disabled" treatment — just repositioned (UI refinement pass #2) out
+   of normal document flow so it no longer costs its own row of height. */
 .admin-home-search-badge {
+  position: absolute;
+  top: -8px;
+  right: 14px;
   display: inline-block;
-  margin: 0 0 12px 4px;
   padding: 2px 9px;
   border: 1px dashed var(--color-neutral-300, #dcd3c4);
   border-radius: var(--admin-radius-full);
   background: var(--admin-tint);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--color-accent-700, #2f6f13);
+  box-shadow: 0 1px 2px rgba(20, 21, 15, 0.08);
 }
 
 /* 4 metric cards — Needs Attention / Today / Booked / Revenue. Deliberately
