@@ -18,6 +18,13 @@
 
 <main class="admin-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+  <!-- TEMPORARY DIAGNOSTIC (added 2026-10-11) — shown only when the "This
+       week's other revenue" request fails, populated by
+       diagFetchOtherRevenue() in admin/home.js. Never shows
+       cookies/tokens/auth headers — only this endpoint's own status/JSON
+       error message. Remove this element (and its JS counterpart) once the
+       real cause is identified; do not ship. -->
+  <div id="diag-other-revenue" class="admin-error-banner" style="display:none;margin-bottom:16px;background:#fff3cd;border-color:#ffe69c;color:#664d03;"></div>
 
   <div class="admin-home-greeting">
     <h1 id="dash-greeting">Good morning.</h1>

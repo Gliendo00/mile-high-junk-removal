@@ -504,6 +504,60 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // =====================================================================
+  // TEMPORARY DIAGNOSTIC — added 2026-10-11, to be removed once the real
+  // cause of "This week's other revenue" failing on the authenticated
+  // Vercel Preview is identified. Do NOT ship this.
+  //
+  // Used for EXACTLY ONE request (other-revenue, below) in place of
+  // safeFetch() for that single call site only — every other request on
+  // this page (today/week/intake/leads/expenses) is completely untouched,
+  // still goes through the original fetchJson()/safeFetch(). This function
+  // reproduces fetchJson()/safeFetch()'s exact request/success/failure
+  // behavior byte-for-byte (same URL, same single adminFetch() call, same
+  // 401-redirect handling, same sectionFailures.push() on a non-ok
+  // response, same null returned to render() either way) — nothing about
+  // what the app actually does on success or failure changes. The only
+  // addition: before discarding the response, it stashes the HTTP status
+  // and the server's own JSON error message (or the first 300 chars of
+  // raw body if it isn't JSON) into window.__otherRevenueDiag, which a
+  // small temporary panel below (#diag-other-revenue in
+  // admin/home/index.html) displays ONLY when this specific request
+  // fails. Never reads or shows cookies/auth headers/tokens — only this
+  // endpoint's own response body, which server-side
+  // (api/admin/bookings.js's handleOtherRevenueList) only ever contains a
+  // generic { error: "..." } string or the normal success payload, never
+  // secrets. Makes no extra network request (still exactly one GET, same
+  // as before) and no database writes.
+  function diagFetchOtherRevenue(url, label) {
+    return adminFetch(url).then(function (res) {
+      if (res.status === 401) {
+        loginRedirected = true;
+        window.location.href = '/admin/login/';
+        return null;
+      }
+      return res.text().then(function (rawText) {
+        var parsed = null;
+        try { parsed = JSON.parse(rawText); } catch (e) {}
+        window.__otherRevenueDiag = {
+          status: res.status,
+          ok: res.ok,
+          error: (parsed && parsed.error) || (rawText ? rawText.slice(0, 300) : null),
+        };
+        if (!res.ok) {
+          sectionFailures.push(label);
+          return null;
+        }
+        return parsed;
+      });
+    }).catch(function (err) {
+      window.__otherRevenueDiag = { status: null, ok: false, error: (err && err.message) || 'Network error' };
+      sectionFailures.push(label);
+      return null;
+    });
+  }
+  // =====================================================================
+
   Promise.all([
     safeFetch('/api/admin/bookings?view=schedule&range=today', "Today's schedule"),
     safeFetch('/api/admin/bookings?view=schedule&range=week', "This week's jobs"),
@@ -529,9 +583,30 @@ document.addEventListener('DOMContentLoaded', function () {
     var qs = 'startDate=' + encodeURIComponent(weekBody.startDate) + '&endDate=' + encodeURIComponent(weekBody.endDate);
     return Promise.all([
       safeFetch('/api/admin/bookings?view=expenses&' + qs, "This week's expenses"),
-      safeFetch('/api/admin/bookings?view=other-revenue&' + qs, "This week's other revenue"),
+      // TEMPORARY DIAGNOSTIC — this one call site uses diagFetchOtherRevenue()
+      // instead of safeFetch(); see that function's own header above. Remove
+      // this comment and swap back to safeFetch(...) once done.
+      diagFetchOtherRevenue('/api/admin/bookings?view=other-revenue&' + qs, "This week's other revenue"),
     ]).then(function (stage2) {
       if (loginRedirected) return;
+
+      // TEMPORARY DIAGNOSTIC — shows a small, clearly-labeled panel ONLY
+      // when the other-revenue request actually failed, with the real
+      // status/range/error. Remove this whole block (and
+      // #diag-other-revenue in admin/home/index.html) once done.
+      var diagEl = document.getElementById('diag-other-revenue');
+      if (diagEl) {
+        var diag = window.__otherRevenueDiag;
+        if (diag && !diag.ok) {
+          diagEl.textContent = '[TEMP DIAGNOSTIC] Other Revenue — Status: ' + (diag.status === null ? 'network error' : diag.status) +
+            ' · Range: ' + weekBody.startDate + ' → ' + weekBody.endDate +
+            ' · Error: ' + (diag.error || '(no message)');
+          diagEl.style.display = 'block';
+        } else {
+          diagEl.style.display = 'none';
+        }
+      }
+
       render(todayBody, weekBody, intakeBody, leadsBody, stage2[0], stage2[1]);
       if (sectionFailures.length) {
         showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
