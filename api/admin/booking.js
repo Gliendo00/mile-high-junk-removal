@@ -751,25 +751,18 @@ async function handleCreate(req, res, session) {
   }
 
   try {
-    const customerRes = await supabase.from("customers").select("id").eq("id", customerId).maybeSingle();
-    if (customerRes.error) throw customerRes.error;
-    if (!customerRes.data) {
-      res.status(404).json({ error: "Client not found." });
-      return;
-    }
-
     // Convert to Job — resolve and validate the originating estimate
-    // BEFORE attempting to create anything. A cancelled estimate (the
-    // appointment itself never happened) can never be converted; every
-    // other status (scheduled/completed/lost) can, including "lost" —
-    // the owner may still convert a completed-but-not-booked estimate
+    // BEFORE trusting any client-sent customerId. A cancelled estimate
+    // (the appointment itself never happened) can never be converted;
+    // every other status (scheduled/completed/lost) can, including "lost"
+    // — the owner may still convert a completed-but-not-booked estimate
     // later if the client calls back (see estimates.status's own header
     // comment in the migration).
     let sourceEstimate = null;
     if (sourceEstimateIdRaw) {
       const estimateRes = await supabase
         .from("estimates")
-        .select("id, status, source_lead_id, converted_booking_id")
+        .select("id, status, customer_id, source_lead_id, converted_booking_id")
         .eq("id", sourceEstimateIdRaw)
         .maybeSingle();
       if (estimateRes.error) throw estimateRes.error;
@@ -784,7 +777,7 @@ async function handleCreate(req, res, session) {
       }
     } else if (sourceLeadIdRaw) {
       // Lead -> Job direct (no estimate at all). Validated here, same as
-      // customerId above, so a malformed/nonexistent lead id never silently
+      // customerId below, so a malformed/nonexistent lead id never silently
       // produces a job with a dangling source_lead_id.
       const leadRes = await supabase.from("leads").select("id").eq("id", sourceLeadIdRaw).maybeSingle();
       if (leadRes.error) throw leadRes.error;
@@ -792,6 +785,26 @@ async function handleCreate(req, res, session) {
         res.status(404).json({ error: "Lead not found." });
         return;
       }
+    }
+
+    // Security hardening — Convert to Job's client is ALWAYS the
+    // estimate's own customer_id, fetched server-side just above, NEVER
+    // the client-sent `customerId` field. A browser request that sends a
+    // different customerId (a bug, a stale page, or a deliberately
+    // crafted request) has no effect on who the resulting job belongs to
+    // — this is what actually makes "Convert to Job preserves the same
+    // client relationship" a server-enforced guarantee rather than a UI
+    // convenience a crafted request could bypass. Every other mode
+    // ("+ New Job", "+ Past Job", Lead -> Job direct) is completely
+    // unaffected: effectiveCustomerId falls back to the ordinary
+    // body-supplied customerId whenever there is no sourceEstimate.
+    const effectiveCustomerId = sourceEstimate ? sourceEstimate.customer_id : customerId;
+
+    const customerRes = await supabase.from("customers").select("id").eq("id", effectiveCustomerId).maybeSingle();
+    if (customerRes.error) throw customerRes.error;
+    if (!customerRes.data) {
+      res.status(404).json({ error: "Client not found." });
+      return;
     }
 
     const BOOKING_SELECT_COLS =
@@ -821,7 +834,7 @@ async function handleCreate(req, res, session) {
       const insertRes = await supabase
         .from("bookings")
         .insert({
-          customer_id: customerId,
+          customer_id: effectiveCustomerId,
           service_type: serviceType,
           appointment_date: appointmentDate,
           time_window: timeWindow,

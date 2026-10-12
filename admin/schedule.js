@@ -289,7 +289,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusBtn.appendChild(statusLabelEl);
     statusBtn.appendChild(statusChevronIcon());
     statusBtn.addEventListener('click', function () {
-      openEstimateStatusSheet(estimate, statusBtn);
+      openEstimateStatusSheet(estimate);
     });
     top.appendChild(statusBtn);
     card.appendChild(top);
@@ -338,30 +338,6 @@ document.addEventListener('DOMContentLoaded', function () {
     return li;
   }
 
-  // Tracks which estimates currently have a status save in flight — same
-  // per-id-not-page-wide guard as statusSavingIds below for jobs.
-  var estimateSavingIds = {};
-
-  function patchEstimateStatus(estimateId, action) {
-    return adminFetch('/api/admin/booking?resource=estimate', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: estimateId, action: action }),
-    }).then(function (res) {
-      if (res.status === 401) {
-        window.location.href = '/admin/login/';
-        return null;
-      }
-      return res
-        .json()
-        .catch(function () { return null; })
-        .then(function (body) {
-          if (!res.ok) throw new Error((body && body.error) || 'Could not update this estimate.');
-          return body;
-        });
-    });
-  }
-
   // Opens the shared change-status bottom sheet (admin/status-ui.js) with
   // the Estimate workflow's own small vocabulary (via the `labels` option
   // that module now supports) — completely independent of
@@ -370,8 +346,17 @@ document.addEventListener('DOMContentLoaded', function () {
   // Job is its own dedicated action on the Estimate detail page, since
   // converting creates a whole new job record rather than just changing a
   // status.
-  function openEstimateStatusSheet(estimate, statusBtn) {
-    if (estimateSavingIds[estimate.id]) return;
+  //
+  // Hardening pass: picking a status here now opens the shared
+  // window.AdminEstimateOutcome sheet (admin/estimate-outcome-sheet.js) —
+  // the SAME sheet admin/estimate-detail.js's own per-action buttons use —
+  // rather than PATCHing directly on select. This both replaces the
+  // original direct-PATCH-on-select behavior with the CRM-native sheet
+  // pattern and gives Schedule a way to add an optional outcome note/
+  // reason, which it never had before. The sheet performs its own PATCH
+  // and write-then-refresh; this function never touches the network
+  // itself.
+  function openEstimateStatusSheet(estimate) {
     var values = estimate.status === 'scheduled' ? ['scheduled', 'completed', 'cancelled'] : ['completed', 'lost'];
     window.AdminStatusUI.open({
       title: 'Change estimate status',
@@ -382,23 +367,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (newStatus === estimate.status) return;
         var action = newStatus === 'completed' ? 'complete' : newStatus === 'cancelled' ? 'cancel' : newStatus === 'lost' ? 'lost' : null;
         if (!action) return;
-        estimateSavingIds[estimate.id] = true;
-        statusBtn.disabled = true;
-        statusBtn.classList.add('is-saving');
-        patchEstimateStatus(estimate.id, action)
-          .then(function (body) {
-            if (!body) return;
+        window.AdminEstimateOutcome.open({
+          estimateId: estimate.id,
+          action: action,
+          onComplete: function () {
             showToast('Estimate updated.', 'success');
             refreshCurrentView();
-          })
-          .catch(function (err) {
-            showToast(err && err.message ? err.message : 'Could not update this estimate.', 'error');
-          })
-          .finally(function () {
-            delete estimateSavingIds[estimate.id];
-            statusBtn.disabled = false;
-            statusBtn.classList.remove('is-saving');
-          });
+          },
+        });
       },
     });
   }

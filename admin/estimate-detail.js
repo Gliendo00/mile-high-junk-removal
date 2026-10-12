@@ -217,69 +217,37 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   }
 
-  function patchEstimate(action, extra) {
-    var payload = Object.assign({ id: estimateId, action: action }, extra || {});
-    return adminFetch('/api/admin/booking?resource=estimate', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).then(function (res) {
-      if (res.status === 401) {
-        window.location.href = '/admin/login/';
-        return null;
-      }
-      return res.json().catch(function () { return null; }).then(function (body) {
-        if (!res.ok) throw new Error((body && body.error) || 'Could not update this estimate.');
-        return body;
-      });
-    });
-  }
-
   if (!estimateId) {
     showError('Missing estimate id.');
   } else {
     load();
   }
 
+  // Hardening pass: replaced window.prompt()/window.confirm() with the
+  // shared window.AdminEstimateOutcome bottom sheet (admin/estimate-
+  // outcome-sheet.js) — same CRM-native sheet pattern as
+  // window.AdminStatusUI/window.AdminJobCloseout, never a browser-native
+  // dialog. The sheet performs its own PATCH and only calls onComplete
+  // after a confirmed save; a dismissed/cancelled sheet calls nothing, so
+  // the estimate is left completely untouched, matching every other
+  // status-change control in this codebase.
+  function onOutcomeComplete(successMessage) {
+    return function (result) {
+      showToast(successMessage, 'success');
+      load();
+    };
+  }
+
   completeBtn.addEventListener('click', function () {
-    var note = window.prompt('How did the estimate go? (optional)', '') || '';
-    completeBtn.disabled = true;
-    patchEstimate('complete', { outcomeNote: note.trim() })
-      .then(function (body) {
-        if (!body) return;
-        showToast('Estimate marked Completed.', 'success');
-        load();
-      })
-      .catch(function (err) { showToast(err && err.message ? err.message : 'Could not update this estimate.', 'error'); })
-      .finally(function () { completeBtn.disabled = false; });
+    window.AdminEstimateOutcome.open({ estimateId: estimateId, action: 'complete', onComplete: onOutcomeComplete('Estimate marked Completed.') });
   });
 
   lostBtn.addEventListener('click', function () {
-    if (!window.confirm('Mark this estimate as Did Not Book? You can still convert it to a job later if the client calls back.')) return;
-    var note = window.prompt('Any notes on why? (optional)', '') || '';
-    lostBtn.disabled = true;
-    patchEstimate('lost', { outcomeNote: note.trim() })
-      .then(function (body) {
-        if (!body) return;
-        showToast('Estimate marked Did Not Book.', 'success');
-        load();
-      })
-      .catch(function (err) { showToast(err && err.message ? err.message : 'Could not update this estimate.', 'error'); })
-      .finally(function () { lostBtn.disabled = false; });
+    window.AdminEstimateOutcome.open({ estimateId: estimateId, action: 'lost', onComplete: onOutcomeComplete('Estimate marked Did Not Book.') });
   });
 
   cancelBtn.addEventListener('click', function () {
-    if (!window.confirm('Cancel this estimate appointment? The originating lead is not affected.')) return;
-    var reason = window.prompt('Reason (optional)', '') || '';
-    cancelBtn.disabled = true;
-    patchEstimate('cancel', { cancelledReason: reason.trim() })
-      .then(function (body) {
-        if (!body) return;
-        showToast('Estimate cancelled.', 'success');
-        load();
-      })
-      .catch(function (err) { showToast(err && err.message ? err.message : 'Could not update this estimate.', 'error'); })
-      .finally(function () { cancelBtn.disabled = false; });
+    window.AdminEstimateOutcome.open({ estimateId: estimateId, action: 'cancel', onComplete: onOutcomeComplete('Estimate cancelled.') });
   });
 
   logoutBtn.addEventListener('click', function () {

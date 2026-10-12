@@ -1029,6 +1029,27 @@ async function handleMonth(req, res, supabase, todayIso) {
     jobs.forEach(function (j) {
       jobCountsByDate[j.appointmentDate] = (jobCountsByDate[j.appointmentDate] || 0) + 1;
     });
+    // Estimate workflow hardening pass — Month now gets the same sibling
+    // `estimates` array as Today/Tomorrow/Yesterday/Day/Week (see
+    // fetchScheduleEstimates()'s own header). An estimate scheduled for a
+    // future date within this month must show here exactly as it does on
+    // Day/Week — fetchScheduleEstimates() has no "today-relative" filter
+    // at all, only the month's own [startDate, endDate] bounds, so a
+    // future-dated scheduled estimate is never dropped merely because the
+    // admin is viewing Month instead of Day/Week. estimateCountsByDate
+    // mirrors jobCountsByDate's shape for the same reason (forward-
+    // compatible, even though the client currently derives its own count
+    // from the `estimates` array directly — see admin/calendar-views.js's
+    // renderMonthGrid()). Never merged into jobs/jobCountsByDate — kept
+    // as a clearly separate pair of fields so this response can never be
+    // mistaken for carrying one combined "schedule item" concept, and so
+    // admin/schedule-financials.js (fed jobs only) stays structurally
+    // unable to see an estimate even if a future caller got careless.
+    const estimates = await fetchScheduleEstimates(supabase, startDate, endDate);
+    const estimateCountsByDate = {};
+    estimates.forEach(function (e) {
+      estimateCountsByDate[e.appointmentDate] = (estimateCountsByDate[e.appointmentDate] || 0) + 1;
+    });
     res.status(200).json({
       ok: true,
       range: "month",
@@ -1038,6 +1059,8 @@ async function handleMonth(req, res, supabase, todayIso) {
       endDate: endDate,
       jobs: jobs,
       jobCountsByDate: jobCountsByDate,
+      estimates: estimates,
+      estimateCountsByDate: estimateCountsByDate,
       today: todayIso,
     });
   } catch (err) {

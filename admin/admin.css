@@ -491,6 +491,25 @@
   font-variant-numeric: tabular-nums;
 }
 .admin-month-grid-cell.is-selected .admin-month-grid-count { background: rgba(255, 255, 255, 0.25); }
+/* Estimate workflow hardening pass — a second, separate count badge for a
+   day with one or more estimates. Same shape/size as .admin-month-grid-
+   count, deliberately a different (teal) color so a day's two counts are
+   never confused for each other; .admin-month-grid-cell's own flex-column
+   layout stacks them automatically, no extra positioning needed. */
+.admin-month-grid-estimate-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #0e7490;
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.admin-month-grid-cell.is-selected .admin-month-grid-estimate-count { background: rgba(255, 255, 255, 0.25); }
 
 /* Selected-day panel — shared by Month's day panel and Week's per-day
    selection (admin/calendar-views.js's renderDayPanel()). Stage 2.4.1
@@ -554,6 +573,14 @@
   font-size: 13px;
   color: var(--color-neutral-700, #645c50);
 }
+
+/* Estimate workflow hardening pass — Month's day-panel estimate card
+   (admin/calendar-views.js's renderDailyEstimateCard()). Same
+   .admin-daily-job-card shell; a teal left accent + the shared ESTIMATE
+   type badge (.admin-estimate-type-badge, admin/schedule.js's own) are
+   the only visual differences, so the two read as one family. */
+.admin-daily-estimate-card { border-left: 3px solid #0e7490; }
+.admin-daily-estimate-card-left { display: flex; align-items: center; gap: 6px; }
 
 /* ------------------------------------------------------------------ */
 /* Week — a genuinely horizontal 7-day strip (Stage 2.4.2; a compact       */

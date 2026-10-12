@@ -128,6 +128,10 @@ window.AdminCalendarViews = (function () {
     monthMonth: todayParts[1],
     monthSelectedDate: null,
     monthJobsByDate: {}, // appointmentDate -> jobs[]
+    // Estimate workflow hardening pass — Month only (see renderMonthGrid()/
+    // renderDayPanel() below for why Week's day panel still passes an empty
+    // array rather than this same treatment).
+    monthEstimatesByDate: {}, // appointmentDate -> estimates[]
     yearYear: todayParts[0],
   };
 
@@ -275,9 +279,16 @@ window.AdminCalendarViews = (function () {
     loadYear();
   }
 
+  // Estimate workflow hardening pass — small local copy of
+  // admin/estimate-detail.js's identical status-label map (this project's
+  // established per-file-duplication convention), used only by
+  // renderDailyEstimateCard() below.
+  var ESTIMATE_STATUS_LABELS = { scheduled: 'Scheduled', completed: 'Completed', cancelled: 'Cancelled', lost: 'Did Not Book', converted: 'Converted to Job' };
+
   // ---------------------------------------------------------------------
   // Shared: the selected-day panel (Selected date, with previous/next-day
-  // arrows -> Jobs), and the compact job card used inside it.
+  // arrows -> Jobs [-> Estimates, Month only for now]), and the compact
+  // job/estimate cards used inside it.
   // ---------------------------------------------------------------------
   function renderDailyJobCard(job) {
     var a = document.createElement('a');
@@ -306,13 +317,49 @@ window.AdminCalendarViews = (function () {
     return a;
   }
 
+  // Estimate workflow hardening pass — the Month day panel's compact
+  // estimate card. Mirrors renderDailyJobCard() above (same
+  // .admin-daily-job-card shell, same "time/status top row, name,
+  // meta line" shape) so the two read as one visual family, with the
+  // ESTIMATE type badge + estimate-specific status color as the only
+  // real differences — matching admin/schedule.js's renderEstimateCard()
+  // for the Day/Week views. Opens /admin/estimate/, never /admin/booking/.
+  function renderDailyEstimateCard(estimate) {
+    var a = document.createElement('a');
+    a.className = 'admin-daily-job-card admin-daily-estimate-card';
+    a.href = '/admin/estimate/?id=' + encodeURIComponent(estimate.id);
+
+    var top = el('div', 'admin-daily-job-card-top');
+    var left = el('div', 'admin-daily-estimate-card-left');
+    left.appendChild(el('span', 'admin-estimate-type-badge', 'ESTIMATE'));
+    left.appendChild(el('span', 'admin-daily-job-card-time', estimate.timeLabel || '—'));
+    top.appendChild(left);
+    top.appendChild(el('span', 'admin-status-badge admin-estimate-status-' + estimate.status, ESTIMATE_STATUS_LABELS[estimate.status] || estimate.status));
+    a.appendChild(top);
+
+    var name = (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
+    a.appendChild(el('div', 'admin-daily-job-card-name', name));
+
+    var metaParts = [estimate.serviceLabel || 'Estimate'];
+    if (estimate.serviceAddress && estimate.serviceAddress.city) metaParts.push(estimate.serviceAddress.city);
+    var quotedText = formatPrice(estimate.quotedAmount);
+    if (quotedText) metaParts.push('Ballpark ' + quotedText);
+    a.appendChild(el('div', 'admin-daily-job-card-meta', metaParts.join(' · ')));
+
+    return a;
+  }
+
   // container: the .admin-day-panel element to fill. iso: the selected
   // date. jobs: that date's jobs (already filtered by the caller).
+  // estimates: that date's estimates, or an empty array — Week's own call
+  // site always passes [] for now (Week doesn't show estimates in its day
+  // panel yet; see selectWeekDate() below), so this stays a purely
+  // additive, opt-in parameter rather than a behavior change for Week.
   // onNavigate(deltaDays): called with -1/+1 when the previous-day/next-day
   // arrow is tapped — left to the caller (selectWeekDate/selectMonthDate)
   // to decide how to resolve a delta that lands outside the currently
   // loaded week/month (see navigateWeekDayBy()/navigateMonthDayBy() below).
-  function renderDayPanel(container, iso, jobs, onNavigate) {
+  function renderDayPanel(container, iso, jobs, estimates, onNavigate) {
     while (container.firstChild) container.removeChild(container.firstChild);
     container.hidden = false;
 
@@ -361,15 +408,34 @@ window.AdminCalendarViews = (function () {
     }
     container.appendChild(actionLink);
 
+    var hasEstimates = estimates && estimates.length;
     var jobsWrap = el('div', 'admin-daily-job-list');
     if (!jobs.length) {
-      jobsWrap.appendChild(el('div', 'admin-empty', 'No jobs on this date.'));
+      // Only the literal "nothing at all scheduled" case reads as "No jobs
+      // on this date" — if this date has an estimate (rendered in its own
+      // section just below), showing that empty-state line here would read
+      // as contradictory/misleading right above a visible card.
+      if (!hasEstimates) jobsWrap.appendChild(el('div', 'admin-empty', 'No jobs on this date.'));
     } else {
       jobs.forEach(function (job) {
         jobsWrap.appendChild(renderDailyJobCard(job));
       });
     }
     container.appendChild(jobsWrap);
+
+    // 3. Estimates (Month only for now — see this function's own header).
+    // Never financial: this section exists purely for operational
+    // visibility, same "scheduled appointment, not a job" posture as
+    // every other Estimate surface — admin/schedule-financials.js is never
+    // handed this array (see showFinancialsFor() below, called with
+    // body.jobs alone).
+    if (hasEstimates) {
+      var estimatesWrap = el('div', 'admin-daily-job-list admin-daily-estimate-list');
+      estimates.forEach(function (estimate) {
+        estimatesWrap.appendChild(renderDailyEstimateCard(estimate));
+      });
+      container.appendChild(estimatesWrap);
+    }
   }
 
   function groupJobsByDate(jobs) {
@@ -504,7 +570,11 @@ window.AdminCalendarViews = (function () {
     Array.prototype.forEach.call(weekOverviewEl.querySelectorAll('.admin-week-day-row'), function (row) {
       row.classList.toggle('is-selected', row.dataset.date === iso);
     });
-    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || [], function (delta) { navigateWeekDayBy(iso, delta); });
+    // Estimate workflow hardening pass: Week's day panel doesn't show
+    // estimates yet (deliberate, narrower scope than Month this round —
+    // see renderDayPanel()'s own header) — an empty array here is a
+    // literal no-op, not a behavior change from before this pass.
+    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || [], [], function (delta) { navigateWeekDayBy(iso, delta); });
     showQuickExpenseFor(iso);
   }
 
@@ -560,6 +630,10 @@ window.AdminCalendarViews = (function () {
         if (!body || seq !== monthRequestSeq) return;
         monthLoading.style.display = 'none';
         state.monthJobsByDate = groupJobsByDate(body.jobs);
+        // Estimate workflow hardening pass — groupJobsByDate() is generic
+        // (it only ever reads .appointmentDate), so it's reused as-is for
+        // estimates rather than a second, identical grouping function.
+        state.monthEstimatesByDate = groupJobsByDate(body.estimates);
         monthCurrentWrap.style.display = (body.year === todayParts[0] && body.month === todayParts[1]) ? 'none' : 'block';
         renderMonthGrid(body);
         showFinancialsFor(body.startDate, body.endDate, body.jobs);
@@ -608,6 +682,7 @@ window.AdminCalendarViews = (function () {
     for (var day = 1; day <= totalDays; day++) {
       var iso = ymdIso(year, month, day);
       var jobs = state.monthJobsByDate[iso] || [];
+      var estimates = state.monthEstimatesByDate[iso] || [];
       var cell = document.createElement('button');
       cell.type = 'button';
       var classes = ['admin-month-grid-cell', 'is-day'];
@@ -618,6 +693,14 @@ window.AdminCalendarViews = (function () {
       cell.appendChild(el('span', 'admin-month-grid-daynum', String(day)));
       if (jobs.length) {
         cell.appendChild(el('span', 'admin-month-grid-count', String(jobs.length)));
+      }
+      // Estimate workflow hardening pass — a second, visually distinct
+      // (teal, matching admin/schedule.js's/admin-estimate-type-badge's
+      // established estimate color) count badge, never merged into the
+      // job count badge above and never read by any financial
+      // calculation — purely a "something's scheduled here too" signal.
+      if (estimates.length) {
+        cell.appendChild(el('span', 'admin-month-grid-estimate-count', String(estimates.length)));
       }
       cell.addEventListener('click', function (e) {
         selectMonthDate(e.currentTarget.dataset.date);
@@ -640,7 +723,7 @@ window.AdminCalendarViews = (function () {
     Array.prototype.forEach.call(monthGrid.querySelectorAll('.admin-month-grid-cell.is-day'), function (cell) {
       cell.classList.toggle('is-selected', cell.dataset.date === iso);
     });
-    renderDayPanel(monthDayPanel, iso, state.monthJobsByDate[iso] || [], function (delta) { navigateMonthDayBy(iso, delta); });
+    renderDayPanel(monthDayPanel, iso, state.monthJobsByDate[iso] || [], state.monthEstimatesByDate[iso] || [], function (delta) { navigateMonthDayBy(iso, delta); });
     showQuickExpenseFor(iso);
   }
 
