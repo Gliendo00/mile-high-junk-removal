@@ -53,10 +53,21 @@ function extractCheckInList(sql, column) {
 // Simple heuristic: strip `--` line comments first, since the Rollback
 // sections are deliberately commented out and legitimately contain
 // DROP TABLE/DROP COLUMN as reference-only text.
+//
+// Line endings: this file may be read back with CRLF (git's autocrlf
+// rewrites LF -> CRLF on checkout on a Windows machine, even though the
+// committed blob itself is unaffected) — strip any trailing \r PER LINE
+// first, rather than relying on `.`/`$` to see through it. `.` does not
+// match a line-terminator character (which includes \r) and, with no `m`
+// flag, `$` only matches at the true end of the string — so a line like
+// "-- comment\r" left the old version of this function's regex with no
+// valid match at all, silently leaving the WHOLE line (including the
+// comment) unstripped. Caught for real on first use in a freshly
+// checked-out working tree, not just a theoretical concern.
 function stripSqlComments(sql) {
   return sql
     .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
+    .map((line) => line.replace(/\r$/, "").replace(/--.*$/, ""))
     .join("\n");
 }
 
