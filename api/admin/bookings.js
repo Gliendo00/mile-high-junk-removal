@@ -122,6 +122,19 @@ module.exports = async (req, res) => {
     return handleGoogleConfig(req, res);
   }
 
+  // Site Improvement Agent (Phase 2) — Home dashboard's "Website &
+  // Marketing Activity" row. Same reasoning as google-config just above:
+  // dispatched before any Supabase client exists, since this never reads
+  // from Supabase at all — it reads agent/history/log.ndjson, a plain
+  // git-tracked file bundled into THIS function's deployment via
+  // vercel.json's functions."api/admin/bookings.js".includeFiles (the
+  // agent library itself is also an ordinary `require()`, which Vercel's
+  // build already traces; only the *data* file needed the explicit
+  // includeFiles, since it's read via fs at runtime, not required).
+  if (req.query.view === "agent-activity") {
+    return handleAgentActivity(req, res);
+  }
+
   const supabase = getServiceClient();
   if (!supabase) {
     console.error("Admin bookings list failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
@@ -446,6 +459,45 @@ function handleGoogleConfig(req, res) {
   const raw = process.env.ADMIN_GOOGLE_MAPS_API_KEY;
   const key = typeof raw === "string" ? raw.trim() : "";
   res.status(200).json({ ok: true, googleMapsApiKey: key });
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent (Phase 2) — ?view=agent-activity
+//
+// A compact ACTIVITY VIEW, not an SEO analytics dashboard: returns only
+// {icon, text} lines per recent run (agent/lib/history.js's
+// buildDashboardSummary()), never the full findings/evidence/research
+// payload that lives in the log file itself. `connected: false` (with no
+// `recent`) is what admin/home.js falls back to its existing "Not
+// connected yet" pill for — the log file not existing yet (or existing
+// but genuinely empty) is a real, honest state, not an error.
+// ---------------------------------------------------------------------
+function handleAgentActivity(req, res) {
+  let history;
+  try {
+    history = require("../../agent/lib/history");
+  } catch (e) {
+    console.error("Admin agent-activity: agent/lib/history.js not available in this deployment", e);
+    res.status(200).json({ ok: true, connected: false, recent: [] });
+    return;
+  }
+
+  let runs;
+  try {
+    runs = history.readAllRuns();
+  } catch (e) {
+    console.error("Admin agent-activity failed to read agent/history/log.ndjson", e);
+    res.status(200).json({ ok: true, connected: false, recent: [] });
+    return;
+  }
+
+  if (!runs.length) {
+    res.status(200).json({ ok: true, connected: false, recent: [] });
+    return;
+  }
+
+  const recent = history.buildDashboardSummary(runs, 5);
+  res.status(200).json({ ok: true, connected: true, recent });
 }
 
 // ---------------------------------------------------------------------

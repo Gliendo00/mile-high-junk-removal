@@ -44,5 +44,10 @@
   ],
   "crons": [
     { "path": "/api/admin/intake?action=cleanup-expired", "schedule": "0 9 * * *" }
-  ]
+  ],
+  "functions": {
+    "api/admin/bookings.js": {
+      "includeFiles": "agent/**"
+    }
+  }
 }

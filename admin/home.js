@@ -11,7 +11,7 @@
 // what Schedule's own Business Pulse counters show for the same range.
 // Nothing here writes anything (except the inline Add Expense action,
 // which reuses admin/quick-expense.js's own existing, already-tested write
-// path unchanged), and no new API endpoint was added for this page — six
+// path unchanged), and no new API endpoint was added for this page — seven
 // existing, already-admin-authenticated GETs, fetched in two stages:
 //
 //   Stage 1 (parallel, independent):
@@ -23,6 +23,9 @@
 //   - GET /api/admin/intake                                (Pending Intake)
 //   - GET /api/admin/bookings?view=leads                   (Leads Need
 //     Attention / Leads Need Your Attention)
+//   - GET /api/admin/bookings?view=agent-activity           (Website &
+//     Marketing Activity — Site Improvement Agent, Phase 2; see that
+//     view's own header in api/admin/bookings.js)
 //
 //   Stage 2 (parallel, fired only once the week's startDate/endDate are
 //   known from stage 1 — never guessed client-side, so the range can never
@@ -379,6 +382,52 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
+  // Website & Marketing Activity (Site Improvement Agent, Phase 2) — a
+  // compact activity-view render of GET ?view=agent-activity's
+  // {connected, recent} payload. `recent[0].lines` is already a short
+  // list of {icon, text} pairs (agent/lib/history.js's
+  // buildDashboardSummary() built it server-side) — this just turns each
+  // into one DOM row, via createElement/textContent only, never
+  // innerHTML, the same discipline every other admin page in this
+  // directory already follows. A null/failed fetch (agentActivityBody is
+  // null) renders identically to "connected: false" — the existing "Not
+  // connected yet" row — never a fabricated status.
+  // -----------------------------------------------------------------
+  var ICON_GLYPH = { check: '✓', flag: '!', research: '○', reject: '✕' };
+  function renderAgentActivity(agentActivityBody) {
+    var notConnectedEl = document.getElementById('marketing-not-connected');
+    var connectedEl = document.getElementById('marketing-connected');
+    var linesEl = document.getElementById('marketing-lines');
+    var connected = !!(agentActivityBody && agentActivityBody.connected && agentActivityBody.recent && agentActivityBody.recent.length);
+
+    if (!connected) {
+      notConnectedEl.hidden = false;
+      connectedEl.hidden = true;
+      return;
+    }
+
+    notConnectedEl.hidden = true;
+    connectedEl.hidden = false;
+    clear(linesEl);
+    agentActivityBody.recent[0].lines.forEach(function (line) {
+      var row = document.createElement('div');
+      row.className = 'admin-home-marketing-line';
+
+      var icon = document.createElement('span');
+      icon.className = 'admin-home-marketing-line-icon admin-home-marketing-line-icon-' + (line.icon || 'flag');
+      icon.textContent = ICON_GLYPH[line.icon] || '•';
+      icon.setAttribute('aria-hidden', 'true');
+
+      var text = document.createElement('span');
+      text.textContent = line.text;
+
+      row.appendChild(icon);
+      row.appendChild(text);
+      linesEl.appendChild(row);
+    });
+  }
+
+  // -----------------------------------------------------------------
   // Quick Actions — New Job / Scan Lead / Other Revenue are plain
   // links to their existing pages. Add Expense mounts the SAME
   // window.AdminQuickExpense module admin/index.html already uses
@@ -407,7 +456,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  function render(todayBody, weekBody, intakeBody, leadsBody, expensesBody, otherRevenueBody) {
+  function render(todayBody, weekBody, intakeBody, leadsBody, expensesBody, otherRevenueBody, agentActivityBody) {
     var todayJobs = (todayBody && todayBody.jobs) || [];
     var weekJobs = (weekBody && weekBody.jobs) || [];
     var intakes = (intakeBody && intakeBody.intakes) || [];
@@ -475,6 +524,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     renderTodaySchedule(todayJobs);
+    renderAgentActivity(agentActivityBody);
 
     var attentionRows = intakes
       .map(intakeToRow)
@@ -522,9 +572,10 @@ document.addEventListener('DOMContentLoaded', function () {
     safeFetch('/api/admin/bookings?view=schedule&range=week', "This week's jobs"),
     safeFetch('/api/admin/intake', 'Pending intake'),
     safeFetch('/api/admin/bookings?view=leads', 'Leads'),
+    safeFetch('/api/admin/bookings?view=agent-activity', 'Website & Marketing Activity'),
   ]).then(function (stage1) {
     if (loginRedirected) return;
-    var todayBody = stage1[0], weekBody = stage1[1], intakeBody = stage1[2], leadsBody = stage1[3];
+    var todayBody = stage1[0], weekBody = stage1[1], intakeBody = stage1[2], leadsBody = stage1[3], agentActivityBody = stage1[4];
 
     // Stage 2 depends on the real week startDate/endDate the server just
     // returned — never computed client-side, so it can't drift from what
@@ -532,7 +583,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // the week fetch failed, stage 2 is skipped entirely (see this file's
     // header) rather than guessing a range.
     if (!weekBody || !weekBody.startDate || !weekBody.endDate) {
-      render(todayBody, weekBody, intakeBody, leadsBody, null, null);
+      render(todayBody, weekBody, intakeBody, leadsBody, null, null, agentActivityBody);
       if (sectionFailures.length) {
         showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
       }
@@ -545,7 +596,7 @@ document.addEventListener('DOMContentLoaded', function () {
       safeFetch('/api/admin/bookings?view=other-revenue&' + qs, "This week's other revenue"),
     ]).then(function (stage2) {
       if (loginRedirected) return;
-      render(todayBody, weekBody, intakeBody, leadsBody, stage2[0], stage2[1]);
+      render(todayBody, weekBody, intakeBody, leadsBody, stage2[0], stage2[1], agentActivityBody);
       if (sectionFailures.length) {
         showError('Some sections failed to load: ' + sectionFailures.join(', ') + '. The rest of the dashboard above is showing correctly.');
       }

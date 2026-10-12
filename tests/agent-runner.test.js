@@ -39,16 +39,30 @@ function gitStatusPorcelain() {
 }
 
 try {
-  test("gatherFindings() runs against the real site without throwing and returns well-formed findings", () => {
-    const { pages, findings } = runner.gatherFindings();
+  test("gatherFindings() runs against the real site without throwing and returns well-formed, decided findings", () => {
+    const { pages, findings, researchWarnings } = runner.gatherFindings();
     assert.ok(pages.length > 30, "expected the real site to have more than 30 top-level pages");
     assert.ok(Array.isArray(findings));
+    assert.ok(Array.isArray(researchWarnings), "research-unavailable must fail safe — an array (possibly empty), never a thrown error");
     for (const f of findings) {
       assert.ok(f.id);
+      assert.ok(f.key);
       assert.ok(f.type);
       assert.ok(["A", "B", "C", "D", "E"].includes(f.category));
       assert.ok(f.evidence.length > 0);
+      assert.ok(Array.isArray(f.research), "every finding must have a `.research` array, even when empty");
+      assert.ok(f.decision, `finding ${f.type} must have a decision assigned`);
+      assert.ok(["APPLY_SAFE_FIX", "PROPOSE_CHANGE", "RESEARCH_MORE", "NO_CHANGE", "REJECT_OPPORTUNITY"].includes(f.decision));
+      if (f.decision === "RESEARCH_MORE") {
+        assert.ok(f.researchQuestion, "a RESEARCH_MORE finding must carry a structured researchQuestion");
+      }
     }
+  });
+
+  test("gatherFindings() is resilient when agent/research/results/ is empty (its current real state) — no findings get stuck undecided", () => {
+    const { findings } = runner.gatherFindings();
+    const undecided = findings.filter((f) => !f.decision);
+    assert.deepStrictEqual(undecided, []);
   });
 
   test("dry-run mode never modifies any file in the repo working tree", () => {

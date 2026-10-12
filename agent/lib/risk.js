@@ -23,7 +23,12 @@ const RULES = {
   "broken-internal-link": { category: "A", riskLevel: "medium" },
   "broken-internal-link-fixable": { category: "A", riskLevel: "low" },
   "redirect-hop-internal-link": { category: "B", riskLevel: "low" },
-  "orphan-page": { category: "C", riskLevel: "medium" },
+  // Whether a page is linked from anywhere else is itself an internal,
+  // mechanically-checkable fact (category A) — deciding whether that's a
+  // real problem (vs. an intentionally unlinked page like a legal page)
+  // needs a human judgment call, not external research, so this stays
+  // propose-only without routing through the research layer.
+  "orphan-page": { category: "A", riskLevel: "medium" },
   "sitemap-missing-file": { category: "A", riskLevel: "medium" },
   "sitemap-missing-url": { category: "A", riskLevel: "low" },
   "robots-sitemap-conflict": { category: "A", riskLevel: "medium" },

@@ -3578,6 +3578,53 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   white-space: nowrap;
 }
 
+/* Website & Marketing Activity — CONNECTED state (Site Improvement Agent,
+   Phase 2). Same compact footprint/card chrome as .admin-home-marketing-row
+   above (never a full analytics card — see api/admin/bookings.js's
+   ?view=agent-activity header: this is an ACTIVITY VIEW, not a technical
+   audit dump), just tall enough for a few {icon, text} lines instead of
+   one status pill. Reuses the exact same status-dot color convention as
+   .admin-status-dot-* (new=green/completed=gray/lost=red) rather than
+   inventing a new palette. */
+.admin-home-marketing-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+}
+.admin-home-marketing-card-label {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 13.5px;
+  color: var(--color-text, #201e1d);
+  margin-bottom: 8px;
+}
+.admin-home-marketing-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.admin-home-marketing-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--color-neutral-700, #4b4438);
+}
+.admin-home-marketing-line-icon {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-weight: 800;
+}
+.admin-home-marketing-line-icon-check { color: #2f6f13; }
+.admin-home-marketing-line-icon-flag { color: #b45309; }
+.admin-home-marketing-line-icon-research { color: #6b7280; }
+.admin-home-marketing-line-icon-reject { color: #b91c1c; }
+
 /* ---------------------------------------------------------------------
    Leads sidebar redesign — replaces the old horizontal 9-pill tab row
    (.admin-leads-tabs, left in place above for any page that still

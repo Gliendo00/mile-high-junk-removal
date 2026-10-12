@@ -14,6 +14,15 @@ function nextId(type) {
   return `${type}-${counter}`;
 }
 
+// A stable, content-derived key — unlike `id` (a per-run counter, never
+// comparable across runs), `key` is the same across runs for "the same
+// observation" (same type + same pages), so Phase 2's research layer can
+// attach a researched answer today to the matching finding in next week's
+// run without relying on any run-specific identifier.
+function makeKey(type, pages) {
+  return `${type}::${[...pages].sort().join(",")}`;
+}
+
 /**
  * @param {object} args
  * @param {string} args.type - stable machine-readable finding type, e.g. "broken-internal-link"
@@ -36,15 +45,17 @@ function makeFinding(args) {
   }
   return {
     id: nextId(args.type),
+    key: makeKey(args.type, args.pages),
     type: args.type,
     summary: args.summary,
     pages: args.pages,
     evidence: args.evidence,
     recommendation: args.recommendation || null,
     autoFix: args.autoFix || null, // { kind, apply: (page) => {changed, before, after} }
-    // risk classification is attached later by risk.js — keep this factory
-    // focused only on "is this a well-evidenced observation".
+    // risk classification is attached later by risk.js, research by
+    // research-intake.js, and a decision by decision.js — keep this
+    // factory focused only on "is this a well-evidenced observation".
   };
 }
 
-module.exports = { makeFinding };
+module.exports = { makeFinding, makeKey };

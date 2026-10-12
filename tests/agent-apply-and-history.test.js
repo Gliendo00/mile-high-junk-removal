@@ -94,10 +94,16 @@ try {
     const runs = [{ runId: "r1", timestamp: new Date().toISOString(), mode: "dry-run", findings: [] }];
     const summary = history.buildDashboardSummary(runs);
     assert.strictEqual(summary.length, 1);
-    assert.deepStrictEqual(summary[0].lines, ["No worthwhile change today."]);
+    assert.deepStrictEqual(summary[0].lines, [{ icon: "check", text: "No worthwhile change today." }]);
   });
 
-  test("history.buildDashboardSummary distinguishes applied / proposed / researched lines", () => {
+  test("history.buildDashboardSummary leads with a 'Checked N pages' line when pagesScanned is known", () => {
+    const runs = [{ runId: "r0", timestamp: new Date().toISOString(), mode: "dry-run", summary: { pagesScanned: 51 }, findings: [] }];
+    const summary = history.buildDashboardSummary(runs);
+    assert.deepStrictEqual(summary[0].lines[0], { icon: "check", text: "Checked 51 pages" });
+  });
+
+  test("history.buildDashboardSummary distinguishes applied / proposed / researched lines (Phase 1 shape, no `decision` field)", () => {
     const runs = [
       {
         runId: "r2",
@@ -111,9 +117,36 @@ try {
       },
     ];
     const summary = history.buildDashboardSummary(runs);
-    assert.strictEqual(summary[0].lines[0], "Fixed: fixed a redirect hop");
-    assert.strictEqual(summary[0].lines[1], "Identified opportunity: duplicate title found");
-    assert.strictEqual(summary[0].lines[2], "Researched: outdated content maybe — no change made");
+    assert.deepStrictEqual(summary[0].lines[0], { icon: "check", text: "Fixed: fixed a redirect hop" });
+    assert.deepStrictEqual(summary[0].lines[1], { icon: "flag", text: "Identified opportunity: duplicate title found" });
+    assert.deepStrictEqual(summary[0].lines[2], { icon: "research", text: "Researched: outdated content maybe — no change made" });
+  });
+
+  test("history.buildDashboardSummary uses Phase 2 `decision`-aware icons/text when present", () => {
+    const runs = [
+      {
+        runId: "r3",
+        timestamp: new Date().toISOString(),
+        mode: "apply-safe",
+        summary: { pagesScanned: 51 },
+        findings: [
+          { decision: "APPLY_SAFE_FIX", status: "applied", summary: "fixed a redirect hop" },
+          { decision: "RESEARCH_MORE", summary: "Aurora appliance-removal opportunity" },
+          { decision: "NO_CHANGE", summary: "thin page maybe", research: [{ source: "x" }] },
+          { decision: "REJECT_OPPORTUNITY", summary: "not actually useful" },
+          { decision: "PROPOSE_CHANGE", summary: "sitemap issue" },
+        ],
+      },
+    ];
+    const summary = history.buildDashboardSummary(runs);
+    assert.deepStrictEqual(summary[0].lines, [
+      { icon: "check", text: "Checked 51 pages" },
+      { icon: "check", text: "Fixed: fixed a redirect hop" },
+      { icon: "research", text: "Researching: Aurora appliance-removal opportunity — pending" },
+      { icon: "research", text: "Researched: thin page maybe — no change made — insufficient evidence" },
+      { icon: "reject", text: "Rejected opportunity: not actually useful" },
+      { icon: "flag", text: "Found: sitemap issue — review/apply status" },
+    ]);
   });
 
   test("history.buildDashboardSummary sorts most-recent-first and respects limit", () => {

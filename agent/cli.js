@@ -29,7 +29,11 @@ function main() {
     console.log(`NOTE: ${record.applySkippedReason}`);
   }
   console.log(`By category: ${JSON.stringify(record.summary.byCategory)}`);
-  console.log(`Auto-applied: ${record.summary.autoApplied}, Proposed: ${record.summary.proposed}`);
+  console.log(`By decision: ${JSON.stringify(record.summary.byDecision)}`);
+  console.log(`Auto-applied: ${record.summary.autoApplied}, Proposed: ${record.summary.proposed}, Research questions raised: ${record.summary.researchQuestionsRaised}`);
+  if (record.validation.performed) {
+    console.log(`Post-apply validation: ${record.validation.confirmed} confirmed-resolved, ${record.validation.reverted} reverted automatically.`);
+  }
   console.log("");
 
   if (record.findings.length === 0) {
@@ -38,8 +42,12 @@ function main() {
   }
 
   for (const f of record.findings) {
-    const tag = f.status === "applied" ? "[APPLIED]" : `[${f.category}/${f.riskLevel}]`;
+    const tag = f.status === "applied" ? "[APPLIED]" : `[${f.category}/${f.riskLevel} -> ${f.decision}]`;
     console.log(`${tag} ${f.type}: ${f.summary}`);
+    console.log(`    reason: ${f.decisionReason}`);
+    if (f.decision === "RESEARCH_MORE" && f.researchQuestion) {
+      console.log(`    research question: ${f.researchQuestion.question}`);
+    }
     if (f.recommendation) console.log(`    -> ${f.recommendation}`);
   }
 }
