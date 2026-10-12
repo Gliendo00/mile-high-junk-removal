@@ -1065,10 +1065,16 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // relocated from the now-deleted api/admin/booking-status.js file (see
   // docs/phase-3/batch5-screenshot-intake-proposal.md §3) — same
   // "independently reviewed elsewhere" reasoning, just accounted for here.
+  // The Site Improvement Agent's Phase 3 "How'd it go?" feature added
+  // exactly one more still — handleUpdateOperationalNote()'s PATCH
+  // ?resource=operational-note, writing only bookings.operational_note
+  // (+ updated_at), same completed-only gating/shape as handleUpdateTip()
+  // — same "independently reviewed elsewhere" reasoning; see
+  // tests/agent-howd-it-go.test.js.
   assert.strictEqual(
     updateCalls,
-    19,
-    "booking.js must have exactly 19 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write) — anything else needs deliberate review"
+    20,
+    "booking.js must have exactly 20 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note) — anything else needs deliberate review"
   );
 });
 

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Website Agent Proposals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-chrome"></div>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <!-- Site Improvement Agent, Phase 3 — the smallest sensible detailed-
+       review surface behind the Home dashboard's compact activity row
+       (see admin/home/index.html's Website & Marketing Activity card,
+       and api/admin/bookings.js's ?view=agent-proposals/
+       resource:"agent-proposal" header for the full architecture). Not
+       linked from the global nav (admin-chrome.js) — reached only via
+       Home's "Review proposals" link, exactly like several other
+       secondary admin pages in this project. -->
+  <div class="admin-list-heading">
+    <h1>Website Agent Proposals</h1>
+  </div>
+  <p class="admin-row-value" style="margin:-6px 0 16px;color:var(--color-neutral-600, #82796a);font-size:13px">
+    Findings the Site Improvement Agent thinks are worth your attention. Approving or rejecting a proposal only records your decision here — it never writes anything to the website by itself.
+  </p>
+
+  <div id="proposals-filter-bar" class="admin-filter-bar" role="tablist" aria-label="Filter proposals by status">
+    <button type="button" class="admin-filter-pill is-active" data-status="" role="tab" aria-selected="true">
+      <span class="admin-filter-pill-label">All</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="proposed" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">Needs review</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="approved" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">Approved</span>
+    </button>
+    <button type="button" class="admin-filter-pill" data-status="rejected" role="tab" aria-selected="false">
+      <span class="admin-filter-pill-label">Rejected</span>
+    </button>
+  </div>
+
+  <div id="proposals-loading" class="admin-loading">Loading…</div>
+  <div id="proposals-empty" class="admin-empty" style="display:none">No proposals match this filter.</div>
+  <div id="proposals-list"></div>
+</main>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../agent-proposals.js"></script>
+</body>
+</html>

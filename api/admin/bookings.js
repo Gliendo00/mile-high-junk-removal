@@ -93,9 +93,15 @@ module.exports = async (req, res) => {
   // Phase 3C Stage 6 (Batch 3): resource:"other-revenue" PATCH only ever
   // voids (no "update" action exists for this ledger at all — see
   // handleVoidOtherRevenue()'s own header for why).
+  // Site Improvement Agent, Phase 3 — resource:"agent-proposal" is a
+  // sibling discriminator on this same PATCH: approve/reject one
+  // agent_proposals row. Checked first so it can never be swallowed by
+  // handlePatchExpense()'s own resource !== "expense" 400, same as
+  // "other-revenue" above.
   if (req.method === "PATCH") {
     const patchResource = req.body && typeof req.body === "object" && typeof req.body.resource === "string" ? req.body.resource.trim() : "";
     if (patchResource === "other-revenue") return handleVoidOtherRevenue(req, res, session);
+    if (patchResource === "agent-proposal") return handleReviewAgentProposal(req, res, session);
     return handlePatchExpense(req, res, session);
   }
 
@@ -120,6 +126,31 @@ module.exports = async (req, res) => {
   // ADMIN_GOOGLE_MAPS_API_KEY happens to be set.
   if (req.query.view === "google-config") {
     return handleGoogleConfig(req, res);
+  }
+
+  // Site Improvement Agent (Phase 2) — Home dashboard's "Website &
+  // Marketing Activity" row. Same reasoning as google-config just above:
+  // dispatched before any Supabase client exists, since this never reads
+  // from Supabase at all — it reads agent/history/log.ndjson, a plain
+  // git-tracked file bundled into THIS function's deployment via
+  // vercel.json's functions."api/admin/bookings.js".includeFiles (the
+  // agent library itself is also an ordinary `require()`, which Vercel's
+  // build already traces; only the *data* file needed the explicit
+  // includeFiles, since it's read via fs at runtime, not required).
+  if (req.query.view === "agent-activity") {
+    return handleAgentActivity(req, res);
+  }
+
+  // Site Improvement Agent, Phase 3 — the CRM-visible, approvable list
+  // behind the Home dashboard's activity row (see handleAgentActivity()
+  // just above for the read-only log, and handleReviewAgentProposal()
+  // below for approve/reject). This DOES need Supabase (unlike
+  // agent-activity, which reads a plain file) — handled with its own
+  // client fetch rather than sharing the one created just below, so this
+  // branch's early-return stays self-contained like google-config/
+  // agent-activity above it.
+  if (req.query.view === "agent-proposals") {
+    return handleListAgentProposals(req, res);
   }
 
   const supabase = getServiceClient();
@@ -446,6 +477,184 @@ function handleGoogleConfig(req, res) {
   const raw = process.env.ADMIN_GOOGLE_MAPS_API_KEY;
   const key = typeof raw === "string" ? raw.trim() : "";
   res.status(200).json({ ok: true, googleMapsApiKey: key });
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent (Phase 2) — ?view=agent-activity
+//
+// A compact ACTIVITY VIEW, not an SEO analytics dashboard: returns only
+// {icon, text} lines per recent run (agent/lib/history.js's
+// buildDashboardSummary()), never the full findings/evidence/research
+// payload that lives in the log file itself. `connected: false` (with no
+// `recent`) is what admin/home.js falls back to its existing "Not
+// connected yet" pill for — the log file not existing yet (or existing
+// but genuinely empty) is a real, honest state, not an error.
+// ---------------------------------------------------------------------
+function handleAgentActivity(req, res) {
+  let history;
+  try {
+    history = require("../../agent/lib/history");
+  } catch (e) {
+    console.error("Admin agent-activity: agent/lib/history.js not available in this deployment", e);
+    res.status(200).json({ ok: true, connected: false, recent: [] });
+    return;
+  }
+
+  // Phase 4 hardening — one try/catch around EVERYTHING past the
+  // require() above, not just the file read: a structurally-valid JSON
+  // line missing an expected field (e.g. a future schema change, or a
+  // hand-edited log) could still throw inside buildDashboardSummary()
+  // itself, not just inside readAllRuns()'s own parse step. Any failure
+  // anywhere in this path falls back to the exact same honest
+  // "not connected" response — this subsystem must never be able to
+  // 500 the Home dashboard, no matter how it fails.
+  try {
+    const runs = history.readAllRuns();
+    if (!runs.length) {
+      res.status(200).json({ ok: true, connected: false, recent: [] });
+      return;
+    }
+    const recent = history.buildDashboardSummary(runs, 5);
+    res.status(200).json({ ok: true, connected: true, recent });
+  } catch (e) {
+    console.error("Admin agent-activity failed to read/summarize agent/history/log.ndjson", e);
+    res.status(200).json({ ok: true, connected: false, recent: [] });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent, Phase 3 — ?view=agent-proposals (list) and
+// resource:"agent-proposal" PATCH (approve/reject). agent_proposals (see
+// sql/2026-10-12_phase3-agent-proposals.sql) is the live, CRM-mutable
+// counterpart to the read-only agent/history/log.ndjson: synced to by
+// agent/lib/proposals-sync.js after a run, read/written here. Approving
+// or rejecting a proposal changes ONLY that one row — it is never a
+// grant of broader authority, and never itself executes any website
+// change (meaningful content changes stay human-executed even once
+// approved; only the existing narrow mechanical-fix whitelist is ever
+// auto-applied, by the unrelated --apply-safe runner path).
+// ---------------------------------------------------------------------
+const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed"];
+const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
+const AGENT_PROPOSAL_SELECT =
+  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at";
+
+function mapAgentProposal(row) {
+  return {
+    id: row.id,
+    findingKey: row.finding_key,
+    findingType: row.finding_type,
+    category: row.category,
+    riskLevel: row.risk_level,
+    decision: row.decision,
+    decisionReason: row.decision_reason,
+    summary: row.summary,
+    pages: row.pages,
+    evidence: row.evidence,
+    research: row.research,
+    status: row.status,
+    reviewedBy: row.reviewed_by,
+    reviewedAt: row.reviewed_at,
+    reviewNote: row.review_note,
+    lastRunId: row.last_run_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function handleListAgentProposals(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin agent-proposals list failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  // Optional filter — e.g. the Home dashboard asking only for proposals
+  // still awaiting a decision, vs. the full review page showing
+  // everything. Any value outside the known set is ignored (treated as
+  // "no filter"), same convention as bookings' own ?status= filter.
+  const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
+  const filterByStatus = AGENT_PROPOSAL_STATUSES.includes(status);
+
+  try {
+    let query = supabase.from("agent_proposals").select(AGENT_PROPOSAL_SELECT).order("created_at", { ascending: false }).limit(100);
+    if (filterByStatus) query = query.eq("status", status);
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.status(200).json({ ok: true, proposals: (data || []).map(mapAgentProposal) });
+  } catch (err) {
+    console.error("Admin agent-proposals list failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Admin data is not available right now." });
+  }
+}
+
+// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject", note }
+async function handleReviewAgentProposal(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin agent-proposal review failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  const note = sanitizeExpenseText(body.note, AGENT_PROPOSAL_REVIEW_NOTE_MAX) || null;
+
+  if (!id) {
+    res.status(400).json({ error: "A proposal id is required." });
+    return;
+  }
+  if (action !== "approve" && action !== "reject") {
+    res.status(400).json({ error: "action must be 'approve' or 'reject'." });
+    return;
+  }
+
+  try {
+    // A fresh read first (rather than a blind update) so a proposal that
+    // was already reviewed, or no longer exists, gets an honest response
+    // instead of silently "succeeding" against nothing.
+    const currentRes = await supabase.from("agent_proposals").select("id, status").eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    if (!currentRes.data) {
+      res.status(404).json({ error: "Proposal not found." });
+      return;
+    }
+
+    const newStatus = action === "approve" ? "approved" : "rejected";
+    // The literal update payload, built here — never the request body —
+    // same mass-assignment discipline every other admin write endpoint
+    // in this project already follows. This can only ever move a
+    // proposal between review states for THIS ONE finding_key; it never
+    // touches finding_type/category/pages/evidence/research (those are
+    // sync-owned, see proposals-sync.js) and never executes any action
+    // beyond recording the owner's decision.
+    const { data, error } = await supabase
+      .from("agent_proposals")
+      .update({
+        status: newStatus,
+        reviewed_by: session.email,
+        reviewed_at: new Date().toISOString(),
+        review_note: note,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select(AGENT_PROPOSAL_SELECT)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ error: "Proposal not found." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, proposal: mapAgentProposal(data) });
+  } catch (err) {
+    console.error("Admin agent-proposal review failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this review." });
+  }
 }
 
 // ---------------------------------------------------------------------

@@ -790,6 +790,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
       "api/admin/booking.js: .update(",
+      // Site Improvement Agent, Phase 3 added exactly one new update —
+      // handleUpdateOperationalNote()'s PATCH ?resource=operational-note,
+      // same completed-only gating/shape as handleUpdateTip() just above.
+      // See tests/agent-howd-it-go.test.js.
+      "api/admin/booking.js: .update(",
       // Batch 5 (5A) relocated the one status-write .update( here from the
       // now-deleted api/admin/booking-status.js — handleStatusAction()'s
       // PATCH ?resource=status, byte-for-byte the same write it always was.
@@ -836,6 +841,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // Other Revenue ledger's handleVoidOtherRevenue(), the ONLY write
       // this ledger's PATCH allows. See
       // tests/phase3c-stage6-other-revenue.test.js.
+      "api/admin/bookings.js: .update(",
+      // Site Improvement Agent, Phase 3 added exactly one new update —
+      // handleReviewAgentProposal()'s resource:"agent-proposal" PATCH,
+      // same reasoning as phase3a-admin-status-write.test.js's own copy
+      // of this accounting. See tests/agent-proposals-api.test.js.
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
       // Batch 2D added exactly one new insert — writeCustomerAuditLog(),

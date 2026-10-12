@@ -96,6 +96,19 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // Site Improvement Agent, Phase 3 — "How'd it go?" edit-in-place control,
+  // completed jobs only (same gating as tip_amount above). The initial
+  // capture at the moment of completion goes through ?resource=status
+  // instead (see handleStatusAction()'s optional `operationalNote` body
+  // field) — this branch is for viewing/editing it afterward. Same
+  // folding convention as every other ?resource= branch: one more branch
+  // on this existing file, not a new Vercel function.
+  if (req.query.resource === "operational-note") {
+    if (req.method === "PATCH") return handleUpdateOperationalNote(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
   // Batch 5 (5A) — retired from its own api/admin/booking-status.js file
   // into this ?resource=status branch, to free a Vercel function slot
   // (Hobby plan's 12-function cap) for api/admin/intake.js. Pre-approved in
@@ -142,7 +155,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, operational_note, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
       )
       .eq("id", id)
       .maybeSingle();
@@ -244,6 +257,11 @@ module.exports = async (req, res) => {
         finalPrice: booking.final_price,
         tipAmount: booking.tip_amount,
         internalNotes: booking.internal_notes,
+        // Site Improvement Agent, Phase 3 — "How'd it go?" (see
+        // handleUpdateOperationalNote() below, and
+        // sql/2026-10-12_phase3-agent-howd-it-go.sql). Internal-only,
+        // never shown to the customer, never auto-published.
+        operationalNote: booking.operational_note,
         isComplimentary: booking.is_complimentary,
         complimentaryValue: booking.complimentary_value,
         complimentaryReason: booking.complimentary_reason,
@@ -882,11 +900,16 @@ async function handleStatusAction(req, res, session) {
 
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
 
-  // Only ever read exactly these two primitives off the body. Anything else
+  // Only ever read exactly these primitives off the body. Anything else
   // the caller sends is silently ignored — never inspected, never logged as
   // if it were meaningful, and never reaches the database query below.
+  // `operationalNote` is the one addition (Phase 3, Site Improvement
+  // Agent's "How'd it go?") — see the literal update-payload construction
+  // below for why it can still only ever reach bookings.operational_note,
+  // and only when the requested status is "completed".
   const id = typeof body.id === "string" ? body.id.trim() : "";
   const requestedStatus = typeof body.status === "string" ? body.status.trim() : "";
+  const operationalNote = sanitizeText(body.operationalNote, OPERATIONAL_NOTE_MAX) || null;
 
   if (!id) {
     res.status(400).json({ error: "Booking id is required." });
@@ -934,9 +957,17 @@ async function handleStatusAction(req, res, session) {
       }
     }
 
-    // The update payload is a literal object with exactly one key, built
-    // here — never the request body, never a spread of the request body.
-    const { data, error } = await supabase.from("bookings").update({ status: requestedStatus }).eq("id", id).select("id, status").maybeSingle();
+    // The update payload is a literal object, built here — never the
+    // request body, never a spread of the request body. operational_note
+    // is included only when both (a) the caller actually sent one and (b)
+    // the requested status is "completed" — marking any OTHER status
+    // leaves operational_note completely untouched, exactly as before
+    // this field existed.
+    const updatePayload = { status: requestedStatus };
+    if (requestedStatus === "completed" && operationalNote) {
+      updatePayload.operational_note = operationalNote;
+    }
+    const { data, error } = await supabase.from("bookings").update(updatePayload).eq("id", id).select("id, status").maybeSingle();
     if (error) throw error;
 
     if (!data) {
@@ -944,6 +975,10 @@ async function handleStatusAction(req, res, session) {
       return;
     }
 
+    // Response stays exactly { ok, id, status } — the narrow contract this
+    // endpoint has always had (see tests/phase3a-admin-status-write.test.js's
+    // own guard for this) — never the full booking row, even though this
+    // request may have also just written operational_note.
     res.status(200).json({ ok: true, id: data.id, status: normalizedStatus(data.status) });
   } catch (err) {
     console.error("Admin booking-status update failed:", err && err.stack ? err.stack : err);
@@ -1511,6 +1546,70 @@ async function handleUpdateTip(req, res, session) {
   } catch (err) {
     console.error("Admin update tip failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save the tip." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent, Phase 3 — PATCH ?resource=operational-note
+// { id, operationalNote } — "How'd it go?", completed jobs only, same
+// gating/shape as handleUpdateTip() just above (status re-checked with a
+// fresh DB read, update payload writes only this one column, no
+// optimistic-concurrency token needed for the same reason tip_amount
+// doesn't carry one: "last write wins" on a single column is the entire
+// risk surface here). Blank/whitespace-only clears it back to NULL,
+// exactly like leaving the tip prompt blank clears tip_amount.
+//
+// This is the POST-completion edit path; the initial capture at the
+// moment of completion goes through handleStatusAction()'s own optional
+// `operationalNote` body field instead, so an admin who answers "How'd it
+// go?" right when marking the job complete never needs a second request.
+// ---------------------------------------------------------------------
+async function handleUpdateOperationalNote(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin update operational note failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(400).json({ error: "A valid booking id is required." });
+    return;
+  }
+
+  const operationalNote = sanitizeText(body.operationalNote, OPERATIONAL_NOTE_MAX) || null;
+
+  try {
+    const currentRes = await supabase.from("bookings").select("id, status").eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    if (!currentRes.data) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (currentRes.data.status !== "completed") {
+      res.status(400).json({ error: "This note can only be recorded for a completed job." });
+      return;
+    }
+
+    const { data: updated, error } = await supabase
+      .from("bookings")
+      .update({ operational_note: operationalNote, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select("id, operational_note")
+      .maybeSingle();
+    if (error) throw error;
+    if (!updated) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, operationalNote: updated.operational_note });
+  } catch (err) {
+    console.error("Admin update operational note failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this note." });
   }
 }
 
@@ -2654,6 +2753,12 @@ const VALID_TIME_WINDOWS = Object.keys(TIME_WINDOW_DEFS);
 
 const MAX = { address: 200, city: 80, zip: 10, long: 2000, short: 200 };
 const MAX_PRICE = 999999;
+// Site Improvement Agent, Phase 3 — "How'd it go?" is meant to be a quick
+// factual note (see sql/2026-10-12_phase3-agent-howd-it-go.sql's header
+// and the UI prompt's own placeholder text), so this is deliberately
+// shorter than internal_notes'/complimentary_note's MAX.long (2000) —
+// plenty for 2-3 sentences, not an invitation to write a full report.
+const OPERATIONAL_NOTE_MAX = 1000;
 // Phase 3C Stage 5D — the Postgres error code handleCreate() checks for
 // against bookings_source_intake_id_uniq (see that migration + the
 // intakeSessionId handling above) to detect a Confirm Booking retry/race

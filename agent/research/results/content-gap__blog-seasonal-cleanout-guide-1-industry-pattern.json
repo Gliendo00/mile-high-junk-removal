@@ -1,0 +1,17 @@
+{
+  "findingKey": "content-gap::blog-seasonal-cleanout-guide.html",
+  "question": "blog-seasonal-cleanout-guide.html answers only 3 FAQ question(s) versus a 6-question average among its comparable siblings — is there enough evidence that this page specific topic has specific, genuinely useful practical questions not yet answered there, that would justify adding to its FAQ?",
+  "source": "Web search for \"seasonal junk removal cleanout FAQ questions homeowners ask spring fall\" — aggregate of industry/competitor FAQ and blog pages (Flannery Handymen, Lansing Junk Removal, Mr Junk, EZ CleanUp, and others)",
+  "sourceType": "search-results-observation",
+  "accessedAt": "2026-10-12T03:36:56.954Z",
+  "evidence": [
+    "Multiple independent junk-removal industry FAQ/blog pages recurrently answer \"how far in advance should I book during a busy season\" as a distinct question from \"does cost change by season\" — Mile High's existing FAQ only has the latter, not the former.",
+    "Several of the same sources separately call out fall yard-waste logistics (bagged leaves/branches) as its own common question, distinct from the general seasonal-cost question.",
+    "This is a pattern observed across generic industry content, not a measurement of search volume or ranking position for Mile High's own page — observing that a topic appears often does NOT establish local search demand (SERP presence vs. search volume)."
+  ],
+  "confidence": "low",
+  "limitations": "This is a generic cross-industry content pattern, not Denver/Mile-High-specific evidence, and carries no search-volume or Search Console data at all. On its own this is too weak to justify a change — see the companion official-government research result for the specific, locally-grounded evidence that actually tips this finding.",
+  "verdict": "inconclusive",
+  "recommendation": "Insufficient on its own. See the companion result citing Denver's official LeafDrop program for a concrete, locally-specific angle worth considering.",
+  "kind": "external"
+}

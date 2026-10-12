@@ -152,12 +152,28 @@
       </div>
     </div>
 
-    <!-- Website & Marketing Activity — a compact single row, not a full
-         card, since there is no real data source yet (see admin/home.js's
-         header). Never fabricates activity. -->
-    <div class="admin-home-marketing-row">
+    <!-- Website & Marketing Activity — Site Improvement Agent (Phase 2).
+         Two mutually-exclusive states, toggled by admin/home.js from
+         GET /api/admin/bookings?view=agent-activity's `connected` flag:
+         the original compact "Not connected yet" row (shown whenever the
+         agent has never logged a run, or the fetch itself fails — never a
+         fabricated status), or a small card with a few real {icon, text}
+         activity lines. Never a full technical audit dump — see that
+         endpoint's own header. -->
+    <div class="admin-home-marketing-row" id="marketing-not-connected">
       <span class="admin-home-marketing-row-label">Website &amp; Marketing Activity</span>
       <span class="admin-home-marketing-row-status">Not connected yet</span>
+    </div>
+    <div class="admin-home-marketing-card" id="marketing-connected" hidden>
+      <div class="admin-home-marketing-card-label">Website Agent</div>
+      <div class="admin-home-marketing-lines" id="marketing-lines"></div>
+      <!-- Phase 3 — the detailed review surface (approve/reject) lives on
+           its own small page, not here (see admin/agent-proposals/index.html's
+           own header for why: "keep Home concise" / "don't dump raw
+           research JSON onto the dashboard"). Always shown once connected
+           — the review page itself handles the empty-state when there's
+           nothing pending. -->
+      <a href="/admin/agent-proposals/" class="admin-home-marketing-review-link">Review proposals →</a>
     </div>
 
   </div>
