@@ -1070,11 +1070,16 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // ?resource=operational-note, writing only bookings.operational_note
   // (+ updated_at), same completed-only gating/shape as handleUpdateTip()
   // — same "independently reviewed elsewhere" reasoning; see
-  // tests/agent-howd-it-go.test.js.
+  // tests/agent-howd-it-go.test.js. The Estimate workflow added exactly
+  // three more still — handleCreate()'s two Convert-to-Job/Lead-to-Job
+  // follow-up writes (marking the originating estimate "converted" and the
+  // originating lead "booked") plus handlePatchEstimate()'s own status
+  // update — same "independently reviewed elsewhere" reasoning; see
+  // tests/estimate-workflow.test.js.
   assert.strictEqual(
     updateCalls,
-    20,
-    "booking.js must have exactly 20 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note) — anything else needs deliberate review"
+    23,
+    "booking.js must have exactly 23 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups) — anything else needs deliberate review"
   );
 });
 

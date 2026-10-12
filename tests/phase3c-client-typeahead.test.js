@@ -166,13 +166,26 @@ test("admin/client-picker.js: 'No matching clients' + a '+ Create Client' escape
   assert.ok(/\+ Create Client/.test(src), "must offer a '+ Create Client' action");
 });
 
+// Updated for the Estimate workflow: openCreateSheet()'s parameter was
+// renamed `prefill` and widened to accept either the plain typed-search
+// string (unchanged call site/behavior) OR a full
+// {firstName,lastName,phone,email} object — used by the Lead -> Estimate/
+// Lead -> Job "carry everything forward" flows (admin/estimate-new.js,
+// admin/booking-new.js's applyLeadPrefill()), never by this file's own
+// typeahead search. The guarantee this test protects — a plain typed
+// string becomes {firstName: <that string>} alone, never fabricating
+// phone/email/address — is unchanged; only the one-line coercion that
+// enforces it moved from the function signature into its first statement.
 test("admin/client-picker.js: typed search text prefills Create Client's first name, never fabricating phone/email/address", () => {
   const src = read("admin/client-picker.js");
   const createToggleHandler = src.slice(src.indexOf('createToggle.addEventListener("click"'));
   assert.ok(/var typedName = input\.value\.trim\(\)/.test(createToggleHandler), "must capture the typed search text");
   assert.ok(/openCreateSheet\(typedName/.test(createToggleHandler), "must hand the typed text to the create sheet as the name prefill");
   const openCreateSheetSig = src.slice(src.indexOf("function openCreateSheet"), src.indexOf("function openCreateSheet") + 400);
-  assert.ok(/firstName:\s*prefillFirstName/.test(openCreateSheetSig), "the prefill must only ever populate firstName — never phone/email/address");
+  assert.ok(
+    /typeof prefill === ["']string["'] \? \{ firstName: prefill \}/.test(openCreateSheetSig),
+    "a plain string prefill must only ever populate firstName — never phone/email/address"
+  );
 });
 
 // =======================================================================
@@ -195,11 +208,25 @@ test("admin/client-picker.js: keyboard behavior — Enter never submits the surr
   assert.ok(/e\.key === ['"]Escape['"]/.test(keydownHandler), "must handle Escape");
 });
 
+// Updated for the Estimate workflow: the onSelect callback used to be
+// defined inline inside the one window.AdminClientPicker.mount(...) call
+// this page made. Lead -> Job direct and Estimate -> Job Convert each need
+// their own separate mount() call with their own preselect/autoOpenCreate
+// options (see applyLeadPrefill()/applyEstimatePrefill()), so the callback
+// was pulled out into one shared named function, onClientSelect(), reused
+// by all three mount() call sites. The guarantee this test protects — a
+// cleared/no-address selection disables "same as client address" — is
+// unchanged; it now lives in that one shared function instead of being
+// duplicated inline at each call site.
 test("admin/booking-new.js: onSelect(null, ...) (a cleared selection) disables 'same as client address', matching a client with no known address", () => {
   const src = read("admin/booking-new.js");
-  const mountCall = src.slice(src.indexOf("window.AdminClientPicker.mount("));
-  assert.ok(/if \(client && client\.address\)/.test(mountCall), "must guard the address-based enable check against a null client");
-  assert.ok(/sameAsClientRow\.disabled = true/.test(mountCall), "must disable 'same as client address' when there is no selected client or no known address");
+  const handler = src.slice(src.indexOf("function onClientSelect"), src.indexOf("function onClientSelect") + 600);
+  assert.ok(/if \(client && client\.address\)/.test(handler), "must guard the address-based enable check against a null client");
+  assert.ok(/sameAsClientRow\.disabled = true/.test(handler), "must disable 'same as client address' when there is no selected client or no known address");
+  // And every mount() call site must actually wire onSelect to this one
+  // shared function — never re-inline the logic at a second call site.
+  const mountCalls = src.match(/window\.AdminClientPicker\.mount\([^)]*\{[^}]*onSelect:\s*onClientSelect/g) || [];
+  assert.ok(mountCalls.length >= 1, "at least one mount() call must wire onSelect: onClientSelect");
 });
 
 // =======================================================================

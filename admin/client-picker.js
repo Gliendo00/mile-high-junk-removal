@@ -223,14 +223,19 @@ window.AdminClientPicker = (function () {
     sheet.appendChild(cancelBtn);
   }
 
-  // prefillFirstName: the raw typed search text, dropped into the First
-  // Name field as-is — same behavior the old search-sheet's "+ Add a new
-  // client" button already had (no name-splitting heuristic; never
-  // fabricates phone/email/address).
-  function openCreateSheet(prefillFirstName, onResolve) {
+  // prefill: either the raw typed search text (a plain string, dropped into
+  // the First Name field as-is — same behavior the old search-sheet's
+  // "+ Add a new client" button already had: no name-splitting heuristic,
+  // never fabricates phone/email/address) OR a full
+  // { firstName, lastName, phone, email } object — the Estimate workflow's
+  // "Schedule Estimate" action uses the object form to carry forward
+  // everything already known about a Lead with no matched client, so the
+  // admin only has to confirm/correct it, never retype it.
+  function openCreateSheet(prefill, onResolve) {
     onCreateResolve = onResolve;
     ensureSheetDom();
-    renderCreateView({ firstName: prefillFirstName || "" });
+    var prefillObj = typeof prefill === "string" ? { firstName: prefill } : prefill || {};
+    renderCreateView(prefillObj);
     overlay.removeAttribute("hidden");
     setTimeout(function () {
       var first = sheet.querySelector("input");
@@ -505,6 +510,26 @@ window.AdminClientPicker = (function () {
       onSelect(null, []);
       showEmpty(true);
     });
+
+    // Estimate workflow — Schedule Estimate from an existing Lead. At most
+    // one of these two is ever passed (the caller already knows, from the
+    // Lead's own matchedClient, which case applies):
+    //   - preselect: a Lead already has a matched client — show it filled
+    //     in immediately, same as if the admin had just picked it from
+    //     search, with no extra tap required.
+    //   - autoOpenCreate: a Lead has no matched client yet — open the
+    //     exact same "+ Create Client" sheet the admin would reach
+    //     manually, pre-filled with whatever name/phone/email the Lead
+    //     already has, so the admin only confirms/edits rather than
+    //     retyping from scratch.
+    if (opts.preselect) {
+      selectExisting(opts.preselect);
+    } else if (opts.autoOpenCreate) {
+      openCreateSheet(opts.autoOpenCreate, function (client, warnings) {
+        showFilled(client);
+        onSelect(client, warnings);
+      });
+    }
   }
 
   return { mount: mount };

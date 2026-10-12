@@ -257,10 +257,199 @@ document.addEventListener('DOMContentLoaded', function () {
     return li;
   }
 
-  function render(jobs) {
+  // Estimate workflow — visually distinct from a job card (an "ESTIMATE"
+  // type badge in the topbar, a different accent class) but built from the
+  // exact same markup skeleton/CSS classes as renderJobCard() above
+  // (admin-schedule-card/-topbar/-main/-actions) rather than a second
+  // layout. Clicking the card opens /admin/estimate/, never /admin/booking/
+  // — an estimate is never a bookings row (see
+  // sql/2026-10-12_estimate-workflow.sql). The status pill opens
+  // openEstimateStatusSheet() below, which is a completely separate
+  // function from openJobStatusSheet() — an estimate card can never reach
+  // openScheduleCloseout()/window.AdminJobCloseout, by construction, not by
+  // a runtime check.
+  var ESTIMATE_STATUS_TEXT = { scheduled: 'Scheduled', completed: 'Completed', cancelled: 'Cancelled', lost: 'Did Not Book' };
+
+  function renderEstimateCard(estimate) {
+    var li = document.createElement('li');
+    var cardClass = 'admin-schedule-card admin-schedule-card-estimate admin-estimate-accent-' + estimate.status;
+    if (currentRange === 'today') cardClass += ' is-today-elevated';
+    var card = el('div', cardClass);
+
+    var top = el('div', 'admin-card-top admin-schedule-card-topbar');
+    var topLeft = el('div', 'admin-card-top-left');
+    topLeft.appendChild(el('span', 'admin-estimate-type-badge', 'ESTIMATE'));
+    topLeft.appendChild(el('span', 'admin-card-when', estimate.timeLabel || '—'));
+    top.appendChild(topLeft);
+
+    var statusBtn = document.createElement('button');
+    statusBtn.type = 'button';
+    statusBtn.className = 'admin-status-badge admin-estimate-status-' + estimate.status + ' admin-status-trigger';
+    var statusLabelEl = el('span', null, ESTIMATE_STATUS_TEXT[estimate.status] || estimate.status);
+    statusBtn.appendChild(statusLabelEl);
+    statusBtn.appendChild(statusChevronIcon());
+    statusBtn.addEventListener('click', function () {
+      openEstimateStatusSheet(estimate, statusBtn);
+    });
+    top.appendChild(statusBtn);
+    card.appendChild(top);
+
+    var main = document.createElement('a');
+    main.className = 'admin-schedule-card-main';
+    main.href = '/admin/estimate/?id=' + encodeURIComponent(estimate.id);
+    main.appendChild(el('div', 'admin-card-name', (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+
+    var serviceCityParts = [estimate.serviceLabel || 'Estimate'];
+    if (estimate.serviceAddress && estimate.serviceAddress.city) serviceCityParts.push(estimate.serviceAddress.city);
+    main.appendChild(el('div', 'admin-card-service', serviceCityParts.join(' · ')));
+
+    var quotedText = formatPrice(estimate.quotedAmount);
+    if (quotedText) main.appendChild(el('div', 'admin-schedule-card-price', 'Ballpark ' + quotedText));
+    card.appendChild(main);
+
+    var actions = el('div', 'admin-contact-actions is-triple admin-schedule-card-actions');
+    var phone = estimate.customer ? estimate.customer.phone : null;
+    var telHref = buildTelHref(phone);
+    var smsHref = buildSmsHref(phone);
+
+    var callBtn = quickBtn('primary', 'Call', callIcon);
+    if (telHref) callBtn.href = telHref; else disableAction(callBtn);
+    actions.appendChild(callBtn);
+
+    var textBtn = quickBtn('primary', 'Text', textIcon);
+    if (smsHref) textBtn.href = smsHref; else disableAction(textBtn);
+    actions.appendChild(textBtn);
+
+    var directionsBtn = quickBtn('secondary', 'Directions', directionsIcon);
+    var mapsQuery = estimate.serviceAddress
+      ? [estimate.serviceAddress.address, estimate.serviceAddress.city, estimate.serviceAddress.state, estimate.serviceAddress.zip].filter(Boolean).join(', ')
+      : '';
+    if (mapsQuery) {
+      directionsBtn.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(mapsQuery);
+      directionsBtn.target = '_blank';
+      directionsBtn.rel = 'noopener';
+    } else {
+      disableAction(directionsBtn);
+    }
+    actions.appendChild(directionsBtn);
+
+    card.appendChild(actions);
+    li.appendChild(card);
+    return li;
+  }
+
+  // Tracks which estimates currently have a status save in flight — same
+  // per-id-not-page-wide guard as statusSavingIds below for jobs.
+  var estimateSavingIds = {};
+
+  function patchEstimateStatus(estimateId, action) {
+    return adminFetch('/api/admin/booking?resource=estimate', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: estimateId, action: action }),
+    }).then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/admin/login/';
+        return null;
+      }
+      return res
+        .json()
+        .catch(function () { return null; })
+        .then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not update this estimate.');
+          return body;
+        });
+    });
+  }
+
+  // Opens the shared change-status bottom sheet (admin/status-ui.js) with
+  // the Estimate workflow's own small vocabulary (via the `labels` option
+  // that module now supports) — completely independent of
+  // window.AdminStatusUI.STATUS_ORDER/STATUS_TEXT, which stay
+  // bookings.status-only. "converted" is never offered here — Convert to
+  // Job is its own dedicated action on the Estimate detail page, since
+  // converting creates a whole new job record rather than just changing a
+  // status.
+  function openEstimateStatusSheet(estimate, statusBtn) {
+    if (estimateSavingIds[estimate.id]) return;
+    var values = estimate.status === 'scheduled' ? ['scheduled', 'completed', 'cancelled'] : ['completed', 'lost'];
+    window.AdminStatusUI.open({
+      title: 'Change estimate status',
+      values: values,
+      selected: estimate.status,
+      labels: ESTIMATE_STATUS_TEXT,
+      onSelect: function (newStatus) {
+        if (newStatus === estimate.status) return;
+        var action = newStatus === 'completed' ? 'complete' : newStatus === 'cancelled' ? 'cancel' : newStatus === 'lost' ? 'lost' : null;
+        if (!action) return;
+        estimateSavingIds[estimate.id] = true;
+        statusBtn.disabled = true;
+        statusBtn.classList.add('is-saving');
+        patchEstimateStatus(estimate.id, action)
+          .then(function (body) {
+            if (!body) return;
+            showToast('Estimate updated.', 'success');
+            refreshCurrentView();
+          })
+          .catch(function (err) {
+            showToast(err && err.message ? err.message : 'Could not update this estimate.', 'error');
+          })
+          .finally(function () {
+            delete estimateSavingIds[estimate.id];
+            statusBtn.disabled = false;
+            statusBtn.classList.remove('is-saving');
+          });
+      },
+    });
+  }
+
+  // Estimate workflow — small local copy of api/_lib/time-windows.js's
+  // start-hour table (this file's own established per-file-duplication
+  // convention — see addDaysIso()/formatPrice() above for prior examples),
+  // just enough to interleave estimates with jobs by time of day on the
+  // client. Each of `jobs`/`estimates` already arrives individually sorted
+  // from the server; this only needs to merge the two.
+  var WINDOW_START_HOUR = {
+    morning: 8, midday: 11, afternoon: 14, evening: 17,
+    w_0400_0600: 4, w_0600_0800: 6, w_0800_1000: 8, w_1000_1200: 10,
+    w_1200_1400: 12, w_1400_1600: 14, w_1600_1800: 16, w_1800_2000: 18, w_2000_2200: 20,
+  };
+  function parseExactTimeMinutes(raw) {
+    if (typeof raw !== 'string') return null;
+    var m = /^(\d{2}):(\d{2})/.exec(raw.trim());
+    if (!m) return null;
+    var h = Number(m[1]), min = Number(m[2]);
+    if (!Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(min) || min < 0 || min > 59) return null;
+    return h * 60 + min;
+  }
+  function effectiveTimeSortMinutes(timeWindow, exactTime) {
+    var exactMinutes = parseExactTimeMinutes(exactTime);
+    if (exactMinutes !== null) return exactMinutes;
+    var hour = WINDOW_START_HOUR[timeWindow];
+    return hour === undefined ? null : hour * 60;
+  }
+  function mergeJobsAndEstimates(jobs, estimates) {
+    var combined = (jobs || []).map(function (j) { return { kind: 'job', data: j }; }).concat(
+      (estimates || []).map(function (e) { return { kind: 'estimate', data: e }; })
+    );
+    combined.sort(function (a, b) {
+      if (a.data.appointmentDate !== b.data.appointmentDate) {
+        return a.data.appointmentDate < b.data.appointmentDate ? -1 : 1;
+      }
+      var aMin = effectiveTimeSortMinutes(a.data.timeWindow, a.data.exactTime);
+      var bMin = effectiveTimeSortMinutes(b.data.timeWindow, b.data.exactTime);
+      if (aMin === null && bMin === null) return 0;
+      if (aMin === null) return 1;
+      if (bMin === null) return -1;
+      return aMin - bMin;
+    });
+    return combined;
+  }
+
+  function render(items) {
     while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
 
-    if (!jobs.length) {
+    if (!items.length) {
       emptyEl.textContent = EMPTY_MESSAGES[currentRange] || 'No jobs scheduled.';
       emptyEl.style.display = 'block';
       listEl.style.display = 'none';
@@ -269,8 +458,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     emptyEl.style.display = 'none';
     listEl.style.display = 'flex';
-    jobs.forEach(function (job) {
-      listEl.appendChild(renderJobCard(job));
+    items.forEach(function (item) {
+      listEl.appendChild(item.kind === 'estimate' ? renderEstimateCard(item.data) : renderJobCard(item.data));
     });
   }
 
@@ -325,7 +514,11 @@ document.addEventListener('DOMContentLoaded', function () {
       window.AdminQuickExpense.hideBar();
       window.AdminScheduleFinancials.hide();
     } else {
-      render(body.jobs || []);
+      // Estimates are merged into the SAME rendered list as jobs (never a
+      // separate calendar) but kept out of admin/schedule-financials.js
+      // entirely — that module is handed only `body.jobs`, exactly as
+      // before, so Revenue/Booked/Net can never see an estimate.
+      render(mergeJobsAndEstimates(body.jobs, body.estimates));
       window.AdminQuickExpense.showBar(activeDateIso);
       window.AdminScheduleFinancials.show(activeDateIso, activeDateIso, body.jobs || []);
     }

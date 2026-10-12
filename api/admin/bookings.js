@@ -737,7 +737,12 @@ async function handleSchedule(req, res, supabase) {
 
   try {
     const jobs = beforeHistoricalFloor ? [] : await fetchScheduleJobs(supabase, startDate, endDate);
-    const body = { ok: true, range: range, startDate: startDate, endDate: endDate, jobs: jobs, today: todayIso };
+    // Estimate workflow — merged in as a sibling `estimates` array (never
+    // mixed into `jobs` itself, so every existing caller/test reading
+    // `jobs` is completely unaffected). See fetchScheduleEstimates()'s own
+    // header for why Month/Year don't get this.
+    const estimates = beforeHistoricalFloor ? [] : await fetchScheduleEstimates(supabase, startDate, endDate);
+    const body = { ok: true, range: range, startDate: startDate, endDate: endDate, jobs: jobs, estimates: estimates, today: todayIso };
     if (beforeHistoricalFloor) body.beforeHistoricalFloor = true;
     if (range === "week") {
       body.weekStart = weekStart;
@@ -782,11 +787,88 @@ async function handleDay(req, res, supabase, todayIso) {
 
   try {
     const jobs = await fetchScheduleJobs(supabase, dateRaw, dateRaw);
-    res.status(200).json({ ok: true, range: "day", startDate: dateRaw, endDate: dateRaw, jobs: jobs, today: todayIso });
+    const estimates = await fetchScheduleEstimates(supabase, dateRaw, dateRaw);
+    res.status(200).json({ ok: true, range: "day", startDate: dateRaw, endDate: dateRaw, jobs: jobs, estimates: estimates, today: todayIso });
   } catch (err) {
     console.error("Admin day schedule failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load that date." });
   }
+}
+
+// Estimate workflow — the Schedule's own estimates for a bounded date
+// range, fetched and merged alongside fetchScheduleJobs()'s bookings so
+// Today/Tomorrow/Yesterday/a day-nav date can show both side by side (see
+// admin/schedule.js's renderEstimateCard()). Deliberately NOT called by
+// handleMonth()/handleYear() in this pass — those render a different,
+// compact job-count-only view; estimates there is tracked as a known
+// follow-up, not built in this pass (see the final report). Only
+// "scheduled" and "completed" estimates are returned — a cancelled, lost,
+// or converted estimate has nothing useful to show on a day view going
+// forward (a converted estimate's resulting JOB is what shows instead).
+// Never read by any revenue/booked counter — estimates carry no final
+// price/payment/tip concept at all, only an optional, purely informational
+// quotedAmount.
+async function fetchScheduleEstimates(supabase, startDate, endDate) {
+  const estimatesRes = await supabase
+    .from("estimates")
+    .select(
+      "id, status, customer_id, service_type, appointment_date, time_window, exact_time, service_address, service_city, service_state, service_zip, quoted_amount, source_lead_id"
+    )
+    .in("status", ["scheduled", "completed"])
+    .gte("appointment_date", startDate)
+    .lte("appointment_date", endDate);
+  if (estimatesRes.error) throw estimatesRes.error;
+
+  const estimates = estimatesRes.data || [];
+  const customerIds = Array.from(new Set(estimates.map((e) => e.customer_id).filter(Boolean)));
+  const customersById = {};
+  if (customerIds.length) {
+    const custRes = await supabase.from("customers").select("id, first_name, last_name, phone, city").in("id", customerIds);
+    if (custRes.error) throw custRes.error;
+    (custRes.data || []).forEach((c) => {
+      customersById[c.id] = c;
+    });
+  }
+
+  const items = estimates.map((e) => {
+    const customer = customersById[e.customer_id] || null;
+    return {
+      id: e.id,
+      status: e.status,
+      serviceType: e.service_type,
+      serviceLabel: e.service_type ? serviceLabel(e.service_type) : null,
+      appointmentDate: e.appointment_date,
+      timeWindow: e.time_window,
+      timeWindowLabel: timeWindowLabel(e.time_window),
+      exactTime: e.exact_time,
+      timeLabel: effectiveTimeLabel(e.time_window, e.exact_time),
+      quotedAmount: e.quoted_amount,
+      sourceLeadId: e.source_lead_id,
+      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
+      serviceAddress: {
+        address: e.service_address || null,
+        city: e.service_city || (customer && customer.city) || null,
+        state: e.service_state || null,
+        zip: e.service_zip || null,
+      },
+    };
+  });
+
+  // Same chronological ordering as fetchScheduleJobs() — appointment date
+  // first, then time-of-day via the shared effective-minute lookup.
+  items.sort(function (a, b) {
+    if (a.appointmentDate !== b.appointmentDate) {
+      return a.appointmentDate < b.appointmentDate ? -1 : 1;
+    }
+    const aMinutes = effectiveTimeSortMinutes(a.timeWindow, a.exactTime);
+    const bMinutes = effectiveTimeSortMinutes(b.timeWindow, b.exactTime);
+    if (aMinutes === null && bMinutes === null) return 0;
+    if (aMinutes === null) return 1;
+    if (bMinutes === null) return -1;
+    return aMinutes - bMinutes;
+  });
+
+  return items;
 }
 
 // Shared by today/tomorrow/week (handleSchedule) and Month (handleMonth) —

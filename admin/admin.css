@@ -1588,6 +1588,51 @@ button.admin-financial-card:focus-visible {
 .admin-status-dot-completed_review_not_sent { background: #0891b2; }
 .admin-status-dot-archived { background: #6b7280; }
 
+/* Estimate workflow — a visually distinct card type on the SAME Schedule
+   list as jobs (never a separate calendar). Deliberately its own color
+   family (teal/indigo) rather than reusing any existing job-status accent
+   or status-dot hue, so an estimate can never be mistaken for a job at a
+   glance even though it shares the exact same card markup/CSS classes
+   (.admin-schedule-card, .admin-status-badge, etc.). */
+.admin-schedule-card-estimate { border-left-width: 5px; }
+.admin-estimate-accent-scheduled { border-left-color: #0e7490; }
+.admin-estimate-accent-completed { border-left-color: #374151; }
+.admin-estimate-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  margin-right: 6px;
+  border-radius: 6px;
+  background: #0e7490;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.admin-status-estimate-scheduled,
+.admin-estimate-status-scheduled { background: #0e7490; color: #fff; }
+.admin-status-estimate-completed,
+.admin-estimate-status-completed { background: #374151; color: #fff; }
+.admin-status-estimate-cancelled,
+.admin-estimate-status-cancelled { background: #6b7280; color: #fff; }
+.admin-status-estimate-lost,
+.admin-estimate-status-lost { background: #b91c1c; color: #fff; }
+.admin-status-estimate-converted,
+.admin-estimate-status-converted { background: #1d4ed8; color: #fff; }
+.admin-sheet-dot.admin-status-dot-scheduled { background: #0e7490; }
+.admin-sheet-dot.admin-status-dot-cancelled { background: #6b7280; }
+
+/* Lead Detail / Estimate Detail action rows (Schedule Estimate / Book Job /
+   Convert to Job / Mark Completed / etc.) — a simple wrapping flex row so
+   2-4 buttons never overflow at phone width. */
+.admin-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.admin-detail-actions .admin-btn { flex: 1 1 auto; min-width: 140px; }
+
 /* Batch 6 (Leads consolidation) — the /admin/leads/ workspace shell.
    Only one of the 9 sections is unhidden at a time (admin/leads-list.js
    owns which), selected via .admin-leads-tabs below — each still reuses

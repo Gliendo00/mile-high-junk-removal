@@ -74,7 +74,12 @@ window.AdminStatusUI = (function () {
   }
 
   // opts: { title, values (array of status keys to show, defaults to all
-  // six), selected (current status key), onSelect(statusKey), onClose }
+  // six), selected (current status key), onSelect(statusKey), onClose,
+  // labels (optional {key: label} override, defaults to STATUS_TEXT — the
+  // Estimate workflow uses this to show its own small status vocabulary
+  // ("Scheduled"/"Cancelled"/etc.) through this exact same shared sheet
+  // without growing STATUS_TEXT/STATUS_ORDER, which stay bookings.status-
+  // only) }
   function open(opts) {
     opts = opts || {};
     ensureDom();
@@ -90,6 +95,7 @@ window.AdminStatusUI = (function () {
     var list = document.createElement("div");
     list.className = "admin-sheet-list";
     var values = opts.values && opts.values.length ? opts.values : STATUS_ORDER;
+    var labels = opts.labels || STATUS_TEXT;
 
     values.forEach(function (key) {
       var btn = document.createElement("button");
@@ -103,7 +109,7 @@ window.AdminStatusUI = (function () {
 
       var label = document.createElement("span");
       label.className = "admin-sheet-option-label";
-      label.textContent = STATUS_TEXT[key] || key;
+      label.textContent = labels[key] || key;
       btn.appendChild(label);
 
       if (key === opts.selected) {

@@ -32,7 +32,7 @@
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { normalizePhone } = require("../_lib/customer-identity");
-const { serviceLabel } = require("../_lib/booking-format");
+const { serviceLabel, normalizedStatus, statusLabel } = require("../_lib/booking-format");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const POSTGRES_UNIQUE_VIOLATION = "23505";
@@ -313,6 +313,46 @@ async function handleGet(req, res) {
       }
     }
 
+    // Estimate workflow — Lead pipeline visibility. Read-only enrichment,
+    // same non-fatal posture as matchedClient above: this is the ONE most
+    // recent estimate (if any) and the ONE most recent booking (if any)
+    // this lead has produced, so Lead Detail can show "no estimate/job yet
+    // / estimate scheduled / estimate completed / job booked" without a
+    // second page or a Kanban board. Never written here — purely a read of
+    // what api/admin/booking.js's handleCreateEstimate()/handleCreate()
+    // already wrote.
+    let pipelineEstimate = null;
+    let pipelineBooking = null;
+    try {
+      const [estimateRes, bookingRes] = await Promise.all([
+        supabase
+          .from("estimates")
+          .select("id, status, appointment_date, converted_booking_id")
+          .eq("source_lead_id", id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("bookings")
+          .select("id, status, appointment_date")
+          .eq("source_lead_id", id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (!estimateRes.error && estimateRes.data) {
+        const e = estimateRes.data;
+        pipelineEstimate = { id: e.id, status: e.status, appointmentDate: e.appointment_date, convertedBookingId: e.converted_booking_id };
+      }
+      if (!bookingRes.error && bookingRes.data) {
+        const b = bookingRes.data;
+        pipelineBooking = { id: b.id, status: normalizedStatus(b.status), statusLabel: statusLabel(b.status), appointmentDate: b.appointment_date };
+      }
+    } catch (pipelineErr) {
+      // Non-fatal — the lead view must never 500 over this enrichment.
+      console.error("Admin lead detail: pipeline enrichment failed (non-fatal):", pipelineErr);
+    }
+
     res.status(200).json({
       ok: true,
       lead: {
@@ -341,6 +381,8 @@ async function handleGet(req, res) {
         updatedAt: lead.updated_at,
         updatedBy: lead.updated_by,
         matchedClient: matchedClient,
+        pipelineEstimate: pipelineEstimate,
+        pipelineBooking: pipelineBooking,
       },
     });
   } catch (err) {

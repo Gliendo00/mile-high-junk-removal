@@ -197,21 +197,79 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  window.AdminClientPicker.mount(clientPickerMount, {
-    onSelect: function (client, warnings) {
-      selectedClient = client;
-      if (client && warnings && warnings.length) {
-        showToast('Note: this client shares contact info with an existing client.', 'error');
-      }
-      if (client && client.address) {
-        sameAsClientRow.disabled = false;
-        sameAsClientRow.checked = false;
-      } else {
-        sameAsClientRow.disabled = true;
-        sameAsClientRow.checked = false;
-      }
-    },
-  });
+  function onClientSelect(client, warnings) {
+    selectedClient = client;
+    if (client && warnings && warnings.length) {
+      showToast('Note: this client shares contact info with an existing client.', 'error');
+    }
+    if (client && client.address) {
+      sameAsClientRow.disabled = false;
+      sameAsClientRow.checked = false;
+    } else {
+      sameAsClientRow.disabled = true;
+      sameAsClientRow.checked = false;
+    }
+  }
+
+  // Estimate workflow — Lead -> Job direct ("Book Job" on Lead Detail,
+  // ?leadId=) and Estimate -> Job ("Convert to Job" on Estimate Detail,
+  // ?estimateId=). At most one of these is ever present. Neither mutates
+  // the Lead/Estimate itself from this page — see applyLeadPrefill()/
+  // applyEstimatePrefill() below, which only ever READ it to prefill the
+  // form; api/admin/booking.js's handleCreate() is what records the
+  // booked outcome back onto the originating lead/estimate, server-side,
+  // once this form is actually saved.
+  function getQueryParam(name) {
+    var params = new URLSearchParams(window.location.search);
+    return (params.get(name) || '').trim();
+  }
+  var leadId = getQueryParam('leadId');
+  var estimateId = getQueryParam('estimateId');
+
+  function prefillDescriptionNotes(descriptionText, notesText) {
+    if (descriptionText) document.getElementById('description').value = descriptionText;
+    if (notesText) document.getElementById('internal-notes').value = notesText;
+  }
+
+  function prefillAppointmentDate(iso) {
+    if (iso && iso >= todayIso) appointmentDateInput.value = iso;
+  }
+
+  function applyLeadPrefill(lead) {
+    if (lead.address) serviceAddressInput.value = lead.address;
+    if (lead.city) serviceCityInput.value = lead.city;
+    if (lead.state) serviceStateInput.value = lead.state;
+    if (lead.zip) serviceZipInput.value = lead.zip;
+    if (lead.serviceType) serviceTypeSelect.value = lead.serviceType;
+    if (lead.quotedAmount !== null && lead.quotedAmount !== undefined) estimatedPriceInput.value = lead.quotedAmount;
+    prefillDescriptionNotes(lead.serviceDetails, lead.notes);
+    updateDumpsterVisibility();
+
+    window.AdminClientPicker.mount(clientPickerMount, {
+      onSelect: onClientSelect,
+      preselect: lead.matchedClient ? { id: lead.matchedClient.id, firstName: lead.matchedClient.firstName, lastName: lead.matchedClient.lastName, phone: lead.matchedClient.phone, email: lead.matchedClient.email } : null,
+      autoOpenCreate: lead.matchedClient ? null : { firstName: lead.firstName || '', lastName: lead.lastName || '', phone: lead.phone || '', email: lead.email || '' },
+    });
+  }
+
+  function applyEstimatePrefill(data) {
+    var estimate = data.estimate;
+    var customer = data.customer;
+    if (estimate.serviceAddress) serviceAddressInput.value = estimate.serviceAddress;
+    if (estimate.serviceCity) serviceCityInput.value = estimate.serviceCity;
+    if (estimate.serviceState) serviceStateInput.value = estimate.serviceState;
+    if (estimate.serviceZip) serviceZipInput.value = estimate.serviceZip;
+    if (estimate.serviceType) serviceTypeSelect.value = estimate.serviceType;
+    if (estimate.quotedAmount !== null && estimate.quotedAmount !== undefined) estimatedPriceInput.value = estimate.quotedAmount;
+    prefillDescriptionNotes(estimate.description, estimate.estimateNotes);
+    prefillAppointmentDate(estimate.appointmentDate);
+    updateDumpsterVisibility();
+
+    window.AdminClientPicker.mount(clientPickerMount, {
+      onSelect: onClientSelect,
+      preselect: customer ? { id: customer.id, firstName: customer.firstName, lastName: customer.lastName, phone: customer.phone, email: customer.email } : null,
+    });
+  }
 
   sameAsClientRow.addEventListener('change', function () {
     if (sameAsClientRow.checked && selectedClient && selectedClient.address) {
@@ -279,6 +337,13 @@ document.addEventListener('DOMContentLoaded', function () {
     var actualRaw = actualPriceInput.value.trim();
     if (actualRaw) body.finalPrice = Number(actualRaw);
 
+    // Estimate workflow. At most one of these is ever sent — when
+    // estimateId is present the server derives the lead link from the
+    // estimate itself (see api/admin/booking.js's handleCreate()), so
+    // sourceLeadId is deliberately NOT also sent in that case.
+    if (estimateId) body.sourceEstimateId = estimateId;
+    else if (leadId) body.sourceLeadId = leadId;
+
     // Batch 2C — dumpster rental fields. pickupDate is sent only if the
     // admin actually filled it in; left blank, the server defaults it to
     // delivery + 5 calendar days (see api/admin/booking.js's handleCreate()).
@@ -314,6 +379,14 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .then(function (respBody) {
         if (!respBody) return; // redirected to login
+        // Estimate workflow — the job itself always saved successfully to
+        // reach this point; a failure updating the originating estimate/
+        // lead is reported here (non-fatal, already logged server-side)
+        // rather than silently swallowed, since it never rolls back the
+        // job that was just created.
+        if (respBody.estimateUpdateError || respBody.leadUpdateError) {
+          window.alert([respBody.estimateUpdateError, respBody.leadUpdateError].filter(Boolean).join(' '));
+        }
         window.location.href = '/admin/booking/?id=' + encodeURIComponent(respBody.booking.id);
       })
       .catch(function (err) {
@@ -335,29 +408,85 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   });
 
-  // Session check on load — this page has no protected data to fetch of its
-  // own (it's a blank create form), so unlike every other admin page it has
-  // no natural "primary fetch" whose 401 already triggers a redirect. The
-  // form stays hidden (see the inline style in booking-new/index.html) until
-  // this check confirms a live session, so an expired/absent session is
-  // caught here instead of only surfacing later when the picker or Save is
-  // used. Reuses the existing countsOnly summary endpoint purely to verify
-  // auth — it returns aggregate counts only, never client/booking records,
-  // and needs no new endpoint (see the Vercel function-count constraint).
-  adminFetch('/api/admin/bookings?countsOnly=1')
-    .then(function (res) {
-      if (res.status === 401) {
-        window.location.href = '/admin/login/';
-        return;
-      }
-      if (!res.ok) throw new Error('Could not verify your session.');
-      loadingEl.style.display = 'none';
-      form.style.display = 'block';
-    })
-    .catch(function () {
-      loadingEl.style.display = 'none';
-      showError('Could not verify your session. Please refresh the page.');
-    });
+  function showForm() {
+    loadingEl.style.display = 'none';
+    form.style.display = 'block';
+  }
+
+  // Estimate workflow: ?estimateId= (Convert to Job) or ?leadId= (Book Job
+  // direct) each fetch their own source record first — which doubles as
+  // this page's session check, since both calls already redirect to login
+  // on a 401. Neither mutates the estimate/lead; see applyEstimatePrefill()/
+  // applyLeadPrefill() above.
+  if (estimateId) {
+    adminFetch('/api/admin/booking?resource=estimate&id=' + encodeURIComponent(estimateId))
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not load this estimate.');
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        applyEstimatePrefill(body);
+        showForm();
+      })
+      .catch(function (err) {
+        loadingEl.style.display = 'none';
+        showError(err && err.message ? err.message : 'Could not load this estimate.');
+      });
+  } else if (leadId) {
+    adminFetch('/api/admin/lead?id=' + encodeURIComponent(leadId))
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not load this lead.');
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        applyLeadPrefill(body.lead);
+        showForm();
+      })
+      .catch(function (err) {
+        loadingEl.style.display = 'none';
+        showError(err && err.message ? err.message : 'Could not load this lead.');
+      });
+  } else {
+    window.AdminClientPicker.mount(clientPickerMount, { onSelect: onClientSelect });
+
+    // Session check on load — this page has no protected data to fetch of
+    // its own (it's a blank create form), so unlike every other admin page
+    // it has no natural "primary fetch" whose 401 already triggers a
+    // redirect. The form stays hidden (see the inline style in
+    // booking-new/index.html) until this check confirms a live session, so
+    // an expired/absent session is caught here instead of only surfacing
+    // later when the picker or Save is used. Reuses the existing countsOnly
+    // summary endpoint purely to verify auth — it returns aggregate counts
+    // only, never client/booking records, and needs no new endpoint (see
+    // the Vercel function-count constraint).
+    adminFetch('/api/admin/bookings?countsOnly=1')
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return;
+        }
+        if (!res.ok) throw new Error('Could not verify your session.');
+        showForm();
+      })
+      .catch(function () {
+        loadingEl.style.display = 'none';
+        showError('Could not verify your session. Please refresh the page.');
+      });
+  }
 
   // A back-navigation restored from bfcache can show a stale/half-filled
   // form (e.g. after saving and tapping Back) — force a clean reload, same

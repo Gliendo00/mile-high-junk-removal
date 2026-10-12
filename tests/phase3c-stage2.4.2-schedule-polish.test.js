@@ -467,10 +467,21 @@ test("admin/calendar-views.js/schedule.js: previous-day navigation never steps b
 //     block. This section proves both are now unmistakable, not just
 //     present.
 // =======================================================================
-test("admin/schedule.js: each job in the list gets its own distinct outer job-card container — render() calls renderJobCard() once per job and appends each result separately (never batches multiple jobs into one shared wrapper)", () => {
+// Updated for the Estimate workflow: render() now takes a merged
+// jobs+estimates list (admin/schedule.js's mergeJobsAndEstimates()), so its
+// parameter was renamed `items` and each item is tagged { kind, data } —
+// dispatching to renderJobCard() or renderEstimateCard() per item,
+// depending on kind, is what replaced the old "always renderJobCard()"
+// call. The underlying guarantee this test protects — one outer card per
+// item, each appended individually, never batched into a shared wrapper —
+// is unchanged; only the dispatch got one more branch.
+test("admin/schedule.js: each item in the list gets its own distinct outer card container — render() calls renderJobCard()/renderEstimateCard() once per item and appends each result separately (never batches multiple items into one shared wrapper)", () => {
   const src = read("admin/schedule.js");
-  const renderBody = src.slice(src.indexOf("function render(jobs)"), src.indexOf("function setActiveTab"));
-  assert.ok(/jobs\.forEach\(function \(job\) \{\s*listEl\.appendChild\(renderJobCard\(job\)\);\s*\}\);/.test(renderBody), "render() must call renderJobCard() once per job and append each one individually — this is what guarantees N jobs produce N separate cards, never one shared block");
+  const renderBody = src.slice(src.indexOf("function render(items)"), src.indexOf("function setActiveTab"));
+  assert.ok(
+    /items\.forEach\(function \(item\) \{\s*listEl\.appendChild\(item\.kind === 'estimate' \? renderEstimateCard\(item\.data\) : renderJobCard\(item\.data\)\);\s*\}\);/.test(renderBody),
+    "render() must call renderJobCard()/renderEstimateCard() once per item and append each one individually — this is what guarantees N items produce N separate cards, never one shared block"
+  );
 });
 
 test("admin/schedule.js: renderJobCard()'s outer wrapper (.admin-schedule-card) contains the entire job — the info section AND the Call/Text/Directions actions row, as siblings inside the same card", () => {

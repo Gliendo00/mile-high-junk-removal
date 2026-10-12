@@ -123,7 +123,27 @@ module.exports = async (req, res) => {
     return;
   }
 
-  if (req.method === "POST") return handleCreate(req, res);
+  // Estimate workflow — an Estimate is its OWN table (public.estimates, see
+  // sql/2026-10-12_estimate-workflow.sql), never a bookings row and never
+  // read by any revenue/booked counter (admin/schedule-financials.js,
+  // admin/home.js) — that is the actual financial-isolation guarantee, by
+  // construction, not a status filter an estimate could slip through. GET
+  // returns one estimate's detail; POST creates one (independent "+ New
+  // Estimate", or from a Lead's "Schedule Estimate"); PATCH moves it
+  // through its own small lifecycle (scheduled -> completed -> lost, or
+  // scheduled -> cancelled). Convert to Job is deliberately NOT a verb
+  // here — see handleCreate()'s sourceEstimateId handling below, which
+  // reuses the existing job-creation path instead of a second, parallel
+  // "create a job" implementation.
+  if (req.query.resource === "estimate") {
+    if (req.method === "GET") return handleGetEstimate(req, res);
+    if (req.method === "POST") return handleCreateEstimate(req, res, session);
+    if (req.method === "PATCH") return handlePatchEstimate(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  if (req.method === "POST") return handleCreate(req, res, session);
   if (req.method === "PATCH") return handleUpdate(req, res);
 
   if (req.method !== "GET") {
@@ -434,7 +454,7 @@ module.exports = async (req, res) => {
 // insert payload — the request body is never spread into it, mirroring the
 // discipline api/admin/booking-status.js already established for the one
 // write path that existed before Stage 2.1.
-async function handleCreate(req, res) {
+async function handleCreate(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
     console.error("Admin job create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
@@ -481,6 +501,25 @@ async function handleCreate(req, res) {
   const intakeSessionId = typeof body.intakeSessionId === "string" ? body.intakeSessionId.trim() : "";
   if (intakeSessionId && !UUID_RE.test(intakeSessionId)) {
     res.status(400).json({ error: "Invalid intake session id." });
+    return;
+  }
+
+  // Estimate workflow — Convert to Job (sourceEstimateId) and Lead -> Job
+  // direct (sourceLeadId). Both optional, both only ever sent by the admin
+  // UI's own Convert-to-Job/Book-Job flows (never required) — every other
+  // caller ("+ New Job", "+ Past Job", Confirm Booking) never sends either,
+  // so this is zero behavior change for them. See the try block below for
+  // how sourceEstimateId makes this request retry-safe (never a second
+  // job) and for how the originating lead/estimate get their outcome
+  // recorded.
+  const sourceLeadIdRaw = typeof body.sourceLeadId === "string" ? body.sourceLeadId.trim() : "";
+  if (sourceLeadIdRaw && !UUID_RE.test(sourceLeadIdRaw)) {
+    res.status(400).json({ error: "Invalid lead id." });
+    return;
+  }
+  const sourceEstimateIdRaw = typeof body.sourceEstimateId === "string" ? body.sourceEstimateId.trim() : "";
+  if (sourceEstimateIdRaw && !UUID_RE.test(sourceEstimateIdRaw)) {
+    res.status(400).json({ error: "Invalid estimate id." });
     return;
   }
 
@@ -719,61 +758,156 @@ async function handleCreate(req, res) {
       return;
     }
 
+    // Convert to Job — resolve and validate the originating estimate
+    // BEFORE attempting to create anything. A cancelled estimate (the
+    // appointment itself never happened) can never be converted; every
+    // other status (scheduled/completed/lost) can, including "lost" —
+    // the owner may still convert a completed-but-not-booked estimate
+    // later if the client calls back (see estimates.status's own header
+    // comment in the migration).
+    let sourceEstimate = null;
+    if (sourceEstimateIdRaw) {
+      const estimateRes = await supabase
+        .from("estimates")
+        .select("id, status, source_lead_id, converted_booking_id")
+        .eq("id", sourceEstimateIdRaw)
+        .maybeSingle();
+      if (estimateRes.error) throw estimateRes.error;
+      if (!estimateRes.data) {
+        res.status(404).json({ error: "Estimate not found." });
+        return;
+      }
+      sourceEstimate = estimateRes.data;
+      if (sourceEstimate.status === "cancelled") {
+        res.status(400).json({ error: "This estimate was cancelled and cannot be converted to a job." });
+        return;
+      }
+    } else if (sourceLeadIdRaw) {
+      // Lead -> Job direct (no estimate at all). Validated here, same as
+      // customerId above, so a malformed/nonexistent lead id never silently
+      // produces a job with a dangling source_lead_id.
+      const leadRes = await supabase.from("leads").select("id").eq("id", sourceLeadIdRaw).maybeSingle();
+      if (leadRes.error) throw leadRes.error;
+      if (!leadRes.data) {
+        res.status(404).json({ error: "Lead not found." });
+        return;
+      }
+    }
+
     const BOOKING_SELECT_COLS =
       "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip, created_at";
 
-    const insertRes = await supabase
-      .from("bookings")
-      .insert({
-        customer_id: customerId,
-        service_type: serviceType,
-        appointment_date: appointmentDate,
-        time_window: timeWindow,
-        exact_time: exactTime,
-        status: status,
-        description: description,
-        estimated_price: estimatedPrice,
-        estimated_price_max: estimatedPriceMax,
-        final_price: finalPrice,
-        tip_amount: tipAmount,
-        internal_notes: internalNotes,
-        is_complimentary: complimentary.isComplimentary,
-        complimentary_value: complimentary.complimentaryValue,
-        complimentary_reason: complimentary.complimentaryReason,
-        complimentary_note: complimentary.complimentaryNote,
-        // Frozen job-location snapshot — written once, here, and never
-        // re-derived from the customer's profile address later, matching
-        // every existing booking everywhere else in this codebase.
-        service_address: serviceAddress,
-        service_city: serviceCity,
-        service_state: serviceState,
-        service_zip: serviceZip,
-        source_intake_id: intakeSessionId || null,
-      })
-      .select(BOOKING_SELECT_COLS)
-      .single();
-
-    // isReplay: true only when this exact call is a retry/race of an
-    // earlier Confirm Booking attempt for the SAME intake that already
-    // succeeded — bookings_source_intake_id_uniq fired, so `created` below
-    // is the ORIGINAL booking, not a new one. Never true for "+ New Job"/
-    // "+ Past Job" (they never send intakeSessionId, so this branch can't
-    // be reached for them at all).
+    // isReplay: true whenever `created` below is NOT a row this exact call
+    // just inserted — either Convert to Job was already completed earlier
+    // (estimate.converted_booking_id already set, checked first, no insert
+    // even attempted) or this call lost a race with another retry/tab that
+    // got there first (the partial unique index on bookings.source_estimate_id
+    // / bookings.source_intake_id fired, caught below). Never true for
+    // "+ New Job"/"+ Past Job" (they send neither id, so neither branch can
+    // ever be reached for them).
     let created;
     let isReplay = false;
-    if (insertRes.error) {
-      if (intakeSessionId && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
-        const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("source_intake_id", intakeSessionId).maybeSingle();
-        if (existingRes.error || !existingRes.data) throw insertRes.error;
+
+    if (sourceEstimate && sourceEstimate.converted_booking_id) {
+      const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("id", sourceEstimate.converted_booking_id).maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+      if (existingRes.data) {
         created = existingRes.data;
         isReplay = true;
-      } else {
-        throw insertRes.error;
       }
-    } else if (!insertRes.data) {
-      throw new Error("Insert returned no row.");
-    } else {
-      created = insertRes.data;
+    }
+
+    if (!created) {
+      const insertRes = await supabase
+        .from("bookings")
+        .insert({
+          customer_id: customerId,
+          service_type: serviceType,
+          appointment_date: appointmentDate,
+          time_window: timeWindow,
+          exact_time: exactTime,
+          status: status,
+          description: description,
+          estimated_price: estimatedPrice,
+          estimated_price_max: estimatedPriceMax,
+          final_price: finalPrice,
+          tip_amount: tipAmount,
+          internal_notes: internalNotes,
+          is_complimentary: complimentary.isComplimentary,
+          complimentary_value: complimentary.complimentaryValue,
+          complimentary_reason: complimentary.complimentaryReason,
+          complimentary_note: complimentary.complimentaryNote,
+          // Frozen job-location snapshot — written once, here, and never
+          // re-derived from the customer's profile address later, matching
+          // every existing booking everywhere else in this codebase.
+          service_address: serviceAddress,
+          service_city: serviceCity,
+          service_state: serviceState,
+          service_zip: serviceZip,
+          source_intake_id: intakeSessionId || null,
+          // Estimate workflow: source_lead_id is derived from the estimate
+          // itself (never the client-sent value) whenever this is a
+          // Convert, so a job's recorded lead lineage always matches the
+          // estimate it actually came from; for a direct Lead -> Job booking
+          // (no estimate at all) the client-sent sourceLeadId is used as-is.
+          source_lead_id: sourceEstimate ? sourceEstimate.source_lead_id || null : sourceLeadIdRaw || null,
+          source_estimate_id: sourceEstimateIdRaw || null,
+        })
+        .select(BOOKING_SELECT_COLS)
+        .single();
+
+      if (insertRes.error) {
+        if (intakeSessionId && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
+          const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("source_intake_id", intakeSessionId).maybeSingle();
+          if (existingRes.error || !existingRes.data) throw insertRes.error;
+          created = existingRes.data;
+          isReplay = true;
+        } else if (sourceEstimateIdRaw && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
+          const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("source_estimate_id", sourceEstimateIdRaw).maybeSingle();
+          if (existingRes.error || !existingRes.data) throw insertRes.error;
+          created = existingRes.data;
+          isReplay = true;
+        } else {
+          throw insertRes.error;
+        }
+      } else if (!insertRes.data) {
+        throw new Error("Insert returned no row.");
+      } else {
+        created = insertRes.data;
+      }
+    }
+
+    // Carry the booked outcome back onto the estimate/lead this job came
+    // from — but only on the call that actually created the job, never
+    // again on a replay (it already happened the first time). Best-effort:
+    // either write failing is reported back but never rolls back the job
+    // itself — the same "the primary write already succeeded, a secondary
+    // one failing doesn't undo it" posture admin/job-closeout.js already
+    // uses for a payment/tip failure after a successful status change.
+    let estimateUpdateError = null;
+    let leadUpdateError = null;
+    if (!isReplay) {
+      if (sourceEstimateIdRaw) {
+        const { error: estErr } = await supabase
+          .from("estimates")
+          .update({ status: "converted", converted_booking_id: created.id, updated_by: session.email, updated_at: new Date().toISOString() })
+          .eq("id", sourceEstimateIdRaw);
+        if (estErr) {
+          console.error("Admin job create: could not mark estimate converted:", estErr);
+          estimateUpdateError = "The job was created, but this estimate's status could not be updated.";
+        }
+      }
+      const effectiveLeadId = sourceEstimate ? sourceEstimate.source_lead_id || null : sourceLeadIdRaw || null;
+      if (effectiveLeadId) {
+        const { error: leadErr } = await supabase
+          .from("leads")
+          .update({ status: "booked", resulting_booking_id: created.id, updated_by: session.email, updated_at: new Date().toISOString() })
+          .eq("id", effectiveLeadId);
+        if (leadErr) {
+          console.error("Admin job create: could not update originating lead:", leadErr);
+          leadUpdateError = "The job was created, but the originating lead could not be updated.";
+        }
+      }
     }
 
     let dumpsterResponse = null;
@@ -864,10 +998,360 @@ async function handleCreate(req, res) {
         zip: created.service_zip,
       },
       dumpster: dumpsterResponse,
+      estimateUpdateError: estimateUpdateError,
+      leadUpdateError: leadUpdateError,
     });
   } catch (err) {
     console.error("Admin job create failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not create job." });
+  }
+}
+
+// =======================================================================
+// Estimate workflow (?resource=estimate) — GET detail, POST create
+// ("+ New Estimate" / Lead's "Schedule Estimate"), PATCH complete/cancel/
+// lost. See sql/2026-10-12_estimate-workflow.sql for the table. An
+// estimate is deliberately never a `bookings` row — see that migration's
+// header for why — so nothing here ever writes to `bookings`, and nothing
+// in admin/schedule-financials.js or admin/home.js's revenue/booked math
+// can ever read an estimate, by construction. Convert to Job lives in
+// handleCreate() above instead (reusing the existing job-creation path),
+// not here.
+// =======================================================================
+const ESTIMATE_SELECT_COLS =
+  "id, created_at, created_by, updated_at, updated_by, status, customer_id, source_lead_id, source_intake_id, service_type, appointment_date, time_window, exact_time, service_address, service_city, service_state, service_zip, description, estimate_notes, quoted_amount, outcome_note, cancelled_reason, converted_booking_id";
+
+function mapEstimate(e) {
+  return {
+    id: e.id,
+    status: e.status,
+    customerId: e.customer_id,
+    sourceLeadId: e.source_lead_id,
+    sourceIntakeId: e.source_intake_id,
+    serviceType: e.service_type,
+    serviceLabel: e.service_type ? serviceLabel(e.service_type) : null,
+    appointmentDate: e.appointment_date,
+    timeWindow: e.time_window,
+    timeWindowLabel: timeWindowLabel(e.time_window),
+    exactTime: e.exact_time,
+    timeLabel: effectiveTimeLabel(e.time_window, e.exact_time),
+    serviceAddress: e.service_address,
+    serviceCity: e.service_city,
+    serviceState: e.service_state,
+    serviceZip: e.service_zip,
+    description: e.description,
+    estimateNotes: e.estimate_notes,
+    quotedAmount: e.quoted_amount,
+    outcomeNote: e.outcome_note,
+    cancelledReason: e.cancelled_reason,
+    convertedBookingId: e.converted_booking_id,
+    createdAt: e.created_at,
+    createdBy: e.created_by,
+    updatedAt: e.updated_at,
+    updatedBy: e.updated_by,
+  };
+}
+
+// GET /api/admin/booking?resource=estimate&id=<uuid> — single estimate
+// detail, enriched with the client's contact info and (when present) the
+// originating lead's name — both read-only lookups, exactly like booking
+// detail's own customer enrichment above.
+async function handleGetEstimate(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin estimate detail failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Estimate not found." });
+    return;
+  }
+
+  try {
+    const estimateRes = await supabase.from("estimates").select(ESTIMATE_SELECT_COLS).eq("id", id).maybeSingle();
+    if (estimateRes.error) throw estimateRes.error;
+    const estimate = estimateRes.data;
+    if (!estimate) {
+      res.status(404).json({ error: "Estimate not found." });
+      return;
+    }
+
+    const [customerRes, leadRes] = await Promise.all([
+      supabase.from("customers").select("id, first_name, last_name, phone, email").eq("id", estimate.customer_id).maybeSingle(),
+      estimate.source_lead_id
+        ? supabase.from("leads").select("id, first_name, last_name, status").eq("id", estimate.source_lead_id).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (customerRes.error) throw customerRes.error;
+    if (leadRes.error) throw leadRes.error;
+
+    const customer = customerRes.data || null;
+    const lead = leadRes.data || null;
+
+    res.status(200).json({
+      ok: true,
+      estimate: mapEstimate(estimate),
+      customer: customer ? { id: customer.id, firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone, email: customer.email } : null,
+      sourceLead: lead ? { id: lead.id, firstName: lead.first_name, lastName: lead.last_name, status: lead.status } : null,
+    });
+  } catch (err) {
+    console.error("Admin estimate detail failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load this estimate." });
+  }
+}
+
+// POST /api/admin/booking?resource=estimate — schedule a new estimate.
+// Reuses the exact same client-lookup/creation pattern as "+ New Job"
+// (the client/address are resolved by the admin UI via the existing
+// client-picker BEFORE this request is ever sent — this endpoint, like
+// handleCreate() above, never looks up or creates a client itself). No
+// idempotency key: same posture as "+ New Job" itself (a plain client-side
+// double-submit guard, no natural dedupe key for "schedule an estimate"
+// either) — Convert to Job is the one step in this whole workflow that
+// genuinely needs server-side double-click protection, because it creates
+// a second, different kind of record (a job); scheduling one estimate
+// twice by mashing Save just creates two ordinary estimate rows, exactly
+// as duplicate-clicking "+ New Job" would create two ordinary jobs today.
+async function handleCreateEstimate(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin estimate create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
+  if (!customerId) {
+    res.status(400).json({ error: "A client is required." });
+    return;
+  }
+  if (!UUID_RE.test(customerId)) {
+    res.status(404).json({ error: "Client not found." });
+    return;
+  }
+
+  const sourceLeadId = typeof body.sourceLeadId === "string" ? body.sourceLeadId.trim() : "";
+  if (sourceLeadId && !UUID_RE.test(sourceLeadId)) {
+    res.status(400).json({ error: "Invalid lead id." });
+    return;
+  }
+
+  let serviceType = null;
+  if (body.serviceType !== undefined && body.serviceType !== null && body.serviceType !== "") {
+    const raw = typeof body.serviceType === "string" ? body.serviceType.trim() : "";
+    if (!SERVICE_TYPES.includes(raw)) {
+      res.status(400).json({ error: "Please choose a valid service type." });
+      return;
+    }
+    serviceType = raw;
+  }
+
+  const appointmentDate = typeof body.appointmentDate === "string" ? body.appointmentDate.trim() : "";
+  if (!isValidIsoDate(appointmentDate)) {
+    res.status(400).json({ error: "A valid estimate date is required." });
+    return;
+  }
+  const todayIso = denverTodayIso();
+  if (appointmentDate < todayIso) {
+    res.status(400).json({ error: "Estimate date cannot be in the past." });
+    return;
+  }
+
+  const timeWindowRaw = typeof body.timeWindow === "string" ? body.timeWindow.trim() : "";
+  const exactTimeRaw = typeof body.exactTime === "string" ? body.exactTime.trim() : "";
+  if (timeWindowRaw && exactTimeRaw) {
+    res.status(400).json({ error: "Choose either an exact time or a time window, not both." });
+    return;
+  }
+  let timeWindow = null;
+  let exactTime = null;
+  if (exactTimeRaw) {
+    if (!EXACT_TIME_RE.test(exactTimeRaw)) {
+      res.status(400).json({ error: "Please enter a valid time." });
+      return;
+    }
+    exactTime = exactTimeRaw;
+  } else if (timeWindowRaw) {
+    if (!VALID_TIME_WINDOWS.includes(timeWindowRaw)) {
+      res.status(400).json({ error: "Please choose a valid time window, or leave it unknown." });
+      return;
+    }
+    timeWindow = timeWindowRaw;
+  }
+  if (!timeWindow && !exactTime) {
+    res.status(400).json({ error: "A valid estimate time or time window is required." });
+    return;
+  }
+
+  const addrIn = body.serviceAddress && typeof body.serviceAddress === "object" && !Array.isArray(body.serviceAddress) ? body.serviceAddress : {};
+  const serviceAddress = sanitizeText(addrIn.address, MAX.address);
+  const serviceCity = sanitizeText(addrIn.city, MAX.city);
+  const serviceStateRaw = sanitizeText(addrIn.state, 40).toUpperCase();
+  const serviceZip = sanitizeText(addrIn.zip, MAX.zip);
+  if (!serviceAddress || !serviceCity) {
+    res.status(400).json({ error: "A complete service address is required." });
+    return;
+  }
+  if (!/^[A-Z]{2}$/.test(serviceStateRaw)) {
+    res.status(400).json({ error: "Please enter a valid 2-letter state." });
+    return;
+  }
+  const serviceState = serviceStateRaw;
+  if (serviceZip && !/^\d{5}(-\d{4})?$/.test(serviceZip)) {
+    res.status(400).json({ error: "Please enter a valid ZIP code." });
+    return;
+  }
+
+  const description = sanitizeText(body.description, MAX.long) || null;
+  const estimateNotes = sanitizeText(body.estimateNotes, MAX.long) || null;
+
+  let quotedAmount = null;
+  if (body.quotedAmount !== undefined && body.quotedAmount !== null && body.quotedAmount !== "") {
+    const n = Number(body.quotedAmount);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_PRICE) {
+      res.status(400).json({ error: "Please enter a valid quoted amount." });
+      return;
+    }
+    quotedAmount = Math.round(n * 100) / 100;
+  }
+
+  try {
+    const customerRes = await supabase.from("customers").select("id").eq("id", customerId).maybeSingle();
+    if (customerRes.error) throw customerRes.error;
+    if (!customerRes.data) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    if (sourceLeadId) {
+      const leadRes = await supabase.from("leads").select("id").eq("id", sourceLeadId).maybeSingle();
+      if (leadRes.error) throw leadRes.error;
+      if (!leadRes.data) {
+        res.status(404).json({ error: "Lead not found." });
+        return;
+      }
+    }
+
+    const insertRes = await supabase
+      .from("estimates")
+      .insert({
+        created_by: session.email,
+        status: "scheduled",
+        customer_id: customerId,
+        source_lead_id: sourceLeadId || null,
+        service_type: serviceType,
+        appointment_date: appointmentDate,
+        time_window: timeWindow,
+        exact_time: exactTime,
+        service_address: serviceAddress,
+        service_city: serviceCity,
+        service_state: serviceState,
+        service_zip: serviceZip || null,
+        description: description,
+        estimate_notes: estimateNotes,
+        quoted_amount: quotedAmount,
+      })
+      .select(ESTIMATE_SELECT_COLS)
+      .single();
+    if (insertRes.error) throw insertRes.error;
+
+    res.status(200).json({ ok: true, estimate: mapEstimate(insertRes.data) });
+  } catch (err) {
+    console.error("Admin estimate create failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not schedule this estimate." });
+  }
+}
+
+// PATCH /api/admin/booking?resource=estimate — body { id, action, ... }.
+// action is one of "complete" | "cancel" | "lost". "converted" is NEVER a
+// reachable value here — only handleCreate()'s sourceEstimateId path ever
+// writes that status, so there is no code path by which this endpoint
+// could be used to fake a conversion without actually creating a job.
+// Each action is idempotent against itself (re-posting the same action
+// once already in that terminal state is a harmless no-op, same
+// "double-tap-safe" posture as handleStatusAction's job-status PATCH) but
+// refuses any OTHER transition outright — e.g. a cancelled estimate can
+// never be marked completed.
+async function handlePatchEstimate(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin estimate update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Estimate not found." });
+    return;
+  }
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  if (action !== "complete" && action !== "cancel" && action !== "lost") {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase.from("estimates").select("id, status").eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Estimate not found." });
+      return;
+    }
+
+    const updatePayload = { updated_by: session.email, updated_at: new Date().toISOString() };
+    if (action === "complete") {
+      if (current.status !== "scheduled" && current.status !== "completed") {
+        res.status(400).json({ error: "This estimate cannot be marked completed right now." });
+        return;
+      }
+      updatePayload.status = "completed";
+      const outcomeNote = sanitizeText(body.outcomeNote, MAX.long);
+      if (outcomeNote) updatePayload.outcome_note = outcomeNote;
+    } else if (action === "cancel") {
+      if (current.status !== "scheduled" && current.status !== "cancelled") {
+        res.status(400).json({ error: "This estimate cannot be cancelled right now." });
+        return;
+      }
+      updatePayload.status = "cancelled";
+      const cancelledReason = sanitizeText(body.cancelledReason, MAX.short);
+      if (cancelledReason) updatePayload.cancelled_reason = cancelledReason;
+    } else {
+      // "lost" — Did Not Book. Deliberately available from "completed"
+      // only: an estimate that was never even performed has nothing to be
+      // "lost" about yet (it should be cancelled instead). Marking an
+      // estimate lost never touches the originating Lead's own status —
+      // see the migration/proposal's explicit "Estimate Completed is not
+      // Lead Lost" requirement; the owner can always convert a "lost"
+      // estimate to a job later if the client calls back (handleCreate()'s
+      // sourceEstimateId path above allows conversion from "lost" too).
+      if (current.status !== "completed" && current.status !== "lost") {
+        res.status(400).json({ error: "Only a completed estimate can be marked Did Not Book." });
+        return;
+      }
+      updatePayload.status = "lost";
+      const outcomeNote = sanitizeText(body.outcomeNote, MAX.long);
+      if (outcomeNote) updatePayload.outcome_note = outcomeNote;
+    }
+
+    const { data: updated, error } = await supabase.from("estimates").update(updatePayload).eq("id", id).select(ESTIMATE_SELECT_COLS).maybeSingle();
+    if (error) throw error;
+    if (!updated) {
+      res.status(404).json({ error: "Estimate not found." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, estimate: mapEstimate(updated) });
+  } catch (err) {
+    console.error("Admin estimate update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update this estimate." });
   }
 }
 

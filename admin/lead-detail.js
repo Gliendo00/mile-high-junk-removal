@@ -159,6 +159,43 @@ document.addEventListener('DOMContentLoaded', function () {
       followUpRow.style.display = 'none';
     }
 
+    // Estimate workflow — pipeline visibility + primary actions. Schedule
+    // Estimate/Book Job are always visible (Lead -> Job direct stays
+    // first-class even once an estimate exists) — the pipeline summary
+    // row is what actually communicates current state, not a disabled
+    // button. Neither action here ever deletes/replaces the Lead itself.
+    document.getElementById('l-schedule-estimate-btn').href = '/admin/estimate-new/?leadId=' + encodeURIComponent(lead.id);
+    document.getElementById('l-book-job-btn').href = '/admin/booking-new/?leadId=' + encodeURIComponent(lead.id);
+
+    var ESTIMATE_STATUS_LABELS = { scheduled: 'Scheduled', completed: 'Completed', cancelled: 'Cancelled', lost: 'Did Not Book', converted: 'Converted to Job' };
+    var estimateRow = document.getElementById('l-pipeline-estimate-row');
+    var jobRow = document.getElementById('l-pipeline-job-row');
+    var summaryParts = [];
+
+    if (lead.pipelineEstimate) {
+      var pe = lead.pipelineEstimate;
+      estimateRow.style.display = 'block';
+      var estimateLink = document.getElementById('l-pipeline-estimate-link');
+      estimateLink.href = '/admin/estimate/?id=' + encodeURIComponent(pe.id);
+      estimateLink.textContent = 'Estimate (' + (ESTIMATE_STATUS_LABELS[pe.status] || pe.status) + ') · ' + formatDate(pe.appointmentDate) + ' →';
+      summaryParts.push('Estimate ' + (ESTIMATE_STATUS_LABELS[pe.status] || pe.status));
+    } else {
+      estimateRow.style.display = 'none';
+    }
+
+    if (lead.pipelineBooking) {
+      var pb = lead.pipelineBooking;
+      jobRow.style.display = 'block';
+      var jobLink = document.getElementById('l-pipeline-job-link');
+      jobLink.href = '/admin/booking/?id=' + encodeURIComponent(pb.id);
+      jobLink.textContent = 'Job (' + (pb.statusLabel || pb.status) + ') · ' + formatDate(pb.appointmentDate) + ' →';
+      summaryParts.push('Job ' + (pb.statusLabel || pb.status));
+    } else {
+      jobRow.style.display = 'none';
+    }
+
+    set('l-pipeline-summary', summaryParts.length ? summaryParts.join(' · ') : 'No estimate or job yet.');
+
     var matchedSection = document.getElementById('l-matched-section');
     if (lead.matchedClient) {
       matchedSection.style.display = 'block';

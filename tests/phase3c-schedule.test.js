@@ -759,6 +759,11 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // dumpster_rentals row, written only when serviceType is
       // 'dumpster_rental'. See tests/phase3c-dumpster-rental-admin.test.js.
       "api/admin/booking.js: .insert(",
+      // Estimate workflow added exactly one new insert — handleCreateEstimate()'s
+      // row into the (separate, never-revenue-counted) `estimates` table,
+      // reachable only via ?resource=estimate POST. See
+      // tests/estimate-workflow.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",
@@ -807,6 +812,18 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // branches (same, review_request_sent_at/_by only). See
       // tests/phase3c-job-archive-review.test.js.
       "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      // Estimate workflow added exactly three new updates: handleCreate()'s
+      // two Convert-to-Job/Lead-to-Job follow-up writes (marking the
+      // originating estimate "converted" and the originating lead "booked"
+      // — both best-effort, never rolling back the job itself on failure),
+      // plus handlePatchEstimate()'s own status update (complete/cancel/
+      // lost). None of these ever touches a `bookings` row's financial
+      // fields, and the estimate/lead updates are gated behind
+      // sourceEstimateId/sourceLeadId, never reachable for "+ New Job"/
+      // "+ Past Job". See tests/estimate-workflow.test.js.
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
