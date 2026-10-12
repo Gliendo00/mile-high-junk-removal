@@ -1,0 +1,17 @@
+{
+  "findingKey": "content-gap::blog-seasonal-cleanout-guide.html",
+  "question": "Does an authoritative, Denver-specific seasonal fact exist that this page could use to answer a genuinely useful practical question it currently doesn't cover?",
+  "source": "City and County of Denver — Department of Transportation and Infrastructure, LeafDrop program (denvergov.org); corroborated by Denver Gazette (2026-10-11) and Denverite coverage of the same program",
+  "sourceType": "official-government",
+  "accessedAt": "2026-10-12T03:37:56.956Z",
+  "evidence": [
+    "Denver runs an official free LeafDrop leaf/pumpkin composting drop-off program every fall (2026 run: October 5 - November 25), at three named city locations (Cherry Creek Transfer Station, Denver Parks and Recreation at 3685 Havana St, Central Platte Campus).",
+    "The program requires leaves bagged in PAPER bags only (no plastic), with branches/other materials removed first — a specific, checkable logistical detail a homeowner would need to know before relying on it instead of a hauler.",
+    "Mile High's existing seasonal-cleanout page mentions \"Fall brings yard waste — branches, leaves, and general cleanup\" but does not mention this municipal program at all, despite it being directly relevant to exactly the fall yard-waste scenario the page already discusses."
+  ],
+  "confidence": "medium",
+  "limitations": "Confirms the program exists and is relevant to the page's existing Fall section; does NOT establish how many of this page's actual visitors are unaware of LeafDrop already, nor that adding it would measurably change engagement — that would need real analytics/Search Console data this agent does not have access to.",
+  "verdict": "supports-opportunity",
+  "recommendation": "A genuine, specific, locally-grounded FAQ-worthy question exists and is currently unanswered on this page: e.g. \"Can I use Denver's free LeafDrop program instead of hauling?\" (branches/mixed debris and anything beyond paper-bagged leaves still need a hauler; LeafDrop is seasonal and location-limited). This is a real content opportunity — still requires a human to write accurate, current copy (verify dates/locations before publishing, since LeafDrop's dates are annual and this evidence is specific to the 2026 run) and remains PROPOSE_CHANGE, not an auto-write.",
+  "kind": "external"
+}

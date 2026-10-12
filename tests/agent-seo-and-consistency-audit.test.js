@@ -55,11 +55,42 @@ test("missing title/description/canonical/h1/schema are each flagged once", () =
   ]);
 });
 
-test("title and description length outliers are flagged", () => {
+test("title and description length outliers are flagged (observation-tier — see risk.js)", () => {
   const findings = auditSeo([page({ title: "Hi", metaDescription: "Short." })]);
   const types = findings.map((f) => f.type);
   assert.ok(types.includes("title-length"));
   assert.ok(types.includes("description-length"));
+  // Never ALSO escalated to -malformed for a merely-short-but-real value.
+  assert.ok(!types.includes("title-malformed"));
+  assert.ok(!types.includes("description-malformed"));
+});
+
+test("Phase 3: a placeholder-looking title/description escalates to -malformed, not a mere -length observation", () => {
+  const findings = auditSeo([page({ title: "Untitled", metaDescription: "Lorem ipsum dolor sit amet" })]);
+  const types = findings.map((f) => f.type);
+  assert.ok(types.includes("title-malformed"));
+  assert.ok(types.includes("description-malformed"));
+  assert.ok(!types.includes("title-length"));
+  assert.ok(!types.includes("description-length"));
+});
+
+test("Phase 3: a severely-over-length title/description escalates to -malformed", () => {
+  const veryLongTitle = "A".repeat(95);
+  const veryLongDesc = "B".repeat(225);
+  const findings = auditSeo([page({ title: veryLongTitle, metaDescription: veryLongDesc })]);
+  const types = findings.map((f) => f.type);
+  assert.ok(types.includes("title-malformed"));
+  assert.ok(types.includes("description-malformed"));
+});
+
+test("Phase 3: a real, specific title that's merely a BIT over the max is NOT escalated (stays an observation)", () => {
+  // 71 chars — the actual real-site example that originally triggered this fix.
+  const realisticTitle = "Furniture Donation Guide: Where to Donate & What's Accepted | MHJR";
+  const findings = auditSeo([page({ title: realisticTitle })]);
+  assert.ok(realisticTitle.length > 65 && realisticTitle.length < 90, "fixture must actually be in the mild-overage range for this test to be meaningful");
+  const types = findings.map((f) => f.type);
+  assert.ok(types.includes("title-length"));
+  assert.ok(!types.includes("title-malformed"));
 });
 
 test("canonical mismatch is flagged when it points at a different URL", () => {

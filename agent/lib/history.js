@@ -53,6 +53,16 @@ function describeFinding(finding) {
       case "RESEARCH_MORE":
         return `Researching: ${finding.summary} — pending`;
       case "NO_CHANGE":
+        // Phase 3: an observation-tier finding never implies research was
+        // (or should have been) attempted — see risk.js/decision.js's
+        // weak-finding-semantics handling. Checked before the
+        // research-array branch so a tier:"observation" finding never
+        // misreports "insufficient evidence" (which reads as "we looked
+        // and it wasn't enough") when the real story is "this was never
+        // strong enough evidence to look into in the first place."
+        if (finding.tier === "observation") {
+          return `Observed: ${finding.summary} — not actionable on its own`;
+        }
         return finding.research && finding.research.length
           ? `Researched: ${finding.summary} — no change made — insufficient evidence`
           : `Reviewed: ${finding.summary} — no change needed`;
@@ -76,6 +86,7 @@ function iconForFinding(finding) {
   if (finding.decision === "APPLY_SAFE_FIX") {
     return finding.status === "applied" ? "check" : "flag";
   }
+  if (finding.decision === "NO_CHANGE" && finding.tier === "observation") return "observation";
   if (finding.decision === "RESEARCH_MORE" || finding.decision === "NO_CHANGE") return "research";
   if (finding.decision === "REJECT_OPPORTUNITY") return "reject";
   if (finding.decision === "PROPOSE_CHANGE") return "flag";

@@ -809,6 +809,12 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // bookings.tip_amount (+ updated_at), never a job_payments row. See
       // tests/phase3c-stage3-job-payments.test.js's Tip test.
       "api/admin/booking.js: .update(",
+      // Site Improvement Agent, Phase 3 added exactly one new update —
+      // handleUpdateOperationalNote()'s PATCH ?resource=operational-note,
+      // which writes only bookings.operational_note (+ updated_at),
+      // same completed-only gating and shape as handleUpdateTip() just
+      // above. See tests/agent-howd-it-go.test.js.
+      "api/admin/booking.js: .update(",
       // Batch 5 (5A) relocated the one status-write .update( here from the
       // now-deleted api/admin/booking-status.js — handleStatusAction()'s
       // PATCH ?resource=status, byte-for-byte the same write it always was.
@@ -859,6 +865,15 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // this ledger's PATCH allows (type/amount/revenueDate/bookingId are
       // never editable once written — append-only, same pattern
       // job_payments uses). See tests/phase3c-stage6-other-revenue.test.js.
+      "api/admin/bookings.js: .update(",
+      // Site Improvement Agent, Phase 3 added exactly one new update —
+      // handleReviewAgentProposal()'s resource:"agent-proposal" PATCH,
+      // which can only move one agent_proposals row between review
+      // states (status/reviewed_by/reviewed_at/review_note) — it never
+      // touches finding_type/category/pages/evidence/research (those
+      // are sync-owned, see agent/lib/proposals-sync.js) and never
+      // executes any website action itself. See
+      // tests/agent-proposals-api.test.js.
       "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
       // Batch 2D added exactly one new insert — writeCustomerAuditLog(),

@@ -3624,6 +3624,17 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-home-marketing-line-icon-flag { color: #b45309; }
 .admin-home-marketing-line-icon-research { color: #6b7280; }
 .admin-home-marketing-line-icon-reject { color: #b91c1c; }
+.admin-home-marketing-line-icon-observation { color: #a39d8e; }
+.admin-home-marketing-review-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--color-link, #1d4ed8);
+  text-decoration: none;
+}
+.admin-home-marketing-review-link:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------------------
    Leads sidebar redesign — replaces the old horizontal 9-pill tab row
@@ -3658,3 +3669,71 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   margin-bottom: 12px;
 }
 
+
+/* Site Improvement Agent, Phase 3 — admin/agent-proposals/. Reuses
+   .admin-status-badge's generic pill shape with new status-color
+   modifiers (same hex values as .admin-home-marketing-line-icon-* on the
+   Home dashboard's compact activity card, so "needs review" / approved /
+   rejected read consistently between the two surfaces). Each proposal's
+   card chrome matches .admin-home-marketing-card's own box treatment
+   (white surface, thin border, same shadow) rather than a new style. */
+.admin-proposal-status-proposed { background: #b45309; color: #fff; }
+.admin-proposal-status-approved { background: #2f6f13; color: #fff; }
+.admin-proposal-status-rejected { background: #b91c1c; color: #fff; }
+.admin-proposal-status-applied,
+.admin-proposal-status-validated { background: #1d4ed8; color: #fff; }
+.admin-proposal-status-failed { background: #6b7280; color: #fff; }
+
+.admin-proposal-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+}
+.admin-proposal-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.admin-proposal-card-summary {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-text, #201e1d);
+  margin: 0 0 4px;
+}
+.admin-proposal-card-meta {
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+  margin: 0 0 6px;
+}
+.admin-proposal-card-reason {
+  font-size: 12.5px;
+  color: var(--color-neutral-700, #4b4438);
+  margin: 0 0 10px;
+}
+.admin-proposal-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.admin-proposal-card-note-input {
+  width: 100%;
+  margin: 8px 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  border-radius: var(--admin-radius-md, 8px);
+  box-sizing: border-box;
+}
+.admin-proposal-card-reviewed-note {
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+  font-style: italic;
+  margin: 0 0 6px;
+}

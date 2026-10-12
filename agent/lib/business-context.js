@@ -1,17 +1,21 @@
 // Site Improvement Agent — private/publication-safe business context
 // boundary.
 //
-// NOT wired to any real data source yet. The CRM does not currently
-// collect a completed-job "how'd it go?" note (see the product spec), so
-// there is nothing real to ingest. This module exists only to establish,
-// and prove with tests, the separation the spec requires BEFORE that
-// integration is built: a completed-job note is private CRM data until it
-// passes through redactForPublication(), and anything that fails
-// validation must never reach a content-generation step.
+// Phase 3 wired the real CRM source: bookings.operational_note ("How'd it
+// go?", see sql/2026-10-12_phase3-agent-howd-it-go.sql and
+// api/admin/booking.js's handleUpdateOperationalNote()). fromCompletedBooking()
+// below maps a real booking row into the same raw-note shape the Phase 1
+// synthetic fixtures already used, then redacts it the same way. Nothing
+// in agent/runner.js calls it yet — there is no Supabase access from the
+// offline runner (by design, see agent/README.md), and this feature has
+// no real production data behind it yet either. This module stays ready
+// for whoever (or whatever) next pulls completed jobs from Supabase: feed
+// the raw row through fromCompletedBooking(), never reimplement
+// redaction inline.
 //
-// When the CRM integration is built, it should produce objects shaped like
-// RawJobNote below and pass them through this module — not invent its own
-// redaction logic inline.
+// Even the output of fromCompletedBooking()/redactForPublication() is
+// EVIDENCE for the agent to reason about, not automatic website copy —
+// nothing becomes public merely because it passed redaction.
 
 // Fields that may NEVER appear in publication-safe output, under any
 // circumstances, regardless of what a future CRM payload calls them.
@@ -88,10 +92,48 @@ function assertNoPrivateLeakage(text, rawNote) {
   return true;
 }
 
+/**
+ * Maps a real `bookings` row (any mix of snake_case DB columns or the
+ * camelCase shape api/admin/booking.js's GET already returns — both are
+ * accepted so this works whether it's fed a raw Supabase row or an
+ * already-mapped API response) into the same four-field raw-note shape
+ * used throughout this module, then redacts it. The booking row may
+ * contain (and in production WILL contain) private fields — customer_id,
+ * final_price, tip_amount, internal_notes, service_address, etc. — none
+ * of those are ever read here; only the four explicit fields below are
+ * picked off the input, so nothing else could leak even before
+ * redactForPublication()'s own allowlist runs as a second, independent
+ * check.
+ *
+ * Returns null (not an empty object) when there is no operational note
+ * at all — "no evidence" should never be mistaken for "evidence of an
+ * empty job."
+ */
+function fromCompletedBooking(booking) {
+  if (!booking || typeof booking !== "object") {
+    throw new Error("fromCompletedBooking requires a booking object");
+  }
+  const status = booking.status;
+  const operationalNote = booking.operational_note || booking.operationalNote || null;
+  if (!operationalNote) return null;
+
+  const raw = {
+    serviceType: booking.service_type || booking.serviceType || null,
+    city: booking.service_city || booking.serviceCity || null,
+    accessNotes: operationalNote,
+    outcomeTag: status === "completed" ? "completed" : null,
+  };
+  for (const key of Object.keys(raw)) {
+    if (raw[key] === null) delete raw[key];
+  }
+  return redactForPublication(raw);
+}
+
 module.exports = {
   PRIVATE_FIELD_PATTERNS,
   PUBLICATION_SAFE_FIELDS,
   isPrivateFieldName,
   redactForPublication,
   assertNoPrivateLeakage,
+  fromCompletedBooking,
 };

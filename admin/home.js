@@ -393,7 +393,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // null) renders identically to "connected: false" — the existing "Not
   // connected yet" row — never a fabricated status.
   // -----------------------------------------------------------------
-  var ICON_GLYPH = { check: '✓', flag: '!', research: '○', reject: '✕' };
+  var ICON_GLYPH = { check: '✓', flag: '!', research: '○', reject: '✕', observation: '·' };
   function renderAgentActivity(agentActivityBody) {
     var notConnectedEl = document.getElementById('marketing-not-connected');
     var connectedEl = document.getElementById('marketing-connected');

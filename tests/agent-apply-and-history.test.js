@@ -149,6 +149,24 @@ try {
     ]);
   });
 
+  test("history.buildDashboardSummary: Phase 3's observation-tier NO_CHANGE renders distinctly from a researched NO_CHANGE", () => {
+    const runs = [
+      {
+        runId: "r4",
+        timestamp: new Date().toISOString(),
+        mode: "dry-run",
+        summary: { pagesScanned: 51 },
+        findings: [
+          { decision: "NO_CHANGE", tier: "observation", summary: "title is 71 characters" },
+          { decision: "NO_CHANGE", summary: "thin page maybe", research: [{ source: "x" }] },
+        ],
+      },
+    ];
+    const summary = history.buildDashboardSummary(runs);
+    assert.deepStrictEqual(summary[0].lines[1], { icon: "observation", text: "Observed: title is 71 characters — not actionable on its own" });
+    assert.deepStrictEqual(summary[0].lines[2], { icon: "research", text: "Researched: thin page maybe — no change made — insufficient evidence" });
+  });
+
   test("history.buildDashboardSummary sorts most-recent-first and respects limit", () => {
     const runs = [
       { runId: "old", timestamp: "2026-01-01T00:00:00.000Z", mode: "dry-run", findings: [] },

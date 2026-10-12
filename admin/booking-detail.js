@@ -398,6 +398,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function saveStatus(newStatus) {
     if (savingInFlight || newStatus === currentStatus) return;
+
+    // Site Improvement Agent, Phase 3 — "How'd it go?" A quick, OPTIONAL,
+    // internal-only operational note, asked right at the moment a job
+    // actually becomes completed (never on any other status change, and
+    // never when it's already completed — e.g. toggling away and back).
+    // Same minimal-UI pattern as the existing Tip/review-request controls
+    // (a single window.prompt(), no new modal/form) rather than inventing
+    // a heavier completion workflow. Cancelling the prompt (null) still
+    // completes the job with no note — this is never forced.
+    var operationalNote = null;
+    if (newStatus === 'completed' && currentStatus !== 'completed') {
+      var raw = window.prompt(
+        "How'd it go? (optional, internal note only — e.g. \"Hot tub removal, easy backyard access, cut into sections.\")",
+        ''
+      );
+      if (raw !== null) operationalNote = raw.trim();
+    }
+
     savingInFlight = true;
 
     var targetLabel = STATUS_TEXT[newStatus] || newStatus;
@@ -406,10 +424,13 @@ document.addEventListener('DOMContentLoaded', function () {
     statusLabelEl.textContent = 'Saving to ' + targetLabel + '…';
     statusManageTrigger.disabled = true;
 
+    var statusBody = { id: bookingId, status: newStatus };
+    if (operationalNote) statusBody.operationalNote = operationalNote;
+
     adminFetch('/api/admin/booking?resource=status', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: bookingId, status: newStatus }),
+      body: JSON.stringify(statusBody),
     })
       .then(function (res) {
         if (res.status === 401) {
@@ -857,6 +878,17 @@ document.addEventListener('DOMContentLoaded', function () {
   var tipEditInFlight = false;
   var currentTipAmount = null;
 
+  // Site Improvement Agent, Phase 3 — "How'd it go?" (bookings.
+  // operational_note). Same completed-only, edit-in-place-via-prompt
+  // pattern as Tip just above — the initial capture happens inline at the
+  // moment of completion instead (see saveStatus()'s own prompt), this
+  // control is only for viewing/correcting it afterward.
+  var operationalNoteRow = document.getElementById('d-operational-note-row');
+  var operationalNoteTextEl = document.getElementById('d-operational-note-text');
+  var operationalNoteEditBtn = document.getElementById('d-operational-note-edit-btn');
+  var operationalNoteEditInFlight = false;
+  var currentOperationalNote = null;
+
   // Batch 2 — review-request tracking, same Payments-section home as Tip.
   var reviewRequestRow = document.getElementById('d-review-request-row');
   var reviewRequestCheckbox = document.getElementById('d-review-request-checkbox');
@@ -879,6 +911,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var totalReceived = data.collectedRevenue != null || currentTipAmount != null ? (data.collectedRevenue || 0) + (currentTipAmount || 0) : null;
     set('d-total-received', totalReceived != null ? formatPrice(totalReceived) : 'Not set yet');
+
+    currentOperationalNote = booking.operationalNote || null;
+    if (currentStatus === 'completed') {
+      operationalNoteRow.style.display = '';
+      operationalNoteTextEl.textContent = currentOperationalNote || 'Not recorded';
+      operationalNoteEditBtn.textContent = currentOperationalNote ? 'Edit' : 'Add';
+    } else {
+      operationalNoteRow.style.display = 'none';
+    }
 
     // Batch 2 — review-request tracking, completed jobs only (same rule as
     // Tip above). The checkbox's own change handler (below) is what
@@ -1053,6 +1094,44 @@ document.addEventListener('DOMContentLoaded', function () {
       .finally(function () {
         tipEditInFlight = false;
         tipEditBtn.disabled = false;
+      });
+  });
+
+  // Site Improvement Agent, Phase 3 — "How'd it go?" edit-in-place,
+  // same pattern as Tip just above. Blank clears it back to "Not recorded".
+  operationalNoteEditBtn.addEventListener('click', function () {
+    if (operationalNoteEditInFlight) return;
+    var raw = window.prompt('How\'d it go? (internal note, leave blank to clear):', currentOperationalNote || '');
+    if (raw === null) return; // cancelled
+    raw = raw.trim();
+
+    operationalNoteEditInFlight = true;
+    operationalNoteEditBtn.disabled = true;
+
+    adminFetch('/api/admin/booking?resource=operational-note', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: bookingId, operationalNote: raw }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not save this note.');
+            return body;
+          });
+      })
+      .then(function () {
+        showToast('Note saved.', 'success');
+        reloadJobPayments();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not save this note.', 'error');
+      })
+      .finally(function () {
+        operationalNoteEditInFlight = false;
+        operationalNoteEditBtn.disabled = false;
       });
   });
 

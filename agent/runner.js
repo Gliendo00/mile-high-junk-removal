@@ -28,12 +28,19 @@ const { scanAllPages } = require("./lib/scan");
 const { auditLinks, auditSitemapAndRobots } = require("./lib/link-audit");
 const { auditSeo } = require("./lib/seo-audit");
 const { auditConsistency } = require("./lib/consistency-audit");
+const { auditInternalLinking } = require("./lib/internal-linking-audit");
+const { auditCannibalization } = require("./lib/cannibalization-audit");
+const { auditContentGaps } = require("./lib/content-gap-audit");
+const { auditCoverage } = require("./lib/coverage-audit");
+const { auditUx } = require("./lib/ux-audit");
+const { auditFactualConsistency } = require("./lib/factual-consistency-audit");
 const { classifyAll } = require("./lib/risk");
 const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
 const { appendRun } = require("./lib/history");
 const rewriteHref = require("./lib/apply/rewrite-href");
 const { validateAndRevertIfNeeded } = require("./lib/validate");
+const { syncProposals } = require("./lib/proposals-sync");
 
 function isWorkingTreeClean() {
   try {
@@ -56,6 +63,12 @@ function gatherFindings() {
     ...auditSitemapAndRobots(pages),
     ...auditSeo(pages),
     ...auditConsistency(pages),
+    ...auditInternalLinking(pages),
+    ...auditCannibalization(pages),
+    ...auditContentGaps(pages),
+    ...auditCoverage(pages),
+    ...auditUx(pages),
+    ...auditFactualConsistency(pages),
   ];
   const classified = classifyAll(findings);
   const { findings: withResearch, warnings: researchWarnings } = attachResearch(classified);
@@ -88,7 +101,7 @@ function applyEligible(findings) {
   return applied;
 }
 
-function run(options = {}) {
+async function run(options = {}) {
   const mode = options.mode === "apply-safe" ? "apply-safe" : "dry-run";
   const runId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + Math.random().toString(36).slice(2, 8);
 
@@ -172,6 +185,16 @@ function run(options = {}) {
           : "no changes applied",
     },
   };
+
+  // Phase 3 — sync PROPOSE_CHANGE/REJECT_OPPORTUNITY findings into the
+  // live, CRM-mutable agent_proposals table (see proposals-sync.js's
+  // header), BEFORE the history record is written so the sync outcome
+  // itself is part of the permanent record. Gracefully skipped whenever
+  // Supabase isn't configured in this process's environment — never
+  // thrown, never affects whether the run itself succeeds.
+  record.proposalsSync = options.syncProposals === false
+    ? { skipped: true, reason: "sync disabled for this run", synced: 0, total: 0, errors: [] }
+    : await syncProposals(findings, runId, { client: options.proposalsSyncClient });
 
   appendRun(record, options.logPath);
   return record;

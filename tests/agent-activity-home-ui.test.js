@@ -50,6 +50,7 @@ test("admin/home.js's icon glyph map covers every icon agent/lib/history.js can 
     { decision: "APPLY_SAFE_FIX", status: "proposed" },
     { decision: "RESEARCH_MORE" },
     { decision: "NO_CHANGE" },
+    { decision: "NO_CHANGE", tier: "observation" },
     { decision: "REJECT_OPPORTUNITY" },
     { decision: "PROPOSE_CHANGE" },
   ];

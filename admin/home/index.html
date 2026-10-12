@@ -167,6 +167,13 @@
     <div class="admin-home-marketing-card" id="marketing-connected" hidden>
       <div class="admin-home-marketing-card-label">Website Agent</div>
       <div class="admin-home-marketing-lines" id="marketing-lines"></div>
+      <!-- Phase 3 — the detailed review surface (approve/reject) lives on
+           its own small page, not here (see admin/agent-proposals/index.html's
+           own header for why: "keep Home concise" / "don't dump raw
+           research JSON onto the dashboard"). Always shown once connected
+           — the review page itself handles the empty-state when there's
+           nothing pending. -->
+      <a href="/admin/agent-proposals/" class="admin-home-marketing-review-link">Review proposals →</a>
     </div>
 
   </div>

@@ -10,26 +10,12 @@
 // to perform it themselves.
 
 const { makeFinding } = require("./findings");
-
-// Phase 2 fix: this used to be the filename pattern /-junk-removal\.html$/,
-// which also matched several pages that are NOT city/location pages —
-// commercial-junk-removal.html, office-junk-removal.html,
-// hoa-junk-removal.html, contractor-remodeler-junk-removal.html,
-// property-management-junk-removal.html, same-day-junk-removal.html are
-// all service-type pages that happen to share the city pages' filename
-// suffix. Comparing those against true city pages for FAQ/word-count
-// "consistency" would have been comparing two different kinds of page.
-// This explicit slug list is the actual set of Denver-metro city/location
-// pages (matches vercel.json's /service-areas/* legacy redirects and the
-// @graph areaServed list every page's JSON-LD already carries).
-const CITY_SLUGS = [
-  "denver", "aurora", "lakewood", "westminster", "broomfield", "arvada",
-  "castle-rock", "thornton", "littleton", "englewood", "parker",
-  "highlands-ranch", "centennial",
-];
-const CITY_PAGE_RE = new RegExp(`^(${CITY_SLUGS.join("|")})-junk-removal\\.html$`);
-
-const BLOG_PAGE_RE = /^blog-.+\.html$/; // excludes blog.html itself (the index)
+// Phase 2 fix, now single-sourced in page-groups.js: this used to be the
+// filename pattern /-junk-removal\.html$/, which also matched several
+// pages that are NOT city/location pages (commercial-, office-, hoa-,
+// contractor-remodeler-, property-management-, same-day-junk-removal.html
+// are all service-type pages sharing the city pages' filename suffix).
+const { CITY_PAGE_RE, BLOG_PAGE_RE } = require("./page-groups");
 
 function hasFaqSchema(page) {
   return page.jsonLd.some((block) => {
@@ -102,4 +88,4 @@ function auditConsistency(pages) {
   ];
 }
 
-module.exports = { auditConsistency, hasFaqSchema, CITY_SLUGS, CITY_PAGE_RE, BLOG_PAGE_RE };
+module.exports = { auditConsistency, hasFaqSchema, CITY_PAGE_RE, BLOG_PAGE_RE };

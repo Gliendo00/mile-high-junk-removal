@@ -74,6 +74,23 @@ test("category D (duplicate-title) -> PROPOSE_CHANGE, requiresApproval true, nev
   assert.strictEqual(d.requiresApproval, true);
 });
 
+test("Phase 3: a tier:'observation' finding ALWAYS resolves to NO_CHANGE, even if its category is A or B and it could otherwise read as a technical issue", () => {
+  const f = classify(makeFinding({ type: "title-length", summary: "71 chars", pages: ["a.html"], evidence: [{ x: 1 }] }));
+  f.research = [];
+  const d = decide(f);
+  assert.strictEqual(f.tier, "observation");
+  assert.strictEqual(d.decision, "NO_CHANGE");
+  assert.ok(d.reason.includes("observation only"));
+});
+
+test("Phase 3: an ESCALATED malformed-title finding (not a mere length observation) IS actionable -> PROPOSE_CHANGE", () => {
+  const f = classify(makeFinding({ type: "title-malformed", summary: "placeholder title", pages: ["a.html"], evidence: [{ x: 1 }] }));
+  f.research = [];
+  const d = decide(f);
+  assert.strictEqual(f.tier, "actionable");
+  assert.strictEqual(d.decision, "PROPOSE_CHANGE");
+});
+
 test("category A/B with no auto-fix -> PROPOSE_CHANGE, no research wasted on it", () => {
   const f = classify(makeFinding({ type: "missing-canonical", summary: "no canonical", pages: ["a.html"], evidence: [{ x: 1 }] }));
   f.research = [];

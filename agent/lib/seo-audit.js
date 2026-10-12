@@ -10,6 +10,12 @@ const config = require("../config");
 const { makeFinding } = require("./findings");
 const { buildRewriteCleanUrlMap } = require("./link-audit");
 
+// Phase 3 weak-finding fix: a handful of unmistakably broken/placeholder
+// values a real page's title or description should never genuinely be —
+// this is deliberately narrow (a false positive here would wrongly
+// escalate a merely-short-but-real title) rather than a loose heuristic.
+const PLACEHOLDER_TEXT_RE = /^(untitled|new page|page\s*\d*|lorem ipsum.*|todo|test|test page|coming soon)$/i;
+
 function auditSeo(pages) {
   const findings = [];
   const titleOwners = new Map(); // title -> [files]
@@ -28,14 +34,31 @@ function auditSeo(pages) {
         })
       );
     } else {
-      if (page.title.length < config.TITLE_MIN || page.title.length > config.TITLE_MAX) {
+      const isPlaceholderTitle = PLACEHOLDER_TEXT_RE.test(page.title.trim());
+      const isSeverelyLongTitle = page.title.length > config.TITLE_SEVERE_MAX;
+      if (isPlaceholderTitle || isSeverelyLongTitle) {
+        findings.push(
+          makeFinding({
+            type: "title-malformed",
+            summary: isPlaceholderTitle
+              ? `${page.file}'s title ("${page.title}") looks like placeholder text, not real page content.`
+              : `${page.file}'s title is ${page.title.length} characters — severely over the ${config.TITLE_SEVERE_MAX}-character threshold, likely hiding the page's distinguishing information entirely in a search result.`,
+            pages: [page.file],
+            evidence: [{ file: page.file, field: "title", value: page.title }],
+            recommendation: `Rewrite the title on ${page.file} with real, page-specific content.`,
+          })
+        );
+      } else if (page.title.length < config.TITLE_MIN || page.title.length > config.TITLE_MAX) {
+        // Observation only — length alone is not sufficient evidence for
+        // a proposal (see risk.js/decision.js). Still recorded, still
+        // visible in the log, never silently dropped.
         findings.push(
           makeFinding({
             type: "title-length",
             summary: `${page.file}'s title is ${page.title.length} characters (recommended ${config.TITLE_MIN}-${config.TITLE_MAX}).`,
             pages: [page.file],
             evidence: [{ file: page.file, field: "title", value: page.title }],
-            recommendation: `Review the title length on ${page.file} for search-result truncation.`,
+            recommendation: `Length alone is not a strong enough reason to rewrite this title; revisit only if a stronger signal (duplication, inaccurate wording, poor differentiation from a sibling page) also applies.`,
           })
         );
       }
@@ -55,17 +78,32 @@ function auditSeo(pages) {
         })
       );
     } else {
-      if (
+      const isPlaceholderDesc = PLACEHOLDER_TEXT_RE.test(page.metaDescription.trim());
+      const isSeverelyLongDesc = page.metaDescription.length > config.DESCRIPTION_SEVERE_MAX;
+      if (isPlaceholderDesc || isSeverelyLongDesc) {
+        findings.push(
+          makeFinding({
+            type: "description-malformed",
+            summary: isPlaceholderDesc
+              ? `${page.file}'s meta description ("${page.metaDescription}") looks like placeholder text, not real page content.`
+              : `${page.file}'s meta description is ${page.metaDescription.length} characters — severely over the ${config.DESCRIPTION_SEVERE_MAX}-character threshold.`,
+            pages: [page.file],
+            evidence: [{ file: page.file, field: "metaDescription", value: page.metaDescription }],
+            recommendation: `Rewrite the meta description on ${page.file} with real, page-specific content.`,
+          })
+        );
+      } else if (
         page.metaDescription.length < config.DESCRIPTION_MIN ||
         page.metaDescription.length > config.DESCRIPTION_MAX
       ) {
+        // Observation only — same reasoning as title-length above.
         findings.push(
           makeFinding({
             type: "description-length",
             summary: `${page.file}'s meta description is ${page.metaDescription.length} characters (recommended ${config.DESCRIPTION_MIN}-${config.DESCRIPTION_MAX}).`,
             pages: [page.file],
             evidence: [{ file: page.file, field: "metaDescription", value: page.metaDescription }],
-            recommendation: `Review the meta description length on ${page.file} for search-result truncation.`,
+            recommendation: `Length alone is not a strong enough reason to rewrite this description; revisit only if a stronger signal also applies.`,
           })
         );
       }

@@ -21,7 +21,21 @@ A reasonable filename is the `findingKey` itself, slugified, e.g.
 is never read for meaning; only the file's own `findingKey` field is used
 to match it to a finding.
 
-This directory is empty as of Phase 2: the first research-assisted run
-against the live site found zero findings that actually required external
-research (see `agent/README.md`'s "First research-assisted run" section)
-— a valid, honest outcome, not a gap to fill artificially.
+## Phase 3 update
+
+Phase 3's expanded audit surface (see `agent/lib/content-gap-audit.js`)
+found one genuine category-C opportunity on the real site —
+`blog-seasonal-cleanout-guide.html`'s FAQ is noticeably thinner than its
+comparable siblings — and this directory now holds the two real research
+results written for it, from actual web research performed in a
+Claude-driven session (not seeded/fabricated to demonstrate the
+mechanism): one general industry-FAQ-pattern observation (deliberately
+low-confidence — SERP presence isn't search volume), and one
+Denver-specific, official-government result (the City and County of
+Denver's LeafDrop leaf/pumpkin composting program) that actually tipped
+the finding's decision to `PROPOSE_CHANGE`. See `agent/README.md`'s
+"First research-assisted run (Phase 3)" section for the full writeup.
+
+Phase 2's note still applies to every OTHER finding on this run: no
+research was warranted, and none was manufactured just to fill this
+directory.

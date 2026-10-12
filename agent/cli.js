@@ -11,12 +11,12 @@
 
 const { run } = require("./runner");
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   const mode = args.includes("--apply-safe") ? "apply-safe" : "dry-run";
   const asJson = args.includes("--json");
 
-  const record = run({ mode });
+  const record = await run({ mode });
 
   if (asJson) {
     console.log(JSON.stringify(record, null, 2));
@@ -33,6 +33,11 @@ function main() {
   console.log(`Auto-applied: ${record.summary.autoApplied}, Proposed: ${record.summary.proposed}, Research questions raised: ${record.summary.researchQuestionsRaised}`);
   if (record.validation.performed) {
     console.log(`Post-apply validation: ${record.validation.confirmed} confirmed-resolved, ${record.validation.reverted} reverted automatically.`);
+  }
+  if (record.proposalsSync.skipped) {
+    console.log(`CRM proposal sync: skipped (${record.proposalsSync.reason}).`);
+  } else {
+    console.log(`CRM proposal sync: ${record.proposalsSync.synced}/${record.proposalsSync.total} synced.`);
   }
   console.log("");
 
@@ -52,4 +57,7 @@ function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error("Site Improvement Agent run failed:", err && err.stack ? err.stack : err);
+  process.exitCode = 1;
+});

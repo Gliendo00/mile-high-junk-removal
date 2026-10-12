@@ -280,6 +280,20 @@
           </label>
         </div>
       </div>
+      <!-- Site Improvement Agent, Phase 3 — "How'd it go?" (bookings.
+           operational_note): a quick, internal-only operational note,
+           never shown to the customer. Completed-only, same
+           show/hide + edit-in-place-via-prompt pattern as Tip/Review
+           request above. Captured inline the moment a job becomes
+           completed (see admin/booking-detail.js's saveStatus()); this
+           row is for viewing/correcting it afterward. -->
+      <div class="admin-row" id="d-operational-note-row" style="display:none">
+        <div class="admin-row-label">How'd it go?</div>
+        <div class="admin-row-value">
+          <span id="d-operational-note-text">Not recorded</span>
+          <button type="button" id="d-operational-note-edit-btn" class="admin-btn admin-btn-outline" style="margin-left:10px;padding:2px 10px;min-height:auto;">Add</button>
+        </div>
+      </div>
       <div id="d-job-payments-list" class="admin-charges-list"></div>
 
       <div class="admin-form-section" style="margin-top:14px">

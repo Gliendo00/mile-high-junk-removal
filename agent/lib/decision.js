@@ -27,18 +27,52 @@ function needsExternalResearch(finding) {
   return finding.category === "C";
 }
 
+// Phase 3: research questions must be narrow enough to produce a
+// decision ("Is there enough evidence that X would benefit from Y on
+// page Z?"), not a vague "research this topic" — see agent/README.md.
+// Each finding type that routes through research gets its own
+// specifically-worded question, grounded in that finding's own evidence,
+// rather than one generic template for every category-C type.
+function questionTextFor(finding) {
+  const page = finding.pages[0];
+  switch (finding.type) {
+    case "content-gap": {
+      const faqCount = (finding.evidence.find((e) => e.field === "faqQuestionCount") || {}).value;
+      const avg = (finding.evidence.find((e) => e.field === "comparableAverage") || {}).value;
+      return `${page} answers only ${faqCount} FAQ question(s) versus a ${avg}-question average among its comparable siblings — is there enough evidence that this page's actual topic has specific, genuinely useful practical questions not yet answered there, that would justify adding to its FAQ?`;
+    }
+    case "coverage-gap-candidate": {
+      const serviceFile = (finding.evidence.find((e) => e.field === "serviceFile") || {}).value;
+      const serviceName = String(serviceFile || "").replace(".html", "").replace(/-/g, " ");
+      return `${serviceFile} is contextually promoted on most other city pages but not on ${page} — is there enough evidence that ${page}'s local market/search demand for "${serviceName}" is similar enough to its siblings to justify a contextual mention there, or is its omission actually appropriate for this specific area?`;
+    }
+    case "overlapping-intent": {
+      const other = finding.pages.find((p) => p !== page);
+      return `${page} and ${other} show high title/description/H1 similarity — is there enough evidence (from how each currently ranks/appears in search, and what each page's content actually covers) that these two pages are genuinely redundant rather than legitimately differentiated for two different searcher intents?`;
+    }
+    case "structural-inconsistency":
+      return `${page} differs structurally from its comparable siblings (${finding.summary}) — is there enough evidence that this specific difference reflects a real content gap worth closing, rather than being an appropriate difference for this page?`;
+    case "duplicate-meta-description":
+      return `${finding.pages.join(" and ")} share an identical meta description — is there enough evidence that these pages serve different enough search intents to justify writing two distinct descriptions, rather than one of them being a deliberate near-copy?`;
+    default:
+      return `${finding.summary} ${finding.recommendation || ""}`.trim();
+  }
+}
+
 function buildResearchQuestion(finding) {
   return {
     findingKey: finding.key,
     findingType: finding.type,
     pages: finding.pages,
-    question: `${finding.summary} ${finding.recommendation || ""}`.trim(),
+    question: questionTextFor(finding),
     internalEvidence: finding.evidence,
     // A hint for whoever performs the research, not a requirement — see
     // research.js's SOURCE_TYPES for the full list.
     suggestedSourceTypes:
-      finding.type === "structural-inconsistency"
+      finding.type === "structural-inconsistency" || finding.type === "overlapping-intent"
         ? ["search-results-observation", "official-government", "competitor-website"]
+        : finding.type === "coverage-gap-candidate"
+        ? ["search-results-observation", "official-government"]
         : ["internal-repo-review", "official-government"],
   };
 }
@@ -69,6 +103,22 @@ function decide(finding) {
     return {
       decision: "NO_CHANGE",
       reason: "finding type not recognized by the risk model, or evidence too weak to classify — failing safe rather than guessing",
+    };
+  }
+
+  // Phase 3 weak-finding fix: an "observation" is a true, recorded fact
+  // that is not, on its own, sufficient evidence to warrant a change
+  // (e.g. a title/description merely falling outside the conventional
+  // character-count window — see risk.js's RULES comment). This is
+  // checked BEFORE the category-based logic below so an observation can
+  // never accidentally fall through to PROPOSE_CHANGE just because its
+  // category happens to be A or B. It never reaches the research layer
+  // either — research is for genuine category-C opportunities, not for
+  // upgrading a weak signal into a question.
+  if (finding.tier === "observation") {
+    return {
+      decision: "NO_CHANGE",
+      reason: "observation only — this signal by itself is not sufficient evidence to warrant a change; no corroborating signal (duplication, malformed content, inconsistency, etc.) was found",
     };
   }
 

@@ -101,6 +101,29 @@ function extractInternalLinks(html) {
   return links;
 }
 
+// Strips the shared global chrome — the <header> (which on every page
+// here contains the full nav, including the services dropdown and
+// mobile menu) and <footer> — plus any other top-level <nav> (e.g. a
+// breadcrumb trail), leaving only the page's own body content. Used to
+// separate "linked from this page's nav/footer, which is identical on
+// every page" from "linked from this page's own written content" — the
+// latter is the actual contextual-relevance signal internal-linking.js
+// cares about; the former tells us nothing about THIS page's content.
+function stripChrome(html) {
+  return html
+    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, " ")
+    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, " ")
+    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, " ");
+}
+
+// Every tel: link on the page, raw (e.g. "tel:+13039901812") — used by
+// factual-consistency-audit.js to check the phone number is the same
+// everywhere, and by ux-audit.js to confirm a phone CTA actually exists.
+function extractTelLinks(html) {
+  const matches = [...html.matchAll(/href=["']tel:([^"']+)["']/gi)];
+  return [...new Set(matches.map((m) => m[1].trim()))];
+}
+
 function wordCount(html) {
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -124,6 +147,12 @@ function scanPage(file) {
     h1s: extractH1s(html),
     jsonLd: extractJsonLdBlocks(html),
     internalLinks: extractInternalLinks(html),
+    // Phase 3 — internal-linking-audit.js's contextual-relevance signal:
+    // links found OUTSIDE the shared header/nav/footer chrome (which is
+    // identical on every page and therefore says nothing about THIS
+    // page's own content). See stripChrome()'s header comment.
+    contextualInternalLinks: extractInternalLinks(stripChrome(html)),
+    telLinks: extractTelLinks(html),
     wordCount: wordCount(html),
     mtime: stat.mtime.toISOString(),
     bytes: stat.size,
