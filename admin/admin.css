@@ -1158,7 +1158,7 @@ button.admin-financial-card:focus-visible {
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
-  background: #000;
+  background: #000 url('../images/admin-login-background.png') center/cover no-repeat;
 }
 .admin-login-card {
   width: 100%;
