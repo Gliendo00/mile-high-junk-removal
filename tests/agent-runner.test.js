@@ -101,6 +101,40 @@ async function main() {
       }
     });
 
+    // Phase 4 bug fix regression test — runner.js's persisted-record
+    // builder was missing `tier` entirely (present on the in-memory
+    // finding, from risk.js's classify(), but silently dropped before
+    // being written to history). history.js's iconForFinding()/
+    // describeFinding() both key off `finding.tier` to tell an
+    // observation-tier NO_CHANGE apart from a genuinely-researched one —
+    // without this field the CRM activity feed mislabeled every
+    // observation. This proves the field both (a) reaches the returned
+    // record and (b) survives the actual JSON-line write-then-read
+    // round-trip to the log file, not just the in-memory return value.
+    await test("tier survives into the persisted activity-log record — every finding has one, matching gatherFindings()'s own classification, after a full write+read round-trip", async () => {
+      const { findings: freshlyClassified } = runner.gatherFindings();
+      const tierByKey = new Map(freshlyClassified.map((f) => [f.key, f.tier]));
+
+      const record = await runner.run({ mode: "dry-run", logPath: TEST_LOG_PATH, syncProposals: false });
+      assert.ok(record.findings.length > 0, "expected the real site to produce at least one finding for this test to be meaningful");
+      for (const f of record.findings) {
+        assert.ok(["observation", "opportunity", "actionable"].includes(f.tier), `finding ${f.type} (${f.key}) is missing a valid tier in the run() return value`);
+        assert.strictEqual(f.tier, tierByKey.get(f.key), `finding ${f.key}'s persisted tier must match risk.js's own classification`);
+      }
+
+      // Read back from disk — the actual bug was specifically about what
+      // gets WRITTEN, so asserting only on the in-memory `record` would
+      // not have caught it.
+      const allRuns = history.readAllRuns(TEST_LOG_PATH);
+      const saved = allRuns.find((r) => r.runId === record.runId);
+      assert.ok(saved, "expected this run to actually be persisted");
+      assert.ok(saved.findings.length > 0);
+      for (const f of saved.findings) {
+        assert.ok(["observation", "opportunity", "actionable"].includes(f.tier), `persisted finding ${f.type} is missing tier after a write+read round-trip`);
+      }
+      assert.ok(saved.findings.some((f) => f.tier === "observation"), "expected at least one real observation-tier finding on the live site (e.g. a title/description-length outlier) for this regression test to actually exercise the bug");
+    });
+
     await test("every run, including an empty-findings run, is recorded to history", async () => {
       const record = await runner.run({ mode: "dry-run", logPath: TEST_LOG_PATH, syncProposals: false });
       assert.ok(record.runId);

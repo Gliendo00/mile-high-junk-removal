@@ -159,6 +159,18 @@ async function run(options = {}) {
       type: f.type,
       category: f.category,
       riskLevel: f.riskLevel,
+      // Phase 4 bug fix: this was missing entirely, so every persisted
+      // run record silently lost risk.js's tier (observation/opportunity/
+      // actionable) — history.js's iconForFinding()/describeFinding()
+      // both key off `finding.tier` to distinguish an observation-tier
+      // NO_CHANGE from a genuinely-researched one, so without this the
+      // CRM activity feed mislabeled every observation as "Reviewed:
+      // ... no change needed" (research icon) instead of "Observed: ...
+      // not actionable on its own" (observation icon). Classification,
+      // decisions, and proposal sync are all computed from the in-memory
+      // finding either way and were never affected by this — only what
+      // got WRITTEN to the log for later display.
+      tier: f.tier,
       autoApplyEligible: f.autoApplyEligible,
       decision: f.decision,
       decisionReason: f.reason,
