@@ -1072,9 +1072,24 @@ button.admin-financial-card:focus-visible {
    separation reads unambiguously at a glance — scoped to the Schedule list
    only. */
 #schedule-list { gap: 16px; }
+/* CRM-only UX fix — the status pill became its own clickable control
+   (opens the same change-status sheet admin/booking-detail.js uses) so a
+   job's status can be changed right from Schedule. Per this file's own
+   established rule just above ("the clickable 'open detail' area and the
+   action buttons are siblings, never nested <a> tags, so each stays
+   independently tappable and the markup stays valid"), the status button
+   can't live inside .admin-schedule-card-main's anchor — the whole top
+   row (time + status) moved out to be its own sibling instead, reusing
+   .admin-card-top's existing flex/space-between/margin-bottom and simply
+   carrying its own top/side padding so the card's total spacing is
+   unchanged; .admin-schedule-card-main's own top padding is removed to
+   match (the row above it already provides that space). */
+.admin-schedule-card-topbar {
+  padding: 12px 14px 0;
+}
 .admin-schedule-card-main {
   display: block;
-  padding: 12px 14px 10px;
+  padding: 0 14px 10px;
   text-decoration: none;
   color: inherit;
 }
@@ -1779,6 +1794,18 @@ button.admin-financial-card:focus-visible {
   letter-spacing: 0.06em;
   color: var(--color-neutral-600, #82796a);
   padding: 10px 12px 6px;
+}
+/* Job Closeout sheet (admin/job-closeout.js) — a plain sub-section label
+   between field groups (Payment / Tip / How'd it go?) within one sheet;
+   smaller and un-padded compared to .admin-sheet-title, which is reserved
+   for the sheet's own top-level heading. */
+.admin-sheet-section-label {
+  font-size: 11.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-neutral-600, #82796a);
+  margin: 10px 2px 2px;
 }
 .admin-sheet-list { display: flex; flex-direction: column; }
 .admin-sheet-option {

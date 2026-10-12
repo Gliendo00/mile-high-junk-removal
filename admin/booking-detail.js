@@ -101,17 +101,6 @@ document.addEventListener('DOMContentLoaded', function () {
     if (node) node.textContent = text === null || text === undefined || text === '' ? '—' : text;
   }
 
-  // Phase 4 hardening — small DOM-builder, same shape as admin/other-
-  // revenue.js's own el() (this project's established per-file
-  // convention over a shared module), used by the new closeout sheet
-  // below. textContent only, never innerHTML.
-  function el(tag, className, text) {
-    var node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-  }
-
   function formatDate(iso) {
     if (!iso) return '—';
     try {
@@ -407,16 +396,15 @@ document.addEventListener('DOMContentLoaded', function () {
     detailEl.style.display = 'block';
   }
 
-  // Phase 4 hardening — the bare network call, with zero UI side
-  // effects, shared by saveStatus() below AND the closeout sheet's
-  // completeJobWithCloseout(): exactly one place sends this PATCH, so
-  // the closeout flow is reusing the existing status-write logic, never
-  // a second copy of it. Resolves with the parsed response body, or
+  // The bare network call, with zero UI side effects, used by saveStatus()
+  // below for every status transition EXCEPT the one to 'completed' — that
+  // one goes through the shared admin/job-closeout.js instead (see
+  // openCompletionCloseout() below), which carries the operational note in
+  // its own identical PATCH. Resolves with the parsed response body, or
   // `null` specifically when a 401 has already redirected to /admin/login/
   // (the one case a caller must NOT treat as "nothing happened").
-  function patchStatus(newStatus, operationalNote) {
+  function patchStatus(newStatus) {
     var body = { id: bookingId, status: newStatus };
-    if (operationalNote) body.operationalNote = operationalNote;
     return adminFetch('/api/admin/booking?resource=status', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -436,11 +424,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // `operationalNote` is an optional second parameter, supplied only by
-  // the closeout sheet's confirm handler via completeJobWithCloseout()
-  // below — every OTHER status transition still calls this with just
-  // `newStatus`, completely unchanged from before Phase 3/4.
-  function saveStatus(newStatus, operationalNote) {
+  function saveStatus(newStatus) {
     if (savingInFlight || newStatus === currentStatus) return;
 
     savingInFlight = true;
@@ -451,7 +435,7 @@ document.addEventListener('DOMContentLoaded', function () {
     statusLabelEl.textContent = 'Saving to ' + targetLabel + '…';
     statusManageTrigger.disabled = true;
 
-    patchStatus(newStatus, operationalNote)
+    patchStatus(newStatus)
       .then(function (body) {
         if (!body) return; // redirected to login
         // The badge only ever shows the server's confirmed value — never
@@ -497,7 +481,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // as before.
       onSelect: function (newStatus) {
         if (newStatus === 'completed' && currentStatus !== 'completed') {
-          openCloseoutSheet();
+          openCompletionCloseout();
         } else {
           saveStatus(newStatus);
         }
@@ -506,195 +490,34 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // ---------------------------------------------------------------------
-  // Phase 4 hardening — Job Closeout sheet. Replaces the previous
-  // window.prompt() chain for "How'd it go?" with one coherent,
-  // CRM-native bottom sheet (same .admin-sheet-overlay/.admin-sheet
-  // chrome admin/status-ui.js, admin/other-revenue.js, etc. already use)
-  // shown exactly once, at the moment a job actually transitions to
-  // completed.
+  // CRM-only UX fix — the Job Closeout sheet (Payment + Tip + How'd it
+  // go?) now lives in the shared admin/job-closeout.js, reused as-is by
+  // admin/schedule.js's clickable status pill (Schedule → tap a job's
+  // status → Completed) — this is the ONE implementation, not a second
+  // Schedule-specific copy of it or its writes. This page no longer
+  // builds its own closeout sheet DOM; it only reacts to the shared
+  // module's result.
   //
-  // Deliberately does NOT duplicate or rewrite any financial logic: the
-  // Tip field here submits through the exact same
-  // PATCH ?resource=tip endpoint (via submitTipAmount(), shared with the
-  // existing Payments-section "Edit"/"Add Tip" control below) and the
-  // exact same validation; this sheet is only a second, earlier place to
-  // reach that one existing action, not a new one. The operational note
-  // travels in the SAME request as the status change itself
-  // (saveStatus()'s existing `operationalNote` parameter) — no separate
-  // write, no new endpoint.
-  //
-  // Sequencing matters and is intentional: the tip write is only
-  // attempted AFTER the status PATCH has actually succeeded, because
-  // PATCH ?resource=tip is itself gated server-side on the booking
-  // already being 'completed' (api/admin/booking.js's
-  // handleUpdateTip()) — firing it first would always 400.
-  //
-  // Cancelling this sheet (the Cancel button, the overlay backdrop, or
-  // Escape) calls NOTHING — saveStatus() is never invoked, so the job's
-  // status is left completely untouched. There is no "partial complete."
-  var closeoutOverlay = null;
-  var closeoutSheet = null;
-  function ensureCloseoutSheetDom() {
-    if (closeoutOverlay) return;
-    closeoutOverlay = document.createElement('div');
-    closeoutOverlay.className = 'admin-sheet-overlay';
-    closeoutOverlay.setAttribute('hidden', '');
-    closeoutSheet = document.createElement('div');
-    closeoutSheet.className = 'admin-sheet';
-    closeoutSheet.setAttribute('role', 'dialog');
-    closeoutSheet.setAttribute('aria-modal', 'true');
-    closeoutOverlay.appendChild(closeoutSheet);
-    closeoutOverlay.addEventListener('click', function (e) {
-      if (e.target === closeoutOverlay) closeCloseoutSheet();
+  // Cancelling the shared sheet calls nothing here (onCancel/onComplete
+  // are the only callbacks this page supplies), so the job's status/
+  // badge is left completely untouched unless the module reports an
+  // actual confirmed server-side status change via onComplete().
+  // ---------------------------------------------------------------------
+  function openCompletionCloseout() {
+    window.AdminJobCloseout.open({
+      bookingId: bookingId,
+      onComplete: function (result) {
+        applyStatusDisplay(result.status);
+        var messages = ['Status updated to Completed.'];
+        if (result.paymentSaved) messages.push('Payment saved.');
+        if (result.paymentError) messages.push('Payment NOT saved: ' + result.paymentError);
+        if (result.tipSaved) messages.push('Tip saved.');
+        if (result.tipError) messages.push('Tip NOT saved: ' + result.tipError);
+        var hadError = !!(result.paymentError || result.tipError);
+        showToast(messages.join(' '), hadError ? 'error' : 'success');
+        reloadJobPayments();
+      },
     });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !closeoutOverlay.hasAttribute('hidden')) closeCloseoutSheet();
-    });
-    document.body.appendChild(closeoutOverlay);
-  }
-  function clearCloseoutSheet() {
-    while (closeoutSheet.firstChild) closeoutSheet.removeChild(closeoutSheet.firstChild);
-  }
-  function closeCloseoutSheet() {
-    if (!closeoutOverlay) return;
-    closeoutOverlay.setAttribute('hidden', '');
-    clearCloseoutSheet();
-  }
-
-  function openCloseoutSheet() {
-    ensureCloseoutSheetDom();
-    clearCloseoutSheet();
-
-    closeoutSheet.appendChild(el('div', 'admin-sheet-title', 'Mark Job Completed'));
-    closeoutSheet.appendChild(el(
-      'p',
-      'admin-row-value',
-      'Optionally record a tip and a quick internal note — both can also be added or edited later from this page.'
-    ));
-
-    var errorBox = el('div', 'admin-alert admin-alert-error');
-    closeoutSheet.appendChild(errorBox);
-    function showFormError(msg) {
-      errorBox.textContent = msg;
-      errorBox.classList.add('is-visible');
-    }
-
-    var tipInput = document.createElement('input');
-    tipInput.type = 'number';
-    tipInput.inputMode = 'decimal';
-    tipInput.min = '0';
-    tipInput.step = '0.01';
-    tipInput.placeholder = 'e.g. 20.00';
-    var tipField = el('div', 'admin-field');
-    tipField.appendChild(el('label', null, 'Tip (optional)'));
-    tipField.appendChild(tipInput);
-    closeoutSheet.appendChild(tipField);
-
-    var noteInput = document.createElement('textarea');
-    noteInput.rows = 3;
-    noteInput.placeholder = 'e.g. "Hot tub removal, easy backyard access, cut into sections."';
-    var noteField = el('div', 'admin-field');
-    noteField.appendChild(el('label', null, "How'd it go? (optional, internal only)"));
-    noteField.appendChild(noteInput);
-    closeoutSheet.appendChild(noteField);
-
-    var actions = el('div', 'admin-duplicate-card-actions');
-    closeoutSheet.appendChild(actions);
-
-    var confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'admin-btn admin-btn-primary';
-    confirmBtn.textContent = 'Mark Completed';
-    actions.appendChild(confirmBtn);
-
-    var cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'admin-btn admin-btn-outline';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', closeCloseoutSheet);
-    actions.appendChild(cancelBtn);
-
-    confirmBtn.addEventListener('click', function () {
-      errorBox.classList.remove('is-visible');
-
-      var tipRaw = tipInput.value.trim();
-      var tipAmount = null;
-      if (tipRaw !== '') {
-        var n = Number(tipRaw);
-        if (!Number.isFinite(n) || n < 0) {
-          showFormError('Please enter a valid tip amount, or leave it blank.');
-          return;
-        }
-        tipAmount = n;
-      }
-      var operationalNote = noteInput.value.trim();
-
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Saving…';
-
-      completeJobWithCloseout(operationalNote, tipAmount)
-        .then(function () {
-          closeCloseoutSheet();
-        })
-        .catch(function (err) {
-          showFormError(err && err.message ? err.message : 'Could not complete this job.');
-        })
-        .finally(function () {
-          confirmBtn.disabled = false;
-          confirmBtn.textContent = 'Mark Completed';
-        });
-    });
-
-    closeoutOverlay.removeAttribute('hidden');
-  }
-
-  // Runs the status PATCH (with the note, if any) via the SAME
-  // patchStatus() saveStatus() itself uses — then, only if that
-  // succeeds AND a tip was entered, submits it via the EXISTING
-  // submitTipAmount() (shared with the Payments-section Tip control,
-  // defined further below). A tip-save failure AFTER a successful
-  // completion is surfaced as its own toast rather than failing the
-  // whole closeout — the job IS completed at that point; the tip can
-  // still be added afterward from the Payments section, exactly like
-  // today. A status-PATCH failure, by contrast, rejects this promise so
-  // the sheet's own error box shows it and the job is left uncompleted.
-  function completeJobWithCloseout(operationalNote, tipAmount) {
-    if (savingInFlight) return Promise.reject(new Error('Already saving — please wait.'));
-    savingInFlight = true;
-    statusTrigger.disabled = true;
-    statusTrigger.classList.add('is-saving');
-    statusLabelEl.textContent = 'Saving to Completed…';
-    statusManageTrigger.disabled = true;
-
-    return patchStatus('completed', operationalNote || null)
-      .then(function (body) {
-        if (!body) throw new Error('Session expired — please sign in again.');
-        applyStatusDisplay(body.status);
-        showToast('Status updated to Completed.', 'success');
-        if (tipAmount === null || tipAmount === undefined) return;
-        return submitTipAmount(tipAmount).then(
-          function () {
-            showToast('Job completed. Tip saved.', 'success');
-            reloadJobPayments();
-          },
-          function (err) {
-            showToast(
-              (err && err.message ? err.message : 'Could not save the tip') + ' — the job is completed; add the tip from Payments below.',
-              'error'
-            );
-          }
-        );
-      })
-      .catch(function (err) {
-        applyStatusDisplay(currentStatus);
-        throw err; // re-thrown so the sheet's own error box reports it
-      })
-      .finally(function () {
-        savingInFlight = false;
-        statusTrigger.disabled = false;
-        statusTrigger.classList.remove('is-saving');
-        statusManageTrigger.disabled = false;
-      });
   }
 
   // ---------------------------------------------------------------------
@@ -1259,12 +1082,12 @@ document.addEventListener('DOMContentLoaded', function () {
       .catch(function () {});
   }
 
-  // Phase 4 hardening — extracted so the closeout sheet's confirm
-  // handler (completeJobWithCloseout() above) can reuse this EXACT same
-  // write path/validation instead of a second copy of it. Zero UI side
-  // effects of its own (no toast, no disabling anything) — both call
-  // sites handle those themselves, since they need different messaging
-  // ("Tip saved." vs. "Job completed. Tip saved.").
+  // Used by the standalone Tip "Edit"/"Add Tip" control below (the
+  // completion closeout sheet has its own identical PATCH ?resource=tip
+  // call inside admin/job-closeout.js — same endpoint/validation, just not
+  // this function, since that module is shared with pages that don't load
+  // this file at all). Zero UI side effects of its own (no toast, no
+  // disabling anything) — the caller handles that.
   function submitTipAmount(tipAmount) {
     return adminFetch('/api/admin/booking?resource=tip', {
       method: 'PATCH',

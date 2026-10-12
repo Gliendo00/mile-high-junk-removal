@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var listEl = document.getElementById('schedule-list');
   var rangeTabs = document.querySelectorAll('.admin-range-tab');
   var logoutBtn = document.getElementById('logout-btn');
+  var toastEl = document.getElementById('admin-toast');
 
   var todayTomorrowView = document.getElementById('today-tomorrow-view');
   var weekView = document.getElementById('week-view');
@@ -56,6 +57,20 @@ document.addEventListener('DOMContentLoaded', function () {
   function clearError() {
     errorBanner.style.display = 'none';
     errorBanner.textContent = '';
+  }
+
+  // CRM-only UX fix — status-change feedback for the new clickable status
+  // pill below, same transient-toast pattern admin/booking-detail.js
+  // already uses (#admin-toast, admin/index.html).
+  var toastTimer = null;
+  function showToast(msg, kind) {
+    if (!toastEl) return;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastEl.textContent = msg;
+    toastEl.className = 'admin-toast is-visible' + (kind ? ' is-' + kind : '');
+    toastTimer = setTimeout(function () {
+      toastEl.classList.remove('is-visible');
+    }, 3200);
   }
 
   function formatPrice(value) {
@@ -137,6 +152,14 @@ document.addEventListener('DOMContentLoaded', function () {
       svgEl('circle', { cx: '12', cy: '9.5', r: '2.5', stroke: 'currentColor', 'stroke-width': '1.6' }),
     ]);
   }
+  // Same small down-chevron admin/booking/index.html's own
+  // #d-status-trigger button ships statically — built here via the DOM
+  // API (see svgEl() above) since this card is rendered dynamically.
+  function statusChevronIcon() {
+    var svg = svgEl('svg', { width: '9', height: '9', viewBox: '0 0 10 10', 'aria-hidden': 'true' });
+    svg.appendChild(svgEl('path', { d: 'M1 3l4 4 4-4', stroke: 'currentColor', 'stroke-width': '1.6', fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+    return svg;
+  }
 
   function quickBtn(kind, label, iconFn) {
     var a = document.createElement('a');
@@ -158,16 +181,29 @@ document.addEventListener('DOMContentLoaded', function () {
     if (currentRange === 'today') cardClass += ' is-today-elevated';
     var card = el('div', cardClass);
 
-    var main = document.createElement('a');
-    main.className = 'admin-schedule-card-main';
-    main.href = '/admin/booking/?id=' + encodeURIComponent(job.id);
-
-    var top = el('div', 'admin-card-top');
+    // CRM-only UX fix — status is now its own clickable control, so (per
+    // admin.css's own rule: "open detail" and action buttons are siblings,
+    // never nested <a> tags) this whole row moves outside the anchor below.
+    var top = el('div', 'admin-card-top admin-schedule-card-topbar');
     var topLeft = el('div', 'admin-card-top-left');
     topLeft.appendChild(el('span', 'admin-card-when', job.timeLabel || '—'));
     top.appendChild(topLeft);
-    top.appendChild(el('span', 'admin-status-badge admin-status-' + job.status, job.statusLabel || 'Booked'));
-    main.appendChild(top);
+
+    var statusBtn = document.createElement('button');
+    statusBtn.type = 'button';
+    statusBtn.className = 'admin-status-badge admin-status-' + job.status + ' admin-status-trigger';
+    var statusLabelEl = el('span', null, job.statusLabel || 'Booked');
+    statusBtn.appendChild(statusLabelEl);
+    statusBtn.appendChild(statusChevronIcon());
+    statusBtn.addEventListener('click', function () {
+      openJobStatusSheet(job, statusBtn, statusLabelEl);
+    });
+    top.appendChild(statusBtn);
+    card.appendChild(top);
+
+    var main = document.createElement('a');
+    main.className = 'admin-schedule-card-main';
+    main.href = '/admin/booking/?id=' + encodeURIComponent(job.id);
 
     main.appendChild(el('div', 'admin-card-name', (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
 
@@ -377,6 +413,126 @@ document.addEventListener('DOMContentLoaded', function () {
         loadingEl.style.display = 'none';
         showError(err && err.message ? err.message : 'Could not load that date.');
       });
+  }
+
+  // CRM-only UX fix — re-fetches whichever single day is currently on
+  // screen after a status/closeout change, so the card's badge/price/
+  // revenue counters reflect the save immediately, without a manual
+  // reload. Only ever called from a job card's own status button, which
+  // only renders on Today/Tomorrow/Yesterday/a day-nav date — never while
+  // Week/Month/Year is the active range (those use admin/calendar-views.js's
+  // own separate, unaffected card renderer).
+  function refreshCurrentView() {
+    if (currentRange === 'day') {
+      loadDate(activeDateIso);
+    } else {
+      load(currentRange);
+    }
+  }
+
+  // Same bare PATCH /api/admin/booking?resource=status call
+  // admin/booking-detail.js's own patchStatus() makes, kept as its own
+  // small copy here rather than a shared cross-file import — this
+  // project's established per-file convention (see e.g. this file's own
+  // formatPrice()/addDaysIso()) for a thin, one-endpoint network wrapper.
+  // Never used for the 'completed' transition — that always goes through
+  // window.AdminJobCloseout (see openScheduleCloseout() below), the one
+  // shared implementation of the actual closeout write sequence.
+  function patchJobStatusOnly(jobId, newStatus) {
+    return adminFetch('/api/admin/booking?resource=status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: jobId, status: newStatus }),
+    }).then(function (res) {
+      if (res.status === 401) {
+        window.location.href = '/admin/login/';
+        return null;
+      }
+      return res
+        .json()
+        .catch(function () { return null; })
+        .then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not update status.');
+          return body;
+        });
+    });
+  }
+
+  // Tracks which jobs currently have a status save in flight (by id, not a
+  // single page-wide flag) so an overlapping tap on a DIFFERENT job's
+  // status button is never blocked by one that's still saving.
+  var statusSavingIds = {};
+
+  function saveJobStatus(job, newStatus, statusBtn) {
+    if (statusSavingIds[job.id]) return;
+    statusSavingIds[job.id] = true;
+    statusBtn.disabled = true;
+    statusBtn.classList.add('is-saving');
+
+    patchJobStatusOnly(job.id, newStatus)
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        showToast('Status updated to ' + (window.AdminStatusUI.STATUS_TEXT[body.status] || body.status) + '.', 'success');
+        refreshCurrentView();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not update status. Please try again.', 'error');
+      })
+      .finally(function () {
+        delete statusSavingIds[job.id];
+        statusBtn.disabled = false;
+        statusBtn.classList.remove('is-saving');
+      });
+  }
+
+  // Completing a job from Schedule opens the exact same Payment + Tip +
+  // How'd it go? closeout sheet admin/booking-detail.js's Status control
+  // uses (admin/job-closeout.js) — never a second, Schedule-specific
+  // implementation of that flow or its writes. A cancel from the sheet
+  // calls nothing, so the job's status is left completely untouched; a
+  // failed status save leaves it untouched too (the sheet's own error box
+  // reports it) — refreshCurrentView() only ever runs after a confirmed
+  // server-side success.
+  function openScheduleCloseout(job) {
+    window.AdminJobCloseout.open({
+      bookingId: job.id,
+      onComplete: function (result) {
+        var messages = ['Job marked Completed.'];
+        if (result.paymentSaved) messages.push('Payment saved.');
+        if (result.paymentError) messages.push('Payment NOT saved: ' + result.paymentError);
+        if (result.tipSaved) messages.push('Tip saved.');
+        if (result.tipError) messages.push('Tip NOT saved: ' + result.tipError);
+        var hadError = !!(result.paymentError || result.tipError);
+        showToast(messages.join(' '), hadError ? 'error' : 'success');
+        refreshCurrentView();
+      },
+    });
+  }
+
+  // Opens the exact same change-status bottom sheet (admin/status-ui.js)
+  // admin/booking-detail.js's own openStatusSheet() uses, with the exact
+  // same "only a dumpster rental ever offers Rental Out" filter and the
+  // exact same "Completed opens the closeout sheet, everything else saves
+  // immediately" routing — the one difference is which page it's tapped
+  // from.
+  function openJobStatusSheet(job, statusBtn) {
+    if (statusSavingIds[job.id]) return;
+    var values = window.AdminStatusUI.STATUS_ORDER.filter(function (key) {
+      return key !== 'rental_out' || job.serviceType === 'dumpster_rental';
+    });
+    window.AdminStatusUI.open({
+      title: 'Change status',
+      values: values,
+      selected: job.status,
+      onSelect: function (newStatus) {
+        if (newStatus === job.status) return;
+        if (newStatus === 'completed') {
+          openScheduleCloseout(job);
+        } else {
+          saveJobStatus(job, newStatus, statusBtn);
+        }
+      },
+    });
   }
 
   dayNavPrevBtn.addEventListener('click', function () {
