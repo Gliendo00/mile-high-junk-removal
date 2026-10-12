@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', function () {
     card.appendChild(el(
       'p',
       'admin-proposal-card-meta',
-      'Category ' + proposal.category + ' · ' + (proposal.riskLevel || 'unknown') + ' risk · ' + proposal.pages.join(', ')
+      'Category ' + proposal.category + ' · ' + (proposal.riskLevel || 'unknown') + ' risk · ' + (proposal.pages || []).join(', ')
     ));
     if (proposal.decisionReason) {
       card.appendChild(el('p', 'admin-proposal-card-reason', proposal.decisionReason));
@@ -112,6 +112,14 @@ document.addEventListener('DOMContentLoaded', function () {
       noteInput.rows = 2;
       noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this)';
       card.appendChild(noteInput);
+
+      // Phase 4 hardening — stated right at the point of action, not
+      // just in the page's top intro paragraph, so it's truthful even
+      // for someone who scrolled straight to a card: approving records
+      // a decision only. It does not publish, edit, or otherwise touch
+      // the website — only the narrow mechanical-fix whitelist
+      // (unrelated to this screen) ever writes to the site on its own.
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approve/Reject only records your decision here — it does not change the website.'));
 
       var actions = el('div', 'admin-proposal-card-actions');
       var approveBtn = el('button', 'admin-btn admin-btn-primary', 'Approve');

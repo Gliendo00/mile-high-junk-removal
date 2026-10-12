@@ -500,22 +500,26 @@ function handleAgentActivity(req, res) {
     return;
   }
 
-  let runs;
+  // Phase 4 hardening — one try/catch around EVERYTHING past the
+  // require() above, not just the file read: a structurally-valid JSON
+  // line missing an expected field (e.g. a future schema change, or a
+  // hand-edited log) could still throw inside buildDashboardSummary()
+  // itself, not just inside readAllRuns()'s own parse step. Any failure
+  // anywhere in this path falls back to the exact same honest
+  // "not connected" response — this subsystem must never be able to
+  // 500 the Home dashboard, no matter how it fails.
   try {
-    runs = history.readAllRuns();
+    const runs = history.readAllRuns();
+    if (!runs.length) {
+      res.status(200).json({ ok: true, connected: false, recent: [] });
+      return;
+    }
+    const recent = history.buildDashboardSummary(runs, 5);
+    res.status(200).json({ ok: true, connected: true, recent });
   } catch (e) {
-    console.error("Admin agent-activity failed to read agent/history/log.ndjson", e);
+    console.error("Admin agent-activity failed to read/summarize agent/history/log.ndjson", e);
     res.status(200).json({ ok: true, connected: false, recent: [] });
-    return;
   }
-
-  if (!runs.length) {
-    res.status(200).json({ ok: true, connected: false, recent: [] });
-    return;
-  }
-
-  const recent = history.buildDashboardSummary(runs, 5);
-  res.status(200).json({ ok: true, connected: true, recent });
 }
 
 // ---------------------------------------------------------------------

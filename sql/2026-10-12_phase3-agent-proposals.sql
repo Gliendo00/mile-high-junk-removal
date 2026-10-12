@@ -22,11 +22,15 @@
 -- (approve/reject) — no new Vercel function, same file that already
 -- hosts ?view=agent-activity.
 --
--- One row per Finding.key (findings.js's stable, content-derived key) —
--- re-syncing an already-reviewed proposal updates its content (summary,
--- evidence, decision) but never silently resets an owner's prior
--- approve/reject decision back to 'proposed'. See proposals-sync.js's
--- own header for the exact upsert rule.
+-- One row per Finding.key (findings.js's stable, content-derived key).
+-- PROPOSAL IDENTITY (Phase 4 hardening): finding_key alone is not
+-- treated as strong enough identity to carry an APPROVED/REJECTED
+-- decision forward across a material content change — if a later sync
+-- re-observes the same finding_key with a different `summary`, and the
+-- existing row was already reviewed, proposals-sync.js resets it back to
+-- 'proposed' (clearing reviewed_by/reviewed_at/review_note) rather than
+-- silently letting the owner's old decision apply to new content. See
+-- that file's own header for the exact rule.
 
 CREATE TABLE IF NOT EXISTS public.agent_proposals (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,16 +76,24 @@ ALTER TABLE public.agent_proposals ENABLE ROW LEVEL SECURITY;
 -- default in this project (confirmed, twice, in prior stages' own
 -- rollouts) — REVOKE-first for a deterministic end state regardless of
 -- whatever (if anything) already exists, same convention as every other
--- brand-new table this project has added. UPDATE is scoped to exactly
--- the columns an approve/reject action (or the auto-apply/validate loop)
--- can ever touch — never finding_key/finding_type/category/pages/
--- evidence/research/created_at, which only the sync step (itself a
--- full-row upsert, i.e. INSERT or a complete replacement) ever writes.
+-- brand-new table this project has added.
+--
+-- UPDATE is scoped to exactly agent/lib/proposals-sync.js's
+-- updatableFields() column list, kept in lockstep with that function on
+-- purpose (see its own header, and tests/agent-migrations-review.test.js,
+-- which fails if this list and the app code's set of columns ever
+-- drift apart again — an earlier draft of this migration had exactly
+-- that bug: it omitted `category` from this GRANT despite the sync step
+-- needing to update it). Permanently excluded: `finding_key` (identity),
+-- `finding_type`/`pages` (redundant on UPDATE — finding_key is derived
+-- FROM them, so any row matched by finding_key already has the same
+-- values; only INSERT ever needs to set them), and `created_at`.
 REVOKE ALL ON public.agent_proposals FROM service_role;
 GRANT SELECT, INSERT ON public.agent_proposals TO service_role;
 GRANT UPDATE (
-  decision, decision_reason, summary, evidence, research, risk_level,
-  status, reviewed_by, reviewed_at, review_note, last_run_id, updated_at
+  category, risk_level, decision, decision_reason, summary, evidence,
+  research, status, reviewed_by, reviewed_at, review_note, last_run_id,
+  updated_at
 ) ON public.agent_proposals TO service_role;
 
 -- =======================================================================
@@ -92,6 +104,15 @@ GRANT UPDATE (
 -- select has_table_privilege('service_role', 'public.agent_proposals', 'DELETE');  -- expect false
 -- select has_column_privilege('service_role', 'public.agent_proposals', 'status', 'UPDATE');       -- expect true
 -- select has_column_privilege('service_role', 'public.agent_proposals', 'finding_key', 'UPDATE');  -- expect false
+--
+-- DECISIVE RLS check (same one sql/2026-09-26_phase3c-stage5-archive-
+-- review-rental-client.sql flagged for booking_audit_log/
+-- customer_audit_log): RLS is enabled above with NO policies, which
+-- blocks every role except one with BYPASSRLS. This table's entire
+-- read/write path (api/admin/bookings.js, via
+-- api/_lib/supabase-admin.js's service-role client) depends on
+-- service_role actually having that flag in this project:
+-- select rolname, rolbypassrls from pg_roles where rolname = 'service_role'; -- expect rolbypassrls = true
 
 -- =======================================================================
 -- Rollback (reference only — not executed as part of this file)

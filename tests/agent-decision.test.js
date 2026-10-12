@@ -173,6 +173,34 @@ test("decideAll mutates and returns the same findings array it was given, each n
   }
 });
 
+// Phase 4 hardening — "external research cannot bypass risk
+// classification": a category A/B/D finding's decision must be
+// completely unaffected by research attached to it (e.g. a misfiled
+// research result whose findingKey happens to collide), because
+// decide() only ever reads `.research` inside the needsExternalResearch()
+// (category === "C") branch. category/tier, decided purely from
+// risk.js's classification, remain the actual gate.
+test("Phase 4 hardening: research attached to a non-category-C finding has ZERO effect on its decision — only category-C findings ever consult `.research`", () => {
+  const strongSupportingResearch = [research({ findingKey: "whatever", confidence: "high", verdict: "supports-opportunity" })];
+
+  const categoryA = classify(makeFinding({ type: "missing-canonical", summary: "no canonical", pages: ["a.html"], evidence: [{ x: 1 }] }));
+  const categoryAWithResearch = { ...categoryA, research: strongSupportingResearch };
+  const categoryAWithout = { ...categoryA, research: [] };
+  assert.deepStrictEqual(decide(categoryAWithResearch), decide(categoryAWithout));
+
+  const categoryD = classify(makeFinding({ type: "duplicate-title", summary: "dup", pages: ["a.html", "b.html"], evidence: [{ x: 1 }] }));
+  const categoryDWithResearch = { ...categoryD, research: strongSupportingResearch };
+  const categoryDWithout = { ...categoryD, research: [] };
+  assert.deepStrictEqual(decide(categoryDWithResearch), decide(categoryDWithout));
+
+  // An observation-tier finding stays NO_CHANGE even with "supporting"
+  // research attached — observations never even reach the research
+  // check (decide() returns before needsExternalResearch() is called).
+  const observation = classify(makeFinding({ type: "title-length", summary: "71 chars", pages: ["a.html"], evidence: [{ x: 1 }] }));
+  const observationWithResearch = { ...observation, research: strongSupportingResearch };
+  assert.strictEqual(decide(observationWithResearch).decision, "NO_CHANGE");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

@@ -45,6 +45,11 @@ class FakeQueryBuilder {
     return this._resolve().then(resolve, reject);
   }
   async _resolve() {
+    // Phase 4 hardening fixture — simulates "the migration has not been
+    // applied yet" (Postgres' real 42P01 "relation does not exist").
+    if (this.db.__relationMissing) {
+      return { data: null, error: { message: `relation "${this.table}" does not exist`, code: "42P01" } };
+    }
     const rows = this.db[this.table] || [];
     let matched = rows.filter((row) => this.eqFilters.every((f) => row[f.col] === f.val));
 
@@ -273,6 +278,41 @@ async function main() {
     assert.strictEqual(after.category, before.category);
     assert.deepStrictEqual(after.pages, before.pages);
     assert.deepStrictEqual(after.evidence, before.evidence);
+  });
+
+  // Phase 4 hardening — "migration not applied" must degrade gracefully
+  // (a clean 500 with a generic message, same posture as every other
+  // DB-backed admin view when Supabase errors), never a crash, and
+  // crucially must have ZERO effect on the (file-only, Supabase-free)
+  // ?view=agent-activity endpoint — see the next two tests.
+  await test("?view=agent-proposals returns a clean 500 (not a crash) when the table doesn't exist yet (migration not applied)", async () => {
+    const db = freshDb();
+    db.__relationMissing = true;
+    currentFakeService = makeFakeServiceClient(db);
+    const res = await run(makeReq({ query: { view: "agent-proposals" } }));
+    assert.strictEqual(res.statusCode, 500);
+    assert.ok(res.body.error);
+  });
+
+  await test("resource=agent-proposal PATCH returns a clean 500 (not a crash) when the table doesn't exist yet (migration not applied)", async () => {
+    const db = freshDb();
+    db.__relationMissing = true;
+    currentFakeService = makeFakeServiceClient(db);
+    const res = await run(makeReq({ method: "PATCH", body: { resource: "agent-proposal", id: "p1", action: "approve" } }));
+    assert.strictEqual(res.statusCode, 500);
+    assert.ok(res.body.error);
+  });
+
+  await test("?view=agent-activity (the Home dashboard's feed) is completely unaffected by agent_proposals being missing — it never touches Supabase at all", async () => {
+    const db = freshDb();
+    db.__relationMissing = true; // would break any Supabase-backed view...
+    currentFakeService = makeFakeServiceClient(db);
+    const res = await run(makeReq({ query: { view: "agent-activity" } }));
+    // ...but agent-activity reads a file, never Supabase, so this must
+    // still succeed normally regardless of what __relationMissing says.
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.ok, true);
+    assert.strictEqual(typeof res.body.connected, "boolean");
   });
 
   if (process.exitCode) process.exit(process.exitCode);

@@ -1,4 +1,4 @@
-# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3
+# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening)
 
 An autonomous system that inspects this site's own public marketing pages,
 researches what genuinely needs external evidence, decides what (if
@@ -348,26 +348,44 @@ deterministically, the finding is marked `apply-failed-requires-review`
 rather than pretending anything succeeded. Git remains the underlying
 rollback mechanism for everything else.
 
-## Completed-job context: "How'd it go?" (Phase 3)
+## Completed-job context: "How'd it go?" (Phase 3, UX hardened in Phase 4)
 
-A real CRM feature, not a stub: marking an existing job **completed**
-(`admin/booking-detail.js`'s status sheet, `PATCH
-/api/admin/booking?resource=status`) now optionally prompts for a quick,
-internal-only operational note — "Hot tub removal, easy backyard access,
-cut into sections." — via the same lightweight `window.prompt()` pattern
-this page already uses for Tip, never a new modal/form. Only asked when
-actually transitioning TO completed (never on every status change, never
-forced — cancelling still completes the job with no note). Stored in a
-new `bookings.operational_note` column
-(`sql/2026-10-12_phase3-agent-howd-it-go.sql`) and editable afterward via
-a dedicated completed-jobs-only control
-(`PATCH ?resource=operational-note`, mirroring Tip's exact shape/gating).
+A real CRM feature, not a stub. Phase 3 shipped it behind a chain of
+`window.prompt()`s; Phase 4 replaced that with one coherent **closeout
+sheet** — the same `.admin-sheet-overlay`/`.admin-sheet` CRM-native
+bottom-sheet chrome `admin/status-ui.js` and `admin/other-revenue.js`
+already use, not a new modal system. Picking "Completed" from the status
+picker (and *only* that specific transition — not toggling away and
+back, not any other status change) opens the sheet instead of saving
+immediately: an optional Tip amount field and an optional "How'd it go?"
+note field, with "Mark Completed" / "Cancel" actions.
+
+- **Cancel** (the button, the backdrop, or Escape) calls nothing — the
+  status PATCH is never sent, so the job is left completely untouched.
+  There is no partial/accidental completion.
+- **Mark Completed** sends the status PATCH (with the note, if any, in
+  that SAME request — `bookings.operational_note`,
+  `sql/2026-10-12_phase3-agent-howd-it-go.sql`) and, only after that
+  succeeds, submits the tip via the exact same `PATCH
+  ?resource=tip` endpoint the existing Payments-section Tip control
+  already uses (`submitTipAmount()`, extracted so there is exactly one
+  implementation, shared by both call sites — never a second copy of the
+  tip-write logic, never a changed validation rule, never a touched
+  Stripe/accounting calculation). A tip-save failure AFTER a successful
+  completion surfaces its own toast rather than failing the whole
+  closeout — the job IS completed at that point; the tip can still be
+  added from Payments below, exactly like before this change.
+- The note is **never required** and remains editable afterward via the
+  existing dedicated completed-jobs-only control (`PATCH
+  ?resource=operational-note`, unchanged from Phase 3).
 
 This was built by first inspecting the existing completion/payment/tip
 flow in detail (there was no single "mark complete" transaction to
-duplicate — tip, review-request, and the new note are each their own
-small, independent, completed-jobs-only write) rather than assuming or
-duplicating anything that already existed.
+duplicate — tip, review-request, and the note are each their own small,
+independent, completed-jobs-only write) rather than assuming or
+duplicating anything that already existed. Neither `api/admin/booking.js`
+nor any Stripe/payment/accounting calculation changed in this hardening
+pass — only `admin/booking-detail.js`'s client-side UI did.
 
 ### Private vs. publication-safe pipeline
 
@@ -391,7 +409,7 @@ available to a future step, same as any research result — even once
 real completed-job data exists, nothing becomes public merely because it
 passed this boundary.
 
-## CRM approval workflow (Phase 3)
+## CRM approval workflow (Phase 3, hardened in Phase 4)
 
 `agent_proposals` (`sql/2026-10-12_phase3-agent-proposals.sql`) is the
 live, CRM-mutable counterpart to the read-only, git-tracked history log —
@@ -399,11 +417,9 @@ needed because a deployed Vercel function's filesystem is read-only, so
 an owner clicking Approve/Reject needs something a live request can
 actually persist. `agent/lib/proposals-sync.js` upserts every
 `PROPOSE_CHANGE`/`REJECT_OPPORTUNITY` finding into it after a run, keyed
-by the finding's stable `key` — a re-sync refreshes content
-(summary/decision/evidence/research) but **never** resets an owner's
-prior approve/reject decision back to `proposed`. Gracefully skipped
-(never thrown) when Supabase isn't configured in the runner's
-environment — true for this repo's offline dry-run/test setup.
+by the finding's stable `key`. Gracefully skipped (never thrown) when
+Supabase isn't configured in the runner's environment — true for this
+repo's offline dry-run/test setup.
 
 State model: `proposed -> approved | rejected` (the only transitions this
 phase's UI performs) — `applied`/`validated`/`failed` exist in the schema
@@ -411,6 +427,42 @@ for the EXISTING mechanical auto-apply/validate loop to use later if it's
 ever connected to this same table; nothing in this phase makes that
 connection, since the narrow whitelist already has its own working
 history-log-based record.
+
+### What "Approve" actually means (stated truthfully in the UI itself)
+
+Approving or rejecting a proposal **only records that decision** — it
+never modifies the website, never runs the mechanical-fix whitelist, and
+never grants the agent any authority beyond that one specific
+`finding_key`. `admin/agent-proposals/` says this twice: once in the
+page's intro paragraph, and again, right at the point of action, next to
+every still-`proposed` card's Approve/Reject buttons — so it's truthful
+even to someone who scrolled straight to one card. There is no "Approve"
+outcome that silently becomes "published."
+
+### Proposal identity stability (Phase 4 hardening)
+
+`finding_key` (`type::sorted-pages`) alone is **not** treated as strong
+enough identity to carry an `approved`/`rejected` decision forward across
+a *materially different* observation wearing the same key. A later run
+re-observing the same `finding_key` with a changed `summary` — a
+genuinely different concrete proposal, not the same one recurring —
+resets the row back to `proposed` and clears `reviewed_by`/`reviewed_at`/
+`review_note`, rather than silently letting the old decision apply to
+new content. An unchanged `summary` (the normal case: the same real
+issue still exists) leaves a prior decision untouched, exactly as before.
+See `proposals-sync.js`'s own header and
+`tests/agent-proposals-sync.test.js` for the exact rule and its tests.
+
+A related bug this same review caught: an earlier draft of the
+`agent_proposals` migration's `GRANT UPDATE` column list didn't actually
+match what `proposals-sync.js`'s UPDATE statement writes (it was missing
+`category`, among others) — in production, that would have silently
+failed to refresh some columns on every re-sync. Fixed, and now
+mechanically enforced by `tests/agent-migrations-review.test.js`, which
+fails if the SQL grant and the app code's column list ever drift apart
+again (it also cross-checks the migration's `category`/`decision`/
+`status` CHECK constraints against `risk.js`/`decision.js`/
+`bookings.js`'s own literal lists, for the same reason).
 
 - `api/admin/bookings.js`'s `?view=agent-proposals` (list, optional
   `?status=` filter) and `resource:"agent-proposal"` PATCH (`{id, action:
@@ -422,9 +474,6 @@ history-log-based record.
   note for anything still `proposed`. Not added to the global nav — only
   reachable via a "Review proposals →" link on Home's existing activity
   card. Home itself was **not** redesigned.
-- Approving a proposal **never grants authority beyond that one specific
-  finding_key** — it is a recorded decision, not a trigger. Meaningful
-  content changes remain human-executed even once approved.
 
 ## What this agent can currently inspect
 
@@ -530,6 +579,32 @@ and verified end-to-end with realistic synthetic findings in
 `tests/agent-decision.test.js` (which also covers the low-confidence and
 inconclusive-verdict cases) and `tests/agent-research.test.js`.
 
+### Phase 4 sanity-check on this exact proposal
+
+Before treating the LeafDrop result as production-ready evidence, Phase
+4 re-reviewed it against four specific risks and updated the committed
+research file's `limitations`/`recommendation` to state the answers
+explicitly (not just imply them) — see
+`agent/research/results/content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop.json`
+and `tests/agent-research.test.js`'s dedicated test for this file:
+
+1. **Topic fit** — confirmed: the page's existing Fall section already
+   discusses exactly this yard-waste/leaf scenario.
+2. **Currency** — the evidence was accessed 2026-10-12, inside the
+   confirmed 2026 program window; it is explicitly marked as ALREADY
+   STALE outside that window and must be re-verified before publish.
+3. **Evergreen-content risk** — explicitly flagged: the published copy,
+   if ever written, should describe the program generically and link to
+   Denver's own page for current dates, rather than hardcoding "October
+   5 - November 25" as static text that will be wrong next year.
+4. **Real visitor benefit** — still only plausible, not proven; restated
+   that this does not establish actual visitor demand.
+
+The research record also now explicitly says the 3-vs-6 FAQ-question gap
+that triggered this research was only a trigger for investigation, never
+a target ("add exactly 3 more FAQs") — the content-gap finding's own
+`recommendation` never implied a count either.
+
 ## Tests
 
 ```bash
@@ -549,6 +624,7 @@ node tests/agent-howd-it-go.test.js
 node tests/agent-proposals-sync.test.js
 node tests/agent-proposals-api.test.js
 node tests/agent-proposals-ui.test.js
+node tests/agent-migrations-review.test.js
 ```
 
 All offline, no network, no mutation of real site content (fixture-based
@@ -558,9 +634,48 @@ injected path, or an injected fake Supabase client, never the real
 `agent/history/log.ndjson` or a real database — that log file is only
 ever written by an explicit `node agent/cli.js` invocation, and the real
 `agent_proposals` table was never written to from this environment,
-which has no real Supabase credentials).
+which has no real Supabase credentials; `agent-migrations-review.test.js`
+never executes either `.sql` file against any database — it's a static
+source-level review).
 
-## Recommended Phase 4
+## Phase 4 — deployment-readiness / UX hardening
+
+Added no new agent capabilities — this phase exists to make the
+Phase 1-3 system safe and truthful to actually turn on. Summary (see each
+section above for detail):
+
+1. Replaced the completion `window.prompt()` chain with one coherent
+   closeout sheet, reusing the existing Tip write path verbatim — no
+   financial-logic duplication, no Stripe/accounting change.
+2. Reviewed both SQL migrations for production-readiness; found and
+   fixed a real bug (the `agent_proposals` UPDATE grant didn't match what
+   the sync step actually writes) and added a test that fails if the
+   grant and the app code's columns, or the CHECK-constraint enum lists,
+   ever drift apart again.
+3. Hardened proposal identity: a reviewed (`approved`/`rejected`)
+   proposal now resets to `proposed` if the underlying finding's content
+   materially changed on a later sync, instead of silently carrying the
+   old decision forward. Made "Approve ≠ Published" explicit in the UI
+   itself, not just implied.
+4. Verified (with a new dedicated test) that external research cannot
+   influence a non-category-C finding's decision, and re-confirmed every
+   other authority boundary (whitelist, approval-required content,
+   honest NO_CHANGE/REJECT_OPPORTUNITY, failed-validation-never-reported-
+   as-success) by re-reading the pipeline rather than assuming it still
+   held after three phases of changes.
+5. Re-reviewed the one real research-backed proposal (seasonal-cleanout
+   FAQ gap) against four specific risks (topic fit, currency,
+   evergreen-content risk, unproven visitor benefit) and made the
+   research record state the answers explicitly.
+6. Added a second, outer try/catch (plus a defensive `Array.isArray`
+   guard inside `buildDashboardSummary` itself) so a malformed history
+   record can never 500 or crash the Home dashboard's activity feed, and
+   added tests proving `?view=agent-proposals`/`resource:"agent-proposal"`
+   degrade to a clean 500 (never a crash) when the migration hasn't been
+   applied yet, while confirming `?view=agent-activity` is completely
+   unaffected either way (it never touches Supabase).
+
+## Recommended Phase 5
 
 1. **Scheduling**: once this phase's output has been trusted over more
    real runs, consider a recurring (e.g. weekly) dry-run via the existing

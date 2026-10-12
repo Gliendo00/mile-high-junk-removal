@@ -262,14 +262,40 @@ async function main() {
     assert.ok(db.bookings[0].operational_note.length <= 1000);
   });
 
-  await test("admin/booking-detail.js only prompts for the note when transitioning TO 'completed' FROM a non-completed status", async () => {
+  await test("admin/booking-detail.js opens the closeout sheet (not a prompt) only when transitioning TO 'completed' FROM a non-completed status", async () => {
     const fs = require("fs");
     const path = require("path");
     const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
-    assert.ok(/newStatus === 'completed' && currentStatus !== 'completed'/.test(src), "expected the completed-transition guard before the prompt()");
-    // The prompt must never be unconditional/forced — cancelling (prompt
-    // returning null) must still be a valid path that completes the job.
-    assert.ok(/if \(raw !== null\) operationalNote = raw\.trim\(\);/.test(src));
+    assert.ok(/newStatus === 'completed' && currentStatus !== 'completed'/.test(src), "expected the completed-transition guard before opening the closeout sheet");
+    assert.ok(/openCloseoutSheet\(\)/.test(src));
+    // Every OTHER status must still save immediately via saveStatus(),
+    // never routed through the closeout sheet.
+    assert.ok(/saveStatus\(newStatus\)/.test(src));
+  });
+
+  await test("admin/booking-detail.js's closeout sheet never forces the note or the tip — both are optional fields with an explicit Cancel", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
+    assert.ok(/["']How.?d it go\? \(optional, internal only\)["']/.test(src));
+    assert.ok(/'Tip \(optional\)'/.test(src));
+    assert.ok(/cancelBtn\.addEventListener\('click', closeCloseoutSheet\)/.test(src));
+  });
+
+  await test("admin/booking-detail.js's closeout confirm sends the note in the SAME request as the status change (no separate write)", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
+    assert.ok(/patchStatus\('completed', operationalNote/.test(src));
+  });
+
+  await test("admin/booking-detail.js's closeout sheet reuses the EXISTING tip write path (submitTipAmount), never a duplicate implementation", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
+    const submitTipAmountDefs = (src.match(/function submitTipAmount\(/g) || []).length;
+    assert.strictEqual(submitTipAmountDefs, 1, "there must be exactly one submitTipAmount() implementation, shared by both call sites");
+    assert.ok(/completeJobWithCloseout[\s\S]{0,400}submitTipAmount\(tipAmount\)/.test(src), "the closeout sheet must call the shared submitTipAmount(), not re-implement the tip PATCH");
   });
 
   await test("admin/booking-detail.js's operational-note UI never uses innerHTML/insertAdjacentHTML/document.write", () => {

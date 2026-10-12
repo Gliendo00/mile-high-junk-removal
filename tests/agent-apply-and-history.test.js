@@ -176,6 +176,26 @@ try {
     assert.strictEqual(summary.length, 1);
     assert.strictEqual(summary[0].runId, "new");
   });
+
+  // Phase 4 hardening — "agent history cannot be read" must never break
+  // the Home dashboard. A structurally-valid JSON line missing its own
+  // `findings` array (a future schema drift, a hand-edited log entry)
+  // used to throw here; buildDashboardSummary() must now degrade to an
+  // empty findings list instead, so callers (e.g.
+  // api/admin/bookings.js's handleAgentActivity(), which wraps this in
+  // its own try/catch too — belt and suspenders) never see an exception
+  // from this function specifically.
+  test("history.buildDashboardSummary never throws on a run record missing its `findings` array — degrades to empty instead", () => {
+    const malformedRuns = [{ runId: "corrupt", timestamp: new Date().toISOString(), mode: "dry-run", summary: { pagesScanned: 10 } }];
+    let summary;
+    assert.doesNotThrow(() => {
+      summary = history.buildDashboardSummary(malformedRuns);
+    });
+    assert.deepStrictEqual(summary[0].lines, [
+      { icon: "check", text: "Checked 10 pages" },
+      { icon: "check", text: "No worthwhile change today." },
+    ]);
+  });
 } finally {
   cleanup();
 }

@@ -113,14 +113,21 @@ function buildDashboardSummary(runs, limit = 10) {
   const recent = sorted.slice(0, limit);
   return recent.map((run) => {
     const pagesScanned = run.summary && typeof run.summary.pagesScanned === "number" ? run.summary.pagesScanned : null;
+    // Phase 4 hardening — defense-in-depth: fall back to an empty array
+    // rather than throwing, if a log entry is ever missing `findings`
+    // (a future schema change, a hand-edited line). Every caller of this
+    // function should already be wrapped in its own try/catch (see
+    // api/admin/bookings.js's handleAgentActivity()), but this function
+    // staying throw-safe on its own is a second, independent guard.
+    const findings = Array.isArray(run.findings) ? run.findings : [];
     const lines = [];
     if (pagesScanned !== null) {
       lines.push({ icon: "check", text: `Checked ${pagesScanned} page${pagesScanned === 1 ? "" : "s"}` });
     }
-    if (run.findings.length === 0) {
+    if (findings.length === 0) {
       lines.push({ icon: "check", text: "No worthwhile change today." });
     } else {
-      lines.push(...run.findings.map(activityLine));
+      lines.push(...findings.map(activityLine));
     }
     return {
       runId: run.runId,

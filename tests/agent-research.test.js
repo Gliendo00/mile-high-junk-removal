@@ -153,6 +153,28 @@ try {
     assert.ok(Array.isArray(loaded.results));
     assert.ok(Array.isArray(loaded.warnings));
   });
+
+  // Phase 4 hardening — the seasonal-cleanout FAQ sanity check: this real
+  // committed research result must explicitly address all four risks the
+  // product review called out, not just assert "supports-opportunity"
+  // and leave them implicit. See this file's own text for the real
+  // reasoning; this test only confirms the record actually documents it.
+  test("the real Denver LeafDrop research result explicitly addresses topic fit, currency, evergreen-content risk, and visitor-benefit uncertainty", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const filePath = path.join(
+      __dirname, "..", "agent", "research", "results",
+      "content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop.json"
+    );
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const result = makeResearchResult(data); // re-validates against the schema too
+
+    assert.ok(/TOPIC FIT/i.test(result.limitations), "must explicitly confirm the evidence actually fits this page's topic");
+    assert.ok(/CURRENCY/i.test(result.limitations) && /2026/.test(result.limitations), "must state how current the evidence is and when it was accessed");
+    assert.ok(/EVERGREEN/i.test(result.limitations), "must warn against hardcoding temporary program dates as evergreen page copy");
+    assert.ok(/not proven|PLAUSIBLE|does not establish/i.test(result.limitations), "must not overstate that this would actually help a real visitor");
+    assert.ok(!/add (exactly )?3 (more )?(faqs|questions)/i.test(result.recommendation), "must never imply the sibling average (6) minus this page's count (3) is itself a content target");
+  });
 } finally {
   cleanupFixtures();
 }

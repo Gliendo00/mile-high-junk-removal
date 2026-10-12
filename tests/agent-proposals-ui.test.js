@@ -58,6 +58,10 @@ test("admin/home/index.html's connected marketing card links to the proposals re
   assert.ok(homeHtml.includes('href="/admin/agent-proposals/"'));
 });
 
+test("Phase 4 hardening: admin/agent-proposals.js states, right at the point of action, that Approve/Reject only records a decision and never changes the website", () => {
+  assert.ok(/Approve\/Reject only records your decision here — it does not change the website\./.test(proposalsJs));
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

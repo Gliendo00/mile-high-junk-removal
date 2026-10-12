@@ -110,23 +110,71 @@ async function main() {
     assert.deepStrictEqual(table.rows[0].pages, ["a.html", "b.html"]);
   });
 
-  await test("syncProposals re-syncing the SAME finding_key updates its content but NEVER resets an owner's prior approve/reject decision", async () => {
+  await test("syncProposals re-syncing the SAME finding_key with the SAME summary preserves an owner's prior approve/reject decision", async () => {
     const table = new FakeProposalsTable();
-    const finding = decidedFinding({ type: "missing-canonical", summary: "no canonical v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    const finding = decidedFinding({ type: "missing-canonical", summary: "a.html has no canonical link tag.", pages: ["a.html"], evidence: [{ x: 1 }] });
 
     await syncProposals([finding], "run-1", { client: table });
     // Simulate the owner approving it through the CRM in between runs.
     table.rows[0].status = "approved";
     table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
 
-    const finding2 = decidedFinding({ type: "missing-canonical", summary: "no canonical v2 (same page, re-observed)", pages: ["a.html"], evidence: [{ x: 1 }] });
+    // Same type+pages -> same summary text (seo-audit.js's template is
+    // deterministic for identical inputs) -> same finding_key AND the
+    // same summary, i.e. genuinely the same observation recurring.
+    const finding2 = decidedFinding({ type: "missing-canonical", summary: "a.html has no canonical link tag.", pages: ["a.html"], evidence: [{ x: 1 }] });
     assert.strictEqual(finding2.key, finding.key, "fixture sanity check: same type+pages must produce the same stable key");
 
     await syncProposals([finding2], "run-2", { client: table });
     assert.strictEqual(table.rows.length, 1, "must update the existing row, never insert a second one for the same finding_key");
-    assert.strictEqual(table.rows[0].summary, "no canonical v2 (same page, re-observed)", "content must refresh");
-    assert.strictEqual(table.rows[0].status, "approved", "status must NOT be reset back to proposed by a re-sync");
-    assert.strictEqual(table.rows[0].reviewed_by, "owner@milehighjunkremoval.net", "the owner's review must survive a re-sync");
+    assert.strictEqual(table.rows[0].status, "approved", "an unchanged observation must NOT reset the owner's prior review");
+    assert.strictEqual(table.rows[0].reviewed_by, "owner@milehighjunkremoval.net", "the owner's review must survive a re-sync when nothing material changed");
+  });
+
+  await test("Phase 4 hardening: re-syncing the SAME finding_key with a MATERIALLY DIFFERENT summary resets an already-reviewed proposal back to 'proposed' — an approval never silently carries over onto different content", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "no canonical v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+    table.rows[0].reviewed_at = "2026-10-12T00:00:00.000Z";
+    table.rows[0].review_note = "Looks fine.";
+
+    const finding2 = decidedFinding({ type: "missing-canonical", summary: "no canonical v2 — materially different observation", pages: ["a.html"], evidence: [{ x: 1 }] });
+    assert.strictEqual(finding2.key, finding.key, "fixture sanity check: same type+pages must still produce the same stable key");
+
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows.length, 1);
+    assert.strictEqual(table.rows[0].summary, "no canonical v2 — materially different observation", "content must refresh");
+    assert.strictEqual(table.rows[0].status, "proposed", "a changed observation must require fresh review, never silently inherit the old approval");
+    assert.strictEqual(table.rows[0].reviewed_by, null, "the stale review's attribution must be cleared, not left attached to new content");
+    assert.strictEqual(table.rows[0].reviewed_at, null);
+    assert.strictEqual(table.rows[0].review_note, null);
+  });
+
+  await test("Phase 4 hardening: the same reset applies to a REJECTED proposal, not just an approved one", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "rejected";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    const finding2 = decidedFinding({ type: "missing-canonical", summary: "v2 different", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows[0].status, "proposed");
+  });
+
+  await test("Phase 4 hardening: a proposal still in 'proposed' (never reviewed) is simply refreshed on content change — nothing to protect yet", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    assert.strictEqual(table.rows[0].status, "proposed");
+
+    const finding2 = decidedFinding({ type: "missing-canonical", summary: "v2 different", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows[0].status, "proposed");
+    assert.strictEqual(table.rows[0].summary, "v2 different");
   });
 
   await test("syncProposals never writes finding_key/finding_type/pages/evidence via the UPDATE path's payload keys that the DB grants don't allow (defense-in-depth check on this module's own payload shape)", async () => {
