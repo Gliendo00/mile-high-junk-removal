@@ -82,16 +82,16 @@ test("renderDayPanel(): previous/next-day arrows call the caller-supplied onNavi
   assert.ok(/prevBtn\.disabled = iso <= HISTORICAL_FLOOR_ISO/.test(body), "previous-day must be disabled once the displayed date is the historical floor itself");
 });
 
-// Updated for the Estimate workflow hardening pass: renderDayPanel() gained
-// one more positional parameter (`estimates`, inserted before `onNavigate`)
-// so Month's day panel can show that date's estimates alongside its jobs
-// (see admin/calendar-views.js's renderDayPanel() header for why Week
-// still passes a literal [] here rather than real data this round). The
-// guarantee this test protects — each of selectWeekDate()/selectMonthDate()
-// supplies its own onNavigate callback and calls showQuickExpenseFor() with
-// the selected date — is unchanged.
+// Updated for the Estimate workflow: renderDayPanel() gained one more
+// positional parameter (`estimates`, inserted before `onNavigate`) so the
+// day panel can show that date's estimates alongside its jobs — first for
+// Month only, then (the Week fix) for Week too, both now passing their own
+// real per-date estimates array rather than a literal []. The guarantee
+// this test protects — each of selectWeekDate()/selectMonthDate() supplies
+// its own onNavigate callback and calls showQuickExpenseFor() with the
+// selected date — is unchanged.
 test("selectWeekDate()/selectMonthDate() each pass their own onNavigate callback into renderDayPanel(), and call showQuickExpenseFor() with the selected date", () => {
-  assert.ok(/function selectWeekDate\(iso\) \{[\s\S]*?renderDayPanel\(weekDayPanel, iso, state\.weekJobsByDate\[iso\] \|\| \[\], \[\], function \(delta\) \{ navigateWeekDayBy\(iso, delta\); \}\);[\s\S]*?showQuickExpenseFor\(iso\);/.test(src));
+  assert.ok(/function selectWeekDate\(iso\) \{[\s\S]*?renderDayPanel\(weekDayPanel, iso, state\.weekJobsByDate\[iso\] \|\| \[\], state\.weekEstimatesByDate\[iso\] \|\| \[\], function \(delta\) \{ navigateWeekDayBy\(iso, delta\); \}\);[\s\S]*?showQuickExpenseFor\(iso\);/.test(src));
   assert.ok(/function selectMonthDate\(iso\) \{[\s\S]*?renderDayPanel\(monthDayPanel, iso, state\.monthJobsByDate\[iso\] \|\| \[\], state\.monthEstimatesByDate\[iso\] \|\| \[\], function \(delta\) \{ navigateMonthDayBy\(iso, delta\); \}\);[\s\S]*?showQuickExpenseFor\(iso\);/.test(src));
 });
 

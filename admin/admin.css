@@ -653,6 +653,16 @@
   color: var(--color-accent-700, #2f6f13);
 }
 .admin-week-day-row.is-selected .admin-week-day-row-count { color: #9fe37a; }
+/* Week fix — a second, separate count (teal, matching every other estimate
+   accent in this file) alongside the job count above; never summed or
+   confused with it. */
+.admin-week-day-row-estimate-count {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0e7490;
+}
+.admin-week-day-row.is-selected .admin-week-day-row-estimate-count { color: #5eead4; }
 /* Stage 2.4.2 (second pass): each job is its own compact mini-card — never
    a run-on list — so a busy day's jobs read as separate grouped objects at
    a glance. Off-white against the day column's own white background when
@@ -703,6 +713,17 @@
   color: var(--color-neutral-600, #82796a);
 }
 .admin-week-day-row.is-selected .admin-week-day-row-more { color: rgba(255, 255, 255, 0.6); }
+/* Week fix — reuses .admin-week-day-row-job's exact shape with one teal
+   tint modifier, same "visually distinct, never mixed into the job list"
+   treatment as every other Estimate surface. */
+.admin-week-day-row-job.admin-week-day-row-estimate {
+  background: rgba(14, 116, 144, 0.08);
+  border-color: rgba(14, 116, 144, 0.3);
+}
+.admin-week-day-row.is-selected .admin-week-day-row-job.admin-week-day-row-estimate {
+  background: rgba(94, 234, 212, 0.15);
+  border-color: rgba(94, 234, 212, 0.35);
+}
 
 /* ------------------------------------------------------------------ */
 /* Year grid — Phase 3C Stage 2.4. Navigation only: job counts, never     */

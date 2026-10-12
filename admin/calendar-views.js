@@ -124,6 +124,7 @@ window.AdminCalendarViews = (function () {
     weekStart: null, // ISO Sunday; null until the first response tells us the current week
     weekSelectedDate: null,
     weekJobsByDate: {},
+    weekEstimatesByDate: {}, // appointmentDate -> estimates[]
     monthYear: todayParts[0],
     monthMonth: todayParts[1],
     monthSelectedDate: null,
@@ -287,8 +288,9 @@ window.AdminCalendarViews = (function () {
 
   // ---------------------------------------------------------------------
   // Shared: the selected-day panel (Selected date, with previous/next-day
-  // arrows -> Jobs [-> Estimates, Month only for now]), and the compact
-  // job/estimate cards used inside it.
+  // arrows -> Jobs -> Estimates), and the compact job/estimate cards used
+  // inside it. Shared by both Week's selectWeekDate() and Month's
+  // selectMonthDate() below.
   // ---------------------------------------------------------------------
   function renderDailyJobCard(job) {
     var a = document.createElement('a');
@@ -351,10 +353,8 @@ window.AdminCalendarViews = (function () {
 
   // container: the .admin-day-panel element to fill. iso: the selected
   // date. jobs: that date's jobs (already filtered by the caller).
-  // estimates: that date's estimates, or an empty array — Week's own call
-  // site always passes [] for now (Week doesn't show estimates in its day
-  // panel yet; see selectWeekDate() below), so this stays a purely
-  // additive, opt-in parameter rather than a behavior change for Week.
+  // estimates: that date's estimates (both Week's selectWeekDate() and
+  // Month's selectMonthDate() below pass their own real data).
   // onNavigate(deltaDays): called with -1/+1 when the previous-day/next-day
   // arrow is tapped — left to the caller (selectWeekDate/selectMonthDate)
   // to decide how to resolve a delta that lands outside the currently
@@ -423,8 +423,9 @@ window.AdminCalendarViews = (function () {
     }
     container.appendChild(jobsWrap);
 
-    // 3. Estimates (Month only for now — see this function's own header).
-    // Never financial: this section exists purely for operational
+    // 3. Estimates — shown for both Week and Month (whichever caller
+    // selected this date). Never financial: this section exists purely for
+    // operational
     // visibility, same "scheduled appointment, not a job" posture as
     // every other Estimate surface — admin/schedule-financials.js is never
     // handed this array (see showFinancialsFor() below, called with
@@ -489,6 +490,12 @@ window.AdminCalendarViews = (function () {
         weekLoading.style.display = 'none';
         state.weekStart = body.weekStart;
         state.weekJobsByDate = groupJobsByDate(body.jobs);
+        // Week fix — api/admin/bookings.js's ?range=week response has
+        // always included a sibling `estimates` array (same
+        // fetchScheduleEstimates() as Day/Month); this client just never
+        // stored or rendered it. groupJobsByDate() is generic (it only
+        // ever reads .appointmentDate), reused as-is.
+        state.weekEstimatesByDate = groupJobsByDate(body.estimates);
         weekPrevBtn.disabled = body.canGoPrevious === false;
         weekRangeLabel.textContent = formatMonthDay(body.weekStart) + ' – ' + formatMonthDay(body.weekEnd);
         weekCurrentWrap.style.display = body.isCurrentWeek ? 'none' : 'block';
@@ -518,6 +525,13 @@ window.AdminCalendarViews = (function () {
     for (var i = 0; i < 7; i++) {
       var iso = addDaysIso(weekStart, i);
       var jobs = (state.weekJobsByDate[iso] || []).slice();
+      // Week fix — same source/shape as Month's own estimate data
+      // (state.monthEstimatesByDate), just keyed off the week's own
+      // grouping. See renderDailyEstimateCard()/admin/schedule.js's
+      // renderEstimateCard() for the other two places this exact
+      // "visually distinct, never mixed into the job list" treatment is
+      // already established.
+      var estimates = (state.weekEstimatesByDate[iso] || []).slice();
 
       var row = document.createElement('button');
       row.type = 'button';
@@ -532,6 +546,9 @@ window.AdminCalendarViews = (function () {
       head.appendChild(el('span', 'admin-week-day-row-date', formatMonthDay(iso)));
       if (jobs.length) {
         head.appendChild(el('span', 'admin-week-day-row-count', jobs.length + (jobs.length === 1 ? ' job' : ' jobs')));
+      }
+      if (estimates.length) {
+        head.appendChild(el('span', 'admin-week-day-row-estimate-count', estimates.length + (estimates.length === 1 ? ' estimate' : ' estimates')));
       }
       row.appendChild(head);
 
@@ -556,6 +573,25 @@ window.AdminCalendarViews = (function () {
         row.appendChild(jobsList);
       }
 
+      if (estimates.length) {
+        // Same compact mini-card shape as jobs just above, reusing
+        // .admin-week-day-row-job's layout with one added modifier class
+        // (.admin-week-day-row-estimate) purely for the teal tint — never
+        // a separate layout, never mixed into the jobs list itself.
+        var estimatesList = el('div', 'admin-week-day-row-jobs');
+        estimates.slice(0, WEEK_ROW_MAX_JOB_LINES).forEach(function (estimate) {
+          var name = (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
+          var estimateRow = el('div', 'admin-week-day-row-job admin-week-day-row-estimate');
+          estimateRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(estimate.timeLabel)));
+          estimateRow.appendChild(el('span', 'admin-week-day-row-job-name', name));
+          estimatesList.appendChild(estimateRow);
+        });
+        if (estimates.length > WEEK_ROW_MAX_JOB_LINES) {
+          estimatesList.appendChild(el('div', 'admin-week-day-row-more', '+' + (estimates.length - WEEK_ROW_MAX_JOB_LINES) + ' more'));
+        }
+        row.appendChild(estimatesList);
+      }
+
       row.addEventListener('click', function (e) {
         selectWeekDate(e.currentTarget.dataset.date);
       });
@@ -570,11 +606,9 @@ window.AdminCalendarViews = (function () {
     Array.prototype.forEach.call(weekOverviewEl.querySelectorAll('.admin-week-day-row'), function (row) {
       row.classList.toggle('is-selected', row.dataset.date === iso);
     });
-    // Estimate workflow hardening pass: Week's day panel doesn't show
-    // estimates yet (deliberate, narrower scope than Month this round —
-    // see renderDayPanel()'s own header) — an empty array here is a
-    // literal no-op, not a behavior change from before this pass.
-    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || [], [], function (delta) { navigateWeekDayBy(iso, delta); });
+    // Week fix: now passes Week's own real estimates for this date,
+    // matching Month's selectMonthDate() — no longer a literal [].
+    renderDayPanel(weekDayPanel, iso, state.weekJobsByDate[iso] || [], state.weekEstimatesByDate[iso] || [], function (delta) { navigateWeekDayBy(iso, delta); });
     showQuickExpenseFor(iso);
   }
 
