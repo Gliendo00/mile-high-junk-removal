@@ -3611,3 +3611,50 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   margin-bottom: 12px;
 }
 
+/* ===========================================================================
+   Unified card/panel border treatment (admin-only) — every elevated content
+   surface across the CRM gets the same thin brand-green outline, with a
+   slightly heavier top edge for a touch more visual weight. Reuses
+   --color-accent-700 (../styles.css's own brand-green token — not a new
+   color) and generalizes the pattern .admin-home-card-priority already
+   established on a single card to the rest of the CRM's cards/panels.
+   Deliberately placed last so it wins the cascade over each component's own
+   earlier `border`/`border-color` declaration without needing !important.
+
+   Scoped entirely to this file: ../styles.css and ../book/book.css (the
+   public site/booking flow) never load admin.css, so none of this reaches
+   them. Status-accented cards (.admin-booking-card/.admin-schedule-card,
+   whose colored left stripe already carries status meaning via
+   .admin-card-accent-*) and the login page's own neon theme
+   (.admin-login-card) are intentionally left out — a uniform green border
+   would either fight their existing color coding or clash with a
+   deliberately different palette. */
+.admin-daily-job-card,
+.admin-quick-expense-bar,
+.admin-lead-card,
+.admin-client-summary,
+.admin-typeahead-panel,
+.admin-address-autocomplete-panel,
+.admin-expense-total-summary,
+.admin-expense-filters,
+.admin-expense-row,
+.admin-charge-row,
+.admin-detail-hero,
+.admin-section,
+.admin-home-search,
+.admin-home-metric-card,
+.admin-home-card,
+.admin-home-marketing-row,
+.admin-duplicate-card,
+.admin-card-flat {
+  border-color: var(--color-accent-700, #2f6f13);
+  border-top-width: 3px;
+}
+/* Bottom-sheet/modal surfaces (status picker, mobile filters, breakdowns,
+   the More menu) had no border at all before — add one rather than just
+   recoloring, then apply the same heavier top edge as every other panel. */
+.admin-sheet {
+  border: 1px solid var(--color-accent-700, #2f6f13);
+  border-top-width: 3px;
+}
+
