@@ -1,4 +1,4 @@
-# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening) + Phase 5 (daily/weekly operating system) + Phase 5B (research orchestration)
+# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening) + Phase 5 (daily/weekly operating system) + Phase 5B (research orchestration) + Phase 6 (first-party search/analytics evidence)
 
 **Naming note**: this file's own Phase 1-4 numbering reached "Recommended
 Phase 5" (a short wish-list, see below) before Rocky's own "Phase 2: turn
@@ -1063,6 +1063,486 @@ was evaluated and explicitly deferred (§8) rather than built messily.
    reveal some of those 7 cities deserve a different priority than others
    (e.g. based on actual lead volume by city, not modeled here since that
    data isn't available to this agent).
+
+---
+
+# Phase 6 — First-Party Search + Analytics Intelligence
+
+Built on the SAME branch (`site-improvement-agent-phase2`), immediately
+after Phase 5B (`9cbdf67`). Gives the agent first-party EVIDENCE from
+Google Search Console (Search Analytics + URL Inspection) and GA4 —
+strictly as additional, inspectable signal alongside the existing
+scanner/research/completed-job evidence, never as a new decision path.
+**Read this section's §4 ("metrics are signals, not decisions") before
+touching anything here** — it's the one rule every other design choice in
+this phase exists to protect, and it's enforced structurally (by code
+and tests), not just by convention.
+
+## 1. What was already there (investigated before building anything)
+
+- **GA4 is already live on every public page**: a literal inline
+  `gtag.js` snippet (measurement ID `G-WC7NX6SETQ`) copy-pasted into the
+  `<head>` of every top-level `*.html` file — no shared analytics helper
+  file exists. Custom events already fired: `phone_click`/`sms_click`
+  (`nav.js`, site-wide header), `contact_form_start`/`generate_lead`/
+  `contact_form_submit_error` (`contact.html`), `before_after_interaction`
+  + a local `trackSocialEvent` wrapper (`index.html`), and the booking
+  funnel's own `booking_started`/`booking_service_selected`/
+  `booking_date_selected`/`booking_form_completed` (`book/book.js`).
+  Phase 6 reads this EXISTING event taxonomy via the GA4 Data API — it
+  does not invent a second one, and does not touch `nav.js`/`book.js`/
+  `contact.html`/`index.html` (CLAUDE.md: tracking is never modified
+  without Rocky's explicit authorization, and there was no demonstrated
+  bug in it — Rocky's own Phase 6 brief authorized the NEW read-only
+  integrations, not a change to the site's existing tracking code).
+- **No existing Search Console integration** anywhere in the repo.
+- **Two other existing Google integrations**, both plain-`fetch`, no SDK:
+  Google Places (`api/reviews.js`, API-key auth, `GOOGLE_PLACES_API_KEY`/
+  `GOOGLE_PLACE_ID`) and Google Maps JS (admin address autocomplete,
+  `ADMIN_GOOGLE_MAPS_API_KEY`). Neither uses OAuth/a service account —
+  Phase 6 is the first integration here that needs one (Search Console
+  and GA4's Data API are both scoped-OAuth-only; there is no API-key
+  mode for either). `googleapis`/`google-auth-library` are NOT in
+  `package.json` — Phase 6 does not add them either (see §11).
+- **Env var convention**: plain upper-snake-case, read via
+  `process.env.X` with a falsy guard, no app-specific prefix (e.g.
+  `SUPABASE_URL`, `STRIPE_SECRET_KEY`, `GOOGLE_PLACES_API_KEY`). Phase 6's
+  three new env vars (§11) follow this exactly.
+- **Existing Phase 5B evidence/research/orchestration architecture** (see
+  above) is the template this phase reuses wholesale: a validated,
+  provenance-carrying evidence shape (`research.js`'s
+  `makeResearchResult()`), a fails-safe intake reader
+  (`research-intake.js`), a separate explicit network-touching CLI step
+  that the deterministic runner never calls itself
+  (`completed-job-fetch.js` + `--refresh-completed-jobs`), and the
+  orchestrator-driven resume lifecycle (§5 of Phase 5B above). Phase 6
+  adds one more instance of each of those same patterns for GSC/GA4/URL
+  Inspection, rather than inventing a new architecture.
+
+## 2. New files
+
+| File | Purpose |
+|---|---|
+| `agent/lib/google-service-account-auth.js` | Shared JWT-bearer OAuth2 token exchange (Node `crypto` + `fetch`, no SDK) |
+| `agent/lib/search-console-client.js` | Raw Search Analytics query + URL Inspection calls |
+| `agent/lib/ga4-client.js` | Raw GA4 Data API `runReport` call |
+| `agent/lib/firstparty-evidence.js` | Normalized evidence schema + freshness windows (no verdict/confidence/recommendation field — see §4) |
+| `agent/lib/firstparty-fetch.js` | The ONLY module that actually calls GSC/GA4 — targeted fetch + normalize + bounds/privacy guards |
+| `agent/lib/firstparty-intake.js` | Reads `agent/research/firstparty/*.json`, attaches to findings by key, for DISPLAY ONLY |
+| `agent/research/firstparty/` | Evidence file directory (git-tracked, intentionally empty on this checkout) |
+| 8 new `tests/agent-firstparty-*.test.js` + `tests/agent-google-service-account-auth.test.js` + `tests/agent-search-console-client.test.js` + `tests/agent-ga4-client.test.js` | §16 |
+
+Modified (additive only): `agent/runner.js` (wires the new intake step
+in, AFTER `decideAll()` — see §4; computes the two `isXConfigured()`
+booleans, still zero network calls, and passes them to `buildReport()`),
+`agent/lib/report.js` (new `report.firstPartyEvidence` summary field),
+`agent/cli.js` (new `--fetch-firstparty=<request.json>` step),
+`admin/agent-reports.js` (new compact "First-party evidence" block in
+the report detail view). **Not modified**: `decision.js`, `risk.js`,
+`findings.js`, `research.js`, `research-intake.js`,
+`research-rotation.js`, `change-detection.js`, `business-profile.js`,
+`completed-job-fetch.js`/`completed-job-intake.js`, every audit module,
+`vercel.json`, `package.json`, any `api/*.js` file, any `sql/*.sql` file,
+and every piece of the site's own GA4 tracking code.
+
+## 3. Architecture: three new read-only clients, one shared auth helper
+
+`agent/lib/google-service-account-auth.js` mints a short-lived OAuth2
+access token from a service-account JSON via a hand-signed RS256 JWT
+(`crypto.createSign`) exchanged at Google's token endpoint with a plain
+`fetch` — the same lightweight-fetch style `api/reviews.js` already uses
+for Google Places, deliberately NOT a reason to add `googleapis`/
+`google-auth-library` as dependencies (brief §11/§16: smallest secure
+model, don't overbuild). Fails safe exactly like
+`api/_lib/supabase-admin.js`'s `getServiceClient()`: missing/invalid
+config returns `{skipped:true, reason}`, never thrown, and (confirmed by
+`tests/agent-google-service-account-auth.test.js`) attempts ZERO network
+call when unconfigured.
+
+`search-console-client.js` (`querySearchAnalytics()`, `inspectUrl()`) and
+`ga4-client.js` (`runReport()`) are thin wrappers that call exactly one
+targeted API request and hand back the RAW response shape to their one
+caller, `firstparty-fetch.js` — normalization happens in exactly one
+place, not scattered across callers.
+
+## 4. "Metrics are signals, not decisions" — the hard rule, enforced structurally
+
+No individual Search Console/GA4/URL Inspection observation may
+independently produce `PROPOSE_CHANGE` or `APPLY_SAFE_FIX`. This is not
+just stated in prose — it is true by construction, for two independent
+reasons:
+
+1. **The evidence shape itself has no verdict.**
+   `firstparty-evidence.js`'s `makeFirstPartyEvidence()` has no
+   `verdict`/`confidence`/`recommendation` field at all (unlike
+   `research.js`'s `makeResearchResult()`, which does, and which IS
+   allowed to tip a decision — see §2's original Phase 2/3 "External
+   research" section above). A metric can describe WHAT was observed; it
+   cannot assert a conclusion.
+2. **`decision.js` never reads it.** `agent/runner.js`'s
+   `gatherFindings()` calls `attachFirstPartyEvidence()` strictly AFTER
+   `decideAll()` has already produced every finding's `.decision` (see
+   the comment at that exact call site in `runner.js`) — but even that
+   ordering is belt-and-suspenders: `decision.js`'s `decide()` function
+   has zero code paths, destructures, or property accesses anywhere in
+   its body that reference `.firstPartyEvidence`.
+   `tests/agent-firstparty-safety.test.js`'s first two tests prove both
+   halves directly: `decide()` produces byte-identical output for two
+   otherwise-identical findings that differ only in whether
+   `.firstPartyEvidence` is populated, and a regex check over
+   `decide.toString()` confirms the string `firstPartyEvidence` never
+   appears in its source at all.
+
+So `finding.firstPartyEvidence` exists for exactly one purpose:
+**report/provenance display** — "here is the first-party evidence a
+human/orchestrator gathered while investigating this finding," surfaced
+in `report.firstPartyEvidence` (§8) and `admin/agent-reports.js`'s detail
+view, never "here is what changed the outcome." The only way first-party
+evidence can ever influence a real decision is INDIRECTLY: by informing
+a human/orchestrator who then writes an actual `research.js`
+verdict-bearing result (citing the first-party evidence in its own
+`evidence`/`source`) — the same path every other category-C opportunity
+already goes through. This also means a weak/concerning metric (a CTR
+near zero, a position drop, a spike in impressions for a city) is never,
+by itself, sufficient justification to rewrite a title, change a CTA,
+create a page, or redirect anything — see §6/§7/§8 below for the
+specific guardrails this implies, each with its own regression test.
+
+## 5. Normalized evidence schema (`agent/lib/firstparty-evidence.js`)
+
+One shape for all three sources, mirroring `research.js`'s validation
+discipline (a result may not assert anything without its source, scope,
+window, and limitations recorded):
+
+```
+{
+  findingKey,       // optional — the Finding.key this informs, or null
+  source,           // "search-console-search-analytics" | "search-console-url-inspection" | "ga4"
+  metric,           // e.g. "clicks-impressions-ctr-position", "indexStatus", "sessions"
+  dimension,        // e.g. "query", "page", "landingPage" — or null
+  scope: {type, value},   // what this is ABOUT: "page" | "query" | "city" | "site"
+  window: {start, end, label},        // the exact date range queried — never omitted
+  comparisonWindow: {...} | null,     // the prior period compared against, if any
+  observed,         // small, BOUNDED normalized value(s) — never the raw API response
+  context,          // what was queried and why, in plain language
+  limitations,      // required, like research.js — what this does NOT establish
+  fetchedAt,
+}
+```
+
+No raw API payload is ever stored — `firstparty-fetch.js` picks out only
+the specific fields each `observed` shape needs (e.g. Search Analytics:
+`{totalRowsReturned, topRows: [...]}` capped at `MAX_ROWS` (10); URL
+Inspection: `{verdict, coverageState, googleCanonical, userCanonical,
+lastCrawlTime}`, discarding everything else the API returns, including
+unrelated result blocks like `mobileUsabilityResult`). Proven end-to-end
+(fetch → normalize → write → read back) by
+`tests/agent-firstparty-fetch.test.js`'s "never leaks"/"raw-only marker"
+tests.
+
+`computeFirstPartyFreshness()` mirrors `research.js`'s
+`computeFreshness()` with per-source windows reflecting real differences
+in how fast each source's data is both DELIVERED and stays MEANINGFUL
+(§6): Search Console (`aging: 10d, stale: 21d` — real reporting lag,
+naturally noisy day to day), URL Inspection (`aging: 14d, stale: 30d` — a
+point-in-time check whose underlying state can drift), GA4
+(`aging: 7d, stale: 14d` — closer to real-time, goes stale fastest).
+
+## 6. Freshness / comparison windows
+
+`firstparty-fetch.js`'s `computeWindow(days, lagDays)` builds
+`{start, end, label}` ending `lagDays` days before "now" — 3 days for
+Search Console (its well-known reporting lag; querying through "today"
+would silently include an incomplete, misleadingly-low final few days),
+1 day for GA4 (a smaller same-day-completeness buffer). The window used
+is always recorded ON the evidence itself (`window.label`, e.g. "28 days
+ending 2026-10-10") — never implied. There is no hardcoded single
+window everywhere: every `fetch*Evidence()` function takes an explicit
+`days` parameter (default 28), so a targeted question that needs a
+different comparison period (e.g. a shorter recent spike, or a longer
+seasonal pattern) is never forced into one default. When Search
+Console/GA4 are unconfigured, or an API call fails, the evidence simply
+isn't produced — `report.firstPartyEvidence.gatheredThisRunCount` stays
+at `0` and `integrations.{searchConsole,ga4}` stays `false`; nothing
+manufactures a trend or a fake "insufficient data" placeholder value.
+
+## 7. Service-area safety (unchanged guard, now proven against first-party evidence specifically)
+
+The Phase 5B rule — 20 claimed service-area cities ≠ 20 required city
+pages — is untouched by this phase, and there is still no finding type,
+anywhere in `risk.js`'s `RULES`, that represents "create a new page."
+`tests/agent-firstparty-safety.test.js` adds the Phase-6-specific proof:
+feeding a `coverage-gap-candidate` finding deliberately EXTREME, high-
+impression, near-zero-CTR first-party evidence for a claimed-but-
+pageless city (Brighton) through `decide()` changes nothing — the
+decision is identical with or without that evidence attached, and the
+evidence shape itself has no `decision`/`recommendation`/`createPage`
+field for anything to act on even if it tried. Search Console impressions
+for a city, GA4 sessions for a city's nearest page, or a weekly rotation
+pick are all still only ever EVIDENCE an opportunity might exist — never
+a page-creation trigger, individually or combined.
+
+## 8. Cannibalization safety (unchanged guard, now proven against query/page overlap evidence)
+
+Same posture: `cannibalization-audit.js`'s `overlapping-intent` finding
+type is untouched, and the only mechanical auto-fixer registered anywhere
+in this codebase is still `rewrite-href` (used only for
+`redirect-hop-internal-link`/`broken-internal-link-fixable` —
+`tests/agent-firstparty-safety.test.js` confirms this by grepping
+`agent/lib/*.js` for every place `autoFix:` is attached, finding only
+`link-audit.js`, to only those two types). Attaching Search-Console-
+observed query/page overlap evidence (two pages both receiving
+impressions for a similar query) to an `overlapping-intent` finding does
+not change its decision and cannot route it anywhere near an auto-
+merge/delete/redirect, because no such fixer exists for this finding
+type to reach even if a decision wanted one to.
+
+## 9. Privacy
+
+Aggregate analytics only — no user-level analytics or visitor profiling
+is introduced. Two independent guarantees:
+
+1. **GA4 dimension denylist, checked BEFORE any request is sent**:
+   `firstparty-fetch.js`'s `fetchGa4Evidence()` refuses `clientId`,
+   `userId`, `userPseudoId`, `appInstanceId`, or `ipOverride`-shaped
+   dimensions outright — `{skipped:true, reason: "...visitor/client-
+   identifier dimension..."}`, with the injected `fetchImpl` proven NEVER
+   called for any of them (`tests/agent-firstparty-fetch.test.js`). This
+   is enforced in code, not left to whoever crafts a request JSON file to
+   remember.
+2. **Nothing here touches the completed-job privacy boundary.**
+   `business-context.js`/`completed-job-fetch.js` (Phase 3/5B) are
+   entirely unmodified by this phase; first-party search/analytics
+   evidence and completed-job evidence are two separate evidence
+   categories that are never joined to each other or to any individual
+   client/booking record anywhere in this codebase.
+
+No IP address, client ID, session ID, or individual visitor identifier
+is ever requested, normalized, or persisted — `observed` shapes are
+always small, aggregate counts/metrics/rows keyed by query/page/
+dimension-name, never by person.
+
+## 10. Failure behavior
+
+Exactly the same fails-safe posture as every other optional integration
+in this codebase (`getServiceClient()`, `completed-job-fetch.js`,
+`research-intake.js`): missing credentials, a missing property/site
+grant, an API error, a quota/rate-limit response, or an unreachable
+endpoint all degrade to `{skipped:true, reason}` at the client layer,
+propagate up through `firstparty-fetch.js` unchanged, and are logged by
+the CLI wrapper as a one-line skip message — never thrown, never
+mistaken for "zero evidence because there's nothing to report." Because
+`decision.js` never reads first-party evidence at all (§4), a
+`RESEARCH_MORE` finding stays `RESEARCH_MORE` (and a run stays
+`research_pending`) regardless of whether first-party evidence happened
+to be available — missing analytics can never be read as "all clear"
+(`tests/agent-firstparty-runner.test.js`'s last test proves this
+directly: a `RESEARCH_MORE` finding with rich attached first-party
+evidence still reports `status: "research_pending"`). A daily/weekly run
+with a genuinely clean deterministic audit still completes normally even
+when GSC/GA4 are fully unconfigured — `report.firstPartyEvidence`
+honestly shows `integrations: {searchConsole:false, ga4:false}` rather
+than silently omitting the section.
+
+## 11. Credentials / APIs required (NOT configured in this environment)
+
+**Smallest secure model**: one service account, shared by both
+integrations (two scoped read-only grants, one credential to rotate) —
+following this repo's existing env-var convention (plain upper-snake,
+`process.env.X`, falsy-guarded), no new dependency added.
+
+| Env var | Purpose |
+|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | The service account's full JSON key, as a single-line JSON string |
+| `GSC_SITE_URL` | The exact Search Console property identifier, e.g. `https://www.milehighjunkremoval.net/` or `sc-domain:milehighjunkremoval.net` |
+| `GA4_PROPERTY_ID` | The numeric GA4 property ID, e.g. `123456789` |
+
+**Required Google Cloud APIs**: "Google Search Console API" and "Google
+Analytics Data API" — both enabled on one GCP project, with one service
+account created there.
+
+**Owner setup steps still required (not performed by this phase)**:
+
+1. In Google Cloud Console: enable the "Google Search Console API" and
+   "Google Analytics Data API" on a project; create a Service Account;
+   create and download a JSON key for it.
+2. In Search Console (search.google.com/search-console), open the
+   `milehighjunkremoval.net` property → Settings → Users and permissions
+   → Add user → the service account's `client_email` → **Restricted**
+   permission (sufficient for read-only API access).
+3. In GA4 Admin → Property Access Management → add the same service
+   account email with role **Viewer**.
+4. Set the three env vars above wherever `node agent/cli.js
+   --fetch-firstparty=...` will actually run (the orchestrator's own
+   environment — a local Claude Code session or the scheduled-session
+   environment described in Phase 5B's §13 — NEVER Vercel env vars,
+   since no Vercel function ever calls this; see §12).
+5. Sanity-check with a single targeted request file before relying on
+   it in a real run (see §12's example).
+
+No credentials were created, requested, or configured by this phase —
+`isSearchConsoleConfigured()`/`isGa4Configured()` both correctly report
+`false` in this environment today.
+
+## 12. Orchestrator integration
+
+Follows Phase 5B's exact orchestrator pattern (§5 of that section above)
+with one more optional step inserted between "read the pending
+questions" and "write research result files":
+
+```
+node agent/cli.js --daily --json   (or --weekly --json)
+  -> report.status === "research_pending"?
+     For each entry in report.research.questionsPending[] (and, weekly
+     only, optionally report.rotation.picks[]):
+       - If a TARGETED first-party query would meaningfully inform this
+         specific question (brief §1/§2/§3's examples — an Aurora
+         opportunity, an existing page's query/page performance, a
+         specific indexing/canonical concern) — write a small request
+         JSON and run:
+             node agent/cli.js --fetch-firstparty=<request.json>
+         e.g. {"type":"search-analytics","findingKey":"coverage-gap-candidate::...",
+               "scope":{"type":"city","value":"Aurora"},"days":28}
+       - Research the question per the existing evidence hierarchy
+         (official sources first, competitors for landscape only),
+         optionally citing the first-party evidence just gathered, and
+         write agent/research/results/<slug>.json (research.js's
+         makeResearchResult() — unchanged shape).
+  -> node agent/cli.js --resume=<runId>
+  -> report.status again: "completed" | "research_pending" (loop) | "failed"
+```
+
+Never run automatically by `--daily`/`--weekly` themselves — the
+deterministic pipeline stays network-free (confirmed by
+`tests/agent-firstparty-runner.test.js`'s static-source check: `runner.js`
+imports `search-console-client.js`/`ga4-client.js` ONLY for their pure
+`isXConfigured()` checks, never `querySearchAnalytics`/`inspectUrl`/
+`runReport`). `--fetch-firstparty` is a peer of `--refresh-completed-jobs`
+(Phase 5B) — both are separate, explicit, orchestrator-invoked steps; the
+runner itself calls neither.
+
+## 13. Daily vs. weekly usage (procedural, like the existing research loop)
+
+Same posture as Phase 5B's external-research loop (its own "Remaining
+risks" §1 already notes that loop is a documented PROCEDURE, not code-
+enforced) — there is no code that forces or forbids a first-party fetch
+on a given run type; this section is the orchestrator's guidance:
+
+- **Daily**: lightweight by default. Only fetch first-party evidence when
+  a specific actionable/research finding genuinely warrants it, or a
+  just-made site change needs a quick indexing/visibility sanity check
+  (one targeted URL Inspection, not a sweep). Never query every
+  page/query/city every day.
+- **Weekly**: may go deeper — e.g. first-party evidence for the week's
+  `report.rotation.picks[]` alongside their external research, a broader
+  (still targeted, still bounded) Search Analytics look at a specific
+  opportunity, or a small batch of URL Inspections for pages that changed
+  recently. A weekly run that finds nothing worth fetching first-party
+  evidence for is still a valid, complete run — this phase does not
+  manufacture first-party queries to "use" the integration.
+
+## 14. CRM reporting (`report.firstPartyEvidence`, `admin/agent-reports.js`)
+
+`report.firstPartyEvidence` (built by `report.js`, computed purely from
+findings' already-attached evidence — never a live call at report-build
+time):
+
+```
+{
+  integrations: {searchConsole: bool, ga4: bool},   // configured? (env-var check only, no network)
+  gatheredThisRunCount: number,
+  countsBySource: {"search-console-search-analytics": n, "search-console-url-inspection": n, "ga4": n},
+  items: [{findingKey, source, metric, scope, window, freshness, context}, ...],
+}
+```
+
+`admin/agent-reports.js`'s report detail view renders exactly this — two
+"available"/"not configured" lines, and (only when `gatheredThisRunCount
+> 0`) up to 10 short one-line summaries, each the plain-language
+`context` string plus scope/window/freshness — matching the brief's own
+example shape ("Search Console: available · GA4: available · URL
+Inspection: 2 targeted URLs checked") and deliberately NOT a raw-numbers
+table or a second analytics dashboard.
+
+## 15. External research provider boundary (unchanged, reconfirmed)
+
+Phase 5B's orchestrator loop already treats "perform the actual research"
+as the orchestrating Claude session's own job (WebSearch/WebFetch), not a
+pluggable provider abstraction in code — this phase doesn't change that,
+and doesn't integrate Perplexity/Brave/any paid research API (explicitly
+out of scope per the brief). Nothing in this phase's architecture assumes
+a specific provider; a future phase choosing one plugs into the same
+"write `agent/research/results/*.json`, then `--resume`" boundary that
+already exists.
+
+## 16. Tests
+
+```bash
+node tests/agent-firstparty-evidence.test.js
+node tests/agent-firstparty-intake.test.js
+node tests/agent-google-service-account-auth.test.js
+node tests/agent-search-console-client.test.js
+node tests/agent-ga4-client.test.js
+node tests/agent-firstparty-fetch.test.js
+node tests/agent-firstparty-safety.test.js
+node tests/agent-firstparty-runner.test.js
+```
+
+8 new files, all passing, covering (per the brief's own checklist):
+evidence schema validation + freshness windows; intake fixture-dir
+loading/attachment/malformed-file handling; the shared OAuth helper
+(real RSA signing, no network); both API clients (request-shape
+assertions, graceful degradation on error); the fetch/normalize layer
+(MAX_ROWS cap, raw-payload-never-persisted end-to-end, the GA4 privacy
+denylist with zero requests sent); the hard safety rules (`decide()`
+byte-identical with/without first-party evidence, by both behavior AND
+source-grep; the auto-apply whitelist's exact scope re-confirmed;
+service-area and cannibalization guards re-proven against this phase's
+own evidence shape); and runner/report wiring (every finding gets the
+field, network-free pipeline re-confirmed by source grep, status/health
+summary unaffected by evidence volume). Full repository suite: same
+single pre-existing, unrelated failure as Phase 5/5B
+(`phase3c-batch5-intake-ui.test.js`) — every other file, including all 8
+new ones, passes.
+
+## 17. Vercel / DB impact
+
+Zero. No new Vercel function (still 12/12 — nothing in `api/` was
+touched), no new/altered SQL migration (first-party evidence lives in
+git-tracked JSON files under `agent/research/firstparty/`, exactly like
+`agent/research/results/`/`agent/research/completed-jobs/` — no new
+table), no change to `vercel.json`. `GOOGLE_SERVICE_ACCOUNT_JSON`/
+`GSC_SITE_URL`/`GA4_PROPERTY_ID` are read by the Node CLI only, in
+whatever environment runs `node agent/cli.js --fetch-firstparty=...` —
+never by a Vercel function, so they are never added to Vercel's own
+environment-variable configuration.
+
+## Remaining risks / open questions (Phase 6)
+
+1. Like Phase 5B's orchestrator loop, the daily-vs-weekly first-party-
+   fetch guidance in §13 is a documented procedure, not code-enforced —
+   nothing stops an orchestrator session from fetching first-party
+   evidence unnecessarily on a daily run, or from never fetching any.
+2. No real Search Console/GA4 credentials exist in this environment, so
+   the clients have only ever been exercised against injected fake
+   `fetchImpl`s — the first real fetch against production credentials
+   will be the first true end-to-end proof of the request/response shapes
+   assumed here (the Search Console/GA4 API docs were followed carefully,
+   but an undocumented quirk in a real property's response is always
+   possible).
+3. `report.firstPartyEvidence.items` is currently uncapped beyond the
+   per-fetch `MAX_ROWS`/10-items-in-the-UI limits — a hypothetical run
+   with many targeted fetches attached to many different findings could
+   produce a longer list than today's real usage pattern (a handful of
+   targeted fetches per run) will ever actually produce; worth revisiting
+   if that assumption changes.
+4. The weekly research-rotation scorer (`research-rotation.js`) was
+   deliberately NOT modified to incorporate Search Console impressions as
+   a new scoring factor (the brief allows but does not require this,
+   and risks destabilizing an already-tested scoring model for marginal
+   benefit this phase) — a future phase could add it as one more
+   documented, bounded factor, the same way completed-job evidence was
+   added in Phase 5.
 
 ---
 

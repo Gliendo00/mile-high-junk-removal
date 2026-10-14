@@ -218,6 +218,29 @@ document.addEventListener('DOMContentLoaded', function () {
     detailEl.appendChild(statLine('Proposals created/updated', report.proposals.createdOrUpdatedCount));
     detailEl.appendChild(statLine('Proposals awaiting approval', report.proposals.awaitingApprovalCount));
 
+    // Phase 6 — compact first-party evidence (Search Console/GA4/URL
+    // Inspection) summary. Deliberately NOT a metrics dashboard: just
+    // whether each integration is configured, and — only when something
+    // was actually gathered this run — the short, targeted items
+    // themselves (never a raw-numbers table). See agent/README.md's
+    // Phase 6 "CRM Reporting" section.
+    if (report.firstPartyEvidence) {
+      var fpe = report.firstPartyEvidence;
+      detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'First-party evidence'));
+      detailEl.appendChild(statLine('Search Console', fpe.integrations.searchConsole ? 'available' : 'not configured'));
+      detailEl.appendChild(statLine('GA4', fpe.integrations.ga4 ? 'available' : 'not configured'));
+      if (fpe.gatheredThisRunCount > 0) {
+        detailEl.appendChild(statLine('Evidence items gathered this run', fpe.gatheredThisRunCount));
+        fpe.items.slice(0, 10).forEach(function (item) {
+          detailEl.appendChild(el(
+            'p',
+            'admin-report-detail-stat',
+            item.source + ' — ' + item.metric + ' (' + item.scope.type + ': ' + item.scope.value + ', ' + item.window + ', ' + item.freshness + ') — ' + item.context
+          ));
+        });
+      }
+    }
+
     // Phase 5B — a run still awaiting external research shows exactly
     // what's pending, in plain language, instead of a dead end. This is
     // informational only — resuming the run happens via the orchestrator

@@ -66,6 +66,9 @@ const { auditFactualConsistency } = require("./lib/factual-consistency-audit");
 const { classifyAll } = require("./lib/risk");
 const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
+const { attachFirstPartyEvidence } = require("./lib/firstparty-intake");
+const { isSearchConsoleConfigured } = require("./lib/search-console-client");
+const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
 const rewriteHref = require("./lib/apply/rewrite-href");
 const { validateAndRevertIfNeeded } = require("./lib/validate");
@@ -108,7 +111,13 @@ function gatherFindings() {
   const classified = classifyAll(findings);
   const { findings: withResearch, warnings: researchWarnings } = attachResearch(classified);
   const decided = decideAll(withResearch);
-  return { pages, findings: decided, researchWarnings };
+  // Phase 6 — attached strictly AFTER decideAll() has already produced
+  // every finding's `.decision`, so first-party evidence (Search
+  // Console/GA4/URL Inspection — see firstparty-intake.js's header) can
+  // never influence a decision via this pipeline's own call order, on
+  // top of decision.js itself never reading this field at all.
+  const { findings: withFirstParty, warnings: firstPartyWarnings } = attachFirstPartyEvidence(decided);
+  return { pages, findings: withFirstParty, researchWarnings, firstPartyWarnings };
 }
 
 function applyEligible(findings) {
@@ -233,12 +242,13 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       proposalsSync: { skipped: true, reason: "run failed before proposal sync could occur", synced: 0, total: 0, errors: [] },
     };
     const { previousRun } = readPreviousRun(options.logPath, priorRecord ? runId : null);
-    failedRecord.report = buildReport({ record: failedRecord, previousRun, failure });
+    const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };
+    failedRecord.report = buildReport({ record: failedRecord, previousRun, failure, firstPartyIntegrations });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
   }
 
-  const { pages, findings, researchWarnings } = pipelineResult;
+  const { pages, findings, researchWarnings, firstPartyWarnings } = pipelineResult;
 
   let appliedFindings = [];
   let applySkippedReason = null;
@@ -343,6 +353,7 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     })),
     researchQuestions,
     researchWarnings: researchWarnings.length ? researchWarnings : undefined,
+    firstPartyWarnings: firstPartyWarnings && firstPartyWarnings.length ? firstPartyWarnings : undefined,
     validation: {
       ...validationSummary,
       notes:
@@ -390,7 +401,8 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     }
   }
 
-  record.report = buildReport({ record, previousRun, rotationPriorities });
+  const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };
+  record.report = buildReport({ record, previousRun, rotationPriorities, firstPartyIntegrations });
 
   appendRun(record, options.logPath);
   return record;

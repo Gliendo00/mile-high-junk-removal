@@ -50,12 +50,29 @@
 //     --daily/--weekly, so the deterministic pipeline itself still never
 //     touches Supabase or the network.
 //
+//   node agent/cli.js --fetch-firstparty=<path/to/request.json>
+//     Phase 6 — a research-capable orchestrator's targeted Search
+//     Console / GA4 / URL Inspection fetch, performed ONLY when a
+//     specific finding or RESEARCH_MORE question warrants it (see
+//     agent/README.md's Phase 6 section) — never a full-dataset dump,
+//     never run automatically by --daily/--weekly. The request file
+//     shape is {type: "search-analytics"|"url-inspection"|"ga4", ...} —
+//     see agent/lib/firstparty-fetch.js's fetch*Evidence() jsdoc for the
+//     exact fields each type takes. Writes one normalized, bounded
+//     evidence file to agent/research/firstparty/ (never the raw API
+//     response) for the next --daily/--weekly/--resume run to pick up via
+//     agent/lib/firstparty-intake.js. Never prints raw evidence values —
+//     only a count and the file path (these aren't private, unlike
+//     completed-job evidence, but the convention stays consistent).
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
 
+const fs = require("fs");
 const { run } = require("./runner");
 const { fetchRecentCompletedJobEvidence, writeCompletedJobEvidence } = require("./lib/completed-job-fetch");
+const { fetchFirstPartyEvidence, writeFirstPartyEvidence } = require("./lib/firstparty-fetch");
 
 function parseResumeArg(args) {
   const prefixed = args.find((a) => a.startsWith("--resume="));
@@ -76,6 +93,31 @@ async function runRefreshCompletedJobs() {
   // completed-job-fetch.js's header for why (raw booking data must never
   // reach a log line, even indirectly).
   console.log(`Completed-job refresh: ${result.evidence.length} publication-safe entr(ies) written to ${written}.`);
+}
+
+function parseFetchFirstPartyArg(args) {
+  const prefixed = args.find((a) => a.startsWith("--fetch-firstparty="));
+  return prefixed ? prefixed.slice("--fetch-firstparty=".length) : null;
+}
+
+async function runFetchFirstParty(requestPath) {
+  let request;
+  try {
+    request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+  } catch (e) {
+    console.error(`Could not read/parse first-party evidence request file "${requestPath}": ${e && e.message ? e.message : e}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await fetchFirstPartyEvidence(request);
+  if (result.skipped) {
+    console.log(`First-party evidence fetch skipped: ${result.reason}`);
+    return;
+  }
+  const filePath = writeFirstPartyEvidence(result.evidence);
+  const count = Array.isArray(result.evidence) ? result.evidence.length : 1;
+  console.log(`First-party evidence fetch: ${count} evidence entr(ies) written to ${filePath}.`);
 }
 
 function printRecord(record, asJson) {
@@ -106,6 +148,10 @@ function printRecord(record, asJson) {
     console.log(`Change detection vs. previous run: ${record.report.changeDetection.counts.new} new, ${record.report.changeDetection.counts.stillOpen} still open, ${record.report.changeDetection.counts.resolved} resolved.`);
     if (record.report.rotation) {
       console.log(`This week's research-rotation picks: ${record.report.rotation.picks.map((p) => p.name).join(", ")}`);
+    }
+    if (record.report.firstPartyEvidence) {
+      const fpe = record.report.firstPartyEvidence;
+      console.log(`First-party evidence — Search Console: ${fpe.integrations.searchConsole ? "configured" : "not configured"}, GA4: ${fpe.integrations.ga4 ? "configured" : "not configured"}, gathered this run: ${fpe.gatheredThisRunCount}`);
     }
     if (record.report.status === "research_pending") {
       console.log("");
@@ -141,6 +187,12 @@ async function main() {
 
   if (args.includes("--refresh-completed-jobs")) {
     await runRefreshCompletedJobs();
+    return;
+  }
+
+  const fetchFirstPartyPath = parseFetchFirstPartyArg(args);
+  if (fetchFirstPartyPath) {
+    await runFetchFirstParty(fetchFirstPartyPath);
     return;
   }
 

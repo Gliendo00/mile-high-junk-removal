@@ -32,6 +32,7 @@
 
 const { classifyChanges } = require("./change-detection");
 const { computeFreshness } = require("./research");
+const { computeFirstPartyFreshness, SOURCES: FIRST_PARTY_SOURCES } = require("./firstparty-evidence");
 
 function countBy(findings, predicate) {
   return findings.filter(predicate).length;
@@ -73,8 +74,12 @@ function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingAppr
  * @param {object|null} args.previousRun - the previous run record read from history, or null if this is the first run
  * @param {object[]} [args.rotationPriorities] - this week's picks (weekly runs only; agent/lib/research-rotation.js)
  * @param {object} [args.failure] - { message } if this run failed partway (see agent/README.md's failure-safety section)
+ * @param {object} [args.firstPartyIntegrations] - Phase 6: {searchConsole, ga4} booleans — whether each
+ *   integration is CONFIGURED (env vars present), computed by runner.js via a pure env-var/local-JSON
+ *   check (no network call — see search-console-client.js/ga4-client.js's isXConfigured()), passed in
+ *   explicitly so this function stays a pure function of its arguments rather than reading process.env itself
  */
-function buildReport({ record, previousRun, rotationPriorities, failure }) {
+function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations }) {
   const findings = record.findings || [];
   const now = new Date(record.timestamp);
 
@@ -127,6 +132,42 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
   const observationsCount = countBy(findings, (f) => f.tier === "observation");
   const opportunitiesCount = countBy(findings, (f) => f.tier === "opportunity");
 
+  // Phase 6 — first-party evidence (Search Console/GA4/URL Inspection)
+  // summary. Deliberately NOT part of status/healthSummary computation —
+  // see agent/README.md's Phase 6 "metrics are signals, not decisions"
+  // rule: this section may only ever REPORT what first-party evidence was
+  // configured/gathered, never flip a run between all-clear/needs-
+  // attention/research-pending by itself (that stays driven entirely by
+  // findings/proposals/questionsPending, computed above, unchanged by
+  // this phase). Built from each finding's own `.firstPartyEvidence`
+  // (attached by firstparty-intake.js strictly AFTER decideAll() already
+  // ran — see that file's header), never from a live API call.
+  const firstPartyAttached = findings.flatMap((f) =>
+    Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence.map((entry) => ({ entry, findingKey: f.key })) : []
+  );
+  const firstPartyCountsBySource = {};
+  for (const source of FIRST_PARTY_SOURCES) firstPartyCountsBySource[source] = 0;
+  for (const { entry } of firstPartyAttached) {
+    firstPartyCountsBySource[entry.source] = (firstPartyCountsBySource[entry.source] || 0) + 1;
+  }
+  const firstPartyEvidence = {
+    integrations: {
+      searchConsole: Boolean(firstPartyIntegrations && firstPartyIntegrations.searchConsole),
+      ga4: Boolean(firstPartyIntegrations && firstPartyIntegrations.ga4),
+    },
+    gatheredThisRunCount: firstPartyAttached.length,
+    countsBySource: firstPartyCountsBySource,
+    items: firstPartyAttached.map(({ entry, findingKey }) => ({
+      findingKey,
+      source: entry.source,
+      metric: entry.metric,
+      scope: entry.scope,
+      window: entry.window.label,
+      freshness: computeFirstPartyFreshness(entry, now).status,
+      context: entry.context,
+    })),
+  };
+
   const status = computeRunStatus({ failure, hasUnresolvedResearch: questionsPending.length > 0 });
 
   const healthSummary = buildHealthSummary({
@@ -174,6 +215,7 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
       })),
     },
     changeDetection,
+    firstPartyEvidence,
     validation: record.validation || null,
     proposalsSyncSkippedReason: record.proposalsSync && record.proposalsSync.skipped ? record.proposalsSync.reason : null,
     failure: failure || null,
