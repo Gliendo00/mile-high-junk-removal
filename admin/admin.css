@@ -3747,7 +3747,6 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-home-marketing-line-icon-observation { color: #a39d8e; }
 .admin-home-marketing-review-link {
   display: inline-block;
-  margin-top: 10px;
   font-family: var(--font-body);
   font-weight: 700;
   font-size: 12px;
@@ -3755,6 +3754,49 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   text-decoration: none;
 }
 .admin-home-marketing-review-link:hover { text-decoration: underline; }
+
+/* Phase 5 — compact run summary (last run time/pages/health) and stats
+   row (fixes applied / opportunities researched / proposals awaiting),
+   both sitting between the card label and the per-finding lines list.
+   Still no 0-100 score anywhere — healthSummary is a short sentence from
+   agent/lib/report.js, colored only to distinguish "all clear" from
+   "needs attention" from "failed", same restrained palette as the
+   existing line icons above. */
+.admin-home-marketing-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-home-marketing-summary-run { font-weight: 700; color: var(--color-text, #201e1d); }
+.admin-home-marketing-summary-health { font-weight: 700; }
+.admin-home-marketing-summary-health-all-clear { color: #2f6f13; }
+.admin-home-marketing-summary-health-needs-attention { color: #b45309; }
+.admin-home-marketing-summary-health-failed { color: #b91c1c; }
+.admin-home-marketing-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-neutral-700, #4b4438);
+}
+.admin-home-marketing-stat {
+  background: var(--admin-tint);
+  border-radius: var(--admin-radius-full);
+  padding: 3px 10px;
+}
+.admin-home-marketing-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+}
 
 /* ---------------------------------------------------------------------
    Leads sidebar redesign — replaces the old horizontal 9-pill tab row
@@ -3849,6 +3891,12 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-proposal-status-applied,
 .admin-proposal-status-validated { background: #1d4ed8; color: #fff; }
 .admin-proposal-status-failed { background: #6b7280; color: #fff; }
+/* Phase 5 — the Adjust-workflow state (see
+   sql/2026-10-14_phase5-agent-adjust-workflow.sql). Same amber family as
+   "proposed" (still needs eyes) but visually distinct via outline instead
+   of solid fill, since it's "waiting on a revision," not "waiting on a
+   first decision." */
+.admin-proposal-status-adjust_requested { background: #fff; border: 1.5px solid #b45309; color: #b45309; }
 
 .admin-proposal-card {
   background: #fff;
@@ -3902,4 +3950,80 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   color: var(--color-neutral-600, #82796a);
   font-style: italic;
   margin: 0 0 6px;
+}
+
+/* Site Improvement Agent, Phase 5 — admin/agent-reports/. Mobile-first
+   list: each run is one full-width tappable row (date / run-type badge /
+   outcome badge), same card chrome as everything else on this page
+   (.admin-proposal-card's white-surface/border/shadow treatment). The
+   detail panel reuses .admin-proposal-card-* typography for findings so
+   it reads consistently with admin/agent-proposals/ instead of
+   introducing a third visual language. */
+.admin-report-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  font-family: var(--font-body);
+  cursor: pointer;
+  text-align: left;
+}
+.admin-report-row:hover { filter: brightness(0.98); }
+.admin-report-row-date {
+  flex: none;
+  min-width: 64px;
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--color-text, #201e1d);
+}
+.admin-report-row-type { background: var(--color-neutral-600, #82796a); color: #fff; }
+.admin-report-row-outcome-all-clear { background: #2f6f13; color: #fff; }
+.admin-report-row-outcome-needs-attention { background: #b45309; color: #fff; }
+.admin-report-row-outcome-failed { background: #b91c1c; color: #fff; }
+.admin-report-row-outcome-unknown { background: #6b7280; color: #fff; }
+
+.admin-report-detail {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  padding: 14px;
+  margin-top: 16px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+}
+.admin-report-detail-heading {
+  font-family: var(--font-display, var(--font-body));
+  font-size: 18px;
+  margin: 10px 0 2px;
+}
+.admin-report-detail-meta {
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+  margin: 0 0 10px;
+}
+.admin-report-detail-health {
+  font-weight: 700;
+  font-size: 13.5px;
+  margin: 0 0 10px;
+}
+.admin-report-detail-subheading {
+  font-family: var(--font-body);
+  font-weight: 800;
+  font-size: 13.5px;
+  margin: 16px 0 6px;
+}
+.admin-report-detail-stat {
+  font-size: 12.5px;
+  color: var(--color-neutral-700, #4b4438);
+  margin: 0 0 4px;
+}
+.admin-report-finding {
+  border-top: 1px solid var(--color-neutral-200, #eee7db);
+  padding: 10px 0;
 }

@@ -47,19 +47,23 @@ test("admin/agent-proposals.js redirects to login on a 401, same convention as e
   assert.ok(proposalsJs.includes("/admin/login/"));
 });
 
-test("admin/agent-proposals/index.html loads admin-chrome.js/admin-fetch.js and its own script, and states approving never writes to the website", () => {
+test("admin/agent-proposals/index.html loads admin-chrome.js/admin-fetch.js and its own script, and states approving/rejecting/adjusting never writes to the website", () => {
   assert.ok(proposalsHtml.includes('src="../admin-chrome.js"'));
   assert.ok(proposalsHtml.includes('src="../admin-fetch.js"'));
   assert.ok(proposalsHtml.includes('src="../agent-proposals.js"'));
-  assert.ok(/never writes anything to the website/i.test(proposalsHtml));
+  // Phase 5: the intro paragraph's wording grew to cover the new Adjust
+  // action too ("Approving, rejecting, or requesting an adjustment...")
+  // — this checks the durable underlying claim (never writes to the
+  // website) rather than the exact Phase-3-era sentence.
+  assert.ok(/write anything to the website/i.test(proposalsHtml));
 });
 
 test("admin/home/index.html's connected marketing card links to the proposals review page", () => {
   assert.ok(homeHtml.includes('href="/admin/agent-proposals/"'));
 });
 
-test("Phase 4 hardening: admin/agent-proposals.js states, right at the point of action, that Approve/Reject only records a decision and never changes the website", () => {
-  assert.ok(/Approve\/Reject only records your decision here — it does not change the website\./.test(proposalsJs));
+test("Phase 4 hardening (extended in Phase 5 to cover Adjust): admin/agent-proposals.js states, right at the point of action, that Approve/Reject/Adjust only records a decision and never changes the website", () => {
+  assert.ok(/Approve\/Reject\/Adjust only records your decision here — it does not change the website\./.test(proposalsJs));
 });
 
 if (process.exitCode) {

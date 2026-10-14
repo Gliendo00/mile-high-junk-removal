@@ -6,12 +6,17 @@
 // distinction consistency-audit.js's Phase 2 correctness fix already
 // established for CITY_SLUGS. Single-sourced here instead of each module
 // re-deriving (or worse, re-guessing) its own filename pattern.
+//
+// Phase 5 (daily/weekly operating system): the actual lists below are now
+// DERIVED from agent/lib/business-profile.js (backed by agent/context/
+// business-profile.json), the one canonical business/service-area config,
+// instead of being hardcoded here a second time. The exported names and
+// values are unchanged on purpose — every existing audit module keeps
+// working exactly as before; only where the data comes from changed.
 
-const CITY_SLUGS = [
-  "denver", "aurora", "lakewood", "westminster", "broomfield", "arvada",
-  "castle-rock", "thornton", "littleton", "englewood", "parker",
-  "highlands-ranch", "centennial",
-];
+const businessProfile = require("./business-profile");
+
+const CITY_SLUGS = businessProfile.getCitySlugs();
 const CITY_PAGE_RE = new RegExp(`^(${CITY_SLUGS.join("|")})-junk-removal\\.html$`);
 
 const BLOG_PAGE_RE = /^blog-.+\.html$/; // excludes blog.html itself (the index)
@@ -23,24 +28,13 @@ const BLOG_PAGE_RE = /^blog-.+\.html$/; // excludes blog.html itself (the index)
 // property-management/same-day, which ARE real service pages but don't
 // map to a single tidy "item removed" category the way the ones below do
 // — kept to the pages coverage-audit.js can reason about most safely.
-const SERVICE_PAGE_FILES = [
-  "furniture-removal.html",
-  "estate-cleanouts.html",
-  "home-cleanouts.html",
-  "appliance-disposal.html",
-  "electronics-recycling.html",
-  "storage-unit-cleanouts.html",
-  "dumpster-rental.html",
-  "demolition-services.html",
-  "yard-waste-removal.html",
-  "foreclosure-cleanouts.html",
-];
+const SERVICE_PAGE_FILES = businessProfile.getServicePageFiles();
 
 // Pages with no conversion/booking intent by design (legal, not a
 // service/location page) — excluded from CTA-presence and business-
 // identity-schema consistency checks, which would otherwise flag a
 // non-issue every single run.
-const UTILITY_PAGE_FILES = ["privacy-policy.html"];
+const UTILITY_PAGE_FILES = businessProfile.getUtilityPageFiles();
 
 function isCityPage(file) {
   return CITY_PAGE_RE.test(file);

@@ -8,6 +8,24 @@
 //                                     working tree is dirty)
 //   node agent/cli.js --json          print the full run record as JSON
 //                                     instead of the human summary
+//
+// Phase 5 (daily/weekly operating system) — run type, orthogonal to mode
+// above (mode controls whether the narrow auto-fix whitelist is applied;
+// run type is purely about REPORTING/rotation — see agent/README.md):
+//
+//   node agent/cli.js --daily         runType "daily" (lightweight — see
+//                                     agent/README.md's daily-run section)
+//   node agent/cli.js --weekly        runType "weekly" — additionally
+//                                     computes this week's research-
+//                                     rotation picks across the whole
+//                                     service area and records them in
+//                                     the report
+//   (no flag)                         runType "manual" (default, e.g. an
+//                                     ad hoc run from the terminal)
+//
+// Nothing here activates a schedule — see agent/README.md's "Scheduling
+// architecture" section for the recommended cron cadence and why it is
+// deliberately NOT turned on by this phase.
 
 const { run } = require("./runner");
 
@@ -15,15 +33,31 @@ async function main() {
   const args = process.argv.slice(2);
   const mode = args.includes("--apply-safe") ? "apply-safe" : "dry-run";
   const asJson = args.includes("--json");
+  const runType = args.includes("--weekly") ? "weekly" : args.includes("--daily") ? "daily" : "manual";
 
-  const record = await run({ mode });
+  let record;
+  try {
+    record = await run({ mode, runType });
+  } catch (err) {
+    // Failure safety: runner.js already persisted an honest "failed" run
+    // record before re-throwing (see its own header) — this CLI's job is
+    // just to surface that failure loudly and with a non-zero exit code,
+    // never to swallow it or print a misleading "no worthwhile change"
+    // message.
+    console.error("Site Improvement Agent run failed:", err && err.stack ? err.stack : err);
+    if (err && err.recordedFailure) {
+      console.error(`A failed-run record was still saved to history (runId ${err.recordedFailure.runId}) so this failure is visible in the CRM report history.`);
+    }
+    process.exitCode = 1;
+    return;
+  }
 
   if (asJson) {
     console.log(JSON.stringify(record, null, 2));
     return;
   }
 
-  console.log(`Site Improvement Agent — run ${record.runId} (${record.mode})`);
+  console.log(`Site Improvement Agent — run ${record.runId} (${record.runType}/${record.mode})`);
   console.log(`Scanned ${record.summary.pagesScanned} pages, ${record.summary.findingsTotal} finding(s).`);
   if (record.applySkippedReason) {
     console.log(`NOTE: ${record.applySkippedReason}`);
@@ -38,6 +72,13 @@ async function main() {
     console.log(`CRM proposal sync: skipped (${record.proposalsSync.reason}).`);
   } else {
     console.log(`CRM proposal sync: ${record.proposalsSync.synced}/${record.proposalsSync.total} synced.`);
+  }
+  if (record.report) {
+    console.log(`Site health: ${record.report.healthSummary.text}`);
+    console.log(`Change detection vs. previous run: ${record.report.changeDetection.counts.new} new, ${record.report.changeDetection.counts.stillOpen} still open, ${record.report.changeDetection.counts.resolved} resolved.`);
+    if (record.report.rotation) {
+      console.log(`This week's research-rotation picks: ${record.report.rotation.picks.map((p) => p.name).join(", ")}`);
+    }
   }
   console.log("");
 

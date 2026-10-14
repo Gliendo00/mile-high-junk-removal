@@ -1,0 +1,93 @@
+{
+  "_comment": "Canonical business/service-area context for the Site Improvement Agent. Single maintainable source of truth — see agent/lib/business-profile.js for the loader and agent/README.md's 'Canonical business context' section for how this is used and kept honest. Every fact below was read directly off the live site (index.html's JSON-LD + #service-areas section) or agent/lib/page-groups.js at verification time — nothing here is invented. Update this file (and re-verify against the live site) if the business's real services/area/identity change; do not let a second copy of this data grow anywhere else in the agent.",
+
+  "verifiedAgainstSite": {
+    "date": "2026-10-14",
+    "sources": [
+      "index.html JSON-LD HomeAndConstructionBusiness/Service blocks (identity, areaServed)",
+      "index.html #service-areas section (featured vs. 'also serving' cities)",
+      "agent/lib/page-groups.js (which city/service pages actually exist, pre-existing single source for the audits)"
+    ]
+  },
+
+  "identity": {
+    "name": "Mile High Junk Removal",
+    "telephone": "+13039901812",
+    "email": "contact@milehighjunkremoval.net",
+    "priceRange": "$100-$600",
+    "homeBase": "Denver, CO"
+  },
+
+  "services": {
+    "pages": [
+      { "file": "furniture-removal.html", "label": "Furniture Removal" },
+      { "file": "estate-cleanouts.html", "label": "Estate Cleanouts" },
+      { "file": "home-cleanouts.html", "label": "Home Cleanouts" },
+      { "file": "appliance-disposal.html", "label": "Appliance Disposal" },
+      { "file": "electronics-recycling.html", "label": "Electronics Recycling" },
+      { "file": "storage-unit-cleanouts.html", "label": "Storage Unit Cleanouts" },
+      { "file": "dumpster-rental.html", "label": "Dumpster Rental" },
+      { "file": "demolition-services.html", "label": "Demolition Services" },
+      { "file": "yard-waste-removal.html", "label": "Yard Waste Removal" },
+      { "file": "foreclosure-cleanouts.html", "label": "Foreclosure Cleanouts" }
+    ],
+    "_specialtyPagesNote": "These real pages exist and serve real audiences but deliberately are not modeled as one of the ten general 'item removed' service pages above (page-groups.js's long-standing reasoning, preserved as-is): hoa-junk-removal.html, commercial-junk-removal.html, office-junk-removal.html, contractor-remodeler-junk-removal.html, property-management-junk-removal.html, same-day-junk-removal.html. The agent should not assume every audit that iterates `services.pages` also needs to cover these.",
+    "specialtyPages": [
+      "hoa-junk-removal.html",
+      "commercial-junk-removal.html",
+      "office-junk-removal.html",
+      "contractor-remodeler-junk-removal.html",
+      "property-management-junk-removal.html",
+      "same-day-junk-removal.html"
+    ]
+  },
+
+  "serviceArea": {
+    "_note": "Two distinct lists on purpose. 'citiesWithPages' is what the site can actually show a visitor today (file = `${slug}-junk-removal.html`). 'claimedCitiesWithoutPages' is real: index.html's own JSON-LD areaServed and the homepage's service-areas section both claim these cities too ('+ all surrounding areas'), but none has a dedicated page. That gap is evidence for the weekly research rotation to evaluate — NOT a to-do list of pages to auto-create (see agent/README.md's new-page standard: a page needs its own evidence of distinct value, not just a name on this list).",
+    "coreCities": [
+      { "slug": "denver", "name": "Denver" },
+      { "slug": "aurora", "name": "Aurora" },
+      { "slug": "lakewood", "name": "Lakewood" },
+      { "slug": "parker", "name": "Parker" }
+    ],
+    "citiesWithPages": [
+      { "slug": "denver", "name": "Denver" },
+      { "slug": "aurora", "name": "Aurora" },
+      { "slug": "lakewood", "name": "Lakewood" },
+      { "slug": "westminster", "name": "Westminster" },
+      { "slug": "broomfield", "name": "Broomfield" },
+      { "slug": "arvada", "name": "Arvada" },
+      { "slug": "castle-rock", "name": "Castle Rock" },
+      { "slug": "thornton", "name": "Thornton" },
+      { "slug": "littleton", "name": "Littleton" },
+      { "slug": "englewood", "name": "Englewood" },
+      { "slug": "parker", "name": "Parker" },
+      { "slug": "highlands-ranch", "name": "Highlands Ranch" },
+      { "slug": "centennial", "name": "Centennial" }
+    ],
+    "claimedCitiesWithoutPages": [
+      { "slug": "golden", "name": "Golden" },
+      { "slug": "brighton", "name": "Brighton" },
+      { "slug": "morrison", "name": "Morrison" },
+      { "slug": "lone-tree", "name": "Lone Tree" },
+      { "slug": "wheat-ridge", "name": "Wheat Ridge" },
+      { "slug": "commerce-city", "name": "Commerce City" },
+      { "slug": "sterling-ranch", "name": "Sterling Ranch" }
+    ]
+  },
+
+  "pageConventions": {
+    "cityPageSuffix": "-junk-removal.html",
+    "blogPagePrefix": "blog-",
+    "utilityPages": ["privacy-policy.html"]
+  },
+
+  "operationalConstraints": [
+    "Never invent reviews, testimonials, customer names, jobs performed, or locations where jobs were performed.",
+    "Never invent or imply pricing beyond the published priceRange ($100-$600) without explicit business authorization.",
+    "Never invent licenses, certifications, awards, partnerships, or business statistics.",
+    "Never invent local regulations, recycling rules, disposal rules, or municipal program details — only cite verifiable official sources.",
+    "Treat competitor content as landscape observation only — never authoritative, never copied.",
+    "A claimed service area (JSON-LD areaServed) is not itself permission to create a page — new pages need their own evidence of distinct visitor value."
+  ]
+}

@@ -1,0 +1,143 @@
+// Site Improvement Agent, Phase 5 — persistent report builder.
+//
+// Turns one run record (runner.js's internal shape: findings, summary,
+// validation, proposalsSync) plus the previous run and (for a weekly run)
+// this week's rotation picks into the CRM-facing REPORT the rest of this
+// phase is built around — see agent/README.md's "Daily report" section
+// for the exact questions this must answer: WHAT DID THE AGENT DO? WHY?
+// DID IT CHANGE ANYTHING? DO I NEED TO APPROVE SOMETHING?
+//
+// Deliberately NOT a raw log dump, and deliberately NOT a 0-100 "site
+// health score" — healthSummary is a short, honest sentence derived from
+// real counts (open actionable findings + proposals awaiting approval),
+// not an invented metric.
+//
+// This is a pure function — runner.js calls it once per run and persists
+// its output as `record.report` (see history.js), so the CRM API layer
+// never has to recompute change-detection/rotation context on every read.
+
+const { classifyChanges } = require("./change-detection");
+const { computeFreshness } = require("./research");
+
+function countBy(findings, predicate) {
+  return findings.filter(predicate).length;
+}
+
+function buildHealthSummary({ actionableOpenCount, proposalsAwaitingApproval, failed }) {
+  if (failed) {
+    return { status: "failed", text: "This run did not complete successfully — see failure details below. No site changes were made based on a failed run." };
+  }
+  if (actionableOpenCount === 0 && proposalsAwaitingApproval === 0) {
+    return { status: "all-clear", text: "All clear — no worthwhile changes found." };
+  }
+  const parts = [];
+  if (actionableOpenCount > 0) parts.push(`${actionableOpenCount} open issue${actionableOpenCount === 1 ? "" : "s"}`);
+  if (proposalsAwaitingApproval > 0) parts.push(`${proposalsAwaitingApproval} proposal${proposalsAwaitingApproval === 1 ? "" : "s"} awaiting approval`);
+  return { status: "needs-attention", text: parts.join(" · ") };
+}
+
+/**
+ * @param {object} args
+ * @param {object} args.record - the run record runner.js builds (pre-persistence), including `runType`
+ * @param {object|null} args.previousRun - the previous run record read from history, or null if this is the first run
+ * @param {object[]} [args.rotationPriorities] - this week's picks (weekly runs only; agent/lib/research-rotation.js)
+ * @param {object} [args.failure] - { message } if this run failed partway (see agent/README.md's failure-safety section)
+ */
+function buildReport({ record, previousRun, rotationPriorities, failure }) {
+  const findings = record.findings || [];
+  const now = new Date(record.timestamp);
+
+  const changeDetection = classifyChanges(findings, previousRun);
+
+  const safeFixesApplied = findings.filter((f) => f.status === "applied");
+  const proposalsCreatedOrUpdated = findings.filter(
+    (f) => f.decision === "PROPOSE_CHANGE" || f.decision === "REJECT_OPPORTUNITY"
+  );
+  const proposalsAwaitingApproval = findings.filter((f) => {
+    const status = f.proposalStatus;
+    return f.decision === "PROPOSE_CHANGE" && (status === "proposed" || status == null);
+  }).length;
+  const previouslyRejectedStillSurfacing = findings.filter((f) => f.proposalStatus === "rejected").length;
+  const alreadyApplied = findings.filter((f) => f.proposalStatus === "applied" || f.proposalStatus === "validated").length;
+
+  const researchPerformed = findings
+    .filter((f) => Array.isArray(f.research) && f.research.length > 0)
+    .map((f) => ({
+      findingKey: f.key,
+      page: f.pages && f.pages[0],
+      results: f.research.map((r) => ({
+        source: r.source,
+        sourceType: r.sourceType,
+        confidence: r.confidence,
+        verdict: r.verdict,
+        freshness: computeFreshness(r, now),
+      })),
+    }));
+
+  const researchQuestionsRaised = findings.filter((f) => f.decision === "RESEARCH_MORE");
+
+  const actionableOpenCount = countBy(
+    findings,
+    (f) => f.tier === "actionable" && f.decision !== "APPLY_SAFE_FIX" && f.status !== "applied"
+  );
+  const observationsCount = countBy(findings, (f) => f.tier === "observation");
+  const opportunitiesCount = countBy(findings, (f) => f.tier === "opportunity");
+
+  const healthSummary = buildHealthSummary({
+    actionableOpenCount,
+    proposalsAwaitingApproval,
+    failed: Boolean(failure),
+  });
+
+  const report = {
+    runId: record.runId,
+    timestamp: record.timestamp,
+    runType: record.runType || "manual",
+    mode: record.mode,
+    pagesChecked: record.summary ? record.summary.pagesScanned : 0,
+    healthSummary,
+    technicalIssues: {
+      actionableOpen: actionableOpenCount,
+      byCategory: record.summary ? record.summary.byCategory : {},
+    },
+    observationsCount,
+    opportunitiesCount,
+    research: {
+      questionsRaisedCount: researchQuestionsRaised.length,
+      performed: researchPerformed,
+    },
+    safeFixes: {
+      appliedCount: safeFixesApplied.length,
+      items: safeFixesApplied.map((f) => ({ key: f.key, summary: f.summary, page: f.pages && f.pages[0] })),
+    },
+    proposals: {
+      createdOrUpdatedCount: proposalsCreatedOrUpdated.length,
+      awaitingApprovalCount: proposalsAwaitingApproval,
+      previouslyRejectedStillSurfacingCount: previouslyRejectedStillSurfacing,
+      alreadyAppliedCount: alreadyApplied,
+      items: proposalsCreatedOrUpdated.map((f) => ({
+        key: f.key,
+        summary: f.summary,
+        decision: f.decision,
+        proposalStatus: f.proposalStatus || null,
+      })),
+    },
+    changeDetection,
+    validation: record.validation || null,
+    proposalsSyncSkippedReason: record.proposalsSync && record.proposalsSync.skipped ? record.proposalsSync.reason : null,
+    failure: failure || null,
+    rotation: rotationPriorities
+      ? {
+          picks: rotationPriorities.map((p) => ({ slug: p.slug, name: p.name, hasPage: p.hasPage, score: p.score, reasons: p.reasons })),
+        }
+      : null,
+    nextReviewHint:
+      record.runType === "weekly"
+        ? "Next weekly deep review will rotate to a different set of service-area topics — see agent/history/research-rotation-state.json."
+        : "A weekly deep-research run has not been scheduled yet in production — see agent/README.md's scheduling recommendation.",
+  };
+
+  return report;
+}
+
+module.exports = { buildReport, buildHealthSummary };

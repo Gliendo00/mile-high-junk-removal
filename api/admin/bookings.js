@@ -141,6 +141,18 @@ module.exports = async (req, res) => {
     return handleAgentActivity(req, res);
   }
 
+  // Site Improvement Agent, Phase 5 — the report-history list/detail
+  // behind the new /admin/agent-reports/ page. Same "never touches
+  // Supabase" posture as agent-activity just above (reads the same
+  // git-tracked log file) — a report is read-only, so there is no
+  // write-side counterpart to these two views.
+  if (req.query.view === "agent-reports") {
+    return handleListAgentReports(req, res);
+  }
+  if (req.query.view === "agent-report") {
+    return handleGetAgentReport(req, res);
+  }
+
   // Site Improvement Agent, Phase 3 — the CRM-visible, approvable list
   // behind the Home dashboard's activity row (see handleAgentActivity()
   // just above for the read-only log, and handleReviewAgentProposal()
@@ -515,10 +527,108 @@ function handleAgentActivity(req, res) {
       return;
     }
     const recent = history.buildDashboardSummary(runs, 5);
-    res.status(200).json({ ok: true, connected: true, recent });
+    // Phase 5 — the richer Home card (see agent/README.md's "CRM Home"
+    // section): a compact `latest` summary built from the most recent
+    // run's own persisted `report` (see agent/lib/report.js), when
+    // present. Older log entries (recorded before Phase 5) have no
+    // `report` field — `latest` is simply omitted for those, and the
+    // Home card falls back to its pre-existing `recent[0].lines`
+    // rendering, exactly as it already does today. Never thrown: a
+    // missing/malformed report degrades to `latest: null`.
+    let latest = null;
+    try {
+      const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const mostRecent = sorted[0];
+      if (mostRecent && mostRecent.report) {
+        const r = mostRecent.report;
+        latest = {
+          runId: r.runId,
+          timestamp: r.timestamp,
+          runType: r.runType,
+          pagesChecked: r.pagesChecked,
+          healthSummary: r.healthSummary,
+          safeFixesAppliedCount: r.safeFixes ? r.safeFixes.appliedCount : 0,
+          researchQuestionsRaisedCount: r.research ? r.research.questionsRaisedCount : 0,
+          proposalsAwaitingApprovalCount: r.proposals ? r.proposals.awaitingApprovalCount : 0,
+        };
+      }
+    } catch (e) {
+      latest = null;
+    }
+    res.status(200).json({ ok: true, connected: true, recent, latest });
   } catch (e) {
     console.error("Admin agent-activity failed to read/summarize agent/history/log.ndjson", e);
     res.status(200).json({ ok: true, connected: false, recent: [] });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent, Phase 5 — ?view=agent-reports (list) and
+// ?view=agent-report&runId=... (one report's full detail). Both read
+// ONLY agent/history/log.ndjson (same file/require path as
+// handleAgentActivity above) — never Supabase — and never return the
+// full per-finding `evidence`/`research` payload in the LIST response
+// (that would defeat the point of a compact history list); the DETAIL
+// response does include each finding's full shape, for the one report a
+// reviewer actually opened.
+// ---------------------------------------------------------------------
+function loadAgentHistoryModule(res) {
+  try {
+    return require("../../agent/lib/history");
+  } catch (e) {
+    console.error("Admin agent-reports: agent/lib/history.js not available in this deployment", e);
+    res.status(200).json({ ok: true, connected: false, reports: [] });
+    return null;
+  }
+}
+
+function reportListEntry(run) {
+  const report = run.report || null;
+  return {
+    runId: run.runId,
+    timestamp: run.timestamp,
+    runType: (report && report.runType) || run.runType || "manual",
+    mode: run.mode,
+    failed: Boolean(run.failed),
+    healthSummary: report ? report.healthSummary : null,
+    pagesChecked: report ? report.pagesChecked : run.summary && run.summary.pagesScanned,
+    proposalsAwaitingApprovalCount: report && report.proposals ? report.proposals.awaitingApprovalCount : 0,
+  };
+}
+
+function handleListAgentReports(req, res) {
+  const history = loadAgentHistoryModule(res);
+  if (!history) return;
+  try {
+    const runs = history.readAllRuns();
+    const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+    res.status(200).json({ ok: true, connected: true, reports: sorted.slice(0, limit).map(reportListEntry) });
+  } catch (e) {
+    console.error("Admin agent-reports list failed to read agent/history/log.ndjson", e);
+    res.status(200).json({ ok: true, connected: false, reports: [] });
+  }
+}
+
+function handleGetAgentReport(req, res) {
+  const history = loadAgentHistoryModule(res);
+  if (!history) return;
+  const runId = typeof req.query.runId === "string" ? req.query.runId.trim() : "";
+  if (!runId) {
+    res.status(400).json({ error: "A runId is required." });
+    return;
+  }
+  try {
+    const runs = history.readAllRuns();
+    const run = runs.find((r) => r.runId === runId);
+    if (!run) {
+      res.status(404).json({ error: "Report not found." });
+      return;
+    }
+    res.status(200).json({ ok: true, run });
+  } catch (e) {
+    console.error("Admin agent-report detail failed to read agent/history/log.ndjson", e);
+    res.status(500).json({ error: "Could not load this report." });
   }
 }
 
@@ -534,10 +644,14 @@ function handleAgentActivity(req, res) {
 // approved; only the existing narrow mechanical-fix whitelist is ever
 // auto-applied, by the unrelated --apply-safe runner path).
 // ---------------------------------------------------------------------
-const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed"];
+// Phase 5: 'adjust_requested' added — see
+// sql/2026-10-14_phase5-agent-adjust-workflow.sql's header for the full
+// state-machine design. Still never includes an "applied by the mechanical
+// runner due to an adjustment" state — Adjust never touches the website.
+const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed", "adjust_requested"];
 const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
 const AGENT_PROPOSAL_SELECT =
-  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at";
+  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, adjust_note, adjusted_at, last_run_id, created_at, updated_at";
 
 function mapAgentProposal(row) {
   return {
@@ -556,6 +670,8 @@ function mapAgentProposal(row) {
     reviewedBy: row.reviewed_by,
     reviewedAt: row.reviewed_at,
     reviewNote: row.review_note,
+    adjustNote: row.adjust_note,
+    adjustedAt: row.adjusted_at,
     lastRunId: row.last_run_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -590,7 +706,15 @@ async function handleListAgentProposals(req, res) {
   }
 }
 
-// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject", note }
+// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject"|"adjust", note }
+//
+// Phase 5 — "adjust": records owner feedback and moves the proposal to
+// 'adjust_requested' WITHOUT approving/rejecting it and WITHOUT touching
+// the website — see sql/2026-10-14_phase5-agent-adjust-workflow.sql's
+// header for the full design (why this is deliberately narrower than
+// "the agent rewrites the proposal automatically"). A non-empty note is
+// required for "adjust" (there is nothing to act on otherwise); it is
+// optional for approve/reject, unchanged from before.
 async function handleReviewAgentProposal(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -608,8 +732,12 @@ async function handleReviewAgentProposal(req, res, session) {
     res.status(400).json({ error: "A proposal id is required." });
     return;
   }
-  if (action !== "approve" && action !== "reject") {
-    res.status(400).json({ error: "action must be 'approve' or 'reject'." });
+  if (action !== "approve" && action !== "reject" && action !== "adjust") {
+    res.status(400).json({ error: "action must be 'approve', 'reject', or 'adjust'." });
+    return;
+  }
+  if (action === "adjust" && !note) {
+    res.status(400).json({ error: "Adjustment feedback is required." });
     return;
   }
 
@@ -624,7 +752,6 @@ async function handleReviewAgentProposal(req, res, session) {
       return;
     }
 
-    const newStatus = action === "approve" ? "approved" : "rejected";
     // The literal update payload, built here — never the request body —
     // same mass-assignment discipline every other admin write endpoint
     // in this project already follows. This can only ever move a
@@ -632,15 +759,27 @@ async function handleReviewAgentProposal(req, res, session) {
     // touches finding_type/category/pages/evidence/research (those are
     // sync-owned, see proposals-sync.js) and never executes any action
     // beyond recording the owner's decision.
+    const update = { updated_at: new Date().toISOString() };
+    if (action === "adjust") {
+      update.status = "adjust_requested";
+      update.adjust_note = note;
+      update.adjusted_at = new Date().toISOString();
+      // A fresh adjustment request supersedes any prior review verdict —
+      // same "a new decision point replaces the old one" posture
+      // approve/reject already has, just entering a different state.
+      update.reviewed_by = null;
+      update.reviewed_at = null;
+      update.review_note = null;
+    } else {
+      update.status = action === "approve" ? "approved" : "rejected";
+      update.reviewed_by = session.email;
+      update.reviewed_at = new Date().toISOString();
+      update.review_note = note;
+    }
+
     const { data, error } = await supabase
       .from("agent_proposals")
-      .update({
-        status: newStatus,
-        reviewed_by: session.email,
-        reviewed_at: new Date().toISOString(),
-        review_note: note,
-        updated_at: new Date().toISOString(),
-      })
+      .update(update)
       .eq("id", id)
       .select(AGENT_PROPOSAL_SELECT)
       .maybeSingle();

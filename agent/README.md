@@ -1,4 +1,17 @@
-# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening)
+# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening) + Phase 5 (daily/weekly operating system)
+
+**Naming note**: this file's own Phase 1-4 numbering reached "Recommended
+Phase 5" (a short wish-list, see below) before Rocky's own "Phase 2: turn
+this into a daily/weekly operating system" request arrived under a
+DIFFERENT numbering scheme (the git branch for that work is named
+`site-improvement-agent-phase2`). To avoid two different "Phase 2"s and
+two different "Phase 5"s existing in the same project, this file keeps its
+own existing Phase 1-4 numbering and calls Rocky's request "Phase 5" here
+— see the dedicated section near the end of this file, which supersedes
+the short "Recommended Phase 5" wish-list that used to be this file's
+final section (kept below, marked superseded, as a historical record of
+what it predicted — items 2-4 of it did end up built, under this new
+numbering).
 
 An autonomous system that inspects this site's own public marketing pages,
 researches what genuinely needs external evidence, decides what (if
@@ -675,28 +688,369 @@ section above for detail):
    applied yet, while confirming `?view=agent-activity` is completely
    unaffected either way (it never touches Supabase).
 
-## Recommended Phase 5
+## Recommended Phase 5 (2026-10-12 wish-list — SUPERSEDED by "Phase 5: Daily/Weekly Operating System" below)
 
 1. **Scheduling**: once this phase's output has been trusted over more
    real runs, consider a recurring (e.g. weekly) dry-run via the existing
    Vercel cron mechanism or an external scheduler — still dry-run only
-   until there's more experience with the approval workflow.
+   until there's more experience with the approval workflow. *(Design
+   done, not activated — see "Scheduling architecture" below.)*
 2. **Connect the real completed-job data**: once `operational_note` has
    real production content, a step that pulls recent completed jobs,
    routes them through `business-context.js`, and feeds genuinely
    recurring signals (e.g. "several real jobs mention X in city Y") into
    `content-gap-audit.js`/`coverage-audit.js` as additional internal
-   evidence — still never a publish trigger by itself.
+   evidence — still never a publish trigger by itself. *(Built — see
+   "Completed-job evidence" below — but feeds the weekly research-rotation
+   scorer, not the daily audit modules directly; see that section for
+   why.)*
 3. **Close the loop on approved proposals**: today, approving a
    `PROPOSE_CHANGE` just records the decision — a human still has to go
    write the actual change. A lightweight way to track "approved and
    already acted on" (vs. "approved, still waiting") would make the
    `applied`/`validated`/`failed` states in `agent_proposals`'s own schema
    actually used for meaningful proposals, not just the narrow mechanical
-   whitelist.
+   whitelist. *(Still open — see "Remaining risks/open questions" below.)*
 4. **Expand the audit surface further** now that the pattern (check
    against the real site during development, confirm it separates signal
    from this site's own natural similarity) is established — e.g.
    near-duplicate description detection with corroborating signals,
    "missing useful content" gap analysis against `services.html`'s own
-   listing.
+   listing. *(Not done this phase — deliberately out of scope; see
+   "Implementation discipline" in the new section below.)*
+
+---
+
+# Phase 5 — Daily/Weekly Operating System
+
+Built on branch `site-improvement-agent-phase2` (confusingly named vs.
+this file's own numbering — see the note at the top of this file),
+starting from `main`@`f67d4c6`. **Does not touch the Estimate workflow**
+(`admin/estimate*`, the Lead→Estimate→Job pipeline) — that work is
+separate, complete, and live; nothing in this phase reads or writes it.
+
+This section documents what changed. It assumes you've already read
+Phases 1-4 above.
+
+## 1. What already existed vs. what this phase added
+
+Already built (Phases 1-4, unchanged by this phase): the scan → 9 audit
+modules → risk classify → research-intake → decide → apply-safe-whitelist
+→ validate/revert → history-log pipeline; the `agent_proposals` CRM table
+and its approve/reject review page; the completed-job privacy boundary
+(`business-context.js`, built but **unwired** — see below); the Phase
+1-4 README/tests. See "Recommended Phase 5" above for exactly what was
+flagged as missing — this phase builds items 1-2 from that list under a
+different name, adds the daily/weekly cadence and reporting layer Rocky
+asked for, and deliberately defers item 3 and all of item 4.
+
+New in this phase (all additive — nothing above was rewritten):
+
+| File | Purpose |
+|---|---|
+| `agent/context/business-profile.json` | Canonical business/service-area data (§2) |
+| `agent/lib/business-profile.js` | Loader/accessors for the above |
+| `agent/lib/page-groups.js` | **Refactored** (not rewritten) to derive its existing exports from business-profile.js instead of hardcoding them a second time — same values, same exports, zero behavior change (proven by `tests/agent-business-profile.test.js`) |
+| `agent/lib/change-detection.js` | New/still-open/resolved vs. the previous run (§5) |
+| `agent/lib/research-rotation.js` | Weekly service-area prioritization (§4) |
+| `agent/lib/completed-job-intake.js` | Reads publication-safe completed-job evidence (§9) |
+| `agent/lib/report.js` | Builds the persisted CRM-facing report (§6) |
+| `agent/lib/run-lock.js` | Concurrency guard (§10) |
+| `agent/history/research-rotation-state.json` | Git-tracked rotation bookkeeping (like `log.ndjson`) |
+| `agent/research/completed-jobs/` | Intake directory, mirrors `research/results/` |
+| `sql/2026-10-14_phase5-agent-adjust-workflow.sql` | Adds the Adjust state (§8) |
+| `admin/agent-reports/`, `admin/agent-reports.js` | Report-history CRM page (§7) |
+| 10 new `tests/agent-*.test.js` files | §11 |
+
+Modified (behavior-preserving unless noted): `agent/runner.js` (runType,
+report building, rotation, lock, failure recording), `agent/cli.js`
+(`--daily`/`--weekly` flags), `agent/lib/proposals-sync.js` (now also
+returns `statusByKey`, additive), `agent/lib/research.js` (new optional
+`temporality`/`publishedAt`/`locality`/`topic` fields, all backward
+compatible — the two real Phase 3 research files were updated to set
+`temporality` explicitly, see §3), `api/admin/bookings.js` (new
+`agent-reports`/`agent-report` views, `adjust` PATCH action, richer
+`agent-activity` response — all additive), `admin/home.js`+
+`admin/home/index.html` (richer card, §6), `admin/agent-proposals.js`+
+`index.html` (Adjust button, §8), `tests/agent-migrations-review.test.js`
+(extended to also check the new migration's cumulative effect).
+
+## 2. Canonical business/service-area context
+
+`agent/context/business-profile.json` is now the single source of truth
+for services/cities/identity — verified directly against the live site
+(`index.html`'s JSON-LD + `#service-areas` section) on 2026-10-14, not
+invented. The verification surfaced a real, previously-undocumented gap:
+**the site's own JSON-LD `areaServed` claims 20 cities, but only 13 have a
+dedicated page.** The profile models both lists explicitly
+(`serviceArea.citiesWithPages` / `serviceArea.claimedCitiesWithoutPages`)
+rather than silently picking one — the 7 pageless-but-claimed cities
+(Golden, Brighton, Morrison, Lone Tree, Wheat Ridge, Commerce City,
+Sterling Ranch) are real evidence for the weekly rotation (§4) to
+evaluate, never a to-do list of pages to auto-create (see §8's new-page
+standard, unchanged from the brief).
+
+`agent/lib/page-groups.js` — the pre-existing single source every Phase
+1-3 audit module already relied on — now derives its exports FROM this
+file instead of hardcoding a second copy. Every existing audit module is
+untouched and was re-tested to confirm identical behavior.
+
+## 3. Daily-run behavior
+
+`node agent/cli.js --daily` (or `--daily --apply-safe`). Runs the exact
+same Phase 1-4 pipeline (nothing about scanning/auditing/deciding
+changed), then additionally:
+
+- Reads the previous run from history and computes change detection (§5).
+- Builds a persisted `report` object (§6) and attaches it to the run
+  record before writing to history.
+- Does NOT compute research-rotation priorities (weekly-only, §4) and
+  does NOT pull completed-job evidence into the mechanical audits (that
+  evidence only ever feeds the weekly rotation scorer, never a daily
+  finding-producer — see §9 for why this boundary was deliberate).
+
+A daily run with zero actionable findings and zero proposals produces an
+`ALL CLEAR` report — proven by `tests/agent-report.test.js`'s first test.
+Daily is not forced to find something wrong; `report.healthSummary` is a
+short sentence derived from real counts, never a fabricated 0-100 score
+(enforced by a dedicated test).
+
+## 4. Weekly-run behavior
+
+`node agent/cli.js --weekly`. Same daily pipeline, PLUS:
+`agent/lib/research-rotation.js` scores every city in the WHOLE claimed
+service area (`business-profile.js`'s `getAllServiceAreaCities()` — 20
+cities, not 13) on four real, non-invented signals:
+
+1. Days since this rotation last reviewed it (persisted in
+   `agent/history/research-rotation-state.json`, git-tracked).
+2. Whether it's claimed-but-pageless (a real gap, evaluate don't
+   auto-create).
+3. Open daily-audit findings already on its page.
+4. Publication-safe completed-job evidence count for that city (§9).
+
+The top N (default 3 — configurable via `rotationLimit`) become this
+week's picks, persisted as "reviewed" so next week rotates elsewhere. No
+search-volume/demand numbers are invented anywhere in this scoring — see
+`research-rotation.js`'s own header for the exact, documented point
+values. **The weekly runner does not perform the actual research** — same
+architecture as the existing category-C research layer: a Claude-driven
+session with web access is expected to read the week's picks from the
+report, research them per the evidence hierarchy (§9 of the brief,
+unchanged — official sources first, competitors for landscape only), and
+write `agent/research/results/*.json` files the NEXT run will pick up.
+This keeps the offline runner's "no network access" invariant intact.
+
+## 5. Change detection
+
+`agent/lib/change-detection.js` compares the current run's finding keys
+against the single most recent previous run, producing `new` /
+`stillOpen` / `resolved` lists. Combined with `proposalStatus` (stamped
+onto each finding from `proposals-sync.js`'s new `statusByKey` return
+value — itself additive, no existing behavior changed), the report can
+distinguish new / still-open / resolved / previously-rejected /
+already-proposed / already-applied, exactly as requested — without a
+second database round-trip. A malformed/missing previous-run history
+degrades to "no previous run" rather than throwing.
+
+## 6. Report persistence model
+
+`agent/lib/report.js`'s `buildReport()` is a pure function —
+`runner.js` calls it once per run and persists the result as
+`record.report` inside the existing `agent/history/log.ndjson` (same
+file, same git-tracked durability as Phases 1-4; no new table). Shape:
+`runId`, `timestamp`, `runType`, `pagesChecked`, `healthSummary`
+(`{status, text}` — never a numeric score), `technicalIssues`,
+`observationsCount`, `opportunitiesCount`, `research` (questions raised +
+each result's freshness, §9), `safeFixes`, `proposals` (counts + items,
+including awaiting/previously-rejected/already-applied), `changeDetection`
+(§5), `validation`, `failure` (null unless the run failed, §10),
+`rotation` (weekly only), `nextReviewHint`.
+
+## 7. CRM Home + report-history UX
+
+Home's "Website & Marketing Activity" card (`admin/home.js` +
+`admin/home/index.html`) gained a compact summary (last run time, pages
+checked, health line) and a stats row (fixes applied / opportunities
+researched / proposals awaiting approval) built from the latest run's
+`report` — see the mockup in the original brief; this implementation
+matches it closely (verified visually in the browser preview, including
+mobile width). Degrades gracefully (hides the new rows) for any
+pre-Phase-5 log entry with no `report` field — the original
+`recent[0].lines` rendering is completely untouched as the fallback.
+
+`admin/agent-reports/` (new, `?view=agent-reports` list +
+`?view=agent-report&runId=` detail, both on the EXISTING
+`api/admin/bookings.js` function — no new Vercel function) is the
+smallest sensible report-history page: a list of
+Today/Yesterday/date + run-type badge + outcome badge, tap a row to see
+that run's full decisions/evidence/actions. Mobile-first (verified at
+375px).
+
+## 8. Proposal integration + the Adjust decision
+
+`agent_proposals`'s existing `proposed → approved|rejected` workflow is
+completely unchanged. **Adjust was evaluated and partially implemented**
+— deliberately scoped narrow rather than building the "messy
+architecture" the brief said to avoid:
+
+**Built** (`sql/2026-10-14_phase5-agent-adjust-workflow.sql` +
+`handleReviewAgentProposal`'s new `action:"adjust"` + the UI's Adjust
+button): a proposal can move `proposed → adjust_requested`, capturing
+required owner feedback (`adjust_note`/`adjusted_at`), WITHOUT setting
+`reviewed_by`/`reviewed_at` (it is not an approval or rejection) and
+WITHOUT touching the website — proven by
+`tests/agent-adjust-workflow.test.js`. An adjust request on an
+already-reviewed proposal clears the stale verdict, same "a new decision
+point replaces the old one" posture approve/reject already has.
+
+**Deliberately not built**: automatic AI-driven regeneration of the
+proposal's text from the owner's feedback. The mechanical offline runner
+has no NLP/LLM capability and should not gain one just for this (new paid
+API dependency, explicitly to avoid per the brief). Instead,
+`adjust_requested` proposals are meant to be picked up by a human or a
+Claude-assisted session — the SAME existing pattern as "real research"
+(§4 above) — who revises the summary/recommendation; when the next sync
+sees that changed content, `proposals-sync.js`'s EXISTING Phase-4
+identity-reset logic (previously only triggered for
+`approved`/`rejected`) already resets it back to `proposed` requiring
+fresh approval — no new code needed for that half, because
+`adjust_requested` was deliberately treated as "not yet reviewed" from
+sync's point of view. This is the clean design the brief asked for when
+full automation isn't: a bounded, reviewable loop reusing existing
+machinery, not a second content-override column with its own
+clobber-avoidance logic (which was drafted and rejected during design —
+see this file's own PATCH handler comment for the reasoning).
+
+## 9. Completed-job evidence + privacy
+
+`business-context.js`'s `fromCompletedBooking()` (built in Phase 3, never
+wired to anything) is now wired — but deliberately NOT into the daily
+mechanical audit modules. Reasoning: those modules' finding `type`+`pages`
+form `Finding.key`, which research-attachment stability depends on
+staying byte-stable (documented risk in the Phase 1-4 architecture);
+wiring real, slowly-changing operational data into their OUTPUT would
+risk exactly that fragility. Instead, `agent/lib/completed-job-intake.js`
+reads ALREADY-REDACTED evidence files (written by whoever has real
+Supabase access — a human or Claude-assisted session, same pattern as
+research results) from `agent/research/completed-jobs/*.json`, and feeds
+only a per-city COUNT into the weekly rotation scorer (§4) — a pure
+informational signal, never a finding-producer, never a publish trigger.
+
+Defense in depth: the loader independently re-validates every field
+against `PUBLICATION_SAFE_FIELDS` (even though its input is supposed to
+already be redacted) and rejects any entry carrying a price/payment/tip/
+address/customer-name/phone/email/raw-notes field — proven for every one
+of those patterns independently by
+`tests/agent-completed-job-intake.test.js`.
+
+## 10. Freshness/temporality + failure/concurrency safety
+
+**Freshness** (`research.js`): every research result now carries an
+optional `temporality` (`evergreen`/`temporary`/`unknown`, defaults to
+`unknown` — never silently assumed evergreen) plus optional
+`publishedAt`/`locality`/`topic`. `computeFreshness()` flags a
+`temporary` result stale after ~45 days, an `evergreen` one after ~365,
+and an `unknown` one as always `needs-classification` regardless of age.
+The real Denver LeafDrop result (a genuinely seasonal municipal program —
+exactly the risk the Phase 4 "sanity check" narrative already flagged in
+prose) is now explicitly tagged `temporality:"temporary"`.
+
+**Concurrency** (`run-lock.js`): a file-based lock
+(`agent/history/.run.lock`, gitignored, never committed) refuses a second
+run while one is in flight (`ConcurrentRunError`), self-heals after 2
+hours if a process crashed without releasing it, and `release()` only
+ever removes a lock it recognizes as its own. Proven with two genuinely
+overlapping `runner.run()` calls in `tests/agent-runner-phase5.test.js`.
+
+**Failure safety** (`runner.js`): the whole scan→decide pipeline is now
+wrapped — if it throws, a `failed:true` record (with a `healthSummary`
+explicitly saying the run didn't complete, never an empty-but-successful-
+looking record) is still written to history before the error is
+re-thrown (carrying `err.recordedFailure` so the CLI can report the
+history runId it saved). A malformed/unreadable previous-run history
+degrades change detection to "no previous run" rather than blocking a new
+run. A malformed rotation-state file degrades to "nothing reviewed yet."
+
+## Scheduling architecture (DESIGNED, NOT ACTIVATED)
+
+No cron/schedule was created this phase, per explicit instruction. Design:
+
+- **Recommended cadence**: Daily at the existing cron's off-hour (e.g.
+  04:00 America/Denver, matching the one existing cron's 9am UTC pattern
+  in `vercel.json`) via `node agent/cli.js --daily --apply-safe`. Weekly
+  on one fixed day (e.g. Sunday 04:00) via `node agent/cli.js --weekly`
+  (apply-safe optional; the weekly run's value is research/reporting, not
+  mechanical fixes).
+- **Entry point**: `node agent/cli.js --daily [--apply-safe]` /
+  `node agent/cli.js --weekly`, exit code 0 on success (including a
+  `failed:true` honest record — the CLI's own exit code still reflects
+  the failure; see `cli.js`'s updated catch block) or nonzero on an
+  unrecoverable CLI-level error.
+- **Required environment/credentials**: `SUPABASE_URL`/`SUPABASE_SECRET_KEY`
+  for proposal sync (optional — gracefully skips without them, same as
+  today); no other credentials required for the mechanical run itself.
+- **How external research is performed**: NOT by the scheduled job itself
+  (no network access by design). A scheduled run's report surfaces
+  `RESEARCH_MORE` questions and the week's rotation picks; a separate,
+  human-or-Claude-assisted session performs the actual research and
+  commits the result files, which the NEXT scheduled run picks up.
+- **If research/network is unavailable**: irrelevant to the scheduled job
+  itself — it never touches the network. A `RESEARCH_MORE` finding simply
+  stays `RESEARCH_MORE` until a research file answers it.
+- **If a run fails halfway**: see §10 above — an honest `failed:true`
+  record is written; the next scheduled run is unaffected (no corrupted
+  state carries forward) except that change-detection will compare
+  against whatever the last SUCCESSFUL run was, since the failed record's
+  `findings` array is empty (never a false "nothing is open anymore").
+- **Concurrency**: `run-lock.js` (§10) — a second scheduled invocation
+  while one is still running is refused, not interleaved.
+- **Vercel/function implications**: NONE. This CLI runs outside any
+  Vercel function (a cron-triggered GitHub Action, or an external
+  scheduler hitting a thin trigger, are both viable — this phase does not
+  pick one, since picking one IS the activation step being deliberately
+  deferred). If a future phase wants a Vercel Cron-triggered HTTP
+  endpoint instead of an external scheduler, it would need to reuse an
+  EXISTING function (the 12/12 budget is fully consumed, confirmed
+  unchanged by this phase) rather than add one.
+
+## 11. Testing
+
+10 new test files, all passing: `agent-business-profile`,
+`agent-change-detection`, `agent-research-freshness`,
+`agent-research-rotation`, `agent-completed-job-intake`, `agent-run-lock`,
+`agent-report`, `agent-adjust-workflow`, `agent-reports-api`,
+`agent-reports-ui`, plus `agent-runner-phase5` (11 total) and 2 existing
+files updated (`agent-migrations-review` extended for the new SQL file,
+`agent-proposals-ui` updated for new UI wording). Full repository suite
+(85 files) run: 84 pass, 1 pre-existing unrelated failure
+(`phase3c-batch5-intake-ui.test.js`, present since before this branch
+existed, confirmed untouched by `git log` — see that file's own history).
+
+## Implementation discipline — what was deliberately NOT built
+
+Per the brief's own "don't overbuild" instruction: no new Supabase
+tables beyond the one additive migration; no new Vercel functions (still
+exactly 12); no paid APIs; no numeric health score anywhere; the 4th
+"Recommended Phase 5" wish-list item (expanding the audit surface
+further) was left for a future phase, since it's unrelated to the
+daily/weekly operating-system request; Adjust's auto-regeneration half
+was evaluated and explicitly deferred (§8) rather than built messily.
+
+## Remaining risks / open questions
+
+1. `agent_proposals`'s `applied`/`validated`/`failed` states are still
+   only ever set by the narrow mechanical whitelist — "close the loop on
+   approved PROPOSE_CHANGE proposals" (item 3 of the old wish-list) is
+   still open.
+2. The weekly rotation's scoring weights (§4) are a reasonable first
+   pass, not tuned against multiple real weekly runs yet (there has only
+   ever been one real run in this repo's history, per the Phase 1-4
+   README's own note) — worth revisiting after a few real weeks.
+3. Scheduling is designed, not activated — see that section. Activating
+   it is a separate, explicit decision for Rocky.
+4. `research-rotation-state.json`'s scoring currently treats every
+   "claimed-but-pageless" city as a flat +8 — real-world weekly runs may
+   reveal some of those 7 cities deserve a different priority than others
+   (e.g. based on actual lead volume by city, not modeled here since that
+   data isn't available to this agent).

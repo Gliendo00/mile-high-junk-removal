@@ -13,5 +13,8 @@
   "limitations": "This is a generic cross-industry content pattern, not Denver/Mile-High-specific evidence, and carries no search-volume or Search Console data at all. On its own this is too weak to justify a change — see the companion official-government research result for the specific, locally-grounded evidence that actually tips this finding.",
   "verdict": "inconclusive",
   "recommendation": "Insufficient on its own. See the companion result citing Denver's official LeafDrop program for a concrete, locally-specific angle worth considering.",
-  "kind": "external"
+  "kind": "external",
+  "temporality": "evergreen",
+  "locality": null,
+  "topic": "seasonal-cleanout-faq-pattern"
 }

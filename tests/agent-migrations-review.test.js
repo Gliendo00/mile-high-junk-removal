@@ -40,6 +40,17 @@ const howdItGoSql = fs.readFileSync(
   path.join(__dirname, "..", "sql", "2026-10-12_phase3-agent-howd-it-go.sql"),
   "utf8"
 );
+// Phase 5 — the Adjust-workflow migration ALTERs the original
+// agent_proposals table (widens the status CHECK, adds two columns,
+// re-GRANTs UPDATE). Read alongside the original so the tests below can
+// check the CUMULATIVE effect of applying both in order, not just the
+// first file in isolation — applying only the first file's checks here
+// would silently stop catching drift the moment a second migration
+// changes the same constraint/grant.
+const adjustSql = fs.readFileSync(
+  path.join(__dirname, "..", "sql", "2026-10-14_phase5-agent-adjust-workflow.sql"),
+  "utf8"
+);
 
 function extractCheckInList(sql, column) {
   const re = new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`, "i");
@@ -96,8 +107,14 @@ test("agent_proposals.sql: decision CHECK constraint matches exactly decision.js
   assert.deepStrictEqual(sqlDecisions, appDecisions);
 });
 
-test("agent_proposals.sql: status CHECK constraint matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
-  const sqlStatuses = extractCheckInList(proposalsSql, "status").sort();
+// Phase 5: the Adjust-workflow migration widens this exact constraint
+// (DROP + re-ADD, same constraint name) — the CUMULATIVE/final status
+// list (after both migrations apply, in order, to a real database) comes
+// from adjustSql, not proposalsSql alone. Checking proposalsSql in
+// isolation here would stop reflecting the real deployed constraint the
+// moment a second migration touches it.
+test("agent_proposals.sql + phase5-agent-adjust-workflow.sql: the FINAL status CHECK constraint (after both migrations apply, in order) matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
+  const sqlStatuses = extractCheckInList(adjustSql, "status").sort();
   const bookingsJs = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "bookings.js"), "utf8");
   const m = bookingsJs.match(/const AGENT_PROPOSAL_STATUSES = \[([^\]]*)\];/);
   assert.ok(m, "expected AGENT_PROPOSAL_STATUSES in api/admin/bookings.js");
@@ -120,17 +137,30 @@ test("agent_proposals.sql: service_role grants are REVOKE-first (deterministic e
   }
 });
 
-test("agent_proposals.sql: the GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus the review-state columns the approve/reject PATCH writes", () => {
+// Phase 5: the Adjust-workflow migration re-REVOKEs/re-GRANTs with a
+// widened column list (adds adjust_note/adjusted_at). The FINAL grant
+// (after both migrations apply, in order) comes from adjustSql.
+test("phase5-agent-adjust-workflow.sql: re-grants are REVOKE-first too, and the FINAL UPDATE grant still excludes identity columns", () => {
+  assert.ok(/REVOKE ALL ON public\.agent_proposals FROM service_role/i.test(adjustSql));
+  const grantUpdateMatch = adjustSql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  assert.ok(grantUpdateMatch);
+  const updatableColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean);
+  for (const protectedCol of ["finding_key", "finding_type", "pages", "created_at", "id"]) {
+    assert.ok(!updatableColumns.includes(protectedCol), `${protectedCol} must never be in the UPDATE grant's column list`);
+  }
+});
+
+test("agent_proposals.sql + phase5-agent-adjust-workflow.sql: the FINAL GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus every column the approve/reject/adjust PATCH writes", () => {
   const { updatableFields } = require("../agent/lib/proposals-sync");
   const sampleFinding = { category: "A", riskLevel: "low", decision: "PROPOSE_CHANGE", reason: "x", summary: "x", evidence: [], research: [] };
   const syncColumns = Object.keys(updatableFields(sampleFinding, "run-1"));
-  const reviewColumns = ["status", "reviewed_by", "reviewed_at", "review_note"];
+  const reviewColumns = ["status", "reviewed_by", "reviewed_at", "review_note", "adjust_note", "adjusted_at"];
 
-  const grantUpdateMatch = proposalsSql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  const grantUpdateMatch = adjustSql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
   const sqlColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean).sort();
 
   const expected = [...new Set([...syncColumns, ...reviewColumns])].sort();
-  assert.deepStrictEqual(sqlColumns, expected, "the SQL grant must cover exactly what the sync step's UPDATE and the approve/reject PATCH actually write — no more, no less");
+  assert.deepStrictEqual(sqlColumns, expected, "the SQL grant must cover exactly what the sync step's UPDATE and the approve/reject/adjust PATCH actually write — no more, no less");
 });
 
 test("howd-it-go.sql: adds exactly one nullable column with no default, via ADD COLUMN IF NOT EXISTS (additive, idempotent, no backfill needed)", () => {
@@ -142,6 +172,21 @@ test("howd-it-go.sql: the executable SQL contains no DROP/ALTER COLUMN TYPE/NOT 
   const executable = stripSqlComments(howdItGoSql);
   assert.ok(!/\bDROP\s+(TABLE|COLUMN)\b/i.test(executable));
   assert.ok(!/SET\s+NOT\s+NULL/i.test(executable));
+});
+
+test("phase5-agent-adjust-workflow.sql: adds its two new columns via ADD COLUMN IF NOT EXISTS, and the status CHECK is dropped-then-recreated by name (idempotent, safe to re-run)", () => {
+  assert.ok(/ADD COLUMN IF NOT EXISTS adjust_note text NULL/i.test(adjustSql));
+  assert.ok(/ADD COLUMN IF NOT EXISTS adjusted_at timestamptz NULL/i.test(adjustSql));
+  assert.ok(/DROP CONSTRAINT IF EXISTS agent_proposals_status_check/i.test(adjustSql));
+  assert.ok(/ADD CONSTRAINT agent_proposals_status_check/i.test(adjustSql));
+});
+
+test("phase5-agent-adjust-workflow.sql: the executable SQL contains no DROP TABLE/TRUNCATE/DELETE/DROP COLUMN statement (only an additive/idempotent ALTER + re-GRANT)", () => {
+  const executable = stripSqlComments(adjustSql);
+  assert.ok(!/\bDROP\s+TABLE\b/i.test(executable));
+  assert.ok(!/\bTRUNCATE\b/i.test(executable));
+  assert.ok(!/\bDELETE\s+FROM\b/i.test(executable));
+  assert.ok(!/\bDROP\s+COLUMN\b/i.test(executable));
 });
 
 test("both migrations' rollback sections are commented out (reference-only), never part of the executable statement", () => {

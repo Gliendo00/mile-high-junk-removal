@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Website Agent Report History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-chrome"></div>
+
+<main class="admin-main">
+  <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
+
+  <!-- Site Improvement Agent, Phase 5 — the report-history surface behind
+       Home's "View report →" link (see admin/home/index.html). Reads
+       GET /api/admin/bookings?view=agent-reports (list) and
+       ?view=agent-report&runId=... (one run's full detail) — both read
+       ONLY agent/history/log.ndjson, never Supabase, same as the
+       pre-existing ?view=agent-activity. Not linked from the global nav
+       — reached only via Home, like /admin/agent-proposals/. -->
+  <div class="admin-list-heading">
+    <h1>Website Agent — Report History</h1>
+  </div>
+  <p class="admin-row-value" style="margin:-6px 0 16px;color:var(--color-neutral-600, #82796a);font-size:13px">
+    Every past run of the Site Improvement Agent. Tap a row to see what it checked, what it did, and why.
+  </p>
+
+  <div id="reports-loading" class="admin-loading">Loading…</div>
+  <div id="reports-empty" class="admin-empty" style="display:none">No runs recorded yet.</div>
+  <div id="reports-list"></div>
+
+  <div id="report-detail" class="admin-report-detail" hidden></div>
+</main>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../agent-reports.js"></script>
+</body>
+</html>
