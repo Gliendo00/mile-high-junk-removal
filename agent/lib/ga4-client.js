@@ -16,13 +16,18 @@
 //
 // Never called by agent/runner.js/gatherFindings() — only by the separate,
 // explicit `node agent/cli.js --fetch-firstparty=<request.json>` step.
+//
+// AUTH-HARDENING UPDATE: auth now goes through agent/lib/google-auth.js's
+// unified resolver (impersonation preferred, then direct ADC, then the
+// legacy service-account-JSON key as an optional fallback — see that
+// file's header) instead of going straight to the legacy key module.
 
-const { getAccessToken, isGoogleServiceAccountConfigured } = require("./google-service-account-auth");
+const { getAccessToken, isGoogleAuthConfigured } = require("./google-auth");
 
 const SCOPE = "https://www.googleapis.com/auth/analytics.readonly";
 
 function isGa4Configured() {
-  return isGoogleServiceAccountConfigured() && Boolean(process.env.GA4_PROPERTY_ID);
+  return isGoogleAuthConfigured() && Boolean(process.env.GA4_PROPERTY_ID);
 }
 
 /**

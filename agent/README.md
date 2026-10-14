@@ -1078,6 +1078,18 @@ touching anything here** — it's the one rule every other design choice in
 this phase exists to protect, and it's enforced structurally (by code
 and tests), not just by convention.
 
+**Auth-hardening follow-up (same phase, built immediately after real
+Google Cloud setup began)**: real setup hit the org's
+`iam.disableServiceAccountKeyCreation` policy — Google's own
+secure-by-default posture, correctly left untouched rather than
+disabled. §3A/§3B below replace the single `GOOGLE_SERVICE_ACCOUNT_JSON`
+mechanism this section originally shipped with a keyless-by-default
+model (service-account impersonation via Application Default
+Credentials, preferred; direct ADC and the legacy key kept only as
+narrower/optional fallbacks) — read §3A/§3B instead of (not in addition
+to) any surviving references to "the service-account JSON key" being
+required elsewhere in this section.
+
 ## 1. What was already there (investigated before building anything)
 
 - **GA4 is already live on every public page**: a literal inline
@@ -1123,14 +1135,17 @@ and tests), not just by convention.
 
 | File | Purpose |
 |---|---|
-| `agent/lib/google-service-account-auth.js` | Shared JWT-bearer OAuth2 token exchange (Node `crypto` + `fetch`, no SDK) |
+| `agent/lib/google-auth.js` | **The unified auth resolver** every client imports — impersonation > direct ADC > legacy key, see §3A |
+| `agent/lib/google-adc.js` | Application Default Credentials loader (keyless — a credential file, or the GCE/Cloud Run metadata server) |
+| `agent/lib/google-impersonation.js` | Short-lived service-account impersonation via the IAM Credentials API |
+| `agent/lib/google-service-account-auth.js` | Legacy JWT-bearer OAuth2 key exchange — now TIER 3, optional fallback only (see §3A) |
 | `agent/lib/search-console-client.js` | Raw Search Analytics query + URL Inspection calls |
 | `agent/lib/ga4-client.js` | Raw GA4 Data API `runReport` call |
 | `agent/lib/firstparty-evidence.js` | Normalized evidence schema + freshness windows (no verdict/confidence/recommendation field — see §4) |
 | `agent/lib/firstparty-fetch.js` | The ONLY module that actually calls GSC/GA4 — targeted fetch + normalize + bounds/privacy guards |
 | `agent/lib/firstparty-intake.js` | Reads `agent/research/firstparty/*.json`, attaches to findings by key, for DISPLAY ONLY |
 | `agent/research/firstparty/` | Evidence file directory (git-tracked, intentionally empty on this checkout) |
-| 8 new `tests/agent-firstparty-*.test.js` + `tests/agent-google-service-account-auth.test.js` + `tests/agent-search-console-client.test.js` + `tests/agent-ga4-client.test.js` | §16 |
+| 12 new `tests/agent-firstparty-*.test.js`/`tests/agent-google-*.test.js` | §16 |
 
 Modified (additive only): `agent/runner.js` (wires the new intake step
 in, AFTER `decideAll()` — see §4; computes the two `isXConfigured()`
@@ -1138,7 +1153,11 @@ booleans, still zero network calls, and passes them to `buildReport()`),
 `agent/lib/report.js` (new `report.firstPartyEvidence` summary field),
 `agent/cli.js` (new `--fetch-firstparty=<request.json>` step),
 `admin/agent-reports.js` (new compact "First-party evidence" block in
-the report detail view). **Not modified**: `decision.js`, `risk.js`,
+the report detail view), `agent/lib/search-console-client.js`/
+`agent/lib/ga4-client.js` (auth-hardening follow-up, §3A: now import
+from `google-auth.js` instead of going straight to the legacy key
+module — their own `isSearchConsoleConfigured()`/`isGa4Configured()`
+signatures are unchanged). **Not modified**: `decision.js`, `risk.js`,
 `findings.js`, `research.js`, `research-intake.js`,
 `research-rotation.js`, `change-detection.js`, `business-profile.js`,
 `completed-job-fetch.js`/`completed-job-intake.js`, every audit module,
@@ -1157,7 +1176,151 @@ model, don't overbuild). Fails safe exactly like
 `api/_lib/supabase-admin.js`'s `getServiceClient()`: missing/invalid
 config returns `{skipped:true, reason}`, never thrown, and (confirmed by
 `tests/agent-google-service-account-auth.test.js`) attempts ZERO network
-call when unconfigured.
+call when unconfigured. **This module is no longer the only, or the
+preferred, way to authenticate — see §3A below**, added immediately
+after this phase shipped, once real Google Cloud setup hit the org's
+`iam.disableServiceAccountKeyCreation` policy.
+
+## 3A. Auth-hardening follow-up — keyless by default, key-based only as a fallback
+
+**Why**: this org's Google Cloud project blocks creating a long-lived
+service-account key outright (`iam.disableServiceAccountKeyCreation`) —
+Google's own secure-by-default posture, and correctly NOT something this
+agent asked to have disabled. `GOOGLE_SERVICE_ACCOUNT_JSON` (§3 above)
+therefore cannot realistically be populated for
+`mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com` going
+forward. This follow-up makes that env var one optional fallback among
+three, with two genuinely keyless mechanisms tried first.
+
+`agent/lib/google-auth.js` is the new single entry point
+`search-console-client.js`/`ga4-client.js` both import
+`getAccessToken()`/`isGoogleAuthConfigured()` from (neither client's own
+code changed beyond that one import swap). It resolves auth in a FIXED
+priority, each tier gated on its own "is this explicitly/discoverably
+configured" check, with **no silent fallthrough once a tier is
+configured** — a misconfigured preferred tier fails loudly with a
+specific reason rather than quietly trying something else (proven by
+`tests/agent-google-auth.test.js`'s "never falls through" tests):
+
+1. **Impersonation (preferred, keyless)** — `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`
+   set to the target SA's email. `agent/lib/google-adc.js` resolves a
+   BASE identity token via Application Default Credentials (a human's
+   own `gcloud auth application-default login`, or a hosted identity's
+   ADC), then `agent/lib/google-impersonation.js` calls the IAM
+   Credentials API's `generateAccessToken` to mint a short-lived
+   (~1 hour) token scoped to EXACTLY what's needed
+   (`webmasters.readonly` / `analytics.readonly`) — regardless of the
+   base credential's own scope. No key file is ever created, read, or
+   needed for the target service account; the human/hosted identity only
+   needs `roles/iam.serviceAccountTokenCreator` on it. This is the ONE
+   mechanism that reliably works end-to-end with zero extra login-time
+   configuration, and is the recommended default for BOTH local dev and
+   eventual unattended orchestration (§3B).
+2. **Direct ADC (keyless, narrower)** — no impersonation configured, but
+   an ADC credential FILE exists (`GOOGLE_APPLICATION_CREDENTIALS`, or
+   the well-known `gcloud auth application-default login` path). Used
+   directly, requesting the target scope from it. Only actually
+   succeeds if that credential's own token already carries the target
+   scope — an `authorized_user` file's scope is fixed at login time
+   (`gcloud`'s default: `cloud-platform` + `userinfo.email` only) and
+   cannot be narrowed per-request, so this tier typically needs an extra
+   `gcloud auth application-default login --scopes=...,https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/analytics.readonly`
+   to work for THESE specific APIs. Kept because the brief asked for ADC
+   "where practical," documented honestly as narrower than impersonation
+   rather than presented as equally reliable.
+3. **Legacy service-account key (optional fallback, lowest explicit
+   priority)** — `GOOGLE_SERVICE_ACCOUNT_JSON` set. Kept ONLY for
+   forward/backward compatibility (a differently-governed project
+   without this org's key-creation policy, or tests) — never required,
+   never recommended going forward.
+4. **Last resort: GCE/Cloud Run metadata server** — tried only when
+   NONE of the three above are configured, for the case of an eventual
+   orchestrator actually hosted on Google Cloud compute with zero
+   environment configuration at all. Never interferes with an
+   explicitly configured tier (confirmed by
+   `tests/agent-google-auth.test.js`'s "no metadata-server pollution"
+   test: a configured legacy key makes exactly one request, never a
+   wasted metadata probe first).
+
+A `GOOGLE_APPLICATION_CREDENTIALS`/well-known-gcloud-path file of type
+`"external_account"` (Workload Identity Federation — e.g. a CI identity
+federated into GCP with no Google credential at all) is recognized and
+explicitly reported as **not yet supported** rather than mis-handled —
+see §3B for why, and the upgrade path once/if it's ever needed.
+
+None of these three credential-resolution modules
+(`google-adc.js`/`google-impersonation.js`/`google-auth.js`) ever call
+`console.*` (checked directly by a dedicated test) — nothing is ever
+logged, so there is no code path where a debug log could leak a token.
+Every result returned by any tier is exactly
+`{skipped, accessToken, ...a non-secret metadata field, source}` —
+never a credential file's own secret fields
+(`refresh_token`/`client_secret`/`private_key`) — proven end-to-end
+(auth → fetch → normalize → write to disk) by
+`tests/agent-firstparty-auth-integration.test.js`.
+
+## 3B. Recommended setup — local Windows dev AND eventual unattended orchestration
+
+**The SAME one-time step serves both**, because `gcloud auth
+application-default login`'s resulting credential file persists on disk
+and silently refreshes itself on every subsequent use — no repeated
+browser interaction required after the first login:
+
+1. Install the Google Cloud CLI on this Windows machine (if not already
+   installed), then run once, interactively:
+   ```bash
+   gcloud auth application-default login
+   ```
+   This opens a browser, authenticates as Rocky's own Google identity
+   (not the service account), and writes
+   `%APPDATA%\gcloud\application_default_credentials.json` — a
+   refresh-token-based credential tied to Rocky, never a service-account
+   key, never subject to `iam.disableServiceAccountKeyCreation`.
+2. In Google Cloud Console (IAM & Admin → IAM, or directly on the
+   service account's "Permissions" tab), grant Rocky's own Google
+   account the role **Service Account Token Creator**
+   (`roles/iam.serviceAccountTokenCreator`) scoped to
+   `mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com`
+   specifically (not project-wide) — this is the ONLY new permission
+   this phase needs granted, and it does not grant Rocky's account any
+   OTHER access to Search Console/GA4 data directly; it only lets that
+   account mint short-lived tokens AS the already-narrowly-scoped
+   service account.
+3. Set exactly these three env vars wherever `node agent/cli.js
+   --fetch-firstparty=...` will actually run (this Windows machine's own
+   shell/profile, or whatever environment hosts the eventual scheduled
+   orchestrator session — never Vercel, see §17):
+   ```
+   GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com
+   GSC_SITE_URL=<the exact Search Console property — e.g. https://www.milehighjunkremoval.net/ or sc-domain:milehighjunkremoval.net>
+   GA4_PROPERTY_ID=549425042
+   ```
+   `GOOGLE_APPLICATION_CREDENTIALS` does NOT need to be set — step 1
+   already wrote the credential to gcloud's well-known path, which
+   `agent/lib/google-adc.js` discovers automatically.
+4. Sanity-check with one targeted request before relying on it in a real
+   run (see §12's example `--fetch-firstparty` request file).
+
+**If/when the orchestrator later moves to GitHub Actions or another
+non-Google-Cloud CI** (true Workload Identity Federation — no Google
+credential anywhere, not even a refresh token): that federated identity
+would need `roles/iam.serviceAccountTokenCreator` on the same service
+account (identical IAM grant as step 2 above — WIF changes WHO is
+authenticating, not what they're authorized to do), and
+`agent/lib/google-adc.js` would need its `"external_account"` branch
+implemented (currently an honest "not yet supported" — see §3A). Not
+built in this pass since no such CI identity exists yet — building the
+STS token-exchange protocol for a provider nobody has configured would
+be exactly the overbuilding this phase was asked to avoid.
+
+**If/when the orchestrator runs ON Google Cloud compute** (a GCE VM,
+Cloud Run job, etc.): no env vars beyond `GSC_SITE_URL`/`GA4_PROPERTY_ID`
+are needed at all — either grant that compute resource's own attached
+service account `roles/iam.serviceAccountTokenCreator` on
+`mile-high-site-agent@...` and set `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`
+(tier 1, same as local dev), or skip impersonation entirely and grant
+the Search Console/GA4 roles directly to that compute resource's own
+identity (tier 4, the metadata-server last resort already implemented).
 
 `search-console-client.js` (`querySearchAnalytics()`, `inspectUrl()`) and
 `ga4-client.js` (`runReport()`) are thin wrappers that call exactly one
@@ -1344,45 +1507,62 @@ when GSC/GA4 are fully unconfigured — `report.firstPartyEvidence`
 honestly shows `integrations: {searchConsole:false, ga4:false}` rather
 than silently omitting the section.
 
-## 11. Credentials / APIs required (NOT configured in this environment)
+## 11. Credentials / APIs required
 
-**Smallest secure model**: one service account, shared by both
-integrations (two scoped read-only grants, one credential to rotate) —
-following this repo's existing env-var convention (plain upper-snake,
-`process.env.X`, falsy-guarded), no new dependency added.
+**Smallest secure, keyless-by-default model** (updated by the §3A/§3B
+auth-hardening follow-up): one service account, two scoped read-only
+IAM grants, impersonated from a human's (or a hosted identity's) own
+Application Default Credentials — never a downloaded long-lived key for
+`mile-high-site-agent@...`, consistent with this org's
+`iam.disableServiceAccountKeyCreation` policy. Env vars follow this
+repo's existing convention (plain upper-snake, `process.env.X`,
+falsy-guarded); no new npm dependency was added for any of this.
 
-| Env var | Purpose |
-|---|---|
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | The service account's full JSON key, as a single-line JSON string |
-| `GSC_SITE_URL` | The exact Search Console property identifier, e.g. `https://www.milehighjunkremoval.net/` or `sc-domain:milehighjunkremoval.net` |
-| `GA4_PROPERTY_ID` | The numeric GA4 property ID, e.g. `123456789` |
+| Env var | Purpose | Required? |
+|---|---|---|
+| `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` | The target SA's email to impersonate (tier 1, preferred) | Recommended |
+| `GSC_SITE_URL` | The exact Search Console property identifier, e.g. `https://www.milehighjunkremoval.net/` or `sc-domain:milehighjunkremoval.net` | Yes, for Search Console |
+| `GA4_PROPERTY_ID` | The numeric GA4 property ID | Yes, for GA4 |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to an ADC credential file (tier 2) — usually unset; `gcloud auth application-default login`'s well-known path is found automatically | Optional |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | A legacy service-account key JSON (tier 3, optional fallback) | Optional, not recommended |
 
-**Required Google Cloud APIs**: "Google Search Console API" and "Google
-Analytics Data API" — both enabled on one GCP project, with one service
-account created there.
+**Already completed on the Google Cloud side (per Rocky, confirmed —
+not performed by this agent)**:
 
-**Owner setup steps still required (not performed by this phase)**:
+- "Google Search Console API" and "Google Analytics Data API" both
+  enabled on the project.
+- Service account created: `mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com`.
+- That service account granted **Restricted** access in Search Console
+  on the `milehighjunkremoval.net` property.
+- That service account granted **Viewer** in GA4 Property Access
+  Management.
+- `GA4_PROPERTY_ID=549425042`.
+- Service-account key creation confirmed BLOCKED by the org's
+  `iam.disableServiceAccountKeyCreation` policy — this agent does not
+  ask for that policy to be relaxed; §3A/§3B's keyless model exists
+  specifically so it never needs to be.
 
-1. In Google Cloud Console: enable the "Google Search Console API" and
-   "Google Analytics Data API" on a project; create a Service Account;
-   create and download a JSON key for it.
-2. In Search Console (search.google.com/search-console), open the
-   `milehighjunkremoval.net` property → Settings → Users and permissions
-   → Add user → the service account's `client_email` → **Restricted**
-   permission (sufficient for read-only API access).
-3. In GA4 Admin → Property Access Management → add the same service
-   account email with role **Viewer**.
-4. Set the three env vars above wherever `node agent/cli.js
-   --fetch-firstparty=...` will actually run (the orchestrator's own
-   environment — a local Claude Code session or the scheduled-session
-   environment described in Phase 5B's §13 — NEVER Vercel env vars,
-   since no Vercel function ever calls this; see §12).
-5. Sanity-check with a single targeted request file before relying on
-   it in a real run (see §12's example).
+**Owner setup steps still required on Rocky's Windows machine — see §3B
+for the full writeup; summarized here**:
 
-No credentials were created, requested, or configured by this phase —
+1. Install the Google Cloud CLI (`gcloud`) if not already installed, then
+   run once, interactively: `gcloud auth application-default login`.
+2. In Google Cloud Console, grant Rocky's own Google account
+   `roles/iam.serviceAccountTokenCreator` scoped specifically to
+   `mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com`
+   (not project-wide).
+3. Set `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`, `GSC_SITE_URL`, and
+   `GA4_PROPERTY_ID` wherever `node agent/cli.js --fetch-firstparty=...`
+   will actually run — NEVER Vercel env vars, since no Vercel function
+   ever calls this (see §17).
+4. Sanity-check with a single targeted request file before relying on it
+   in a real run (see §12's example).
+
+No credentials were created, requested, or configured BY THIS AGENT —
 `isSearchConsoleConfigured()`/`isGa4Configured()` both correctly report
-`false` in this environment today.
+`false` in this sandboxed environment today (it has no `gcloud` install,
+no ADC file, and no env vars set — confirmed before writing any of this
+code).
 
 ## 12. Orchestrator integration
 
@@ -1486,24 +1666,40 @@ node tests/agent-ga4-client.test.js
 node tests/agent-firstparty-fetch.test.js
 node tests/agent-firstparty-safety.test.js
 node tests/agent-firstparty-runner.test.js
+node tests/agent-google-adc.test.js
+node tests/agent-google-impersonation.test.js
+node tests/agent-google-auth.test.js
+node tests/agent-firstparty-auth-integration.test.js
 ```
 
-8 new files, all passing, covering (per the brief's own checklist):
+12 new files, all passing, covering (per the brief's own checklist):
 evidence schema validation + freshness windows; intake fixture-dir
-loading/attachment/malformed-file handling; the shared OAuth helper
-(real RSA signing, no network); both API clients (request-shape
-assertions, graceful degradation on error); the fetch/normalize layer
-(MAX_ROWS cap, raw-payload-never-persisted end-to-end, the GA4 privacy
-denylist with zero requests sent); the hard safety rules (`decide()`
-byte-identical with/without first-party evidence, by both behavior AND
-source-grep; the auto-apply whitelist's exact scope re-confirmed;
-service-area and cannibalization guards re-proven against this phase's
-own evidence shape); and runner/report wiring (every finding gets the
-field, network-free pipeline re-confirmed by source grep, status/health
-summary unaffected by evidence volume). Full repository suite: same
-single pre-existing, unrelated failure as Phase 5/5B
-(`phase3c-batch5-intake-ui.test.js`) — every other file, including all 8
-new ones, passes.
+loading/attachment/malformed-file handling; **the unified auth resolver's
+exact tier priority** (impersonation > direct ADC file > legacy key >
+last-resort metadata server, with zero silent fallthrough once a tier is
+configured, and zero wasted metadata-server probe when a tier is
+explicitly configured — the specific regression this auth-hardening
+follow-up exists to prevent); ADC's authorized_user/service_account/
+external_account file handling and the metadata-server fallback, all
+via injected fetches, never a real gcloud install; impersonation's IAM
+Credentials API call shape and graceful degradation; both API clients
+(request-shape assertions, graceful degradation on error); the
+fetch/normalize layer (MAX_ROWS cap, raw-payload-never-persisted
+end-to-end, the GA4 privacy denylist with zero requests sent); the hard
+safety rules (`decide()` byte-identical with/without first-party
+evidence, by both behavior AND source-grep; the auto-apply whitelist's
+exact scope re-confirmed; service-area and cannibalization guards
+re-proven); runner/report wiring (every finding gets the field,
+network-free pipeline re-confirmed by source grep, status/health summary
+unaffected by evidence volume); **no credential material (refresh
+token/client secret/private key/access token) ever appears in a
+returned auth result, a written evidence file, or `report.firstPartyEvidence`**
+(proven end-to-end: auth → fetch → normalize → write to disk); and
+**zero `console.*` calls in any of the three new auth-resolution
+modules** (nothing is ever logged). Full repository suite: same single
+pre-existing, unrelated failure as Phase 5/5B
+(`phase3c-batch5-intake-ui.test.js`) — every other file, including all
+12 new ones, passes (99 total test files, 98 passing).
 
 ## 17. Vercel / DB impact
 
@@ -1511,11 +1707,16 @@ Zero. No new Vercel function (still 12/12 — nothing in `api/` was
 touched), no new/altered SQL migration (first-party evidence lives in
 git-tracked JSON files under `agent/research/firstparty/`, exactly like
 `agent/research/results/`/`agent/research/completed-jobs/` — no new
-table), no change to `vercel.json`. `GOOGLE_SERVICE_ACCOUNT_JSON`/
-`GSC_SITE_URL`/`GA4_PROPERTY_ID` are read by the Node CLI only, in
+table), no change to `vercel.json`. `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`/
+`GOOGLE_APPLICATION_CREDENTIALS`/`GOOGLE_SERVICE_ACCOUNT_JSON`/
+`GSC_SITE_URL`/`GA4_PROPERTY_ID` are all read by the Node CLI only, in
 whatever environment runs `node agent/cli.js --fetch-firstparty=...` —
-never by a Vercel function, so they are never added to Vercel's own
-environment-variable configuration.
+never by a Vercel function, so none of them are ever added to Vercel's
+own environment-variable configuration. The auth-hardening follow-up
+also did not weaken, request an exception to, or otherwise touch the
+org's `iam.disableServiceAccountKeyCreation` policy — it was worked
+around entirely by using a different, keyless auth mechanism, not by
+asking for the policy itself to change.
 
 ## Remaining risks / open questions (Phase 6)
 
@@ -1543,6 +1744,25 @@ environment-variable configuration.
    benefit this phase) — a future phase could add it as one more
    documented, bounded factor, the same way completed-job evidence was
    added in Phase 5.
+5. **(Auth-hardening follow-up)** Impersonation's base-ADC step
+   (`google-adc.js`) has only ever been exercised against an
+   `authorized_user` FILE fixture in tests — Rocky has not yet run
+   `gcloud auth application-default login` on this machine (confirmed:
+   no such file exists here today), so the first real `--fetch-firstparty`
+   attempt will be the first true proof that a real gcloud-issued
+   refresh token round-trips correctly through this code.
+6. **(Auth-hardening follow-up)** The IAM grant
+   (`roles/iam.serviceAccountTokenCreator` on
+   `mile-high-site-agent@...`, scoped to that one service account, not
+   project-wide) has not been performed yet either — without it,
+   impersonation will fail with a clear, specific IAM permission-denied
+   reason (never a silent/misleading failure), but the first real run
+   still needs that grant done first; see §3B/§11 for the exact step.
+7. **(Auth-hardening follow-up)** Workload Identity Federation
+   (`external_account` ADC files) remains unimplemented — correctly
+   deferred (no federated identity provider exists for this project yet)
+   but worth revisiting if the orchestrator ever moves to GitHub Actions
+   or another non-Google-Cloud CI runner (see §3B's note on that path).
 
 ---
 

@@ -1,23 +1,36 @@
-// Site Improvement Agent, Phase 6 — shared Google service-account auth.
+// Site Improvement Agent, Phase 6 — legacy service-account-KEY auth
+// (TIER 3 — optional fallback only, lowest priority).
 //
 // A minimal OAuth2 "JWT bearer" token exchange (RFC 7523) for read-only
 // access to Search Console + GA4 Data API, using only Node's built-in
 // `crypto` and global `fetch` — no `googleapis`/`google-auth-library`
 // dependency, matching this repo's existing lightweight-fetch style
 // (api/reviews.js already calls a Google API, Places, the same way: a
-// plain fetch, no SDK — see agent/README.md's Phase 6 credentials section
-// for why a second pattern wasn't introduced).
+// plain fetch, no SDK).
+//
+// AUTH-HARDENING UPDATE (Phase 6 follow-up): this module is no longer
+// the only, or the preferred, way to authenticate — see
+// agent/lib/google-auth.js for the unified resolver every client now
+// actually imports. This file is kept ONLY as an optional, explicit,
+// lowest-priority fallback (`GOOGLE_SERVICE_ACCOUNT_JSON`), because:
+//   1. The org's `iam.disableServiceAccountKeyCreation` policy means a
+//      long-lived key for mile-high-site-agent@... cannot be created in
+//      the first place — this module's env var is realistically unused
+//      for THIS service account going forward.
+//   2. It's still useful compatibility for a differently-governed
+//      project/service-account that doesn't have that policy, or for
+//      tests — so it is kept working, never required.
+// `signAndExchangeServiceAccountKey()` below is also reused by
+// agent/lib/google-adc.js for the (rare) case of an ADC credential FILE
+// that happens to be a service-account key rather than a human's
+// `gcloud auth application-default login` refresh token — one signing
+// implementation, not two.
 //
 // Fails safe exactly like api/_lib/supabase-admin.js's getServiceClient():
 // missing/invalid configuration returns {skipped:true, reason}, never
 // throws — so a Site Improvement Agent run (or the separate, explicit
 // --fetch-firstparty CLI step — see firstparty-fetch.js) can never be
 // taken down by a missing credential.
-//
-// One service account, one credential, two scopes — the smallest secure
-// model for two read-only Google integrations (see agent/README.md's
-// Phase 6 "Credentials" section for required Google Cloud / Search
-// Console / GA4 setup steps; NOT configured in this environment).
 
 const crypto = require("crypto");
 
@@ -71,25 +84,24 @@ function signJwt(serviceAccount, scope) {
 }
 
 /**
- * Exchanges the configured service account for a short-lived access token
- * scoped to exactly one OAuth scope. Never caches across calls (a Site
- * Improvement Agent fetch step is a short-lived CLI invocation, not a long
- * running server — see firstparty-fetch.js) and never attempts a network
- * call at all when unconfigured.
+ * Signs a JWT for `serviceAccount` and exchanges it for a short-lived
+ * access token — the one place this (long-lived-key-based) exchange is
+ * implemented, reused by both this module's own getAccessToken() below
+ * (TIER 3, `GOOGLE_SERVICE_ACCOUNT_JSON` env var) and
+ * agent/lib/google-adc.js's handling of a "service_account"-typed ADC
+ * credential FILE — one implementation, not two. Returns ONLY
+ * {skipped, accessToken, expiresInSeconds, source} on success — never
+ * echoes any field of `serviceAccount` (private_key included) back to
+ * the caller.
+ * @param {object} serviceAccount - a parsed service-account key object ({client_email, private_key, ...})
  * @param {string} scope - a single OAuth scope string
- * @param {object} [options]
- * @param {function} [options.fetchImpl] - injectable for tests; defaults to global fetch
+ * @param {function} [fetchImpl] - injectable for tests; defaults to global fetch
  */
-async function getAccessToken(scope, options = {}) {
-  const serviceAccount = loadServiceAccount();
-  if (!serviceAccount) {
-    return { skipped: true, reason: "GOOGLE_SERVICE_ACCOUNT_JSON not configured or invalid — first-party evidence not available" };
-  }
-
-  const fetchImpl = options.fetchImpl || fetch;
+async function signAndExchangeServiceAccountKey(serviceAccount, scope, fetchImpl) {
+  const f = fetchImpl || fetch;
   try {
     const assertion = signJwt(serviceAccount, scope);
-    const res = await fetchImpl(TOKEN_ENDPOINT, {
+    const res = await f(TOKEN_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -102,10 +114,29 @@ async function getAccessToken(scope, options = {}) {
       const reason = (body && (body.error_description || body.error)) || `HTTP ${res.status}`;
       return { skipped: true, reason: `Google OAuth token exchange failed: ${reason}` };
     }
-    return { skipped: false, accessToken: body.access_token, expiresInSeconds: body.expires_in || 3600 };
+    return { skipped: false, accessToken: body.access_token, expiresInSeconds: body.expires_in || 3600, source: "service-account-key" };
   } catch (e) {
     return { skipped: true, reason: `Google OAuth token exchange error: ${e && e.message ? e.message : String(e)}` };
   }
 }
 
-module.exports = { getAccessToken, isGoogleServiceAccountConfigured, loadServiceAccount, TOKEN_ENDPOINT };
+/**
+ * Exchanges the configured (GOOGLE_SERVICE_ACCOUNT_JSON env var) service
+ * account for a short-lived access token scoped to exactly one OAuth
+ * scope. Never caches across calls and never attempts a network call at
+ * all when unconfigured. TIER 3 — see agent/lib/google-auth.js for the
+ * resolver that only reaches this when Phase 6's auth-hardening update's
+ * preferred keyless tiers (impersonation, direct ADC) aren't configured.
+ * @param {string} scope - a single OAuth scope string
+ * @param {object} [options]
+ * @param {function} [options.fetchImpl] - injectable for tests; defaults to global fetch
+ */
+async function getAccessToken(scope, options = {}) {
+  const serviceAccount = loadServiceAccount();
+  if (!serviceAccount) {
+    return { skipped: true, reason: "GOOGLE_SERVICE_ACCOUNT_JSON not configured or invalid — first-party evidence not available" };
+  }
+  return signAndExchangeServiceAccountKey(serviceAccount, scope, options.fetchImpl);
+}
+
+module.exports = { getAccessToken, signAndExchangeServiceAccountKey, isGoogleServiceAccountConfigured, loadServiceAccount, TOKEN_ENDPOINT };
