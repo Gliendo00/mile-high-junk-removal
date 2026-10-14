@@ -537,7 +537,11 @@ function handleAgentActivity(req, res) {
     // missing/malformed report degrades to `latest: null`.
     let latest = null;
     try {
-      const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      // Phase 5B — dedupe by runId first (see history.latestByRunId()'s
+      // header) so a run still awaiting research never gets superseded
+      // by, or confusingly shown alongside, its own later "completed"
+      // line once resumed.
+      const sorted = history.latestByRunId(runs).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       const mostRecent = sorted[0];
       if (mostRecent && mostRecent.report) {
         const r = mostRecent.report;
@@ -545,6 +549,7 @@ function handleAgentActivity(req, res) {
           runId: r.runId,
           timestamp: r.timestamp,
           runType: r.runType,
+          status: r.status,
           pagesChecked: r.pagesChecked,
           healthSummary: r.healthSummary,
           safeFixesAppliedCount: r.safeFixes ? r.safeFixes.appliedCount : 0,
@@ -590,17 +595,36 @@ function reportListEntry(run) {
     runType: (report && report.runType) || run.runType || "manual",
     mode: run.mode,
     failed: Boolean(run.failed),
+    // Phase 5B — the explicit run-status lifecycle (see
+    // agent/lib/report.js's header): "completed" | "research_pending" |
+    // "failed". Falls back to the old failed/all-clear-only inference
+    // for a pre-Phase-5B record with no `report.status` at all.
+    status: report ? report.status : run.failed ? "failed" : "completed",
     healthSummary: report ? report.healthSummary : null,
     pagesChecked: report ? report.pagesChecked : run.summary && run.summary.pagesScanned,
     proposalsAwaitingApprovalCount: report && report.proposals ? report.proposals.awaitingApprovalCount : 0,
+    // Phase 5B — for the list row's SHORT outcome label (e.g. "2
+    // Pending"), distinct from healthSummary.text's full sentence (which
+    // is for the detail view / Home card only — a full sentence does not
+    // fit a pill-shaped badge, especially on a narrow screen; see
+    // admin/agent-reports.js's outcomeLabel()).
+    researchQuestionsPendingCount: report && report.research ? report.research.questionsRaisedCount : 0,
+    safeFixesAppliedCount: report && report.safeFixes ? report.safeFixes.appliedCount : 0,
   };
 }
 
+// Phase 5B — both views now dedupe by runId (history.latestByRunId())
+// BEFORE sorting/filtering, so a run that needed research (an initial
+// `research_pending` line, later superseded by a `completed`/`failed`
+// line once resumed — see runner.js's `resumeRunId`) is shown as ONE
+// report in its current state, never as two confusing "before research"/
+// "after research" entries. See history.js's own header for why this is
+// a read-time dedup rather than ever rewriting the append-only log.
 function handleListAgentReports(req, res) {
   const history = loadAgentHistoryModule(res);
   if (!history) return;
   try {
-    const runs = history.readAllRuns();
+    const runs = history.latestByRunId(history.readAllRuns());
     const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
     res.status(200).json({ ok: true, connected: true, reports: sorted.slice(0, limit).map(reportListEntry) });
@@ -619,13 +643,15 @@ function handleGetAgentReport(req, res) {
     return;
   }
   try {
-    const runs = history.readAllRuns();
-    const run = runs.find((r) => r.runId === runId);
-    if (!run) {
+    // The single CURRENT state for this runId — if it was resumed after
+    // research, this is the finalized (completed/failed) line, not the
+    // superseded research_pending one.
+    const current = history.latestByRunId(history.readAllRuns()).find((r) => r.runId === runId);
+    if (!current) {
       res.status(404).json({ error: "Report not found." });
       return;
     }
-    res.status(200).json({ ok: true, run });
+    res.status(200).json({ ok: true, run: current });
   } catch (e) {
     console.error("Admin agent-report detail failed to read agent/history/log.ndjson", e);
     res.status(500).json({ error: "Could not load this report." });
@@ -644,14 +670,10 @@ function handleGetAgentReport(req, res) {
 // approved; only the existing narrow mechanical-fix whitelist is ever
 // auto-applied, by the unrelated --apply-safe runner path).
 // ---------------------------------------------------------------------
-// Phase 5: 'adjust_requested' added — see
-// sql/2026-10-14_phase5-agent-adjust-workflow.sql's header for the full
-// state-machine design. Still never includes an "applied by the mechanical
-// runner due to an adjustment" state — Adjust never touches the website.
-const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed", "adjust_requested"];
+const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed"];
 const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
 const AGENT_PROPOSAL_SELECT =
-  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, adjust_note, adjusted_at, last_run_id, created_at, updated_at";
+  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at";
 
 function mapAgentProposal(row) {
   return {
@@ -670,8 +692,6 @@ function mapAgentProposal(row) {
     reviewedBy: row.reviewed_by,
     reviewedAt: row.reviewed_at,
     reviewNote: row.review_note,
-    adjustNote: row.adjust_note,
-    adjustedAt: row.adjusted_at,
     lastRunId: row.last_run_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -706,15 +726,7 @@ async function handleListAgentProposals(req, res) {
   }
 }
 
-// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject"|"adjust", note }
-//
-// Phase 5 — "adjust": records owner feedback and moves the proposal to
-// 'adjust_requested' WITHOUT approving/rejecting it and WITHOUT touching
-// the website — see sql/2026-10-14_phase5-agent-adjust-workflow.sql's
-// header for the full design (why this is deliberately narrower than
-// "the agent rewrites the proposal automatically"). A non-empty note is
-// required for "adjust" (there is nothing to act on otherwise); it is
-// optional for approve/reject, unchanged from before.
+// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject", note }
 async function handleReviewAgentProposal(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -732,12 +744,8 @@ async function handleReviewAgentProposal(req, res, session) {
     res.status(400).json({ error: "A proposal id is required." });
     return;
   }
-  if (action !== "approve" && action !== "reject" && action !== "adjust") {
-    res.status(400).json({ error: "action must be 'approve', 'reject', or 'adjust'." });
-    return;
-  }
-  if (action === "adjust" && !note) {
-    res.status(400).json({ error: "Adjustment feedback is required." });
+  if (action !== "approve" && action !== "reject") {
+    res.status(400).json({ error: "action must be 'approve' or 'reject'." });
     return;
   }
 
@@ -752,6 +760,7 @@ async function handleReviewAgentProposal(req, res, session) {
       return;
     }
 
+    const newStatus = action === "approve" ? "approved" : "rejected";
     // The literal update payload, built here — never the request body —
     // same mass-assignment discipline every other admin write endpoint
     // in this project already follows. This can only ever move a
@@ -759,27 +768,15 @@ async function handleReviewAgentProposal(req, res, session) {
     // touches finding_type/category/pages/evidence/research (those are
     // sync-owned, see proposals-sync.js) and never executes any action
     // beyond recording the owner's decision.
-    const update = { updated_at: new Date().toISOString() };
-    if (action === "adjust") {
-      update.status = "adjust_requested";
-      update.adjust_note = note;
-      update.adjusted_at = new Date().toISOString();
-      // A fresh adjustment request supersedes any prior review verdict —
-      // same "a new decision point replaces the old one" posture
-      // approve/reject already has, just entering a different state.
-      update.reviewed_by = null;
-      update.reviewed_at = null;
-      update.review_note = null;
-    } else {
-      update.status = action === "approve" ? "approved" : "rejected";
-      update.reviewed_by = session.email;
-      update.reviewed_at = new Date().toISOString();
-      update.review_note = note;
-    }
-
     const { data, error } = await supabase
       .from("agent_proposals")
-      .update(update)
+      .update({
+        status: newStatus,
+        reviewed_by: session.email,
+        reviewed_at: new Date().toISOString(),
+        review_note: note,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", id)
       .select(AGENT_PROPOSAL_SELECT)
       .maybeSingle();

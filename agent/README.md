@@ -1,4 +1,4 @@
-# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening) + Phase 5 (daily/weekly operating system)
+# Site Improvement Agent — Phase 1 + Phase 2 + Phase 3 + Phase 4 (hardening) + Phase 5 (daily/weekly operating system) + Phase 5B (research orchestration)
 
 **Naming note**: this file's own Phase 1-4 numbering reached "Recommended
 Phase 5" (a short wish-list, see below) before Rocky's own "Phase 2: turn
@@ -758,7 +758,6 @@ New in this phase (all additive — nothing above was rewritten):
 | `agent/lib/run-lock.js` | Concurrency guard (§10) |
 | `agent/history/research-rotation-state.json` | Git-tracked rotation bookkeeping (like `log.ndjson`) |
 | `agent/research/completed-jobs/` | Intake directory, mirrors `research/results/` |
-| `sql/2026-10-14_phase5-agent-adjust-workflow.sql` | Adds the Adjust state (§8) |
 | `admin/agent-reports/`, `admin/agent-reports.js` | Report-history CRM page (§7) |
 | 10 new `tests/agent-*.test.js` files | §11 |
 
@@ -769,11 +768,14 @@ returns `statusByKey`, additive), `agent/lib/research.js` (new optional
 `temporality`/`publishedAt`/`locality`/`topic` fields, all backward
 compatible — the two real Phase 3 research files were updated to set
 `temporality` explicitly, see §3), `api/admin/bookings.js` (new
-`agent-reports`/`agent-report` views, `adjust` PATCH action, richer
-`agent-activity` response — all additive), `admin/home.js`+
-`admin/home/index.html` (richer card, §6), `admin/agent-proposals.js`+
-`index.html` (Adjust button, §8), `tests/agent-migrations-review.test.js`
-(extended to also check the new migration's cumulative effect).
+`agent-reports`/`agent-report` views, richer `agent-activity` response —
+all additive), `admin/home.js`+`admin/home/index.html` (richer card,
+§6).
+**An `adjust` PATCH action, `admin/agent-proposals.js` Adjust UI, and a
+SQL migration were ALSO built in this phase and documented in §8 below
+— then fully reverted in Phase 5B (see that section) before this branch
+reached its current state. §8's text is kept as a historical record of
+what was evaluated; it does not describe what ships today.**
 
 ## 2. Canonical business/service-area context
 
@@ -887,7 +889,14 @@ Today/Yesterday/date + run-type badge + outcome badge, tap a row to see
 that run's full decisions/evidence/actions. Mobile-first (verified at
 375px).
 
-## 8. Proposal integration + the Adjust decision
+## 8. Proposal integration + the Adjust decision (HISTORICAL — see "Phase 5B" below for the current state)
+
+> **Phase 5B update**: Adjust (described below exactly as it was built)
+> was DEFERRED and fully reverted before the branch reached its current
+> state — see the "Phase 5B" section's "Adjust removal" for why and
+> exactly what was reverted. `agent_proposals`'s workflow today is simply
+> `proposed → approved | rejected`, unchanged from Phase 3. This section
+> is kept as a historical record of the design that was evaluated.
 
 `agent_proposals`'s existing `proposed → approved|rejected` workflow is
 completely unchanged. **Adjust was evaluated and partially implemented**
@@ -1014,7 +1023,7 @@ No cron/schedule was created this phase, per explicit instruction. Design:
   EXISTING function (the 12/12 budget is fully consumed, confirmed
   unchanged by this phase) rather than add one.
 
-## 11. Testing
+## 11. Testing (HISTORICAL — see "Phase 5B" below for the current test list; `agent-adjust-workflow.test.js` listed here was deleted in Phase 5B)
 
 10 new test files, all passing: `agent-business-profile`,
 `agent-change-detection`, `agent-research-freshness`,
@@ -1027,7 +1036,7 @@ files updated (`agent-migrations-review` extended for the new SQL file,
 (`phase3c-batch5-intake-ui.test.js`, present since before this branch
 existed, confirmed untouched by `git log` — see that file's own history).
 
-## Implementation discipline — what was deliberately NOT built
+## Implementation discipline — what was deliberately NOT built (HISTORICAL — see "Phase 5B" below)
 
 Per the brief's own "don't overbuild" instruction: no new Supabase
 tables beyond the one additive migration; no new Vercel functions (still
@@ -1037,7 +1046,7 @@ further) was left for a future phase, since it's unrelated to the
 daily/weekly operating-system request; Adjust's auto-regeneration half
 was evaluated and explicitly deferred (§8) rather than built messily.
 
-## Remaining risks / open questions
+## Remaining risks / open questions (HISTORICAL — superseded by "Phase 5B"'s own "Remaining risks" below)
 
 1. `agent_proposals`'s `applied`/`validated`/`failed` states are still
    only ever set by the narrow mechanical whitelist — "close the loop on
@@ -1054,3 +1063,420 @@ was evaluated and explicitly deferred (§8) rather than built messily.
    reveal some of those 7 cities deserve a different priority than others
    (e.g. based on actual lead volume by city, not modeled here since that
    data isn't available to this agent).
+
+---
+
+# Phase 5B — Research Orchestration, Adjust Deferral, Migration Correction
+
+Built immediately after Phase 5 (`df0eab6`), on the SAME branch
+(`site-improvement-agent-phase2`), in response to Rocky's review. This
+section is the CURRENT, authoritative state of the agent — read it
+instead of (not in addition to) the "HISTORICAL" sections above wherever
+they conflict.
+
+## 1. Adjust removal
+
+Fully reverted, cleanly, not just disabled: `sql/2026-10-14_phase5-agent-
+adjust-workflow.sql` deleted; `api/admin/bookings.js`'s `adjust` PATCH
+action, `adjust_requested` status, and `adjust_note`/`adjusted_at`
+columns removed from `AGENT_PROPOSAL_STATUSES`/`AGENT_PROPOSAL_SELECT`/
+`mapAgentProposal`/`handleReviewAgentProposal`; `admin/agent-proposals.js`
++ `index.html` reverted byte-for-byte to their pre-Phase-5 shape (git
+`checkout` of the pre-Phase-5 commit, not a hand-revert); the Adjust CSS
+rule removed from `admin/admin.css`; `tests/agent-migrations-review.test.js`
+and `tests/agent-proposals-ui.test.js` reverted to their pre-Phase-5
+shape. `agent_proposals`'s workflow is exactly `proposed → approved |
+rejected`, identical to Phase 3 — confirmed by re-running
+`tests/agent-proposals-api.test.js` unchanged and green.
+
+A hard regression guard (`tests/agent-reports-ui.test.js`'s "no 'adjust'
+... reference remains" test) scans every agent-related UI/API/SQL file
+this project has for Adjust-workflow vocabulary and fails the build if it
+ever creeps back in without deliberate reconsideration.
+
+**Reasoning** (per Rocky): Adjust's "revise and resume" half always
+required a separate human/Claude session to act on the feedback — with
+Phase 5B now giving the orchestrator a resumable run lifecycle for
+RESEARCH anyway (see §2 below), a proposal needing a human look is better
+served by that same reviewer just rejecting it with a note (existing
+Phase 3 behavior) than by a second, mostly-manual "adjust_requested"
+limbo state. If a genuinely automated revise-and-resume flow is wanted
+later, it's cleaner to build it as a presumably-related extension of the
+resume lifecycle below than as the separate mechanism Phase 5 built.
+
+## 2. Does Phase 5B need any DB migration? **No.**
+
+Every Phase 5B capability — run status/sequence, resumable runs, the
+orchestrator hand-off, completed-job auto-fetch — is either (a) fields on
+the already-git-tracked `agent/history/log.ndjson` record (no schema;
+it's a JSON blob per line, same as every Phase 1-5 field already was), or
+(b) a narrowly-scoped SELECT against the EXISTING `bookings` table's
+EXISTING columns (`status`, `service_type`, `service_city`,
+`operational_note` — all already live since Phase 3's
+`2026-10-12_phase3-agent-howd-it-go.sql`). With Adjust reverted, Phase 5B
+introduces zero new tables, zero new columns, zero altered constraints.
+
+**Migration-state correction** (per Rocky): Phase 3's two migrations
+(`2026-10-12_phase3-agent-proposals.sql`, `2026-10-12_phase3-agent-howd-
+it-go.sql`) are confirmed, by Rocky directly, to already be live in
+production — current production code depends on them. This repo's own
+code cannot independently verify an external database and should not
+have hedged on that basis; this file and the project's own memory record
+have been corrected to stop characterizing them as "unconfirmed."
+
+## 3. Final Daily lifecycle
+
+```
+node agent/cli.js --daily [--apply-safe]
+  -> scan -> 9 audits -> classify -> attach existing research ->
+     decide -> (apply-safe only) apply narrow whitelist + validate ->
+     sync proposals -> build report
+  -> if ANY finding is RESEARCH_MORE: persist status "research_pending"
+     (sequence 1). report.research.questionsPending[] has everything an
+     orchestrator needs. STOP — this run is not finalized.
+  -> else: persist status "completed" (sequence 1). Done.
+```
+
+External research is performed ONLY if a genuine category-C
+`RESEARCH_MORE` finding exists — never manufactured daily (unchanged from
+Phase 5's own "don't force a finding every day" principle, and from the
+brief's original §3/§6).
+
+## 4. Final Weekly lifecycle
+
+```
+node agent/cli.js --refresh-completed-jobs      (optional, see §10)
+node agent/cli.js --weekly
+  -> same daily pipeline, PLUS research-rotation scoring across the
+     WHOLE 20-city service area (agent/lib/research-rotation.js,
+     unchanged from Phase 5) using whatever completed-job evidence the
+     refresh step above most recently wrote.
+  -> rotation picks are ALWAYS included in the report (for the
+     orchestrator to read), regardless of whether any finding is also
+     RESEARCH_MORE.
+  -> status "research_pending" if any finding needs research; the
+     orchestrator should ALSO consider researching the rotation picks
+     while it has web access open (same session, see §6) — rotation
+     picks never themselves cause "research_pending" (they're not
+     findings; a weekly run with rotation picks but zero RESEARCH_MORE
+     findings still finalizes as "completed" in one pass, since the
+     rotation picks are advisory investigation targets, not blocking
+     questions).
+  -> else: "completed" in one pass.
+```
+
+Only the top N (default 3) rotation picks per week — never every city
+every week (brief §6, unchanged).
+
+## 5. Orchestrator architecture
+
+The orchestrator is a **Claude-driven session** (this very kind of
+session) with Bash/file-write access to this repository and WebSearch/
+WebFetch — NOT a new Node program, NOT a new Vercel function, NOT a new
+service. `agent/runner.js`/`agent/cli.js` remain network-free; nothing
+about that invariant changed. The orchestrator's job is entirely sitting
+OUTSIDE the deterministic pipeline, driving it via two CLI invocations
+(or one, when no research is needed):
+
+```
+Orchestrator session starts (scheduled or manual)
+  1. node agent/cli.js --refresh-completed-jobs   (weekly only, optional)
+  2. node agent/cli.js --daily --json   (or --weekly --json)
+  3. Read the JSON result's `report.status`.
+     - "completed": done. Report is final. Stop.
+     - "failed": done. Report records the failure honestly. Stop —
+       do NOT attempt to "fix" a pipeline failure by retrying research;
+       that's a code/environment problem, not a research gap.
+     - "research_pending": continue to step 4.
+  4. For each entry in report.research.questionsPending[]:
+     - Research it using the evidence hierarchy (brief §9, unchanged —
+       official government first, competitors for landscape only).
+     - For a weekly run, ALSO consider the top report.rotation.picks[]
+       (advisory, not blocking) using the same hierarchy, if there's
+       time/budget in this session.
+     - Write agent/research/results/<slugified-key>.json conforming to
+       research.js's makeResearchResult() shape — including the NEW
+       `temporality`/`publishedAt`/`locality`/`topic` fields from Phase 5
+       wherever the evidence has a real answer for them (never guessed).
+     - Weak/inconclusive evidence is written as low-confidence/
+       inconclusive — NEVER omitted to force a decision either way; the
+       deterministic decision.js already resolves that honestly to
+       NO_CHANGE.
+  5. node agent/cli.js --resume=<runId>
+  6. Read the result's `report.status` again.
+     - "completed": done.
+     - "research_pending" AGAIN: the orchestrator's research didn't
+       actually answer every pending question (e.g. it only answered
+       some, or a NEW category-C finding appeared from re-scanning —
+       rare but possible if the evidence file itself exposed something).
+       Loop back to step 4 for the remaining questionsPending.
+     - "failed": the resume itself hit an error (e.g. a malformed
+       research file). Report records it honestly. Stop.
+```
+
+This is a loop a Claude Code session (interactive or run via this
+product's own scheduled-session mechanism) executes directly — no new
+code was needed to make this possible beyond the resume capability
+itself (§6 below); the "orchestration" is the session's own tool calls
+(Bash, WebSearch, Write), not a new abstraction layer.
+
+## 6. How research questions are handed to the research-capable layer
+
+`record.report.research.questionsPending[]` — already fully-formed
+`researchQuestion` objects (`findingKey`, `question`, `internalEvidence`,
+`suggestedSourceTypes` — unchanged shape from Phase 2/3's
+`decision.js#buildResearchQuestion()`), returned by `node agent/cli.js
+--daily --json` (or `--weekly --json`), and also rendered in plain text
+by the CLI's human-readable summary, and in the CRM report-detail page
+(`admin/agent-reports/`'s new "Awaiting research" section) for a human
+reviewer to see what's pending even without running the CLI.
+
+## 7. How research results return to the deterministic engine
+
+Unchanged mechanism from Phase 2/3: the orchestrator writes one
+`agent/research/results/*.json` file per answered question, matching its
+`findingKey`. What's NEW in Phase 5B is `node agent/cli.js
+--resume=<runId>` — it re-runs the FULL deterministic pipeline fresh
+(same `gatherFindings()` as every other run; `research-intake.js` picks
+up the new files automatically, exactly as any later run always would
+have), but reuses the SAME `runId` (a new `sequence`, see §9) rather than
+minting a new one, and finalizes the record to `"completed"` or
+`"failed"`. `runner.findResumableRun()` refuses to resume a runId that
+doesn't exist or is already finalized — a resume can never silently
+double-apply.
+
+## 8. Report/run lifecycle states
+
+`report.status` (top-level, machine-readable): `"completed"` |
+`"research_pending"` | `"failed"` — computed by
+`agent/lib/report.js#computeRunStatus()`, checked in that priority order
+(failed wins over research_pending wins over completed). This is the
+fix for the real bug Rocky flagged: before this, a run whose ONLY
+findings were unresolved `RESEARCH_MORE` questions (category C, tier
+"opportunity" — never "actionable", never `PROPOSE_CHANGE`) produced
+`actionableOpenCount === 0` and `proposalsAwaitingApproval === 0`, which
+read as `"all-clear"`. `computeRunStatus()` is now checked BEFORE that
+logic, so a pending question always wins. Proven by
+`tests/agent-report.test.js`'s dedicated regression test and the
+end-to-end `tests/agent-runner-resume.test.js`.
+
+`healthSummary.status` (display-oriented, CSS-class-friendly):
+`"all-clear"` | `"needs-attention"` | `"research-pending"` | `"failed"` —
+the Home card and report-history list both render a distinct blue
+"awaiting research" treatment for this state (never the amber
+"needs-attention" color — it isn't an issue to approve, it's "the
+orchestrator hasn't finished yet").
+
+No separate persisted `"running"` state was added — the deterministic
+pass itself completes synchronously in seconds; nothing would ever
+observe a mid-pass "running" record. The only genuinely multi-step,
+possibly-slow state is `research_pending` (while the orchestrator does
+real web research), which IS persisted and visible.
+
+**"Avoid duplicate before/after-research reports"**: a resumed run is
+recorded as a SECOND append-only line sharing the SAME `runId`
+(`sequence` 1, then 2) — the git-tracked log itself is still never
+rewritten (an absolute rule, unchanged). `agent/lib/history.js#
+latestByRunId()` is the new read-time dedup every consumer (the Home
+card, `?view=agent-reports`, `?view=agent-report`) now applies BEFORE
+building any list or "most recent run" summary, so the owner always sees
+exactly ONE report per logical run, in its current state — proven by
+`tests/agent-runner-resume.test.js`'s dedup assertion and the three
+updated `api/admin/bookings.js` handlers' own tests.
+
+## 9. Completed-job retrieval architecture
+
+New `agent/lib/completed-job-fetch.js` replaces the Phase 5 manual file
+handoff. `node agent/cli.js --refresh-completed-jobs` is a SEPARATE,
+explicit step (run by the orchestrator before `--weekly`, never by the
+deterministic pipeline itself — `runner.js` still has zero network/DB
+access):
+
+```
+fetchRecentCompletedJobEvidence()
+  -> supabase.from("bookings")
+       .select("status, service_type, service_city, operational_note")  <- narrowest possible column list, see below
+       .eq("status", "completed")
+       .gte("updated_at", cutoff)
+  -> for each row: fromCompletedBooking(row)   <- the EXISTING Phase 3 privacy boundary, unchanged
+  -> returns ONLY the already-redacted entries (a raw row is never
+     returned, logged, or written anywhere by this module)
+writeCompletedJobEvidence(evidence)
+  -> overwrites ONE rolling file, agent/research/completed-jobs/
+     latest-refresh.json (a snapshot, not an accumulating archive —
+     the historical record of what the agent DID with this evidence
+     already lives in agent/history/log.ndjson)
+```
+
+The SELECT itself never requests `customer_id`, `final_price`,
+`estimated_price`, `tip_amount`, `payment_method`, `service_address`,
+`internal_notes`, or any other private column — this is defense BEFORE
+`fromCompletedBooking()`'s own redaction, not instead of it: even if a
+future schema change widened the `bookings` table, a private value
+cannot reach this process's memory via this specific query. The CLI
+wrapper never logs field values, only a count.
+
+## 10. Privacy guarantees + tests
+
+Every requirement from the brief's "hard requirement" list is covered by
+`tests/agent-completed-job-fetch.test.js`, using a realistic raw
+`bookings` row with EVERY private field populated (customer name/id,
+phone, email, exact address, final/estimated price, tip, payment method,
+internal notes) fed through a fake Supabase client:
+
+- `SELECT_COLUMNS` never matches any `business-context.js`
+  `PRIVATE_FIELD_PATTERNS` entry (static check).
+- The fetch function's output never contains any of the 9 forbidden
+  values, even when the fake client returns them anyway (simulating a
+  future schema/query mistake) — defense-in-depth at the
+  `fromCompletedBooking()` layer, independent of the SELECT-column
+  narrowing above.
+- A row with no `operational_note` is dropped entirely, not pushed as an
+  empty placeholder.
+- `writeCompletedJobEvidence()`'s output file, read back from disk, is
+  confirmed to contain none of the forbidden values either — proving the
+  full fetch→write pipeline, not just the fetch function in isolation.
+- Supabase misconfigured or erroring both degrade to `skipped: true`,
+  never thrown, never a partial/garbled write.
+
+`agent/lib/completed-job-intake.js` (Phase 5, unchanged) still
+independently re-validates every field against the allowlist when
+READING these files back for rotation scoring — two independent layers
+agreeing, per the brief's defense-in-depth instinct.
+
+## 11. Service-area/new-page guard
+
+Already true structurally in Phase 5 (a pageless city is never scanned —
+there's no file), but now has an explicit regression test
+(`tests/agent-service-area-guard.test.js`) proving it at every layer:
+
+- A rotation pick's shape is exactly `{slug, name, hasPage, pageFile,
+  score, reasons}` — no `decision`, `recommendation`, or "create this
+  page" field exists anywhere on it.
+- Every pageless city's `reasons` text reads "evaluate, don't
+  auto-create" — never a conclusion that demand exists or the site is
+  deficient.
+- `scanAllPages()`'s output never includes a pageless city's
+  would-be filename.
+- `buildReport()`'s `proposals`/`technicalIssues` sections are computed
+  ONLY from `findings` — a rotation pick, by construction, cannot
+  produce a `PROPOSE_CHANGE`, a new-page recommendation, or move
+  `healthSummary` off `"all-clear"` by itself.
+
+## 12. Research quality/freshness behavior
+
+Unchanged from Phase 5 (§9 of the original brief's evidence hierarchy;
+§10's freshness/temporality model) — the orchestrator is instructed (§5
+above) to follow the same hierarchy and to tag `temporality` honestly.
+`computeFreshness()`'s stale/aging windows are unchanged.
+
+## 13. Scheduling environment recommendation
+
+**A scheduled Claude Code / Claude Agent SDK session — NOT Vercel Cron.**
+Reasoning, against the brief's own requirements:
+
+| Requirement | Vercel Cron -> serverless function | Scheduled Claude session |
+|---|---|---|
+| Execute repo code | Yes, but read-only filesystem except `/tmp` | Yes, full repo checkout |
+| Access the web for real research | No general-purpose capability | Yes (WebSearch/WebFetch) |
+| Securely access Supabase credentials | Yes (env vars) | Yes (env vars / secrets) |
+| Write research/report/proposal results back to GIT | No — a Vercel function cannot commit | Yes |
+| Preserve git/history behavior | N/A — can't write to git at all | Yes, natively |
+| Fail visibly | Yes | Yes (§8 above) |
+| Prevent concurrent runs | Yes (`run-lock.js`) | Yes (same `run-lock.js`) |
+| Stay within the 12/12 Vercel function budget | Would need a 13th function for the orchestration step alone (research needs more than one HTTP request/response cycle) | N/A — doesn't touch Vercel at all |
+
+A Vercel Cron job fundamentally cannot perform the research half (no
+general web-research capability, and a serverless invocation's
+read-only, ephemeral filesystem cannot commit `agent/research/results/`
+files back to git) — it would, at best, run the deterministic pass alone
+and leave every `research_pending` run stuck forever with nothing to
+resume it. The scheduled-Claude-session model handles the ENTIRE
+lifecycle in §5 above with existing product capabilities (this
+environment's own scheduled/cron session mechanism), not new
+infrastructure.
+
+**Recommended cadence** (unchanged intent from Phase 5): Daily
+04:00 America/Denver, Weekly Sunday 04:00 America/Denver.
+
+## 14. Required credentials
+
+Same as Phase 5: `SUPABASE_URL`/`SUPABASE_SECRET_KEY` (for proposal sync,
+AND now also `--refresh-completed-jobs` — both optional/gracefully
+skipped without them). No credentials are required for the deterministic
+`--daily`/`--weekly --json` pass itself. The orchestrator session needs
+whatever this product's own scheduled-session mechanism already provides
+for repo + web access — no new secret category.
+
+## 15. Git/history behavior
+
+`agent/history/log.ndjson` remains strictly append-only — a resumed run
+adds a SECOND line, never rewrites the first (§8 above). `agent/history/
+research-rotation-state.json` is updated only on the INITIAL pass of a
+weekly run, never on resume (rotation picks are carried forward verbatim
+— re-computing on resume could pick different cities now that findings
+have shifted, and would double-mark picks reviewed).
+`agent/research/results/*.json` and `agent/research/completed-jobs/
+latest-refresh.json` are git-tracked like every other evidence file in
+this project.
+
+## 16. Failure/concurrency behavior
+
+Unchanged mechanism from Phase 5 (`run-lock.js`, the outer
+try/catch-and-record-honestly in `runner.js`), now proven to also cover
+resume: resuming while another run (fresh or resumed) holds the lock is
+refused; resuming a nonexistent or already-finalized runId is refused
+with a clear, specific error (never a silent no-op or false success); a
+failure DURING resume (e.g. a malformed research file causing something
+unexpected) still produces an honest `"failed"` record rather than
+pretending the resume succeeded.
+
+## 17. API/Vercel function impact
+
+Zero new functions — still exactly 12/12 (confirmed by re-running the
+existing function-count test). `api/admin/bookings.js` gained zero NEW
+view/action branches in Phase 5B (the `agent-reports`/`agent-report`
+views already existed from Phase 5; the `adjust` PATCH action was added
+then fully removed). `report.status`/`sequence` are additive fields on
+the existing `?view=agent-report` response shape.
+
+## 18. Tests/results
+
+4 new test files (`agent-runner-resume`, `agent-completed-job-fetch`,
+`agent-service-area-guard`, plus the already-existing `agent-report`/
+`agent-reports-ui` extended with new cases) and 1 test file deleted
+(`agent-adjust-workflow`, since the feature it tested was reverted).
+Full repository suite: **84/85 pass** — the same single pre-existing,
+unrelated failure as Phase 5 (`phase3c-batch5-intake-ui.test.js`,
+confirmed via `git log` to predate this entire branch).
+
+## 19. Files changed
+
+See the final report's own file list and commit SHA.
+
+## Remaining risks / open questions (Phase 5B)
+
+1. The orchestrator loop in §5 is a documented PROCEDURE a Claude session
+   follows — it is not itself enforced by code (nothing stops a human
+   from running `--daily` and never resuming a `research_pending` run).
+   That's intentional (the brief asked for the lifecycle/hand-off to
+   exist, not for a meta-process-enforcer), but worth knowing: a
+   `research_pending` run just sits there, visibly, until something
+   resumes it — there's no timeout/escalation.
+2. `research-rotation-state.json`'s "picks carried forward on resume"
+   design (§15) means a weekly run's rotation choice is locked in at the
+   INITIAL pass — if the orchestrator's research takes long enough that
+   the picks feel stale by resume time, there's no re-evaluation point.
+   Judged acceptable (a week-scale rotation doesn't need minute-scale
+   freshness), but worth revisiting if weekly runs start taking unusually
+   long.
+3. Items 1-4 of Phase 5's own "Remaining risks" (closing the loop on
+   `applied`/`validated`/`failed` proposal states; rotation-weight
+   tuning; scheduling activation; flat pageless-city scoring) are all
+   still open, unchanged by Phase 5B.
+4. No automated test exercises a REAL multi-step Claude-orchestrator
+   session end-to-end (only the underlying `runner.js` resume mechanics
+   are tested) — this is intentional (that loop's "intelligence" is the
+   orchestrating session itself, not something a Node test can
+   meaningfully simulate), but the first real scheduled run will be the
+   first true end-to-end proof.

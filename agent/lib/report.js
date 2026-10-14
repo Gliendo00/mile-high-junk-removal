@@ -1,4 +1,5 @@
-// Site Improvement Agent, Phase 5 — persistent report builder.
+// Site Improvement Agent, Phase 5 (+ Phase 5B lifecycle fix) — persistent
+// report builder.
 //
 // Turns one run record (runner.js's internal shape: findings, summary,
 // validation, proposalsSync) plus the previous run and (for a weekly run)
@@ -12,9 +13,22 @@
 // real counts (open actionable findings + proposals awaiting approval),
 // not an invented metric.
 //
-// This is a pure function — runner.js calls it once per run and persists
-// its output as `record.report` (see history.js), so the CRM API layer
-// never has to recompute change-detection/rotation context on every read.
+// Phase 5B — RUN STATUS LIFECYCLE: a run record now carries an explicit
+// `status`: "completed" | "research_pending" | "failed". This fixes a
+// real bug in the original Phase 5 report: a run whose ONLY findings
+// were unresolved RESEARCH_MORE questions (category C, tier
+// "opportunity" — never "actionable", and never PROPOSE_CHANGE) produced
+// `actionableOpenCount === 0` and `proposalsAwaitingApproval === 0`,
+// which `buildHealthSummary()` read as "All clear" — exactly the
+// "a run requiring research must never look like ALL CLEAR" failure mode
+// Rocky flagged. `computeRunStatus()` below is checked BEFORE the
+// all-clear/needs-attention logic, so a pending research question always
+// wins that race.
+//
+// This is a pure function — runner.js calls it once per run (or once per
+// RESUME of a run — see runner.js's resumeRunId option) and persists its
+// output as `record.report` (see history.js), so the CRM API layer never
+// has to recompute change-detection/rotation context on every read.
 
 const { classifyChanges } = require("./change-detection");
 const { computeFreshness } = require("./research");
@@ -23,9 +37,26 @@ function countBy(findings, predicate) {
   return findings.filter(predicate).length;
 }
 
-function buildHealthSummary({ actionableOpenCount, proposalsAwaitingApproval, failed }) {
-  if (failed) {
-    return { status: "failed", text: "This run did not complete successfully — see failure details below. No site changes were made based on a failed run." };
+// Checked in this exact order: failed > research_pending > completed. A
+// run can be BOTH "has unresolved research" and "failed" (research was
+// needed, then something else broke) — failed always wins, since "this
+// run did not complete successfully" is the most important thing to say.
+function computeRunStatus({ failure, hasUnresolvedResearch }) {
+  if (failure) return "failed";
+  if (hasUnresolvedResearch) return "research_pending";
+  return "completed";
+}
+
+function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingApproval, questionsPendingCount, failure }) {
+  if (status === "failed") {
+    const detail = failure && failure.message ? ` (${failure.message})` : "";
+    return { status: "failed", text: `This run did not complete successfully${detail} — see failure details below. No site changes were made based on a failed run.` };
+  }
+  if (status === "research_pending") {
+    return {
+      status: "research-pending",
+      text: `Research needed before this run can be finalized — ${questionsPendingCount} question${questionsPendingCount === 1 ? "" : "s"} awaiting results.`,
+    };
   }
   if (actionableOpenCount === 0 && proposalsAwaitingApproval === 0) {
     return { status: "all-clear", text: "All clear — no worthwhile changes found." };
@@ -74,7 +105,20 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
       })),
     }));
 
-  const researchQuestionsRaised = findings.filter((f) => f.decision === "RESEARCH_MORE");
+  // Phase 5B — the actual hand-off contract to the research-capable
+  // orchestrator (a Claude-driven session — see agent/README.md's
+  // "Orchestrator architecture" section): every RESEARCH_MORE finding's
+  // full researchQuestion object (question text, internal evidence,
+  // suggested source types — see decision.js's buildResearchQuestion())
+  // is surfaced here, not just a count. The orchestrator reads THIS
+  // array (via `--json`, or the CRM report detail), researches each one,
+  // writes agent/research/results/*.json files matching each
+  // `findingKey`, then resumes this exact run (see runner.js's
+  // `resumeRunId`).
+  const questionsPending = findings
+    .filter((f) => f.decision === "RESEARCH_MORE")
+    .map((f) => f.researchQuestion)
+    .filter(Boolean);
 
   const actionableOpenCount = countBy(
     findings,
@@ -83,14 +127,20 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
   const observationsCount = countBy(findings, (f) => f.tier === "observation");
   const opportunitiesCount = countBy(findings, (f) => f.tier === "opportunity");
 
+  const status = computeRunStatus({ failure, hasUnresolvedResearch: questionsPending.length > 0 });
+
   const healthSummary = buildHealthSummary({
+    status,
     actionableOpenCount,
     proposalsAwaitingApproval,
-    failed: Boolean(failure),
+    questionsPendingCount: questionsPending.length,
+    failure,
   });
 
   const report = {
     runId: record.runId,
+    sequence: record.sequence || 1,
+    status,
     timestamp: record.timestamp,
     runType: record.runType || "manual",
     mode: record.mode,
@@ -103,7 +153,8 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
     observationsCount,
     opportunitiesCount,
     research: {
-      questionsRaisedCount: researchQuestionsRaised.length,
+      questionsRaisedCount: questionsPending.length,
+      questionsPending,
       performed: researchPerformed,
     },
     safeFixes: {
@@ -140,4 +191,4 @@ function buildReport({ record, previousRun, rotationPriorities, failure }) {
   return report;
 }
 
-module.exports = { buildReport, buildHealthSummary };
+module.exports = { buildReport, buildHealthSummary, computeRunStatus };

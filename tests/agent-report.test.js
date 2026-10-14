@@ -36,12 +36,37 @@ function baseRecord(overrides) {
   };
 }
 
-test("a run with zero findings produces an 'All Clear' report — a valid, desirable result, not an error", () => {
+test("a run with zero findings produces an 'All Clear' report (status 'completed') — a valid, desirable result, not an error", () => {
   const report = buildReport({ record: baseRecord(), previousRun: null });
+  assert.strictEqual(report.status, "completed");
   assert.strictEqual(report.healthSummary.status, "all-clear");
   assert.strictEqual(report.healthSummary.text, "All clear — no worthwhile changes found.");
   assert.strictEqual(report.pagesChecked, 51);
   assert.strictEqual(report.proposals.awaitingApprovalCount, 0);
+});
+
+// Phase 5B — the bug this specifically guards against: a run whose ONLY
+// findings are unresolved RESEARCH_MORE questions (category C, tier
+// "opportunity" — never "actionable", never PROPOSE_CHANGE) must NOT
+// read as all-clear just because actionableOpenCount and
+// proposalsAwaitingApproval both happen to be zero.
+test("a run with an unresolved RESEARCH_MORE finding is status 'research_pending', with an honest 'awaiting research' health summary — NEVER 'all-clear' or 'completed'", () => {
+  const record = baseRecord({
+    findings: [
+      {
+        key: "a", type: "content-gap", tier: "opportunity", decision: "RESEARCH_MORE", status: "proposed",
+        summary: "thin FAQ", pages: ["x.html"],
+        researchQuestion: { findingKey: "a", question: "is there a real local angle?", internalEvidence: [], suggestedSourceTypes: ["official-government"] },
+      },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null });
+  assert.strictEqual(report.status, "research_pending");
+  assert.notStrictEqual(report.healthSummary.status, "all-clear");
+  assert.notStrictEqual(report.status, "completed");
+  assert.ok(/awaiting results/.test(report.healthSummary.text));
+  assert.strictEqual(report.research.questionsPending.length, 1);
+  assert.strictEqual(report.research.questionsPending[0].findingKey, "a");
 });
 
 test("a run with only observation-tier NO_CHANGE findings is still reported as healthy — an observation alone is not an 'issue'", () => {
@@ -142,11 +167,23 @@ test("a daily run has no rotation section at all (null, not an empty array) — 
   assert.strictEqual(report.rotation, null);
 });
 
-test("a failed run reports healthSummary.status 'failed' and carries the failure message, never pretending success", () => {
+test("a failed run reports status 'failed' (and healthSummary.status 'failed') and carries the failure message, never pretending success", () => {
   const record = baseRecord({ failed: true });
   const report = buildReport({ record, previousRun: null, failure: { message: "simulated scan failure" } });
+  assert.strictEqual(report.status, "failed");
   assert.strictEqual(report.healthSummary.status, "failed");
   assert.strictEqual(report.failure.message, "simulated scan failure");
+});
+
+test("'failed' always wins over 'research_pending' when both are true — a run that failed mid-research must never be reported as merely awaiting research", () => {
+  const record = baseRecord({
+    failed: true,
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "RESEARCH_MORE", status: "proposed", summary: "s", pages: ["x.html"], researchQuestion: { findingKey: "a", question: "q" } },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null, failure: { message: "simulated failure" } });
+  assert.strictEqual(report.status, "failed");
 });
 
 if (process.exitCode) {

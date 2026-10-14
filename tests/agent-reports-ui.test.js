@@ -27,7 +27,6 @@ const reportsJs = fs.readFileSync(path.join(__dirname, "..", "admin", "agent-rep
 const reportsHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "agent-reports", "index.html"), "utf8");
 const homeJs = fs.readFileSync(path.join(__dirname, "..", "admin", "home.js"), "utf8");
 const homeHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "home", "index.html"), "utf8");
-const proposalsJs = fs.readFileSync(path.join(__dirname, "..", "admin", "agent-proposals.js"), "utf8");
 
 test("admin/agent-reports.js never uses innerHTML/insertAdjacentHTML/document.write", () => {
   assert.ok(!/\.innerHTML\s*=/.test(reportsJs));
@@ -67,18 +66,72 @@ test("admin/home.js's health-status rendering reuses a named status class (all-c
   assert.ok(!/healthScore|siteScore|seoScore/i.test(homeJs));
 });
 
-test("admin/agent-proposals.js's Adjust button requires non-empty feedback before submitting (client-side guard, in addition to the server-side 400)", () => {
-  assert.ok(/noteInput\.value\.trim\(\)/.test(proposalsJs));
+// Phase 5B — a run awaiting external research must be visibly
+// distinguishable in the CRM, not silently indistinguishable from
+// all-clear (the status class itself is generic/data-driven on both
+// surfaces — see admin/home.js/admin/agent-reports.js's own status-class
+// concatenation — so the CSS rule's existence is the actual proof the
+// UI has a real rendering for this state rather than falling through to
+// "unknown").
+test("admin.css defines a distinct visual treatment for the 'research-pending' status on both the Home card and the report-history list", () => {
+  const adminCss = fs.readFileSync(path.join(__dirname, "..", "admin", "admin.css"), "utf8");
+  assert.ok(adminCss.includes("admin-home-marketing-summary-health-research-pending"));
+  assert.ok(adminCss.includes("admin-report-row-outcome-research-pending"));
 });
 
-test("admin/agent-proposals.js's STATUS_LABELS covers 'adjust_requested'", () => {
-  const match = proposalsJs.match(/var STATUS_LABELS = \{([^}]*)\}/);
-  assert.ok(match);
-  assert.ok(match[1].includes("adjust_requested"));
+test("admin/agent-reports.js's report detail view surfaces the pending research questions (not a dead end) when a run is awaiting research", () => {
+  assert.ok(/research_pending/.test(reportsJs));
+  assert.ok(/questionsPending/.test(reportsJs));
 });
 
-test("admin/agent-proposals.js states, for a proposed card, that Approve/Reject/Adjust only ever record a decision — never that the website changes", () => {
-  assert.ok(/Approve\/Reject\/Adjust only records your decision here/.test(proposalsJs));
+// Phase 5B fix, caught by visual browser testing: .admin-status-badge is
+// white-space:nowrap by design (every other badge in this app is a short
+// label like "Daily"/"Approved"). outcomeLabel() originally returned the
+// full healthSummary.text SENTENCE for the pill badge, which overflowed
+// the row on any screen (worst on mobile — see agent/README.md's own
+// Phase 5B section). The fix: the list row shows a SHORT label (matching
+// the original CRM mockup: "All Clear" / "1 Proposal" / "2 Pending"); the
+// full sentence is reserved for the unconstrained detail view below.
+test("admin/agent-reports.js's list-row outcome label is short (never the full healthSummary sentence) — must not overflow the pill-shaped, nowrap status badge", () => {
+  assert.ok(!/return entry\.healthSummary\.text/.test(reportsJs), "the list row must not use the full healthSummary.text sentence as a badge label");
+  assert.ok(/Pending/.test(reportsJs) && /All Clear/.test(reportsJs), "expected short, mockup-matching labels like 'N Pending'/'All Clear'");
+});
+
+// Phase 5B — Adjust was evaluated in Phase 5 and deliberately DEFERRED
+// (see agent/README.md's "Phase 5B" section: it required a separate
+// human/Claude session to act on, which wasn't enough value yet to
+// justify the production schema change). No Adjust UI/API/DB state
+// should remain anywhere in this codebase — this is a hard regression
+// guard against it silently creeping back in.
+test("no 'adjust'/'adjust_requested' reference remains anywhere in the agent CRM surface (UI, API, or SQL) — Adjust was deferred in Phase 5B", () => {
+  const proposalsJs = fs.readFileSync(path.join(__dirname, "..", "admin", "agent-proposals.js"), "utf8");
+  const proposalsHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "agent-proposals", "index.html"), "utf8");
+  const bookingsJs = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "bookings.js"), "utf8");
+  const proposalsSyncJs = fs.readFileSync(path.join(__dirname, "..", "agent", "lib", "proposals-sync.js"), "utf8");
+  const adminCss = fs.readFileSync(path.join(__dirname, "..", "admin", "admin.css"), "utf8");
+  const files = [
+    ["admin/agent-reports.js", reportsJs],
+    ["admin/agent-reports/index.html", reportsHtml],
+    ["admin/home.js", homeJs],
+    ["admin/home/index.html", homeHtml],
+    ["admin/agent-proposals.js", proposalsJs],
+    ["admin/agent-proposals/index.html", proposalsHtml],
+    ["api/admin/bookings.js", bookingsJs],
+    ["agent/lib/proposals-sync.js", proposalsSyncJs],
+    ["admin/admin.css", adminCss],
+  ];
+  // Matches the Adjust-WORKFLOW-specific vocabulary only (not the bare
+  // English word "adjust" — admin/home.js legitimately uses it elsewhere,
+  // e.g. "the greeting adjusts to local time", unrelated to proposals).
+  const ADJUST_WORKFLOW_PATTERN = /adjust_requested|adjustNote|adjust_note|adjustedAt|adjusted_at|action\s*===\s*['"]adjust['"]|'adjust'\s*,/i;
+  for (const [name, src] of files) {
+    assert.ok(!ADJUST_WORKFLOW_PATTERN.test(src), `${name} must not reference the Adjust proposal workflow — it was deferred in Phase 5B`);
+  }
+});
+
+test("no Phase 5 Adjust-workflow SQL migration file exists in sql/", () => {
+  const sqlFiles = fs.readdirSync(path.join(__dirname, "..", "sql"));
+  assert.ok(!sqlFiles.some((f) => /adjust/i.test(f)), "the deferred Adjust migration must not exist in sql/");
 });
 
 if (process.exitCode) {

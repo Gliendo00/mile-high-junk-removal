@@ -3776,6 +3776,11 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-home-marketing-summary-health-all-clear { color: #2f6f13; }
 .admin-home-marketing-summary-health-needs-attention { color: #b45309; }
 .admin-home-marketing-summary-health-failed { color: #b91c1c; }
+/* Phase 5B — a run genuinely awaiting external research (see
+   agent/lib/report.js's computeRunStatus()). Distinct blue, never the
+   amber "needs-attention" color — this is not an issue to approve, it's
+   "the orchestrator hasn't finished yet." */
+.admin-home-marketing-summary-health-research-pending { color: #1d4ed8; }
 .admin-home-marketing-stats {
   display: flex;
   flex-wrap: wrap;
@@ -3891,12 +3896,6 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-proposal-status-applied,
 .admin-proposal-status-validated { background: #1d4ed8; color: #fff; }
 .admin-proposal-status-failed { background: #6b7280; color: #fff; }
-/* Phase 5 — the Adjust-workflow state (see
-   sql/2026-10-14_phase5-agent-adjust-workflow.sql). Same amber family as
-   "proposed" (still needs eyes) but visually distinct via outline instead
-   of solid fill, since it's "waiting on a revision," not "waiting on a
-   first decision." */
-.admin-proposal-status-adjust_requested { background: #fff; border: 1.5px solid #b45309; color: #b45309; }
 
 .admin-proposal-card {
   background: #fff;
@@ -3988,6 +3987,9 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-report-row-outcome-needs-attention { background: #b45309; color: #fff; }
 .admin-report-row-outcome-failed { background: #b91c1c; color: #fff; }
 .admin-report-row-outcome-unknown { background: #6b7280; color: #fff; }
+/* Phase 5B — awaiting external research (see report.js's
+   computeRunStatus()) — same blue as the Home card's equivalent state. */
+.admin-report-row-outcome-research-pending { background: #1d4ed8; color: #fff; }
 
 .admin-report-detail {
   background: #fff;

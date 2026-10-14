@@ -63,9 +63,27 @@ document.addEventListener('DOMContentLoaded', function () {
     if (runType === 'weekly') return 'Weekly';
     return 'Manual';
   }
+  // Phase 5B fix — the list row's outcome is a PILL badge (white-space:
+  // nowrap by design, like every other status badge in this admin app),
+  // so it must stay a short label (matching agent/README.md's own
+  // mockup: "All Clear" / "1 Proposal" / "2 Pending" — never the full
+  // healthSummary.text sentence, which overflows a pill on any screen,
+  // worst on mobile). The full sentence is still shown, unconstrained,
+  // in the detail view below.
   function outcomeLabel(entry) {
-    if (entry.failed) return 'Failed';
-    if (entry.healthSummary && entry.healthSummary.text) return entry.healthSummary.text;
+    var status = entry.failed ? 'failed' : (entry.healthSummary && entry.healthSummary.status) || 'unknown';
+    if (status === 'failed') return 'Failed';
+    if (status === 'research-pending') {
+      var n = entry.researchQuestionsPendingCount || 0;
+      return n + ' Pending';
+    }
+    if (status === 'all-clear') return 'All Clear';
+    if (status === 'needs-attention') {
+      if (entry.proposalsAwaitingApprovalCount > 0) {
+        return entry.proposalsAwaitingApprovalCount + ' Proposal' + (entry.proposalsAwaitingApprovalCount === 1 ? '' : 's');
+      }
+      return 'Needs Attention';
+    }
     return '—';
   }
   function outcomeStatusClass(entry) {
@@ -199,6 +217,18 @@ document.addEventListener('DOMContentLoaded', function () {
     detailEl.appendChild(statLine('Research questions raised', report.research.questionsRaisedCount));
     detailEl.appendChild(statLine('Proposals created/updated', report.proposals.createdOrUpdatedCount));
     detailEl.appendChild(statLine('Proposals awaiting approval', report.proposals.awaitingApprovalCount));
+
+    // Phase 5B — a run still awaiting external research shows exactly
+    // what's pending, in plain language, instead of a dead end. This is
+    // informational only — resuming the run happens via the orchestrator
+    // (node agent/cli.js --resume=...), not from this read-only page.
+    if (report.status === 'research_pending' && report.research.questionsPending && report.research.questionsPending.length) {
+      detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'Awaiting research'));
+      report.research.questionsPending.forEach(function (q) {
+        detailEl.appendChild(el('p', 'admin-report-detail-stat', q.question));
+      });
+      detailEl.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'This run will finalize automatically once the research-capable session answers these and resumes it.'));
+    }
 
     var cd = report.changeDetection;
     detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'Since the previous run'));

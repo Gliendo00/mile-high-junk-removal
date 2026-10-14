@@ -38,6 +38,30 @@ function readAllRuns(logPath = config.HISTORY_LOG_PATH) {
     .map((l) => JSON.parse(l));
 }
 
+// Phase 5B — a run that needed external research is recorded as TWO
+// append-only lines sharing the same `runId` (see runner.js's
+// `resumeRunId`): an initial `research_pending` line, then a `completed`
+// (or `failed`) line once the orchestrator's research has been ingested
+// and the run is resumed — `sequence` increments each time (1, 2, ...).
+// The committed log itself NEVER rewrites the first line (append-only is
+// still an absolute rule — see this file's own header) — this function
+// is what every CONSUMER of readAllRuns() should call before building a
+// user-facing list, so a resumed run is shown ONCE, as its latest/
+// current state, never as two confusing "before research"/"after
+// research" entries. A record with no `sequence` field (every pre-
+// Phase-5B record) is treated as sequence 1, so old history still works.
+function latestByRunId(runs) {
+  const byId = new Map();
+  for (const run of runs) {
+    const seq = run.sequence || 1;
+    const existing = byId.get(run.runId);
+    if (!existing || seq >= (existing.sequence || 1)) {
+      byId.set(run.runId, run);
+    }
+  }
+  return [...byId.values()];
+}
+
 // Plain-text description of one finding's outcome. Prefers Phase 2's
 // `decision` field when present; falls back to the plainer Phase 1
 // status/category heuristic for any older-shaped record still in the log
@@ -109,7 +133,8 @@ function activityLine(finding) {
  * @param {number} limit - max runs to include, most recent first
  */
 function buildDashboardSummary(runs, limit = 10) {
-  const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const deduped = latestByRunId(runs);
+  const sorted = [...deduped].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   const recent = sorted.slice(0, limit);
   return recent.map((run) => {
     const pagesScanned = run.summary && typeof run.summary.pagesScanned === "number" ? run.summary.pagesScanned : null;
@@ -138,4 +163,4 @@ function buildDashboardSummary(runs, limit = 10) {
   });
 }
 
-module.exports = { appendRun, readAllRuns, buildDashboardSummary, describeFinding, iconForFinding, activityLine };
+module.exports = { appendRun, readAllRuns, latestByRunId, buildDashboardSummary, describeFinding, iconForFinding, activityLine };

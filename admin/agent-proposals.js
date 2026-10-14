@@ -21,7 +21,6 @@ document.addEventListener('DOMContentLoaded', function () {
     applied: 'Applied',
     validated: 'Validated',
     failed: 'Failed',
-    adjust_requested: 'Adjustment requested',
   };
 
   var errorBanner = document.getElementById('error-banner');
@@ -111,7 +110,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (proposal.status === 'proposed') {
       var noteInput = el('textarea', 'admin-proposal-card-note-input');
       noteInput.rows = 2;
-      noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this) — required if requesting an adjustment';
+      noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this)';
       card.appendChild(noteInput);
 
       // Phase 4 hardening — stated right at the point of action, not
@@ -120,46 +119,24 @@ document.addEventListener('DOMContentLoaded', function () {
       // a decision only. It does not publish, edit, or otherwise touch
       // the website — only the narrow mechanical-fix whitelist
       // (unrelated to this screen) ever writes to the site on its own.
-      // Phase 5: Adjust is the same — it only ever records feedback
-      // here, never a website change (see
-      // sql/2026-10-14_phase5-agent-adjust-workflow.sql's header).
-      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approve/Reject/Adjust only records your decision here — it does not change the website.'));
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approve/Reject only records your decision here — it does not change the website.'));
 
       var actions = el('div', 'admin-proposal-card-actions');
       var approveBtn = el('button', 'admin-btn admin-btn-primary', 'Approve');
       approveBtn.type = 'button';
       var rejectBtn = el('button', 'admin-btn admin-btn-danger', 'Reject');
       rejectBtn.type = 'button';
-      var adjustBtn = el('button', 'admin-btn admin-btn-outline', 'Adjust');
-      adjustBtn.type = 'button';
 
-      var allButtons = [approveBtn, rejectBtn, adjustBtn];
       approveBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'approve', noteInput.value, allButtons);
+        reviewProposal(proposal.id, 'approve', noteInput.value, [approveBtn, rejectBtn]);
       });
       rejectBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'reject', noteInput.value, allButtons);
-      });
-      adjustBtn.addEventListener('click', function () {
-        if (!noteInput.value.trim()) {
-          showError('Adjustment feedback is required — describe what should change before requesting an adjustment.');
-          return;
-        }
-        reviewProposal(proposal.id, 'adjust', noteInput.value, allButtons);
+        reviewProposal(proposal.id, 'reject', noteInput.value, [approveBtn, rejectBtn]);
       });
 
       actions.appendChild(approveBtn);
       actions.appendChild(rejectBtn);
-      actions.appendChild(adjustBtn);
       card.appendChild(actions);
-    } else if (proposal.status === 'adjust_requested') {
-      var adjustedLine = 'Adjustment requested';
-      if (proposal.adjustedAt) adjustedLine += ' on ' + formatDateTime(proposal.adjustedAt);
-      card.appendChild(el('p', 'admin-proposal-card-meta', adjustedLine));
-      if (proposal.adjustNote) {
-        card.appendChild(el('p', 'admin-proposal-card-reviewed-note', '"' + proposal.adjustNote + '"'));
-      }
-      card.appendChild(el('p', 'admin-proposal-card-meta', 'Waiting on a revised proposal — this will return to "Needs review" once the finding is re-evaluated with this feedback.'));
     } else {
       var reviewedLine = 'Reviewed';
       if (proposal.reviewedBy) reviewedLine += ' by ' + proposal.reviewedBy;

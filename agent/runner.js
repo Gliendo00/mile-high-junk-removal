@@ -21,6 +21,35 @@
 //                automatically using the same mechanical, single-
 //                unambiguous-occurrence rewrite mechanism as the fix
 //                itself.
+//
+// Phase 5B — RESEARCH ORCHESTRATION LIFECYCLE (see agent/README.md's
+// "Orchestrator architecture" section for the full design): this module
+// itself still never touches the network — that invariant is unchanged.
+// What's new is a RESUME capability so a research-capable orchestrator
+// (a Claude-driven session) can run this pipeline, see which findings
+// need external research (record.report.research.questionsPending),
+// perform that research and write the result files, then call run()
+// again with `resumeRunId` set to finish the SAME run:
+//
+//   run({ runType: "daily" })                 -> pass 1
+//     -> if any finding is RESEARCH_MORE, the persisted report's
+//        `status` is "research_pending" (NEVER "completed" or
+//        "all-clear" — see report.js's computeRunStatus()) and
+//        `record.runId` is returned for the orchestrator to resume.
+//   ... orchestrator researches each questionsPending entry, writes
+//       agent/research/results/*.json files matching their findingKey ...
+//   run({ resumeRunId: record.runId })         -> pass 2 (same runId,
+//        sequence 2) -> re-runs the full pipeline fresh (research-
+//        intake.js picks up the new files automatically), finalizes to
+//        "completed" or "failed".
+//
+// Both passes append their own line to the git-tracked, append-only
+// history log (never rewritten — see history.js's header) sharing the
+// same runId; history.latestByRunId() is what every READER (the CRM API,
+// the dashboard) uses to collapse that into ONE current-state report, so
+// the owner never sees confusing "before research"/"after research"
+// duplicates. A run with no RESEARCH_MORE findings at all still
+// finalizes in a single pass, exactly as before Phase 5B.
 
 const { execSync } = require("child_process");
 const config = require("./config");
@@ -111,9 +140,15 @@ function applyEligible(findings) {
 // (null, with a warning) rather than throwing if the log is malformed or
 // unreadable — see agent/README.md's failure-safety section: a corrupt
 // history file must never block a new run from happening.
-function readPreviousRun(logPath) {
+//
+// Phase 5B: `excludeRunId` is set when resuming a run (see
+// `resumeRunId` below) — the most recent record in history at that point
+// is the SAME run's own research_pending line, not a genuinely different
+// "previous" run to diff against. Without this, a resumed run would
+// nonsensically compare itself to itself.
+function readPreviousRun(logPath, excludeRunId) {
   try {
-    const runs = readAllRuns(logPath);
+    const runs = readAllRuns(logPath).filter((r) => !excludeRunId || r.runId !== excludeRunId);
     if (!runs.length) return { previousRun: null, warning: null };
     const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     return { previousRun: sorted[0], warning: null };
@@ -122,20 +157,55 @@ function readPreviousRun(logPath) {
   }
 }
 
+// Phase 5B — locates the run to resume (see runner.js's module header
+// "Research orchestration lifecycle" section). A run may be recorded as
+// more than one line sharing the same runId (sequence 1, 2, ...); this
+// returns the LATEST one and throws a clear, specific error if there is
+// nothing by that runId, or if it's already finalized (completed/failed)
+// — resuming a finalized run would silently double-sync proposals and
+// duplicate validation against stale evidence, so it's refused outright
+// rather than guessed at.
+function findResumableRun(runId, logPath) {
+  const runs = readAllRuns(logPath).filter((r) => r.runId === runId);
+  if (!runs.length) {
+    throw new Error(`No run found with runId "${runId}" to resume.`);
+  }
+  const latest = runs.sort((a, b) => (b.sequence || 1) - (a.sequence || 1))[0];
+  const status = latest.report ? latest.report.status : latest.failed ? "failed" : "completed";
+  if (status !== "research_pending") {
+    throw new Error(`Run "${runId}" is not awaiting research (status: "${status}") — nothing to resume.`);
+  }
+  return latest;
+}
+
 async function run(options = {}) {
-  const mode = options.mode === "apply-safe" ? "apply-safe" : "dry-run";
-  const runType = RUN_TYPES.includes(options.runType) ? options.runType : "manual";
-  const runId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + Math.random().toString(36).slice(2, 8);
+  let priorRecord = null;
+  if (options.resumeRunId) {
+    // Let a bad/already-finalized runId fail loudly and immediately —
+    // before acquiring the lock or touching anything else — rather than
+    // starting a pipeline run for a resume that was never going to be
+    // valid in the first place.
+    priorRecord = findResumableRun(options.resumeRunId, options.logPath);
+  }
+
+  const mode = options.mode !== undefined
+    ? (options.mode === "apply-safe" ? "apply-safe" : "dry-run")
+    : (priorRecord ? priorRecord.mode : "dry-run");
+  const runType = RUN_TYPES.includes(options.runType)
+    ? options.runType
+    : (priorRecord ? priorRecord.runType : "manual");
+  const runId = priorRecord ? priorRecord.runId : new Date().toISOString().replace(/[:.]/g, "-") + "-" + Math.random().toString(36).slice(2, 8);
+  const sequence = priorRecord ? (priorRecord.sequence || 1) + 1 : 1;
 
   const release = options.skipLock ? () => {} : acquireLock(runId, options.lockPath);
   try {
-    return await runLocked({ options, mode, runType, runId });
+    return await runLocked({ options, mode, runType, runId, sequence, priorRecord });
   } finally {
     release();
   }
 }
 
-async function runLocked({ options, mode, runType, runId }) {
+async function runLocked({ options, mode, runType, runId, sequence, priorRecord }) {
   // Failure safety (agent/README.md): if the scan/audit/decide pipeline
   // itself throws, this run must still produce an honest, persisted
   // record saying so — never silently nothing, and never a record that
@@ -150,6 +220,7 @@ async function runLocked({ options, mode, runType, runId }) {
     const failure = { message: e && e.message ? e.message : String(e) };
     const failedRecord = {
       runId,
+      sequence,
       timestamp: new Date().toISOString(),
       mode,
       runType,
@@ -161,7 +232,7 @@ async function runLocked({ options, mode, runType, runId }) {
       validation: { performed: false, confirmed: 0, reverted: 0, notes: "run failed before validation could occur" },
       proposalsSync: { skipped: true, reason: "run failed before proposal sync could occur", synced: 0, total: 0, errors: [] },
     };
-    const { previousRun } = readPreviousRun(options.logPath);
+    const { previousRun } = readPreviousRun(options.logPath, priorRecord ? runId : null);
     failedRecord.report = buildReport({ record: failedRecord, previousRun, failure });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
@@ -218,6 +289,7 @@ async function runLocked({ options, mode, runType, runId }) {
 
   const record = {
     runId,
+    sequence,
     timestamp: new Date().toISOString(),
     mode,
     runType,
@@ -285,13 +357,24 @@ async function runLocked({ options, mode, runType, runId }) {
   // only) this week's research-rotation picks, both folded into one
   // persisted `report` object so the CRM API layer never has to
   // recompute either on every read (see agent/lib/report.js's header).
-  const { previousRun, warning: historyWarning } = readPreviousRun(options.logPath);
+  //
+  // Phase 5B: when RESUMING (priorRecord set), exclude this same runId
+  // from "previous run" lookup (see readPreviousRun's header — a resumed
+  // run must never diff itself against its own research_pending line).
+  const { previousRun, warning: historyWarning } = readPreviousRun(options.logPath, priorRecord ? runId : null);
   if (historyWarning) {
     record.researchWarnings = [...(record.researchWarnings || []), historyWarning];
   }
 
   let rotationPriorities = null;
-  if (runType === "weekly" && options.computeRotation !== false) {
+  if (priorRecord) {
+    // Resuming: this week's rotation picks were already decided (and
+    // already persisted to research-rotation-state.json) during the
+    // initial research_pending pass — carry them forward verbatim rather
+    // than recomputing (which could pick different cities now that
+    // `findings` has shifted) or double-marking them reviewed.
+    rotationPriorities = priorRecord.report && priorRecord.report.rotation ? priorRecord.report.rotation.picks : null;
+  } else if (runType === "weekly" && options.computeRotation !== false) {
     const { evidence } = loadCompletedJobEvidence(options.completedJobsDir);
     const citySummary = summarizeByCity(evidence);
     const rotationState = loadRotationState(options.rotationStatePath);
@@ -313,4 +396,4 @@ async function runLocked({ options, mode, runType, runId }) {
   return record;
 }
 
-module.exports = { run, gatherFindings, isWorkingTreeClean, applyEligible, RUN_TYPES };
+module.exports = { run, gatherFindings, isWorkingTreeClean, applyEligible, findResumableRun, RUN_TYPES };
