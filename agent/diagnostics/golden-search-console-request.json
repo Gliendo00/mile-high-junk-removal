@@ -1,6 +1,7 @@
 {
   "type": "search-analytics",
   "rotationSlug": "golden",
+  "purpose": "diagnostic",
   "scope": {
     "type": "city",
     "value": "Golden"

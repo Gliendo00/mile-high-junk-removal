@@ -95,9 +95,14 @@ function computeWindow(days, lagDays) {
  *   makeFirstPartyEvidence() untouched, same pattern as findingKey/rotationSlug
  *   above — see finding-evidence.js's needsFindingEvidenceRefresh() for the
  *   one caller that actually uses it today.
+ * @param {string} [args.purpose] - threaded straight through to makeFirstPartyEvidence()
+ *   untouched, same pattern as the fields above — "operational" (the default when omitted)
+ *   or "diagnostic" (set explicitly by a diagnostic request file, e.g.
+ *   agent/diagnostics/golden-search-console-request.json — never inferred here from
+ *   `strict`/anything else; see firstparty-evidence.js's EVIDENCE_PURPOSES header).
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, requestFingerprint, fetchImpl } = {}) {
+async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, requestFingerprint, purpose, fetchImpl } = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -121,6 +126,7 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
     findingKey,
     rotationSlug,
     requestFingerprint,
+    purpose,
     source: "search-console-search-analytics",
     metric: "clicks-impressions-ctr-position",
     dimension: dims.join("+"),
@@ -151,9 +157,10 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
  * @param {string} [args.rotationSlug] - see fetchSearchAnalyticsEvidence()'s jsdoc
  * @param {string[]} args.urls - fully-qualified URLs to inspect
  * @param {string} [args.context]
+ * @param {string} [args.purpose] - see fetchSearchAnalyticsEvidence()'s jsdoc
  * @param {function} [args.fetchImpl]
  */
-async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, context, fetchImpl } = {}) {
+async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, context, purpose, fetchImpl } = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -171,6 +178,7 @@ async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, cont
       makeFirstPartyEvidence({
         findingKey,
         rotationSlug,
+        purpose,
         source: "search-console-url-inspection",
         metric: "indexStatus",
         scope: { type: "page", value: url },
@@ -203,9 +211,10 @@ async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, cont
  * @param {string[]} [args.metrics] - default ["sessions","engagementRate","conversions"]
  * @param {object} [args.dimensionFilter] - raw GA4 FilterExpression
  * @param {string} [args.context]
+ * @param {string} [args.purpose] - see fetchSearchAnalyticsEvidence()'s jsdoc
  * @param {function} [args.fetchImpl]
  */
-async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensions, metrics, dimensionFilter, context, fetchImpl } = {}) {
+async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensions, metrics, dimensionFilter, context, purpose, fetchImpl } = {}) {
   if (!isGa4Configured()) {
     return { skipped: true, reason: "GA4 not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GA4_PROPERTY_ID missing)" };
   }
@@ -241,6 +250,7 @@ async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensi
   const evidence = makeFirstPartyEvidence({
     findingKey,
     rotationSlug,
+    purpose,
     source: "ga4",
     metric: (metricNames.length ? metricNames : mets).join("+"),
     dimension: (dimNames.length ? dimNames : dims).join("+"),

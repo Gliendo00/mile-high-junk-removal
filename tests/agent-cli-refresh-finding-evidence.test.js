@@ -48,6 +48,36 @@ function findRealCandidate() {
   return candidate;
 }
 
+// Ensures `target` is genuinely eligible for --refresh-finding-evidence
+// RIGHT NOW, regardless of whatever real, already-committed evidence
+// currently exists for it on disk — which legitimately evolves over
+// time as real Controlled Weekly runs correctly self-heal their own
+// fingerprint (see finding-evidence.js's needsFindingEvidenceRefresh()
+// header): once a real run fetches the CURRENT, correct term, the real
+// candidate becomes "already evidenced" again, exactly as designed.
+// Tests that need to exercise the FETCH path itself (not the
+// already-evidenced-exclusion path, which has its own dedicated test)
+// must not depend on that real, mutable state. Writes one throwaway,
+// deliberately-mismatched-fingerprint entry dated NOW (so it is always
+// the MOST RECENT entry for this key, per "most recent wins" — see
+// freshFindingEvidenceFingerprint()) and returns its path for cleanup.
+function forceCandidateNeedsRefresh(target) {
+  const override = makeFirstPartyEvidence({
+    findingKey: target.key,
+    requestFingerprint: "zzz-test-override-deliberately-mismatched-fingerprint",
+    source: "search-console-search-analytics",
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: target.pages[0] },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "test fixture — forces the target eligible regardless of real repo evidence state",
+    limitations: "test fixture",
+    fetchedAt: new Date().toISOString(),
+  });
+  return writeFirstPartyEvidence(override, "zzz-test-fixture-force-eligible.json", EVIDENCE_DIR);
+}
+
 const GOOGLE_ENV_KEYS = ["GOOGLE_IMPERSONATE_SERVICE_ACCOUNT", "GSC_SITE_URL", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_APPLICATION_CREDENTIALS"];
 
 function saveGoogleEnv() {
@@ -110,6 +140,8 @@ async function main() {
   // -----------------------------------------------------------------
 
   await test("with NO Google env configured: the real candidate is correctly identified, the fetch is correctly SKIPPED (not failed), and NO evidence file is written", async () => {
+    const target = findRealCandidate();
+    const forceEligible = forceCandidateNeedsRefresh(target);
     const saved = saveGoogleEnv();
     for (const k of GOOGLE_ENV_KEYS) delete process.env[k];
     const before = filesBeforeIn(EVIDENCE_DIR);
@@ -123,6 +155,7 @@ async function main() {
       assert.deepStrictEqual(newFilesSince(EVIDENCE_DIR, before), [], "a skipped fetch must never write an evidence file");
     } finally {
       restoreGoogleEnv(saved);
+      fs.unlinkSync(forceEligible);
       cleanupNewFiles(EVIDENCE_DIR, before);
     }
   });
@@ -192,6 +225,8 @@ async function main() {
   });
 
   await test("STRICT-ANALOG real fetch: a genuine API error (e.g. quota) is classified 'failed', writes NO evidence file, and is never indistinguishable from a real zero-row success", async () => {
+    const target = findRealCandidate();
+    const forceEligible = forceCandidateNeedsRefresh(target);
     const saved = saveGoogleEnv();
     process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT = "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com";
     process.env.GSC_SITE_URL = "sc-domain:milehighjunkremoval.net";
@@ -225,11 +260,14 @@ async function main() {
       global.fetch = originalFetch;
       restoreGoogleEnv(saved);
       fs.unlinkSync(adcPath);
+      fs.unlinkSync(forceEligible);
       cleanupNewFiles(EVIDENCE_DIR, before);
     }
   });
 
   await test("a real successful fetch with a legitimate ZERO-ROW response is classified 'fetched-zero-rows' and IS written as normal, honest evidence", async () => {
+    const target = findRealCandidate();
+    const forceEligible = forceCandidateNeedsRefresh(target);
     const saved = saveGoogleEnv();
     process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT = "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com";
     process.env.GSC_SITE_URL = "sc-domain:milehighjunkremoval.net";
@@ -268,6 +306,7 @@ async function main() {
       global.fetch = originalFetch;
       restoreGoogleEnv(saved);
       fs.unlinkSync(adcPath);
+      fs.unlinkSync(forceEligible);
       cleanupNewFiles(EVIDENCE_DIR, before);
     }
   });
@@ -280,6 +319,7 @@ async function main() {
 
   await test("END TO END: a realistic GSC query+page response with a mismatched row flows through --refresh-finding-evidence, gets attached by firstparty-intake.js, and firstparty-signals.js's query-page-mismatch classifier DOES fire on it in a real weekly run", async () => {
     const target = findRealCandidate();
+    const forceEligible = forceCandidateNeedsRefresh(target);
     const saved = saveGoogleEnv();
     process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT = "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com";
     process.env.GSC_SITE_URL = "sc-domain:milehighjunkremoval.net";
@@ -358,6 +398,7 @@ async function main() {
       global.fetch = originalFetch;
       restoreGoogleEnv(saved);
       fs.unlinkSync(adcPath);
+      fs.unlinkSync(forceEligible);
       if (fs.existsSync(logPath)) fs.unlinkSync(logPath);
       cleanupNewFiles(EVIDENCE_DIR, beforeEvidence);
     }

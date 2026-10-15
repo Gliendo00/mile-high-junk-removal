@@ -11,7 +11,8 @@ const fs = require("fs");
 const path = require("path");
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 const { makeFinding } = require("../agent/lib/findings");
-const { attachFirstPartyEvidence, attachRotationEvidence } = require("../agent/lib/firstparty-intake");
+const { attachFirstPartyEvidence, attachRotationEvidence, isOperationalEvidence, loadFirstPartyEvidence } = require("../agent/lib/firstparty-intake");
+const { freshlyEvidencedRotationSlugs } = require("../agent/lib/rotation-evidence");
 
 function test(name, fn) {
   try {
@@ -56,6 +57,10 @@ function cleanupFixtures() {
 // path by default, so these tests exercise its lower-level loader logic
 // directly against a fixture directory instead — same pattern
 // tests/agent-research.test.js already uses for research-intake.js.
+// Mirrors the real loadFirstPartyEvidence()'s own purpose filter
+// (isOperationalEvidence()) exactly, so these fixture-based tests
+// exercise the SAME provenance enforcement the real loader applies —
+// not a weaker stand-in.
 function loadFromFixtureDir() {
   const entries = [];
   const warnings = [];
@@ -64,7 +69,10 @@ function loadFromFixtureDir() {
     try {
       const parsed = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, file), "utf8"));
       const list = Array.isArray(parsed) ? parsed : [parsed];
-      for (const item of list) entries.push(makeFirstPartyEvidence(item));
+      for (const item of list) {
+        const evidence = makeFirstPartyEvidence(item);
+        if (isOperationalEvidence(evidence)) entries.push(evidence);
+      }
     } catch (e) {
       warnings.push(`${file}: ${e.message}`);
     }
@@ -175,6 +183,102 @@ try {
     const picks = [{ slug: "golden", name: "Golden", hasPage: false }];
     const { picks: out } = attachRotationEvidence(picks, loaded);
     assert.deepStrictEqual(out[0].firstPartyEvidence, []);
+  });
+
+  // -----------------------------------------------------------------------
+  // Evidence provenance (purpose) — a diagnostic artifact can never
+  // satisfy operational intake, even when its key matches a real
+  // finding/rotation pick. See agent/lib/firstparty-intake.js's own
+  // header on why the filter lives in loadFirstPartyEvidence() alone.
+  // -----------------------------------------------------------------------
+
+  test("legacy evidence written with no purpose field at all remains operational and loads normally", () => {
+    cleanupFixtures();
+    writeFixtureFile("legacy.json", [validArgs({ findingKey: "coverage-gap-candidate::aurora-junk-removal.html" })]); // no purpose key at all
+    const loaded = loadFromFixtureDir();
+    assert.strictEqual(loaded.entries.length, 1);
+    assert.strictEqual(loaded.entries[0].purpose, "operational");
+  });
+
+  test("explicit purpose: 'operational' evidence remains operational and loads normally", () => {
+    cleanupFixtures();
+    writeFixtureFile("explicit-operational.json", [validArgs({ findingKey: "coverage-gap-candidate::aurora-junk-removal.html", purpose: "operational" })]);
+    const loaded = loadFromFixtureDir();
+    assert.strictEqual(loaded.entries.length, 1);
+    assert.strictEqual(loaded.entries[0].purpose, "operational");
+  });
+
+  test("purpose: 'diagnostic' evidence is EXCLUDED from loadFirstPartyEvidence()'s own operational entries, even though the file parses fine and the key matches a real finding/pick", () => {
+    cleanupFixtures();
+    writeFixtureFile("diagnostic.json", [validArgs({ findingKey: "coverage-gap-candidate::aurora-junk-removal.html", purpose: "diagnostic" })]);
+    const loaded = loadFromFixtureDir();
+    assert.strictEqual(loaded.entries.length, 0, "a diagnostic-purpose entry must never reach the operational entries array");
+    assert.strictEqual(loaded.warnings.length, 0, "exclusion is not an error/warning — it's the correct, expected outcome");
+  });
+
+  test("end-to-end through the real loader shape: a diagnostic entry never attaches to a matching finding OR a matching rotation pick, while a sibling operational entry for a DIFFERENT key still attaches normally", () => {
+    cleanupFixtures();
+    writeFixtureFile("diagnostic-matching-finding.json", [validArgs({ findingKey: "coverage-gap-candidate::aurora-junk-removal.html", purpose: "diagnostic" })]);
+    writeFixtureFile("diagnostic-matching-pick.json", [validArgs({ findingKey: undefined, rotationSlug: "golden", purpose: "diagnostic" })]);
+    writeFixtureFile("operational-sibling.json", [validArgs({ findingKey: "coverage-gap-candidate::parker-junk-removal.html", purpose: "operational" })]);
+    const loaded = loadFromFixtureDir();
+
+    const matchingFinding = makeFinding({ type: "coverage-gap-candidate", summary: "s", pages: ["aurora-junk-removal.html"], evidence: [{ x: 1 }] });
+    const siblingFinding = makeFinding({ type: "coverage-gap-candidate", summary: "s2", pages: ["parker-junk-removal.html"], evidence: [{ x: 1 }] });
+    const { findings: outFindings } = attachFirstPartyEvidence([matchingFinding, siblingFinding], loaded);
+    assert.deepStrictEqual(outFindings[0].firstPartyEvidence, [], "the diagnostic entry must NOT attach despite the matching findingKey");
+    assert.strictEqual(outFindings[1].firstPartyEvidence.length, 1, "a genuine operational entry for a different key must still attach normally");
+
+    const goldenPick = { slug: "golden", name: "Golden", hasPage: false };
+    const { picks: outPicks } = attachRotationEvidence([goldenPick], loaded);
+    assert.deepStrictEqual(outPicks[0].firstPartyEvidence, [], "the diagnostic entry must NOT attach to the Golden pick despite the matching rotationSlug");
+  });
+
+  // -----------------------------------------------------------------------
+  // The REAL, already-committed Golden diagnostic artifacts — proves the
+  // fix against the actual repo content Controlled Weekly #12 flagged,
+  // not just a synthetic analog.
+  // -----------------------------------------------------------------------
+
+  test("THE REAL Golden Search Console diagnostic file can no longer attach to the real Golden rotation pick", () => {
+    const loaded = loadFirstPartyEvidence();
+    const goldenDiagnosticStillOnDisk = fs
+      .readFileSync(path.join(__dirname, "..", "agent", "research", "firstparty", "search-console-search-analytics__golden-1792071840456.json"), "utf8");
+    assert.ok(JSON.parse(goldenDiagnosticStillOnDisk)[0].purpose === "diagnostic", "sanity check: the real file on disk is marked diagnostic");
+
+    const goldenPick = { slug: "golden", name: "Golden", hasPage: false };
+    const { picks: outPicks } = attachRotationEvidence([goldenPick], loaded);
+    assert.deepStrictEqual(outPicks[0].firstPartyEvidence, [], "the real Golden diagnostic must never attach to the real Golden rotation pick — Controlled Weekly #12's exact contamination");
+  });
+
+  test("THE REAL Golden Search Console diagnostic can no longer satisfy Golden rotation freshness — a genuine --refresh-rotation-evidence fetch for Golden is no longer suppressed", () => {
+    const loaded = loadFirstPartyEvidence();
+    const freshSlugs = freshlyEvidencedRotationSlugs(loaded.entries);
+    assert.strictEqual(freshSlugs.has("golden"), false, "with the diagnostic excluded from operational entries, Golden must read as having NO operational evidence, making it eligible for a real fetch again");
+  });
+
+  test("THE REAL Golden GA4 diagnostic is likewise excluded from operational intake", () => {
+    const loaded = loadFirstPartyEvidence();
+    assert.strictEqual(loaded.entries.some((e) => e.source === "ga4" && e.rotationSlug === "golden-ga4"), false, "the GA4 diagnostic must never appear in operational entries, same as the Search Console one");
+  });
+
+  test("both real Golden diagnostic artifacts remain fully committed on disk, with their original observed/context data completely untouched — only `purpose` was added", () => {
+    const scPath = path.join(__dirname, "..", "agent", "research", "firstparty", "search-console-search-analytics__golden-1792071840456.json");
+    const ga4Path = path.join(__dirname, "..", "agent", "research", "firstparty", "ga4__milehighjunkremoval-net-1792073503085.json");
+    assert.ok(fs.existsSync(scPath), "the Search Console Golden diagnostic file must still exist — never deleted");
+    assert.ok(fs.existsSync(ga4Path), "the GA4 Golden diagnostic file must still exist — never deleted");
+
+    const sc = JSON.parse(fs.readFileSync(scPath, "utf8"))[0];
+    assert.strictEqual(sc.purpose, "diagnostic");
+    assert.strictEqual(sc.rotationSlug, "golden");
+    assert.strictEqual(sc.observed.totalRowsReturned, 0);
+    assert.ok(/One-off controlled test of the production auth\/fetch path/.test(sc.context), "original context text must be unchanged");
+
+    const ga4 = JSON.parse(fs.readFileSync(ga4Path, "utf8"))[0];
+    assert.strictEqual(ga4.purpose, "diagnostic");
+    assert.strictEqual(ga4.rotationSlug, "golden-ga4");
+    assert.strictEqual(ga4.observed.totalRowsReturned, 10);
+    assert.ok(/One-off controlled test of the production auth\/fetch path/.test(ga4.context), "original context text must be unchanged");
   });
 } finally {
   cleanupFixtures();

@@ -12,6 +12,7 @@ const {
   SOURCES,
   SCOPE_TYPES,
   FRESHNESS_WINDOWS_DAYS,
+  EVIDENCE_PURPOSES,
 } = require("../agent/lib/firstparty-evidence");
 
 function test(name, fn) {
@@ -75,7 +76,7 @@ test("makeFirstPartyEvidence has NO verdict/confidence/recommendation field — 
   assert.strictEqual(evidence.recommendation, undefined);
   assert.deepStrictEqual(
     Object.keys(evidence).sort(),
-    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "rotationSlug", "requestFingerprint", "limitations", "metric", "observed", "scope", "source", "window"].sort()
+    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "rotationSlug", "requestFingerprint", "purpose", "limitations", "metric", "observed", "scope", "source", "window"].sort()
   );
 });
 
@@ -84,6 +85,36 @@ test("requestFingerprint is optional — defaults to null, and round-trips when 
   assert.strictEqual(a.requestFingerprint, null);
   const b = makeFirstPartyEvidence(validArgs({ requestFingerprint: "seasonal cleanout guide" }));
   assert.strictEqual(b.requestFingerprint, "seasonal cleanout guide");
+});
+
+// -----------------------------------------------------------------------
+// purpose (provenance) — operational vs diagnostic, see
+// agent/lib/firstparty-evidence.js's EVIDENCE_PURPOSES header
+// -----------------------------------------------------------------------
+
+test("EVIDENCE_PURPOSES is exactly {operational, diagnostic} — a small, bounded set", () => {
+  assert.deepStrictEqual([...EVIDENCE_PURPOSES].sort(), ["diagnostic", "operational"]);
+});
+
+test("legacy evidence with no purpose field at all defaults to 'operational' — backward compatibility for every entry written before this field existed", () => {
+  const evidence = makeFirstPartyEvidence(validArgs({ purpose: undefined }));
+  assert.strictEqual(evidence.purpose, "operational");
+});
+
+test("explicit purpose: 'operational' round-trips unchanged", () => {
+  const evidence = makeFirstPartyEvidence(validArgs({ purpose: "operational" }));
+  assert.strictEqual(evidence.purpose, "operational");
+});
+
+test("explicit purpose: 'diagnostic' round-trips unchanged — never silently coerced to operational", () => {
+  const evidence = makeFirstPartyEvidence(validArgs({ purpose: "diagnostic" }));
+  assert.strictEqual(evidence.purpose, "diagnostic");
+});
+
+test("an unrecognized purpose value is REJECTED (throws), never silently treated as operational or any other bucket", () => {
+  assert.throws(() => makeFirstPartyEvidence(validArgs({ purpose: "manual-ish" })), /purpose/);
+  assert.throws(() => makeFirstPartyEvidence(validArgs({ purpose: "Operational" })), /purpose/, "case-sensitive — must not silently normalize casing");
+  assert.throws(() => makeFirstPartyEvidence(validArgs({ purpose: "" })), /purpose/, "an empty string is not a valid purpose and must not fall back to a default");
 });
 
 test("makeFirstPartyEvidence never stores a raw API payload field — only the bounded `observed` shape the caller provided", () => {

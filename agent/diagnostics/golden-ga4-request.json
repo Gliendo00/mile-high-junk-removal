@@ -1,6 +1,7 @@
 {
   "type": "ga4",
   "rotationSlug": "golden-ga4",
+  "purpose": "diagnostic",
   "scope": {
     "type": "site",
     "value": "milehighjunkremoval.net"

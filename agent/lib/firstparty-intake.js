@@ -37,6 +37,26 @@ const { makeFirstPartyEvidence } = require("./firstparty-evidence");
 
 const EVIDENCE_DIR = path.join(config.SITE_ROOT, "agent", "research", "firstparty");
 
+// THE single enforcement point for evidence provenance (see
+// firstparty-evidence.js's EVIDENCE_PURPOSES header): every consumer in
+// this codebase reads committed evidence exclusively through this
+// function's `entries` — attachFirstPartyEvidence()/attachRotationEvidence()
+// below, cli.js's --refresh-rotation-evidence (freshlyEvidencedRotationSlugs())
+// and --refresh-finding-evidence (needsFindingEvidenceRefresh()/
+// freshlyEvidencedFindingKeys()), and transitively firstparty-candidates.js's
+// daily permanent-suppression check (it reads finding.firstPartyEvidence,
+// which attachFirstPartyEvidence() populates from here). Filtering ONCE,
+// here, to purpose === "operational" means a diagnostic artifact (a
+// one-off manual proof the Google auth/fetch path works — never a real
+// rotation/finding answer) can never attach to anything, never count as
+// "already evidenced" for freshness, and therefore can never suppress a
+// genuine autonomous fetch — with zero changes needed in any of those
+// downstream functions. The file itself is untouched on disk — this
+// only affects what the in-memory pipeline sees.
+function isOperationalEvidence(entry) {
+  return (entry.purpose || "operational") === "operational";
+}
+
 function loadFirstPartyEvidence() {
   const entries = [];
   const warnings = [];
@@ -53,7 +73,8 @@ function loadFirstPartyEvidence() {
       const parsed = JSON.parse(raw);
       const list = Array.isArray(parsed) ? parsed : [parsed];
       for (const item of list) {
-        entries.push(makeFirstPartyEvidence(item));
+        const evidence = makeFirstPartyEvidence(item);
+        if (isOperationalEvidence(evidence)) entries.push(evidence);
       }
     } catch (e) {
       warnings.push(`agent/research/firstparty/${file}: ${e.message}`);
@@ -126,4 +147,4 @@ function attachRotationEvidence(picks, loaded) {
   return { picks, warnings };
 }
 
-module.exports = { loadFirstPartyEvidence, attachFirstPartyEvidence, attachRotationEvidence, EVIDENCE_DIR };
+module.exports = { loadFirstPartyEvidence, attachFirstPartyEvidence, attachRotationEvidence, isOperationalEvidence, EVIDENCE_DIR };

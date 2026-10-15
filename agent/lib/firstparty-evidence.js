@@ -30,6 +30,29 @@ const SOURCES = [
 
 const SCOPE_TYPES = ["page", "query", "city", "site"];
 
+// Evidence PROVENANCE — "operational" (gathered by the ordinary
+// autonomous/orchestrator-driven research paths: --refresh-rotation-
+// evidence, --refresh-finding-evidence, firstparty-candidates.js's
+// human-orchestrator --fetch-firstparty= path) vs "diagnostic" (a
+// one-off, manual proof that the GitHub Actions -> WIF -> service-
+// account -> Search Console/GA4 auth path itself works — see
+// agent/diagnostics/*.json and the Golden diagnostics in
+// .github/workflows/website-agent.yml). A diagnostic exists only to
+// prove plumbing, never to answer a real rotation/finding question, and
+// must never be able to satisfy either — see firstparty-intake.js's
+// loadFirstPartyEvidence() for the single enforcement point.
+//
+// "operational" is the default when `purpose` is omitted (backward
+// compatibility for every piece of evidence written before this field
+// existed, all of which IS genuinely operational) — but that default is
+// deliberately NEVER applied to the two already-known diagnostic
+// artifacts: those were explicitly backfilled with
+// `"purpose": "diagnostic"` in their own committed JSON files instead
+// of being left to fall through this default (see
+// agent/research/firstparty/*golden*.json). An unrecognized value is
+// rejected outright, never silently coerced to either bucket.
+const EVIDENCE_PURPOSES = ["operational", "diagnostic"];
+
 // How many days before each source's evidence is "aging"/"stale" — see
 // agent/README.md's Phase 6 "freshness/comparison windows" section.
 // Search Console has a real ~2-3 day reporting lag and is naturally
@@ -97,6 +120,10 @@ function computeFirstPartyFreshness(evidence, now = new Date()) {
  *   evidence answers a question my own derivation logic no longer asks,"
  *   even while the evidence is still date-fresh. Purely descriptive, like
  *   `scope` — never read by decision.js, never affects freshness itself.
+ * @param {string} [args.purpose] - one of EVIDENCE_PURPOSES; defaults to "operational" when
+ *   omitted (see EVIDENCE_PURPOSES' own header above for exactly why that default is safe
+ *   for every pre-existing caller, and why the two known diagnostic artifacts are explicitly
+ *   backfilled rather than relying on it).
  */
 function makeFirstPartyEvidence(args) {
   if (!args || typeof args !== "object") throw new Error("makeFirstPartyEvidence requires an object");
@@ -135,6 +162,9 @@ function makeFirstPartyEvidence(args) {
   if (args.requestFingerprint !== undefined && args.requestFingerprint !== null) {
     assertNonEmptyString(args.requestFingerprint, "requestFingerprint");
   }
+  if (args.purpose !== undefined && args.purpose !== null && !EVIDENCE_PURPOSES.includes(args.purpose)) {
+    throw new Error(`first-party evidence purpose must be one of ${EVIDENCE_PURPOSES.join(", ")}, got "${args.purpose}"`);
+  }
 
   return {
     findingKey: args.findingKey || null,
@@ -152,6 +182,7 @@ function makeFirstPartyEvidence(args) {
     limitations: args.limitations,
     fetchedAt: args.fetchedAt || new Date().toISOString(),
     requestFingerprint: args.requestFingerprint || null,
+    purpose: args.purpose || "operational",
   };
 }
 
@@ -161,4 +192,5 @@ module.exports = {
   SOURCES,
   SCOPE_TYPES,
   FRESHNESS_WINDOWS_DAYS,
+  EVIDENCE_PURPOSES,
 };

@@ -71,13 +71,17 @@ async function main() {
     assert.ok(typeof committed.context === "string" && committed.context.length > 0);
   });
 
-  await test("the committed Golden diagnostic request's structural fields are BYTE-IDENTICAL to rotation-evidence.js's own buildRotationEvidenceRequest() output for Golden — same shape used in production, not a hand-drifted copy", () => {
+  await test("the committed Golden diagnostic request's structural fields are BYTE-IDENTICAL to rotation-evidence.js's own buildRotationEvidenceRequest() output for Golden, with exactly ONE deliberate difference — `purpose: \"diagnostic\"`, which buildRotationEvidenceRequest() (a genuinely operational request builder) never sets — same shape used in production, not a hand-drifted copy", () => {
     const { buildRotationEvidenceRequest } = require("../agent/lib/rotation-evidence");
     const committed = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "agent", "diagnostics", "golden-search-console-request.json"), "utf8"));
     const generated = buildRotationEvidenceRequest({ slug: "golden", name: "Golden" });
-    const { context: committedContext, ...committedRest } = committed;
+
+    assert.strictEqual(committed.purpose, "diagnostic", "the committed diagnostic request must explicitly declare itself diagnostic");
+    assert.strictEqual(generated.purpose, undefined, "a genuinely operational, autonomously-generated rotation request must never carry a purpose field itself — it relies on makeFirstPartyEvidence()'s own 'operational' default");
+
+    const { context: committedContext, purpose: committedPurpose, ...committedRest } = committed;
     const { context: generatedContext, ...generatedRest } = generated;
-    assert.deepStrictEqual(committedRest, generatedRest, "every field except `context` must match buildRotationEvidenceRequest()'s real output exactly");
+    assert.deepStrictEqual(committedRest, generatedRest, "every field except `context`/`purpose` must match buildRotationEvidenceRequest()'s real output exactly");
   });
 
   await test("STRICT mode: a {skipped:true} result (e.g. misconfiguration/auth/API failure) sets process.exitCode = 1 and never writes an evidence file", async () => {
@@ -174,6 +178,13 @@ async function main() {
       const entry = Array.isArray(written) ? written[0] : written;
       assert.strictEqual(entry.rotationSlug, "golden");
       assert.strictEqual(entry.observed.totalRowsReturned, 0, "the zero-row count must be represented honestly, not hidden or treated as an error");
+      // Strictness and provenance are separate concepts: this test's own
+      // GOLDEN_REQUEST fixture (unlike the real committed diagnostic
+      // file) never declares a `purpose`, and `--fetch-firstparty-strict`
+      // itself must NEVER inject/imply "diagnostic" — a future strict
+      // OPERATIONAL fetch must remain possible. The request is the only
+      // source of truth for purpose.
+      assert.strictEqual(entry.purpose, "operational", "strict mode must never imply diagnostic purpose on its own — purpose comes only from what the request itself declares");
     } finally {
       delete process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT;
       delete process.env.GSC_SITE_URL;
