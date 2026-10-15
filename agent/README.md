@@ -3181,3 +3181,206 @@ no GitHub Actions workflow was dispatched by this phase.
    per evidence entry) — the same, already-accepted posture
    `firstPartyEvidence.items` has (see Phase 6's own remaining-risks
    list, item 3).
+
+# Phase 9 — Autonomous First-Party Evidence Candidacy + Fetch Planning
+
+Phase 8 built `query-page-mismatch` but left a gap item 1 above states
+plainly: the classifier has never seen real qualifying evidence, because
+exercising it has always required a human to hand-compose a
+`--fetch-firstparty=` request with un-overridden `["query","page"]`
+dimensions. This phase closes that gap — Weekly can now identify
+eligible findings and fetch that evidence itself, through the existing
+network boundary, with zero widening of decision/proposal/site-change
+authority.
+
+## What's now autonomous
+
+A `weekly` dispatch now recognizes, on its own, when a `content-gap` or
+`structural-inconsistency` finding would benefit from real Search
+Console query/page evidence, builds a bounded, mechanically-derived
+request for it, fetches it through the SAME existing
+`fetchFirstPartyEvidence()`/`search-console-client.js` path every other
+first-party fetch already uses (no new Google client, no new auth code),
+and persists it through the SAME normalized schema — all BEFORE the
+deterministic `--weekly` pass runs, so `firstparty-intake.js` attaches it
+and `firstparty-signals.js` classifies it in the SAME run, same pattern
+Phase 7B established for rotation picks.
+
+## New files
+
+- `agent/lib/finding-evidence.js` — `QUERY_PAGE_CANDIDATE_TYPES`
+  (`content-gap`, `structural-inconsistency` — exactly two, not every
+  category-C type), `isQueryPageEvidenceCandidate()`,
+  `deriveQueryFilterTerm()`, `buildQueryPageEvidenceRequest()`,
+  `freshlyEvidencedFindingKeys()`. Mirrors `rotation-evidence.js`'s
+  architecture deliberately — same separation of concerns, same reason
+  for existing as its own module (a category of evidence-worthy target
+  neither existing evidence-gathering path reaches).
+
+## Why exactly these two finding types, and not the other category-C types
+
+- **`content-gap`/`structural-inconsistency` (included)** — both ask
+  "is this page's own content/depth adequate for what it's actually
+  about?" Real Search Console query text about this page's own topic is
+  the single most direct, non-fabricated evidence for that question, and
+  both are always single-page findings, fitting this module's
+  single-target request shape cleanly.
+- **`coverage-gap-candidate` (excluded)** — its question is about a
+  MISSING cross-reference to a different service, not this page's own
+  adequacy. The natural query term would be the missing service's name,
+  not this page's own identity, and a real query for that service
+  landing on the general service page instead of a city page is often
+  entirely normal — the mismatch semantics don't map cleanly. Left out
+  rather than forced.
+- **`overlapping-intent` (2 pages) / `duplicate-meta-description` (2+
+  pages) (excluded)** — both need a genuinely GROUP-scoped request shape
+  this module's single-target design doesn't attempt. A real, legitimate
+  future extension (arguably the cleanest actual use of
+  `query-page-mismatch` — cannibalization IS a query/page-mismatch
+  question), but it needs its own deliberate request-shape design, not a
+  mechanical default forced onto this phase's "smallest architecture."
+- **`research-gap` (moot)** — defined in `risk.js`'s `RULES` table but
+  never actually emitted by any audit module.
+- **Every category A/B finding (`broken-internal-link`,
+  `missing-title`, etc.) and the EXISTING `firstparty-candidates.js`
+  `CANDIDATE_TYPES` set (excluded, untouched)** — technical/indexing
+  questions answerable from internal evidence alone, or already covered
+  by the separate, existing URL-Inspection-oriented mechanism. A
+  technical finding does not get Search Console performance research
+  just because it has a URL — the exact case the brief warned against.
+
+## Request shape — a correctness detail that matters
+
+```json
+{
+  "type": "search-analytics",
+  "findingKey": "content-gap::blog-seasonal-cleanout-guide.html",
+  "scope": { "type": "page", "value": "blog-seasonal-cleanout-guide.html" },
+  "days": 28,
+  "dimensions": ["query", "page"],
+  "dimensionFilterGroups": [
+    { "filters": [{ "dimension": "query", "operator": "contains", "expression": "blog seasonal cleanout guide" }] }
+  ]
+}
+```
+
+**Deliberately filtered by QUERY, never by PAGE.** An earlier draft of
+this design considered filtering `dimensionFilterGroups` by the
+finding's own page — which would have been self-defeating: filtering to
+one page makes every returned row's `page` column trivially equal that
+same page by construction, making a query-page mismatch structurally
+impossible to ever detect. The query-filter term is derived
+MECHANICALLY from the page's own file name
+(`deriveQueryFilterTerm()`: `.replace(/\.html$/,"").replace(/-/g," ")`
+— the exact same transform `decision.js`'s `questionTextFor()` already
+uses for service names) — the page's own existing identity, not an
+invented keyword, not a demand/volume claim.
+
+## Freshness, not permanent suppression
+
+The EXISTING `firstparty-candidates.js`/`isFirstPartyEvidenceCandidate()`
+mechanism (daily, pause/resume-based) treats "already has ANY evidence,
+ever" as permanent disqualification. That's too blunt for this
+autonomous, mechanical weekly refresh, and this phase does NOT carry it
+forward: `freshlyEvidencedFindingKeys()` mirrors
+`rotation-evidence.js`'s existing `freshlyEvidencedRotationSlugs()`
+exactly — STALE evidence (per `firstparty-evidence.js`'s existing,
+UNCHANGED freshness windows: aging 10 days, stale 21 days for
+`search-console-search-analytics`) is treated as absent, so a finding is
+re-checked again once enough time passes rather than permanently
+abandoned after one fetch. The EXISTING `CANDIDATE_TYPES` mechanism's
+permanent-suppression rule is untouched — a deliberately separate,
+already-shipped lifecycle this phase does not redesign.
+
+## `--refresh-finding-evidence` (`agent/cli.js`)
+
+Mirrors `--refresh-rotation-evidence` almost exactly: recomputes this
+week's findings (same deterministic `gatherFindings()` a `--weekly` run
+itself will call moments later), filters to eligible,
+not-already-fresh candidates, and for each, fetches ONE targeted
+request via the EXISTING `fetchFirstPartyEvidence()`/
+`writeFirstPartyEvidence()` functions — zero new networking code. Never
+throws: every candidate's outcome is logged and the loop continues.
+
+**Four-way honest outcome classification** (`classifyFindingEvidenceOutcome()`),
+addressing the explicit requirement that a transient failure must never
+be silently indistinguishable from "zero evidence":
+
+- `"fetched"` — a real, successful API call that found 1+ rows.
+- `"fetched-zero-rows"` — a real, successful API call that found 0 rows
+  (honest absence-of-SIGNAL, never absence-of-opportunity).
+- `"skipped"` — never attempted: the integration isn't configured, or
+  the request was malformed before any network call.
+- `"failed"` — an attempt WAS made (auth resolution or the Search
+  Analytics API call itself) and did not succeed.
+
+This classification is pure, read-only text-matching over
+`fetchFirstPartyEvidence()`'s EXISTING `{skipped, reason}` shape — no
+change to that shape, no new Google networking code. It exists purely
+to make the console log say which of the two happened, instead of
+collapsing both into one generic "skipped" word. The underlying
+guarantee that prevents a failure from ever masquerading as real
+evidence is structural, not logging: `fetchSearchAnalyticsEvidence()`
+only ever calls `makeFirstPartyEvidence()` — and therefore only ever
+writes a file — on a GENUINE successful API response; a skip or a
+failure writes nothing, full stop.
+
+## Workflow integration
+
+One new step, "Refresh finding-level query evidence (weekly only)" —
+`if: inputs.run_type == 'weekly'` — placed immediately after the
+existing "Refresh weekly rotation evidence" step and before "Run
+Website Agent (weekly)". Daily is untouched by construction: the gate
+is `inputs.run_type == 'weekly'` and nothing else, identical in
+structure to the rotation-evidence step's own gate.
+
+## Tests
+
+New `tests/agent-finding-evidence.test.js` (18 cases — candidacy rules
+including the explicit "a broken link is never a candidate" case,
+query-term derivation, the "never page-filtered" structural proof,
+freshness/staleness behavior, cross-contamination guards). New
+`tests/agent-cli-refresh-finding-evidence.test.js` (9 cases — the
+four-way outcome classification; real end-to-end wiring with no Google
+env configured (correctly "skipped", no file written); freshness
+exclusion; a genuine API error correctly classified "failed" (not
+"skipped"), writing no file; a real zero-row success correctly written;
+and — the key proof this phase exists to deliver — a REALISTICALLY-
+SHAPED mocked Search Console response with a genuine mismatch row,
+flowing through `--refresh-finding-evidence` into a real
+`runner.run({runType:"weekly"})` call, confirming
+`firstparty-signals.js`'s `query-page-mismatch` classifier actually
+fires, that `decision.js`'s output for that finding is byte-identical
+regardless, and that the signal reaches `record.report.firstPartySignals`).
+Extended `tests/github-actions-workflow.test.js` (+3 — the new step's
+gating/placement/ordering, that it uses the same credential variables,
+and an explicit assertion that Daily is unaffected).
+
+## Compatibility / boundaries preserved
+
+`decision.js`, `risk.js`, `firstparty-signals.js`, every audit module,
+`apply/rewrite-href.js`, and `proposals-sync.js` are all completely
+untouched by this phase (confirmed via `git diff --stat` before commit
+— only `agent/cli.js`, the workflow file, the new
+`agent/lib/finding-evidence.js`, and tests changed). No paid API, no
+scheduling, no Vercel function, no new Google authentication/network
+code. Daily behavior is unchanged (the new step and CLI path are both
+additive and gated to `weekly` only).
+
+## Remaining risks / open questions (Phase 9)
+
+1. `coverage-gap-candidate` remains a plausible future candidate once a
+   deliberate decision is made about which query term to derive for it
+   (the missing service's name vs. this page's own identity) and how to
+   interpret a resulting mismatch — documented above, not implemented.
+2. `overlapping-intent`/`duplicate-meta-description` remain the most
+   semantically direct future use of `query-page-mismatch`
+   (cannibalization IS a page/query-mismatch question) but need a
+   genuinely group-scoped request design this phase didn't attempt.
+3. The query-filter term is derived from the page's OWN file name for
+   both candidate types uniformly — for `content-gap` specifically, the
+   actual real query TEXT returned (not just whether it mismatches) is
+   independently valuable context for a human reviewing the finding,
+   even on the (common) healthy case where no mismatch fires; nothing
+   currently surfaces that raw query text anywhere beyond
+   `report.firstPartyEvidence.items`'s existing generic display.

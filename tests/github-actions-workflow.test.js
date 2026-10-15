@@ -264,6 +264,35 @@ await test("Phase 7E: the GA4 diagnostic step runs AFTER the Search Console diag
   assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(gscBlock), "the Search Console diagnostic's own gating must be unaffected by adding the GA4 diagnostic");
 });
 
+await test("Finding-level query evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the rotation-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
+  const block = extractStepBlock(code, /Refresh finding-level query evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/--refresh-finding-evidence/.test(block));
+  assert.strictEqual(/apply-safe/.test(block), false);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+
+  const lines = code.split("\n");
+  const rotationIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
+  const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+  assert.ok(rotationIdx > -1 && findingIdx > -1 && mainRunIdx > -1);
+  assert.ok(findingIdx > rotationIdx, "finding evidence refresh must run AFTER rotation evidence refresh");
+  assert.ok(mainRunIdx > findingIdx, "finding evidence refresh must run BEFORE the main --daily/--weekly Agent pass");
+});
+
+await test("Finding-level query evidence refresh step uses the SAME GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/GSC_SITE_URL variables production runs use — no separate/local credential path", () => {
+  const block = extractStepBlock(code, /Refresh finding-level query evidence/);
+  assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block));
+  assert.ok(/GSC_SITE_URL:\s*\$\{\{\s*vars\.GSC_SITE_URL\s*\}\}/.test(block));
+});
+
+await test("Daily dispatches remain behaviorally unchanged by the finding-level query evidence refresh — it is gated OUT for every run_type except 'weekly', same exclusivity as the rotation-evidence refresh step", () => {
+  const findingBlock = extractStepBlock(code, /Refresh finding-level query evidence/);
+  const ifLineMatch = findingBlock.match(/if:\s*(.+)/);
+  assert.ok(ifLineMatch, "Finding-level query evidence refresh must have an explicit if: condition");
+  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+});
+
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));
     assert.ok(/npm ci\b/.test(code));

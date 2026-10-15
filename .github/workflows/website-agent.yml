@@ -164,6 +164,35 @@ jobs:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
+      - name: Refresh finding-level query evidence (weekly only)
+        # Closes the analogous gap for FINDINGS that Phase 7B closed for
+        # rotation picks (see agent/lib/finding-evidence.js's header for
+        # the full root-cause writeup, and this file's own
+        # --refresh-finding-evidence doc comment in agent/cli.js):
+        # category-C content-opportunity findings (content-gap,
+        # structural-inconsistency) were never eligible for either
+        # existing first-party-evidence path, so
+        # agent/lib/firstparty-signals.js's query-page-mismatch
+        # classifier has never had real qualifying evidence to classify.
+        # Run BEFORE the main Agent pass below (same placement/precedent
+        # as the rotation-evidence refresh step immediately above, and
+        # --refresh-completed-jobs before it), so any evidence fetched
+        # here is already on disk by the time --weekly's own report is
+        # built and can attach/classify it in the SAME run. Fetches ONE
+        # targeted, already-bounded Search Console Search Analytics
+        # query per eligible, not-already-fresh candidate finding —
+        # never a page decision, never a site change, never touches
+        # rotation state, never runs the ordinary Agent pipeline itself
+        # (that stays the step below). A candidate whose fetch is
+        # skipped or fails writes NO evidence file at all (see
+        # finding-evidence.js's header) — never silently mistaken for a
+        # genuine zero-row result.
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --refresh-finding-evidence
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+
       - name: Run Website Agent (${{ inputs.run_type }})
         # Only for daily/weekly — neither Golden diagnostic (run_type
         # above) must EVER run the ordinary Agent pipeline: no scan, no

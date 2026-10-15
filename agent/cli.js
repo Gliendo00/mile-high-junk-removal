@@ -106,6 +106,46 @@
 //     half of a deep review — that still requires a research-capable
 //     orchestrator session this unattended runner does not have.
 //
+//   node agent/cli.js --refresh-finding-evidence
+//     Closes the analogous gap for FINDINGS: category-C content-
+//     opportunity findings (content-gap, structural-inconsistency) were
+//     never eligible for either existing first-party-evidence path —
+//     firstparty-candidates.js's CANDIDATE_TYPES excludes category-C by
+//     design, and decision.js's RESEARCH_MORE path only ever gathers
+//     EXTERNAL research, never first-party Search Console data — so
+//     agent/lib/firstparty-signals.js's query-page-mismatch classifier
+//     (built in a prior phase) has never had real qualifying evidence
+//     to classify. See agent/lib/finding-evidence.js's header for the
+//     full architecture (same pattern as --refresh-rotation-evidence
+//     above: a narrow candidate rule, a mechanical, no-judgment-needed
+//     request builder, and freshness-based — not permanent — exclusion
+//     of findings that already have fresh evidence). Recomputes this
+//     week's findings (same deterministic gatherFindings() a --weekly
+//     run itself will call moments later), and for each eligible,
+//     not-already-fresh candidate, fetches ONE targeted Search Console
+//     Search Analytics query (dimensions ["query","page"], filtered by
+//     QUERY only — never by page, which would make a mismatch
+//     structurally undetectable — see finding-evidence.js's
+//     buildQueryPageEvidenceRequest()) and writes it to
+//     agent/research/firstparty/ — same file convention, same
+//     fetchFirstPartyEvidence()/writeFirstPartyEvidence() functions
+//     every other first-party path already uses; no new Google client,
+//     no new auth code. Run BEFORE --weekly (same precedent as
+//     --refresh-rotation-evidence and --refresh-completed-jobs) so the
+//     evidence is already on disk by the time --weekly's own report is
+//     built and firstparty-signals.js's attachFirstPartySignals() can
+//     classify it. Never throws: every candidate's outcome (fetched /
+//     fetched-zero-rows / skipped / failed — see classifyFindingEvidenceOutcome()
+//     below) is logged and the loop continues, one candidate's problem
+//     must never block another's fetch — same fail-safe posture as
+//     every other optional-integration step in this codebase. A
+//     skipped/failed candidate writes NO evidence file at all (the
+//     underlying fetchSearchAnalyticsEvidence() never calls
+//     makeFirstPartyEvidence() on a skip), so a failure can never be
+//     silently mistaken for a genuine zero-row result — only a REAL
+//     successful API call ever produces a file with
+//     `observed.totalRowsReturned: 0`.
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
@@ -117,6 +157,7 @@ const { fetchFirstPartyEvidence, writeFirstPartyEvidence } = require("./lib/firs
 const { loadCompletedJobEvidence, summarizeByCity } = require("./lib/completed-job-intake");
 const { loadRotationState, computePriorities } = require("./lib/research-rotation");
 const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
+const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, freshlyEvidencedFindingKeys } = require("./lib/finding-evidence");
 const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
 
 function parseResumeArg(args) {
@@ -181,6 +222,104 @@ async function runRefreshRotationEvidence() {
     const written = writeFirstPartyEvidence(result.evidence);
     console.log(`  "${pick.name}" (${pick.slug}): fetched, written to ${written}.`);
   }
+}
+
+// Classifies a fetchFirstPartyEvidence() result into exactly one of
+// four honest outcomes, for --refresh-finding-evidence's own console
+// log (see this file's top-of-file comment on why: "a transient
+// individual candidate fetch failure... must not imply that research
+// was successfully performed for that candidate", and must be
+// distinguishable from a genuine zero-row result, never silently
+// conflated with it):
+//   - "fetched"            - a real, successful API call that found 1+ rows
+//   - "fetched-zero-rows"  - a real, successful API call that found 0 rows
+//                            (honest absence-of-SIGNAL, never absence-of-
+//                            opportunity — same rule every other
+//                            zero-row path in this codebase already
+//                            states explicitly)
+//   - "skipped"            - never attempted at all: the integration
+//                            simply isn't configured in this environment,
+//                            or the request itself was malformed before
+//                            any network call — same reason text
+//                            fetchSearchAnalyticsEvidence() already
+//                            produces for these cases, just read back
+//                            here for classification, not re-derived
+//   - "failed"             - an attempt WAS made (auth resolution, or
+//                            the Search Analytics API call itself) and
+//                            did not succeed — a real problem worth a
+//                            human's attention, distinct from "not
+//                            configured"
+// This is read-only classification of fetchFirstPartyEvidence()'s
+// EXISTING {skipped, reason} shape — no change to that shape, no new
+// Google networking code, nothing persisted differently: a
+// skipped/failed candidate still writes zero evidence files either way
+// (see this file's --refresh-finding-evidence doc comment on why that
+// alone already prevents a failure from masquerading as real evidence).
+// This function exists purely to make the CONSOLE LOG (the only place
+// either outcome is currently surfaced, same precedent as
+// --refresh-rotation-evidence) say which of the two happened, instead
+// of collapsing both into one generic "skipped" word.
+function classifyFindingEvidenceOutcome(result) {
+  if (!result.skipped) {
+    const rows = result.evidence && result.evidence.observed ? result.evidence.observed.totalRowsReturned : null;
+    return rows > 0 ? "fetched" : "fetched-zero-rows";
+  }
+  const reason = String(result.reason || "");
+  // Matches fetchSearchAnalyticsEvidence()'s own "not configured"/
+  // input-validation reason text (firstparty-fetch.js) — anything else
+  // (an auth-resolution problem from google-auth.js, or a genuine
+  // "Search Analytics API error"/"request failed" from
+  // search-console-client.js) means an attempt genuinely happened and
+  // did not succeed, which this classifies as "failed", never "skipped".
+  if (/not configured|requires (a |an )?scope|requires a non-empty/i.test(reason)) return "skipped";
+  return "failed";
+}
+
+// See this file's top-of-file comment on --refresh-finding-evidence and
+// agent/lib/finding-evidence.js's header for the full architecture.
+// Never throws: every candidate's outcome is logged (via
+// classifyFindingEvidenceOutcome() above) and the loop continues — one
+// candidate's problem must never block another's fetch, same fail-safe
+// posture as runRefreshRotationEvidence() above.
+//
+// A candidate with STALE existing evidence is still eligible — only
+// evidence that's still FRESH-or-AGING (freshlyEvidencedFindingKeys(),
+// same freshness windows report.js/rotation-evidence.js already use)
+// counts as "already evidenced" and skips a re-fetch. See
+// finding-evidence.js's header on why this is freshness-based, not the
+// EXISTING firstparty-candidates.js mechanism's permanent-suppression
+// rule (a deliberately separate, unchanged lifecycle).
+//
+// Returns the per-candidate outcomes array (not currently persisted
+// anywhere beyond this console log and the evidence files' own natural
+// presence/absence — see this file's doc comment) so tests can assert
+// on it directly without parsing console output.
+async function runRefreshFindingEvidence() {
+  const { findings } = gatherFindings();
+  const freshKeys = freshlyEvidencedFindingKeys(loadFirstPartyEvidence().entries);
+  const candidates = findings.filter((f) => isQueryPageEvidenceCandidate(f) && !freshKeys.has(f.key));
+
+  console.log(`Finding evidence refresh: ${candidates.length} candidate finding(s) needing first-party query/page evidence.`);
+  const outcomes = [];
+  if (candidates.length === 0) return outcomes;
+
+  for (const finding of candidates) {
+    const request = buildQueryPageEvidenceRequest(finding);
+    const result = await fetchFirstPartyEvidence(request);
+    const outcome = classifyFindingEvidenceOutcome(result);
+
+    if (result.skipped) {
+      console.log(`  "${finding.key}" (${finding.type}): ${outcome} — ${result.reason}`);
+      outcomes.push({ findingKey: finding.key, type: finding.type, outcome, reason: result.reason });
+      continue;
+    }
+
+    const written = writeFirstPartyEvidence(result.evidence);
+    const rows = result.evidence.observed.totalRowsReturned;
+    console.log(`  "${finding.key}" (${finding.type}): ${outcome} (${rows} row(s)), written to ${written}.`);
+    outcomes.push({ findingKey: finding.key, type: finding.type, outcome, rows, writtenTo: written });
+  }
+  return outcomes;
 }
 
 function parseFetchFirstPartyArg(args) {
@@ -328,6 +467,11 @@ async function main() {
     return;
   }
 
+  if (args.includes("--refresh-finding-evidence")) {
+    await runRefreshFindingEvidence();
+    return;
+  }
+
   const fetchFirstPartyStrictPath = parseFetchFirstPartyStrictArg(args);
   if (fetchFirstPartyStrictPath) {
     await runFetchFirstParty(fetchFirstPartyStrictPath, { strict: true });
@@ -374,7 +518,13 @@ async function main() {
   printRecord(record, asJson);
 }
 
-module.exports = { runFetchFirstParty, parseFetchFirstPartyArg, parseFetchFirstPartyStrictArg };
+module.exports = {
+  runFetchFirstParty,
+  parseFetchFirstPartyArg,
+  parseFetchFirstPartyStrictArg,
+  runRefreshFindingEvidence,
+  classifyFindingEvidenceOutcome,
+};
 
 // Guards against auto-running the CLI when this file is require()'d
 // for testing (tests/agent-cli-fetch-firstparty-strict.test.js) rather
