@@ -1,3 +1,16 @@
 {
-  "byCitySlug": {}
+  "byCitySlug": {
+    "golden": {
+      "lastReviewedAt": "2026-10-15T04:44:08.386Z",
+      "lastReviewedRunId": "2026-10-15T04-44-07-249Z-qz23e2"
+    },
+    "brighton": {
+      "lastReviewedAt": "2026-10-15T04:44:08.386Z",
+      "lastReviewedRunId": "2026-10-15T04-44-07-249Z-qz23e2"
+    },
+    "morrison": {
+      "lastReviewedAt": "2026-10-15T04:44:08.386Z",
+      "lastReviewedRunId": "2026-10-15T04-44-07-249Z-qz23e2"
+    }
+  }
 }
