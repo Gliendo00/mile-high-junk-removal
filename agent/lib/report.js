@@ -33,6 +33,7 @@
 const { classifyChanges } = require("./change-detection");
 const { computeFreshness } = require("./research");
 const { computeFirstPartyFreshness, SOURCES: FIRST_PARTY_SOURCES } = require("./firstparty-evidence");
+const { isFirstPartyEvidenceCandidate, buildFirstPartyEvidenceQuestion } = require("./firstparty-candidates");
 
 function countBy(findings, predicate) {
   return findings.filter(predicate).length;
@@ -42,21 +43,35 @@ function countBy(findings, predicate) {
 // run can be BOTH "has unresolved research" and "failed" (research was
 // needed, then something else broke) — failed always wins, since "this
 // run did not complete successfully" is the most important thing to say.
-function computeRunStatus({ failure, hasUnresolvedResearch }) {
+//
+// Lifecycle-tightening update: `research_pending` now also covers an
+// unresolved FIRST-PARTY-EVIDENCE question (firstparty-candidates.js) —
+// deliberately the SAME status value, not a second lifecycle/status
+// enum, so the existing resume mechanism (runner.js's
+// findResumableRun()/run({resumeRunId})) needs zero changes to also
+// cover this case: it already just checks `status === "research_pending"`
+// and doesn't care WHY. See agent/README.md's Phase 6 lifecycle-
+// tightening section for the full reasoning.
+function computeRunStatus({ failure, hasUnresolvedResearch, hasUnresolvedFirstPartyEvidence }) {
   if (failure) return "failed";
-  if (hasUnresolvedResearch) return "research_pending";
+  if (hasUnresolvedResearch || hasUnresolvedFirstPartyEvidence) return "research_pending";
   return "completed";
 }
 
-function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingApproval, questionsPendingCount, failure }) {
+function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingApproval, questionsPendingCount, firstPartyQuestionsPendingCount, failure }) {
   if (status === "failed") {
     const detail = failure && failure.message ? ` (${failure.message})` : "";
     return { status: "failed", text: `This run did not complete successfully${detail} — see failure details below. No site changes were made based on a failed run.` };
   }
   if (status === "research_pending") {
+    const parts = [];
+    if (questionsPendingCount > 0) parts.push(`${questionsPendingCount} research question${questionsPendingCount === 1 ? "" : "s"}`);
+    if (firstPartyQuestionsPendingCount > 0) {
+      parts.push(`${firstPartyQuestionsPendingCount} first-party evidence check${firstPartyQuestionsPendingCount === 1 ? "" : "s"}`);
+    }
     return {
       status: "research-pending",
-      text: `Research needed before this run can be finalized — ${questionsPendingCount} question${questionsPendingCount === 1 ? "" : "s"} awaiting results.`,
+      text: `Evidence needed before this run can be finalized — ${parts.join(" and ")} awaiting results.`,
     };
   }
   if (actionableOpenCount === 0 && proposalsAwaitingApproval === 0) {
@@ -78,10 +93,16 @@ function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingAppr
  *   integration is CONFIGURED (env vars present), computed by runner.js via a pure env-var/local-JSON
  *   check (no network call — see search-console-client.js/ga4-client.js's isXConfigured()), passed in
  *   explicitly so this function stays a pure function of its arguments rather than reading process.env itself
+ * @param {string} [args.initialTimestamp] - lifecycle-tightening: the FIRST pass's timestamp for this
+ *   logical run (runner.js passes `priorRecord.timestamp` on a resume, else `record.timestamp` — i.e.
+ *   itself, on a fresh single-pass run). Used only to tell "evidence gathered DURING this logical run"
+ *   (fetched after the initial pass, picked up by a resume) apart from "evidence that already existed
+ *   and was simply reused" — see the firstPartyEvidence section below.
  */
-function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations }) {
+function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp }) {
   const findings = record.findings || [];
   const now = new Date(record.timestamp);
+  const runStartedAt = new Date(initialTimestamp || record.timestamp);
 
   const changeDetection = classifyChanges(findings, previousRun);
 
@@ -136,12 +157,15 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   // summary. Deliberately NOT part of status/healthSummary computation —
   // see agent/README.md's Phase 6 "metrics are signals, not decisions"
   // rule: this section may only ever REPORT what first-party evidence was
-  // configured/gathered, never flip a run between all-clear/needs-
-  // attention/research-pending by itself (that stays driven entirely by
-  // findings/proposals/questionsPending, computed above, unchanged by
-  // this phase). Built from each finding's own `.firstPartyEvidence`
-  // (attached by firstparty-intake.js strictly AFTER decideAll() already
-  // ran — see that file's header), never from a live API call.
+  // configured/gathered/pending, never flip a run between all-clear/
+  // needs-attention by itself (that stays driven entirely by findings/
+  // proposals, computed above, unchanged by this phase) — the ONE
+  // exception, matching research's existing precedent exactly, is that
+  // an UNRESOLVED question (not a metric value) can keep a run from
+  // finalizing as "completed" — see computeRunStatus() above. Built from
+  // each finding's own `.firstPartyEvidence` (attached by
+  // firstparty-intake.js strictly AFTER decideAll() already ran — see
+  // that file's header), never from a live API call.
   const firstPartyAttached = findings.flatMap((f) =>
     Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence.map((entry) => ({ entry, findingKey: f.key })) : []
   );
@@ -150,14 +174,20 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   for (const { entry } of firstPartyAttached) {
     firstPartyCountsBySource[entry.source] = (firstPartyCountsBySource[entry.source] || 0) + 1;
   }
-  const firstPartyEvidence = {
-    integrations: {
-      searchConsole: Boolean(firstPartyIntegrations && firstPartyIntegrations.searchConsole),
-      ga4: Boolean(firstPartyIntegrations && firstPartyIntegrations.ga4),
-    },
-    gatheredThisRunCount: firstPartyAttached.length,
-    countsBySource: firstPartyCountsBySource,
-    items: firstPartyAttached.map(({ entry, findingKey }) => ({
+  const sourcesConsulted = new Set(firstPartyAttached.map(({ entry }) => entry.source));
+  const sourcesNotConsulted = FIRST_PARTY_SOURCES.filter((s) => !sourcesConsulted.has(s));
+
+  // Lifecycle-tightening: distinguishes evidence genuinely fetched
+  // DURING this logical run (after the initial pass, picked up by a
+  // resume — see runner.js's resumeRunId) from evidence that already
+  // existed beforehand and was simply reused. A fresh, single-pass run
+  // (no resume) has `runStartedAt === now`, so nothing can postdate it —
+  // everything attached on a single pass is correctly "reused" (the
+  // network-free deterministic runner never fetches anything itself;
+  // anything attached was necessarily gathered by an earlier session).
+  const firstPartyItems = firstPartyAttached.map(({ entry, findingKey }) => {
+    const gatheredDuringThisRun = new Date(entry.fetchedAt) > runStartedAt;
+    return {
       findingKey,
       source: entry.source,
       metric: entry.metric,
@@ -165,16 +195,50 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
       window: entry.window.label,
       freshness: computeFirstPartyFreshness(entry, now).status,
       context: entry.context,
-    })),
+      gatheredDuringThisRun,
+    };
+  });
+  const gatheredDuringThisRunCount = firstPartyItems.filter((i) => i.gatheredDuringThisRun).length;
+
+  // Lifecycle-tightening — which open findings would genuinely benefit
+  // from a targeted first-party check, raised NOW (only for a finding
+  // that's NEW this run — see firstparty-candidates.js's header on why
+  // an older still-open finding doesn't keep re-blocking every
+  // subsequent run) so the orchestrator can gather evidence BEFORE this
+  // run finalizes, not only after (the exact gap the first live Phase 6
+  // validation surfaced).
+  const newKeysThisRun = new Set(changeDetection.new);
+  const firstPartyQuestionsPending = findings
+    .filter((f) => isFirstPartyEvidenceCandidate(f, { isNewThisRun: newKeysThisRun.has(f.key) }))
+    .map(buildFirstPartyEvidenceQuestion);
+
+  const firstPartyEvidence = {
+    integrations: {
+      searchConsole: Boolean(firstPartyIntegrations && firstPartyIntegrations.searchConsole),
+      ga4: Boolean(firstPartyIntegrations && firstPartyIntegrations.ga4),
+    },
+    gatheredThisRunCount: firstPartyAttached.length,
+    gatheredDuringThisRunCount,
+    reusedFromBeforeCount: firstPartyAttached.length - gatheredDuringThisRunCount,
+    countsBySource: firstPartyCountsBySource,
+    sourcesNotConsulted,
+    questionsRaisedCount: firstPartyQuestionsPending.length,
+    questionsPending: firstPartyQuestionsPending,
+    items: firstPartyItems,
   };
 
-  const status = computeRunStatus({ failure, hasUnresolvedResearch: questionsPending.length > 0 });
+  const status = computeRunStatus({
+    failure,
+    hasUnresolvedResearch: questionsPending.length > 0,
+    hasUnresolvedFirstPartyEvidence: firstPartyQuestionsPending.length > 0,
+  });
 
   const healthSummary = buildHealthSummary({
     status,
     actionableOpenCount,
     proposalsAwaitingApproval,
     questionsPendingCount: questionsPending.length,
+    firstPartyQuestionsPendingCount: firstPartyQuestionsPending.length,
     failure,
   });
 

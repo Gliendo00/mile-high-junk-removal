@@ -98,6 +98,74 @@ test("sitemap/robots audit runs against the real site files without throwing and
   }
 });
 
+// -----------------------------------------------------------------------
+// Sitemap vs. noindex intent (fixes a real false positive this audit
+// produced in production: privacy-policy.html declares noindex, so its
+// absence from sitemap.xml is consistent with that intent, not a defect
+// — see agent/README.md's "Sitemap vs. noindex intent" section). These
+// use a synthetic filename guaranteed absent from the real sitemap.xml
+// (for scenarios 1-2) and a REAL filename known to be IN the real
+// sitemap.xml (pricing.html, for scenario 3) with `noindex` set
+// synthetically — this audit's own loadSitemapUrls() always reads the
+// real on-disk sitemap.xml (no injection point), so these tests work
+// WITH that real file rather than mocking it.
+// -----------------------------------------------------------------------
+
+test("an indexable (non-noindex) page missing from sitemap.xml still produces an ACTIONABLE sitemap-missing-url finding", () => {
+  const findings = auditSitemapAndRobots([page({ file: "__test-synthetic-indexable-missing-page.html", noindex: false })]);
+  const finding = findings.find((f) => f.type === "sitemap-missing-url" && f.pages.includes("__test-synthetic-indexable-missing-page.html"));
+  assert.ok(finding, "an indexable page missing from the sitemap must still be flagged");
+  assert.ok(!findings.some((f) => f.type === "noindex-page-in-sitemap" && f.pages.includes("__test-synthetic-indexable-missing-page.html")));
+});
+
+test("an explicitly noindex page missing from sitemap.xml produces NO sitemap-missing-url finding — its absence is consistent with its own stated intent", () => {
+  const findings = auditSitemapAndRobots([
+    page({ file: "__test-synthetic-noindex-missing-page.html", robotsMeta: "noindex, follow", noindex: true }),
+  ]);
+  assert.ok(
+    !findings.some((f) => f.type === "sitemap-missing-url" && f.pages.includes("__test-synthetic-noindex-missing-page.html")),
+    "a noindex page's absence from the sitemap must never be treated as a defect/proposal opportunity"
+  );
+  // Also absent from the sitemap -> no "noindex-page-in-sitemap"
+  // contradiction either (that type only fires when BOTH are true).
+  assert.ok(!findings.some((f) => f.type === "noindex-page-in-sitemap"));
+});
+
+test("a noindex page that IS already in sitemap.xml is surfaced as an observation, never auto-removed or auto-fixed", () => {
+  const { loadSitemapUrls } = require("../agent/lib/link-audit");
+  assert.ok(
+    loadSitemapUrls().some((u) => u.endsWith("/pricing.html")),
+    "expected pricing.html to be in the real sitemap.xml for this test to be meaningful"
+  );
+  const findings = auditSitemapAndRobots([page({ file: "pricing.html", robotsMeta: "noindex, follow", noindex: true })]);
+  const finding = findings.find((f) => f.type === "noindex-page-in-sitemap" && f.pages.includes("pricing.html"));
+  assert.ok(finding, "expected the contradiction (noindex + listed in sitemap) to be surfaced");
+  assert.ok(!finding.autoFix, "this finding must never carry a mechanical auto-fix");
+  assert.ok(!findings.some((f) => f.type === "sitemap-missing-url" && f.pages.includes("pricing.html")));
+
+  // Never actionable, never auto-resolved — risk.js's own classification
+  // (not just this one audit module) guarantees NO_CHANGE, never a
+  // proposal to silently remove it from the sitemap.
+  const { classify } = require("../agent/lib/risk");
+  const classified = classify(finding);
+  assert.strictEqual(classified.tier, "observation");
+  assert.strictEqual(classified.autoApplyEligible, false);
+});
+
+test("real site scan: privacy-policy.html (genuinely noindexed in production) produces no sitemap-missing-url finding, for the general noindex reason, not a special case", () => {
+  const { scanAllPages } = require("../agent/lib/scan");
+  const pages = scanAllPages();
+  const privacyPage = pages.find((p) => p.file === "privacy-policy.html");
+  assert.ok(privacyPage, "expected privacy-policy.html to exist on the real site");
+  assert.strictEqual(privacyPage.noindex, true, "expected the real page to actually declare noindex (if this ever changes, this test should fail loudly, not silently)");
+
+  const findings = auditSitemapAndRobots(pages);
+  assert.ok(
+    !findings.some((f) => f.type === "sitemap-missing-url" && f.pages.includes("privacy-policy.html")),
+    "the real false positive this fix targets must not recur"
+  );
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

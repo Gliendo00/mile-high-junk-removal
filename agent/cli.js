@@ -151,17 +151,30 @@ function printRecord(record, asJson) {
     }
     if (record.report.firstPartyEvidence) {
       const fpe = record.report.firstPartyEvidence;
-      console.log(`First-party evidence — Search Console: ${fpe.integrations.searchConsole ? "configured" : "not configured"}, GA4: ${fpe.integrations.ga4 ? "configured" : "not configured"}, gathered this run: ${fpe.gatheredThisRunCount}`);
+      console.log(`First-party evidence — Search Console: ${fpe.integrations.searchConsole ? "configured" : "not configured"}, GA4: ${fpe.integrations.ga4 ? "configured" : "not configured"}, this run: ${fpe.gatheredDuringThisRunCount} gathered during this run, ${fpe.reusedFromBeforeCount} reused from before (${fpe.gatheredThisRunCount} total).`);
+      if (fpe.sourcesNotConsulted.length) {
+        console.log(`  Not consulted this run: ${fpe.sourcesNotConsulted.join(", ")}.`);
+      }
     }
     if (record.report.status === "research_pending") {
       console.log("");
-      console.log(`RESEARCH REQUIRED — this run is NOT finalized. ${record.report.research.questionsPending.length} question(s) need answers before it can be resumed:`);
-      for (const q of record.report.research.questionsPending) {
-        console.log(`  [${q.findingKey}] ${q.question}`);
-        console.log(`    suggested sources: ${(q.suggestedSourceTypes || []).join(", ")}`);
+      console.log(`EVIDENCE REQUIRED — this run is NOT finalized.`);
+      if (record.report.research.questionsPending.length) {
+        console.log(`${record.report.research.questionsPending.length} external research question(s) need answers:`);
+        for (const q of record.report.research.questionsPending) {
+          console.log(`  [${q.findingKey}] ${q.question}`);
+          console.log(`    suggested sources: ${(q.suggestedSourceTypes || []).join(", ")}`);
+        }
+      }
+      if (record.report.firstPartyEvidence && record.report.firstPartyEvidence.questionsPending.length) {
+        console.log(`${record.report.firstPartyEvidence.questionsPending.length} first-party-evidence check(s) would genuinely help:`);
+        for (const q of record.report.firstPartyEvidence.questionsPending) {
+          console.log(`  [${q.findingKey}] ${q.question}`);
+          console.log(`    suggested request types: ${(q.suggestedRequestTypes || []).join(", ")} — e.g. node agent/cli.js --fetch-firstparty=<request.json>`);
+        }
       }
       console.log("");
-      console.log(`After writing the research result file(s), resume with:  node agent/cli.js --resume=${record.runId}`);
+      console.log(`After writing the research/evidence file(s), resume with:  node agent/cli.js --resume=${record.runId}`);
     }
   }
   console.log("");

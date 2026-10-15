@@ -44,6 +44,12 @@ const RULES = {
   "orphan-page": { category: "A", riskLevel: "medium", tier: "actionable" },
   "sitemap-missing-file": { category: "A", riskLevel: "medium", tier: "actionable" },
   "sitemap-missing-url": { category: "A", riskLevel: "low", tier: "actionable" },
+  // A page's own stated indexing intent (noindex) disagreeing with its
+  // presence in sitemap.xml — worth a human's attention, but never
+  // auto-resolved in either direction (see link-audit.js's
+  // auditSitemapAndRobots() header on why this stops short of
+  // automatic sitemap cleanup).
+  "noindex-page-in-sitemap": { category: "A", riskLevel: "low", tier: "observation" },
   "robots-sitemap-conflict": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-title": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-meta-description": { category: "A", riskLevel: "medium", tier: "actionable" },

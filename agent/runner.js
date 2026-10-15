@@ -243,7 +243,7 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     };
     const { previousRun } = readPreviousRun(options.logPath, priorRecord ? runId : null);
     const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };
-    failedRecord.report = buildReport({ record: failedRecord, previousRun, failure, firstPartyIntegrations });
+    failedRecord.report = buildReport({ record: failedRecord, previousRun, failure, firstPartyIntegrations, initialTimestamp: priorRecord ? priorRecord.timestamp : failedRecord.timestamp });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
   }
@@ -402,7 +402,13 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
   }
 
   const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };
-  record.report = buildReport({ record, previousRun, rotationPriorities, firstPartyIntegrations });
+  record.report = buildReport({
+    record,
+    previousRun,
+    rotationPriorities,
+    firstPartyIntegrations,
+    initialTimestamp: priorRecord ? priorRecord.timestamp : record.timestamp,
+  });
 
   appendRun(record, options.logPath);
   return record;

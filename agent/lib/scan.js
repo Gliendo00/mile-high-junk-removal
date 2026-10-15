@@ -64,6 +64,22 @@ function extractCanonical(html) {
   );
 }
 
+// A page's own, explicit indexing intent — <meta name="robots"> (the
+// general directive) or <meta name="googlebot"> (a Google-specific
+// override of the same thing, checked as a fallback if "robots" isn't
+// present). Used by link-audit.js's sitemap audit to tell "genuinely
+// missing from the sitemap" apart from "correctly absent because this
+// page says not to index it" — see agent/README.md's "Sitemap vs.
+// noindex intent" note. Raw value kept (not just the derived boolean)
+// so a finding's evidence can show exactly what the page declared.
+function extractRobotsMeta(html) {
+  return extractMeta(html, "robots") || extractMeta(html, "googlebot") || null;
+}
+
+function isNoindex(robotsMetaValue) {
+  return typeof robotsMetaValue === "string" && /noindex/i.test(robotsMetaValue);
+}
+
 function extractH1s(html) {
   const matches = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)];
   return matches.map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, "").trim()));
@@ -144,6 +160,8 @@ function scanPage(file) {
     title: extractTitle(html),
     metaDescription: extractMeta(html, "description"),
     canonical: extractCanonical(html),
+    robotsMeta: extractRobotsMeta(html),
+    noindex: isNoindex(extractRobotsMeta(html)),
     h1s: extractH1s(html),
     jsonLd: extractJsonLdBlocks(html),
     internalLinks: extractInternalLinks(html),

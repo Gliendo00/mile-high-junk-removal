@@ -230,14 +230,22 @@ document.addEventListener('DOMContentLoaded', function () {
       detailEl.appendChild(statLine('Search Console', fpe.integrations.searchConsole ? 'available' : 'not configured'));
       detailEl.appendChild(statLine('GA4', fpe.integrations.ga4 ? 'available' : 'not configured'));
       if (fpe.gatheredThisRunCount > 0) {
-        detailEl.appendChild(statLine('Evidence items gathered this run', fpe.gatheredThisRunCount));
+        // Lifecycle-tightening: distinguishes evidence genuinely fetched
+        // DURING this logical run (after the initial pass, picked up by
+        // a resume) from evidence that already existed and was reused —
+        // see agent/README.md's Phase 6 lifecycle-tightening section.
+        detailEl.appendChild(statLine('Gathered during this run', fpe.gatheredDuringThisRunCount));
+        detailEl.appendChild(statLine('Reused from before', fpe.reusedFromBeforeCount));
         fpe.items.slice(0, 10).forEach(function (item) {
           detailEl.appendChild(el(
             'p',
             'admin-report-detail-stat',
-            item.source + ' — ' + item.metric + ' (' + item.scope.type + ': ' + item.scope.value + ', ' + item.window + ', ' + item.freshness + ') — ' + item.context
+            item.source + ' — ' + item.metric + ' (' + item.scope.type + ': ' + item.scope.value + ', ' + item.window + ', ' + item.freshness + (item.gatheredDuringThisRun ? ', gathered this run' : ', reused') + ') — ' + item.context
           ));
         });
+      }
+      if (fpe.sourcesNotConsulted && fpe.sourcesNotConsulted.length) {
+        detailEl.appendChild(el('p', 'admin-report-detail-stat', 'Not consulted this run: ' + fpe.sourcesNotConsulted.join(', ') + '.'));
       }
     }
 
@@ -245,12 +253,23 @@ document.addEventListener('DOMContentLoaded', function () {
     // what's pending, in plain language, instead of a dead end. This is
     // informational only — resuming the run happens via the orchestrator
     // (node agent/cli.js --resume=...), not from this read-only page.
-    if (report.status === 'research_pending' && report.research.questionsPending && report.research.questionsPending.length) {
-      detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'Awaiting research'));
-      report.research.questionsPending.forEach(function (q) {
-        detailEl.appendChild(el('p', 'admin-report-detail-stat', q.question));
-      });
-      detailEl.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'This run will finalize automatically once the research-capable session answers these and resumes it.'));
+    // Lifecycle-tightening: a pending FIRST-PARTY-EVIDENCE check (same
+    // research_pending status, same resume mechanism — see
+    // agent/lib/firstparty-candidates.js) is shown the same way.
+    if (report.status === 'research_pending') {
+      if (report.research.questionsPending && report.research.questionsPending.length) {
+        detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'Awaiting research'));
+        report.research.questionsPending.forEach(function (q) {
+          detailEl.appendChild(el('p', 'admin-report-detail-stat', q.question));
+        });
+      }
+      if (report.firstPartyEvidence && report.firstPartyEvidence.questionsPending && report.firstPartyEvidence.questionsPending.length) {
+        detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'Awaiting first-party evidence'));
+        report.firstPartyEvidence.questionsPending.forEach(function (q) {
+          detailEl.appendChild(el('p', 'admin-report-detail-stat', q.question));
+        });
+      }
+      detailEl.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'This run will finalize automatically once these are answered and the run is resumed.'));
     }
 
     var cd = report.changeDetection;

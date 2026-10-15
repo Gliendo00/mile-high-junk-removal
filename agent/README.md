@@ -1718,19 +1718,140 @@ org's `iam.disableServiceAccountKeyCreation` policy — it was worked
 around entirely by using a different, keyless auth mechanism, not by
 asking for the policy itself to change.
 
+## 18. First live validation (real Google data) + two post-validation fixes
+
+The first real `--daily` run against production GSC/GA4/URL Inspection
+(via real impersonation — ADC + IAM Credentials API, no key file)
+surfaced one real false positive and one real lifecycle gap. Both were
+fixed immediately, before any merge, with regression coverage.
+
+### 18A. Sitemap audit vs. noindex intent (correctness fix)
+
+**What the live evidence showed**: the real daily run proposed adding
+`privacy-policy.html` to `sitemap.xml` (`sitemap-missing-url`). A
+targeted URL Inspection for that exact page showed real Google evidence:
+`coverageState: "Excluded by 'noindex' tag"` — and the page itself
+genuinely declares `<meta name="robots" content="noindex, follow">`.
+Google and the page agree; the proposal was wrong.
+
+**The general rule, not a special case**: `agent/lib/scan.js` now
+extracts each page's own stated indexing intent
+(`extractRobotsMeta()`/`noindex`, from its `<meta name="robots">` or
+`<meta name="googlebot">` tag — a real, on-disk fact, same discipline as
+every other scanned field). `agent/lib/link-audit.js`'s
+`auditSitemapAndRobots()` uses this DIRECTLY — no filename is ever
+checked: a page declaring `noindex` and missing from `sitemap.xml`
+produces NO finding at all (its absence is consistent with its own
+stated intent); a genuinely indexable page missing from the sitemap
+still produces the existing `sitemap-missing-url` finding, unchanged.
+The opposite disagreement — a `noindex` page that IS still listed in
+`sitemap.xml` — is now surfaced as a new, narrow `noindex-page-in-sitemap`
+finding (category A, tier **observation** — `risk.js`'s RULES table —
+so `decision.js` always resolves it to `NO_CHANGE`, "not actionable on
+its own"), never an automatic sitemap edit; this audit module still has
+no write capability at all, and the only mechanical auto-fixer anywhere
+in this codebase remains `rewrite-href`, used for exactly its original
+two finding types.
+
+Regression coverage (`tests/agent-link-audit.test.js`): an indexable
+page missing from the sitemap still produces the actionable finding; a
+noindex page missing from the sitemap produces nothing; a noindex page
+already in the sitemap produces the new observation-only finding
+(never `autoFix`, never `autoApplyEligible`); and the real
+`privacy-policy.html` scan is asserted directly (no `sitemap-missing-url`
+for it, with an explicit check that the page is genuinely noindexed — so
+this test fails loudly, not silently, if that page's own markup ever
+changes).
+
+### 18B. First-party-evidence lifecycle tightening
+
+**What the live validation showed**: evidence for the `sitemap-missing-
+url` finding was fetched (via `--fetch-firstparty`) only AFTER that
+daily run had already finalized as `"completed"` — so that run's own
+persisted report honestly said `gatheredThisRunCount: 0`, even though
+evidence was genuinely warranted and was gathered moments later for
+exactly that finding. Truthful, but not the intended production
+lifecycle: Rocky asked for evidence to be gathered BEFORE finalization,
+reusing Phase 5B's existing pause/resume mechanism rather than inventing
+a second one.
+
+**The smallest coherent change**: `agent/lib/firstparty-candidates.js`
+(new) deterministically identifies which DECIDED findings are
+first-party-evidence CANDIDATES — narrow by design:
+
+- Only a small, fixed type list (`sitemap-missing-url`,
+  `robots-sitemap-conflict`, `canonical-mismatch`, `missing-canonical`,
+  `orphan-page`) whose own definition IS an indexing-consistency
+  question. Category-C findings keep their existing, separate
+  `RESEARCH_MORE` path unchanged — not folded into this one.
+- Never an `observation`-tier finding (decision.js already settled
+  those as "not actionable on its own" — reopening them just to fetch
+  more evidence would itself be manufactured work).
+- Never a finding that already carries first-party evidence.
+- Only when the finding is NEW this run (`change-detection.js`'s `new`
+  list) — once a candidate has been through one cycle without anyone
+  investigating it, it does NOT keep re-blocking every subsequent daily
+  run forever (nothing stops an orchestrator from investigating an older
+  still-open one manually anyway).
+
+`report.js`'s `computeRunStatus()` now treats an unresolved first-party-
+evidence question exactly like an unresolved research question: status
+stays `"research_pending"` — **the SAME status value, not a new one** —
+until it's resolved. Because `runner.js`'s resume mechanism
+(`findResumableRun()`/`run({resumeRunId})`) already only checks
+`status === "research_pending"` and never cared WHY, **zero changes**
+were needed there: an orchestrator reads `report.firstPartyEvidence.
+questionsPending[]` (mirrors `report.research.questionsPending[]` —
+narrow question + a source-type hint, never a pre-filled request —
+same shape discipline as `decision.js`'s `buildResearchQuestion()`),
+runs the warranted `--fetch-firstparty` request(s), then calls the
+EXISTING `--resume=<runId>` — which re-attaches the new evidence and
+re-finalizes, exactly like a research resume always has.
+
+`report.firstPartyEvidence` now also distinguishes, truthfully:
+- `gatheredDuringThisRunCount` / `reusedFromBeforeCount` — per evidence
+  item, whether its `fetchedAt` postdates the INITIAL pass's timestamp
+  (genuinely fetched during this logical run/resume cycle) or predates
+  it (already existed, simply reused) — a resumed pass naturally shows
+  real "gathered during this run" counts; a fresh single-pass run
+  (nothing can postdate its own start) correctly shows everything as
+  reused, since the network-free runner never fetches anything itself.
+- `sourcesNotConsulted` — which of the three sources contributed zero
+  items this run.
+- `questionsRaisedCount`/`questionsPending` — mirrors `report.research`'s
+  shape exactly.
+
+Metrics are still never decisions: `firstparty-candidates.js` is never
+imported by `decision.js`, and the one place a pending question CAN
+affect anything is `status`/`healthSummary` (exactly where a pending
+RESEARCH_MORE question already could) — never `actionableOpenCount`,
+never a finding's own `category`/`tier`/`decision`, never which pages
+get scanned, never a new finding type, never an auto-applied change.
+
+Regression coverage: `tests/agent-firstparty-candidates.test.js` (the
+candidacy rules in isolation — type/tier/decision/evidence-presence/
+`isNewThisRun` gating, and the question/hint shape) and
+`tests/agent-firstparty-lifecycle.test.js` (full `buildReport()`
+integration — a new candidate pauses the run with the right status/
+health text; the same candidate already in the previous run does not
+re-pause it; gathered-during-this-run vs. reused-from-before is computed
+correctly in both a resume and a fresh single-pass run; `sourcesNotConsulted`;
+and that none of this touches `actionableOpen`/`proposals` counts).
+
 ## Remaining risks / open questions (Phase 6)
 
 1. Like Phase 5B's orchestrator loop, the daily-vs-weekly first-party-
    fetch guidance in §13 is a documented procedure, not code-enforced —
    nothing stops an orchestrator session from fetching first-party
    evidence unnecessarily on a daily run, or from never fetching any.
-2. No real Search Console/GA4 credentials exist in this environment, so
-   the clients have only ever been exercised against injected fake
-   `fetchImpl`s — the first real fetch against production credentials
-   will be the first true end-to-end proof of the request/response shapes
-   assumed here (the Search Console/GA4 API docs were followed carefully,
-   but an undocumented quirk in a real property's response is always
-   possible).
+   §18B's new candidate-gating narrows this for the specific types it
+   covers, but doesn't make it impossible to fetch evidence that wasn't
+   strictly asked for.
+2. ~~No real Search Console/GA4 credentials exist in this environment~~
+   — **RESOLVED**: a real `--daily` run and three real targeted fetches
+   (Search Analytics, GA4, URL Inspection) were performed successfully
+   against production credentials via impersonation (§3A/§3B), proving
+   the request/response shapes assumed here were correct.
 3. `report.firstPartyEvidence.items` is currently uncapped beyond the
    per-fetch `MAX_ROWS`/10-items-in-the-UI limits — a hypothetical run
    with many targeted fetches attached to many different findings could
@@ -1744,25 +1865,32 @@ asking for the policy itself to change.
    benefit this phase) — a future phase could add it as one more
    documented, bounded factor, the same way completed-job evidence was
    added in Phase 5.
-5. **(Auth-hardening follow-up)** Impersonation's base-ADC step
-   (`google-adc.js`) has only ever been exercised against an
-   `authorized_user` FILE fixture in tests — Rocky has not yet run
-   `gcloud auth application-default login` on this machine (confirmed:
-   no such file exists here today), so the first real `--fetch-firstparty`
-   attempt will be the first true proof that a real gcloud-issued
-   refresh token round-trips correctly through this code.
-6. **(Auth-hardening follow-up)** The IAM grant
-   (`roles/iam.serviceAccountTokenCreator` on
-   `mile-high-site-agent@...`, scoped to that one service account, not
-   project-wide) has not been performed yet either — without it,
-   impersonation will fail with a clear, specific IAM permission-denied
-   reason (never a silent/misleading failure), but the first real run
-   still needs that grant done first; see §3B/§11 for the exact step.
-7. **(Auth-hardening follow-up)** Workload Identity Federation
-   (`external_account` ADC files) remains unimplemented — correctly
-   deferred (no federated identity provider exists for this project yet)
-   but worth revisiting if the orchestrator ever moves to GitHub Actions
-   or another non-Google-Cloud CI runner (see §3B's note on that path).
+5. ~~Impersonation's base-ADC step has only ever been exercised against
+   a FILE fixture in tests~~ — **RESOLVED**: `gcloud auth
+   application-default login` was completed on Rocky's machine and a
+   real refresh-token-backed base token was obtained and used for real
+   impersonation.
+6. ~~The IAM grant has not been performed yet~~ — **RESOLVED**: granted,
+   confirmed by a successful real impersonated token exchange.
+7. **(Auth-hardening follow-up, still open)** Workload Identity
+   Federation (`external_account` ADC files) remains unimplemented —
+   correctly deferred (no federated identity provider exists for this
+   project yet) but worth revisiting if the orchestrator ever moves to
+   GitHub Actions or another non-Google-Cloud CI runner (see §3B's note
+   on that path).
+8. **(§18B, new)** The `CANDIDATE_TYPES` list in
+   `firstparty-candidates.js` is a deliberately narrow starting set —
+   extending first-party-evidence candidacy to category-C findings
+   (alongside their existing external-research path) is a documented,
+   deliberately-deferred future option, not something this pass does.
+9. **(§18B, new)** "New this run" (point 4 of §18B's candidate rules)
+   means a candidate finding gets exactly ONE chance to pause a run for
+   investigation; if nobody resumes it, it silently reverts to a normal
+   open proposal on the next run, same as before this change — there is
+   no escalation/reminder mechanism if a genuinely-warranted check is
+   missed. Judged acceptable (matches the existing, already-accepted
+   posture for research questions nobody ever answers), but worth
+   revisiting if this pattern proves too easy to miss in practice.
 
 ---
 
