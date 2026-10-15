@@ -1,0 +1,16 @@
+{
+  "sourceUrl": "https://www.denvergov.org/My-Property/Recycle-Compost-Trash/Seasonal-Programs/LeafDrop-and-Pumpkin-Recycling",
+  "sourceDomain": "denvergov.org",
+  "authorityClass": "official-government",
+  "locality": "Denver, CO",
+  "topic": "leafdrop-pumpkin-composting-program",
+  "discoveryMethod": "known-url",
+  "retrievedAt": "2026-10-15T19:38:34.057Z",
+  "extractedSnippet": "LeafDrop and Pumpkin Recycling LeafDrop and Pumpkin Recycling Denver's LeafDrop program allows residents to dispose of their fall leaves in an environmentally friendly way. Each fall, Denver's Office of the City Forester partners with Denver's Department of Transportation & Infrastructure (DOTI), Denver's Office of Climate Action, Sustainability and Resiliency (CASR) and Ace Hardware to provide paper leaf bags and designated drop-off sites for Denver residents. Loose leaves and compostable leaf bags are also accepted in Denver's green compost carts. Residents can download a coupon to receive a free five-pack of paper leaf bags at participating Ace Hardware stores . Leaves dropped off in plastic bags must be emptied on site. 2026 Drop Sites WEEKDAY DROP SITES: Oct. 5 - Nov. 25 The following LeafDrop locations will be open on weekdays from 8:00 a.m. to 2:00 p.m.: Cherry Creek Transfer Station* - 7301 E. Jewell Ave. (enter on E. Jewell Ave.) Denver Parks and Recreation - 3685 Havana St. (enter on Havana St.) Central Platte Campus - 1271 W. Bayaud Ave. (Enter through the gates at Bayaud and Navajo, go past the Denver Animal Shelter to dumpsters in front of Building 2 on the right *Hitched trailers (6ft in length or less) are only accepted at the Cherry Creek Transfer Station. WEEKEND DROP SITES: Nov. 7-8; 14-15; 21-22 The following LeafDrop locations will be open on Saturday, November 7, 14, 21 and Sunday, November 8, 15, 22 from 10:00 a.m. to 2:00 p.m.: Bruce Randolph High School - 3955 Steele St. Cherry Creek Transfer Station* - 7301 E. Jewell Ave. (enter on E. Jewell Ave.) JFK High School - 2855 S Lamar St. Sloan's Lake Northwest Parking Lot - W. Byron Pl. and Yates St. Veterans Park - S. Vine St. and E. Iowa Ave. Archuleta Elementary School - 16000 Maxwell Pl. *Hitched trailers (6ft in length or less) and loose leaves are only accepted at the Cherry Creek Transfer Station. Leaves brought to all other LeafDrop sites must be in paper bags. Residents can download a cou",
+  "expectedTemporality": "temporary",
+  "limitations": "A single, bounded text snippet mechanically extracted from one retrieval of this page — not a structured fact, not a verdict, and not confirmation that this remains the program's current/correct information. A human (or Claude session) must read this snippet and the live page itself before treating anything in it as a confirmed fact for site copy. Dates/locations for a temporary program are never safe to hardcode as evergreen text from this alone.",
+  "robots": {
+    "checkedAt": "2026-10-15T19:38:34.057Z",
+    "allowed": true
+  }
+}
