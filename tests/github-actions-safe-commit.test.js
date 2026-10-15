@@ -76,6 +76,16 @@ function initTempRepo() {
   // the real repo's actual behavior.
   fs.mkdirSync(path.join(dir, "agent", "research", "firstparty"), { recursive: true });
   fs.writeFileSync(path.join(dir, "agent", "research", "firstparty", "README.md"), "placeholder\n", "utf8");
+  // Same reasoning as agent/research/firstparty/ immediately above,
+  // applied to Phase 10's directory.
+  fs.mkdirSync(path.join(dir, "agent", "research", "local-sources"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "research", "local-sources", "README.md"), "placeholder\n", "utf8");
+  // Mirrors the REAL repo's state: agent/context/business-profile.json
+  // already exists and is already tracked — so a test adding a NEW
+  // file under agent/context/ (e.g. local-source-registry.json) reports
+  // that individual path, same collapsing concern as above.
+  fs.mkdirSync(path.join(dir, "agent", "context"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "context", "business-profile.json"), "{}\n", "utf8");
   runGit(["add", "-A"], dir);
   runGit(["commit", "-m", "initial"], dir);
   return dir;
@@ -139,10 +149,11 @@ function initTempRepoNoIdentity(extraGlobalConfig) {
 async function main() {
   // --- pure function tests ---------------------------------------
 
-  await test("isPathAllowed() allows the known Agent-artifact paths, including Phase 7B's agent/research/firstparty/*.json", () => {
+  await test("isPathAllowed() allows the known Agent-artifact paths, including Phase 7B's agent/research/firstparty/*.json and Phase 10's agent/research/local-sources/*.json", () => {
     assert.strictEqual(isPathAllowed("agent/history/log.ndjson"), true);
     assert.strictEqual(isPathAllowed("agent/history/research-rotation-state.json"), true);
     assert.strictEqual(isPathAllowed("agent/research/firstparty/search-console-search-analytics__golden-1234567890.json"), true);
+    assert.strictEqual(isPathAllowed("agent/research/local-sources/denvergov-org__leafdrop-pumpkin-composting-program-1234567890.json"), true);
   });
 
   await test("isPathAllowed() refuses any other Agent path, website source, or credential-like file — including sibling agent/research/ directories NOT in scope", () => {
@@ -156,6 +167,13 @@ async function main() {
     // the allowlist is one level deep only — never a nested subdirectory
     assert.strictEqual(isPathAllowed("agent/research/firstparty/nested/evidence.json"), false);
     assert.strictEqual(isPathAllowed("agent/research/firstparty/not-json.txt"), false);
+    assert.strictEqual(isPathAllowed("agent/research/local-sources/nested/evidence.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/local-sources/not-json.txt"), false);
+  });
+
+  await test("isPathAllowed() REFUSES the human-curated local-source registry (and business-profile.json) — the runner may read either, but can never autonomously commit a change to what it's allowed to fetch", () => {
+    assert.strictEqual(isPathAllowed("agent/context/local-source-registry.json"), false);
+    assert.strictEqual(isPathAllowed("agent/context/business-profile.json"), false);
   });
 
   await test("parsePorcelainStatus() parses modified/untracked/renamed and quoted-path lines", () => {
@@ -326,6 +344,45 @@ async function main() {
       assert.notStrictEqual(after, before);
       const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
       assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/research/firstparty/search-console-search-analytics__golden-123.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI: commits a new agent/research/local-sources/*.json evidence file (Phase 10's --fetch-local-source-strict= output) alongside history", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r6b" }) + "\n", "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "research", "local-sources"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "agent", "research", "local-sources", "denvergov-org__leafdrop-pumpkin-composting-program-123.json"),
+        JSON.stringify({ sourceUrl: "https://www.denvergov.org/x", sourceDomain: "denvergov.org", authorityClass: "official-government", extractedSnippet: "LeafDrop" }),
+        "utf8"
+      );
+      const result = runSafeCommit(dir, "chore(agent): diagnostic-denver-leafdrop run r6b");
+      assert.strictEqual(result.status, 0, `stderr: ${result.stderr}`);
+      const after = headSha(dir);
+      assert.notStrictEqual(after, before);
+      const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
+      assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/research/local-sources/denvergov-org__leafdrop-pumpkin-composting-program-123.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI: REFUSES to commit when the local-source REGISTRY itself changed alongside valid evidence — the registry is human-curated and must never be autonomously committed, even bundled with an otherwise-legitimate evidence file", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.mkdirSync(path.join(dir, "agent", "research", "local-sources"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "research", "local-sources", "denvergov-org__leafdrop-pumpkin-composting-program-999.json"), JSON.stringify({ ok: true }), "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "context"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "context", "local-source-registry.json"), JSON.stringify({ entries: [{ id: "sneaky", url: "https://evil.example.com" }] }), "utf8");
+      const result = runSafeCommit(dir, "chore(agent): should be refused");
+      assert.notStrictEqual(result.status, 0, "must refuse (nonzero exit) rather than silently commit a registry change");
+      const after = headSha(dir);
+      assert.strictEqual(after, before, "nothing must be committed when a disallowed path changed, even alongside allowed ones");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

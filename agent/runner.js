@@ -68,6 +68,7 @@ const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
 const { attachFirstPartyEvidence, attachRotationEvidence } = require("./lib/firstparty-intake");
 const { attachFirstPartySignals } = require("./lib/firstparty-signals");
+const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
 const { isSearchConsoleConfigured } = require("./lib/search-console-client");
 const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
@@ -260,6 +261,12 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       firstPartyIntegrations,
       initialTimestamp: priorRecord ? priorRecord.timestamp : failedRecord.timestamp,
       workflowStartedAt: process.env.WORKFLOW_STARTED_AT,
+      // Phase 10 — filesystem-only read (no network), same category as
+      // attachFirstPartyEvidence() above: surfaces whatever curated
+      // local-source evidence already exists on disk even for a run
+      // that otherwise failed, same honesty rule failure reporting
+      // already follows elsewhere.
+      localSourceEvidence: loadLocalSourceEvidence(),
     });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
@@ -464,6 +471,13 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     // initialTimestamp's existing behavior in that case (see
     // report.js's parseWorkflowStartedAt()).
     workflowStartedAt: process.env.WORKFLOW_STARTED_AT,
+    // Phase 10 — Curated Official Source Evidence: a filesystem-only read
+    // (agent/research/local-sources/*.json), never a network call —
+    // same category as attachFirstPartyEvidence() above. Deliberately
+    // NOT attached to any finding/rotation pick (see local-source-
+    // intake.js's own header on why) — report.js surfaces the whole
+    // loaded list as its own, independent section instead.
+    localSourceEvidence: loadLocalSourceEvidence(),
   });
 
   appendRun(record, options.logPath);

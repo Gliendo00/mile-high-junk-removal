@@ -146,6 +146,32 @@
 //     successful API call ever produces a file with
 //     `observed.totalRowsReturned: 0`.
 //
+//   node agent/cli.js --fetch-local-source-strict=<registry-entry-id>
+//     Phase 10 — Curated Official Source Evidence: a narrow, manual
+//     verification fetch against EXACTLY ONE entry already declared in
+//     the human-curated, human-VERIFIED agent/context/local-source-
+//     registry.json (never an arbitrary URL — the argument is a
+//     registry entry's `id`, looked up via
+//     agent/lib/local-source-registry.js's getEntryById(); an unknown id
+//     refuses outright rather than falling back to treating it as a
+//     literal URL). Checks robots.txt first (never proceeds without an
+//     explicit allow), fetches ONLY that one known URL (no sitemap
+//     discovery, no redirect-following, no retry/bypass of any kind),
+//     and writes one normalized, bounded evidence file to
+//     agent/research/local-sources/ (see agent/lib/local-source-
+//     evidence.js — no verdict/confidence/recommendation field; this is
+//     never a research.js result and never reaches decision.js). Same
+//     strict-mode contract as --fetch-firstparty-strict= above: a
+//     {skipped:true} result (robots disallow, network error, non-2xx,
+//     an unexpected redirect, or an unknown registry id) EXITS NONZERO
+//     instead of logging and returning 0 — exists for the one-off
+//     "Denver LeafDrop local-source diagnostic" GitHub Actions dispatch
+//     (see .github/workflows/website-agent.yml's
+//     diagnostic-denver-leafdrop run_type). Never runs the ordinary
+//     Agent pipeline, never touches rotation state, never creates a
+//     proposal, never changes the site — see agent/README.md's Phase 10
+//     section.
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
@@ -159,6 +185,8 @@ const { loadRotationState, computePriorities } = require("./lib/research-rotatio
 const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
 const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, needsFindingEvidenceRefresh } = require("./lib/finding-evidence");
 const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
+const { getEntryById } = require("./lib/local-source-registry");
+const { fetchLocalSourceEvidence, writeLocalSourceEvidence } = require("./lib/local-source-fetch");
 
 function parseResumeArg(args) {
   const prefixed = args.find((a) => a.startsWith("--resume="));
@@ -384,6 +412,51 @@ async function runFetchFirstParty(requestPath, options = {}) {
   console.log(`First-party evidence fetch: ${count} evidence entr(ies) written to ${filePath}.`);
 }
 
+function parseFetchLocalSourceStrictArg(args) {
+  const prefixed = args.find((a) => a.startsWith("--fetch-local-source-strict="));
+  return prefixed ? prefixed.slice("--fetch-local-source-strict=".length) : null;
+}
+
+/**
+ * See this file's top-of-file comment on --fetch-local-source-strict=.
+ * Always strict in Phase 1 (no non-strict/orchestrator-facing variant
+ * exists yet — this flag exists purely for the manual diagnostic
+ * dispatch), kept as an explicit `options.strict` the same shape as
+ * runFetchFirstParty() above for consistency, rather than hardcoding the
+ * behavior, so a future non-strict caller could be added without
+ * reshaping this function.
+ * @param {string} entryId - a agent/context/local-source-registry.json entry's own `id`
+ * @param {object} [options]
+ * @param {boolean} [options.strict]
+ */
+async function runFetchLocalSource(entryId, options = {}) {
+  const strict = options.strict === true;
+  const entry = getEntryById(entryId);
+  if (!entry) {
+    const message = `No local-source-registry entry with id "${entryId}".`;
+    if (strict) {
+      console.error(message);
+      process.exitCode = 1;
+    } else {
+      console.log(message);
+    }
+    return;
+  }
+
+  const result = await fetchLocalSourceEvidence(entry);
+  if (result.skipped) {
+    if (strict) {
+      console.error(`Local-source evidence fetch FAILED: ${result.reason}`);
+      process.exitCode = 1;
+    } else {
+      console.log(`Local-source evidence fetch skipped: ${result.reason}`);
+    }
+    return;
+  }
+  const filePath = writeLocalSourceEvidence(result.evidence);
+  console.log(`Local-source evidence fetch: 1 evidence entry written to ${filePath}.`);
+}
+
 function printRecord(record, asJson) {
   if (asJson) {
     console.log(JSON.stringify(record, null, 2));
@@ -489,6 +562,12 @@ async function main() {
     return;
   }
 
+  const fetchLocalSourceStrictId = parseFetchLocalSourceStrictArg(args);
+  if (fetchLocalSourceStrictId) {
+    await runFetchLocalSource(fetchLocalSourceStrictId, { strict: true });
+    return;
+  }
+
   const asJson = args.includes("--json");
   const resumeRunId = parseResumeArg(args);
 
@@ -529,6 +608,8 @@ module.exports = {
   parseFetchFirstPartyStrictArg,
   runRefreshFindingEvidence,
   classifyFindingEvidenceOutcome,
+  runFetchLocalSource,
+  parseFetchLocalSourceStrictArg,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

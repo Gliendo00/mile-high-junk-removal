@@ -23,13 +23,21 @@
 //     firstparty-fetch.js's existing writeFirstPartyEvidence(), same as
 //     an orchestrator's --fetch-firstparty already produced before this
 //     phase; only WHEN it runs changed, not what it writes.)
-// All three are already git-tracked, append-only/small-diff JSON —
+//   - agent/research/local-sources/*.json            (Phase 10's manual
+//     diagnostic dispatch only — node agent/cli.js
+//     --fetch-local-source-strict=<id>; see agent/lib/local-source-
+//     fetch.js's header. Each file is a normalized, bounded text
+//     snippet from ONE human-curated/verified official page — never raw
+//     HTML, never a credential, never a verdict.)
+// All four are already git-tracked, append-only/small-diff JSON —
 // exactly the "legitimate Agent artifacts" the brief describes. Nothing
 // else is in the allowlist: not agent/research/results/ or
 // agent/research/completed-jobs/ (written only by --refresh-completed-
-// jobs/--resume, neither of which this runner invokes), and never any
-// top-level *.html/sitemap.xml/robots.txt/vercel.json (the actual
-// public site).
+// jobs/--resume, neither of which this runner invokes), not
+// agent/context/local-source-registry.json or
+// agent/context/business-profile.json (human-curated — the runner only
+// ever READS either, never writes to them), and never any top-level
+// *.html/sitemap.xml/robots.txt/vercel.json (the actual public site).
 //
 // Usage:
 //   node .github/scripts/safe-commit.js "commit message"
@@ -81,6 +89,13 @@ const ALLOWED_PATH_PATTERNS = [
   // deep, .json only — never agent/research/** broadly (results/ and
   // completed-jobs/ stay OUT of this allowlist; see this file's header).
   /^agent\/research\/firstparty\/[^/]+\.json$/,
+  // Phase 10 — same narrow treatment, one directory deep, .json only.
+  // Deliberately does NOT include agent/context/local-source-
+  // registry.json: the registry is human-curated and must never be
+  // autonomously editable (see agent/lib/local-source-registry.js's
+  // header) — only the EVIDENCE this diagnostic writes is allowlisted,
+  // never the list of what it's allowed to fetch.
+  /^agent\/research\/local-sources\/[^/]+\.json$/,
 ];
 
 // Deliberately pattern-based, not a secrets-scanning dependency — this
@@ -200,7 +215,7 @@ function main() {
   if (disallowed.length > 0) {
     console.error("safe-commit: REFUSING to commit — unexpected path(s) changed outside the Agent-artifact allowlist:");
     for (const e of disallowed) console.error(`  ${e.status} ${e.path}`);
-    console.error("Only agent/history/log.ndjson, agent/history/research-rotation-state.json, and agent/research/firstparty/*.json are ever expected to change from an unattended --daily/--weekly run. Investigate before re-running.");
+    console.error("Only agent/history/log.ndjson, agent/history/research-rotation-state.json, agent/research/firstparty/*.json, and agent/research/local-sources/*.json are ever expected to change from an unattended --daily/--weekly/diagnostic run. Investigate before re-running.");
     process.exitCode = 1;
     return;
   }

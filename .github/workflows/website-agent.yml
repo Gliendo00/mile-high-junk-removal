@@ -62,6 +62,22 @@ on:
           # step below and tests/github-actions-workflow.test.js's
           # diagnostic-specific assertions).
           - diagnostic-golden-ga4
+          # Phase 10 — a narrow, manual, one-off verification: fetches
+          # EXACTLY ONE human-curated, human-verified official source
+          # (agent/context/local-source-registry.json's
+          # "denver-leafdrop" entry) via agent/lib/local-source-fetch.js,
+          # checking robots.txt first and writing one normalized,
+          # bounded evidence file to agent/research/local-sources/ (no
+          # raw HTML, no verdict). Needs NO Google Cloud/WIF credentials
+          # at all — this is a plain, anonymous, public HTTP fetch, not
+          # a Search Console/GA4 call — see the dedicated step below and
+          # the Supabase/Google-Cloud config checks' own `if:` gates,
+          # which skip entirely for this run_type. Never runs the
+          # ordinary Agent pipeline, never touches rotation state, never
+          # creates a proposal, never touches the public site — see
+          # tests/github-actions-workflow.test.js's diagnostic-specific
+          # assertions.
+          - diagnostic-denver-leafdrop
         default: daily
 
 permissions:
@@ -119,12 +135,13 @@ jobs:
         # than let agent/lib/proposals-sync.js degrade to its normal
         # (otherwise correct) {skipped:true} behavior unnoticed. Never
         # echoes either value.
-        # Skipped for the Golden diagnostics (run_type above) — neither
-        # mode ever runs the Agent pipeline or proposal sync at all, so
+        # Skipped for the Golden diagnostics and the Denver LeafDrop
+        # local-source diagnostic (run_type above) — none of the three
+        # ever runs the Agent pipeline or proposal sync at all, so
         # Supabase configuration is simply irrelevant to them; requiring
-        # it anyway would make a pure Google-auth diagnostic depend on an
-        # unrelated credential.
-        if: inputs.run_type != 'diagnostic-golden-search-console' && inputs.run_type != 'diagnostic-golden-ga4'
+        # it anyway would make a pure Google-auth/local-source diagnostic
+        # depend on an unrelated credential.
+        if: inputs.run_type != 'diagnostic-golden-search-console' && inputs.run_type != 'diagnostic-golden-ga4' && inputs.run_type != 'diagnostic-denver-leafdrop'
         run: |
           if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
             echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured. This permanent runner requires both so CRM proposal sync is never silently skipped. See the setup documentation in the workflow run summary / PR description."
@@ -132,6 +149,15 @@ jobs:
           fi
 
       - name: Verify required Google Cloud configuration
+        # Skipped for the Denver LeafDrop local-source diagnostic
+        # (Phase 10) — that diagnostic is a plain, anonymous public HTTP
+        # fetch (agent/lib/local-source-fetch.js) with NO Google Cloud/
+        # WIF dependency at all; requiring these variables anyway would
+        # make a diagnostic that genuinely doesn't need Google Cloud
+        # depend on it regardless. Still required for both Golden
+        # diagnostics (run_type above) — those DO exercise the real WIF
+        # -> impersonation -> Search Console/GA4 path.
+        if: inputs.run_type != 'diagnostic-denver-leafdrop'
         run: |
           if [ -z "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
             echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER repository/environment variable is not configured (the Workload Identity Federation provider resource name)."
@@ -152,6 +178,10 @@ jobs:
         run: npm ci
 
       - name: Authenticate to Google Cloud (Workload Identity Federation)
+        # Skipped for the Denver LeafDrop local-source diagnostic (Phase
+        # 9) — see the Google Cloud config check immediately above for
+        # why that diagnostic has no Google Cloud dependency at all.
+        if: inputs.run_type != 'diagnostic-denver-leafdrop'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -305,6 +335,30 @@ jobs:
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+
+      - name: Run Denver LeafDrop local-source diagnostic (diagnostic only)
+        # Phase 10 — a narrow, manual, one-off proof that
+        # agent/lib/local-source-fetch.js's robots-check -> known-URL
+        # GET -> bounded-extraction pipeline actually works end to end
+        # against the real, human-verified Denver LeafDrop page (see
+        # agent/context/local-source-registry.json's "denver-leafdrop"
+        # entry — the ONLY entry this diagnostic, or anything else, is
+        # permitted to fetch; an unknown id refuses outright). Needs NO
+        # Google Cloud/WIF credentials — this is a plain, anonymous
+        # public HTTP fetch, not a Search Console/GA4 call. Uses
+        # --fetch-local-source-strict= (not a hypothetical non-strict
+        # variant, which does not exist) deliberately: a skip here
+        # (robots disallow, network error, non-2xx, an unexpected
+        # redirect, or an unknown registry id) must fail this job
+        # visibly, not log-and-return-0.
+        #
+        # Never runs --daily/--weekly, never calls computePriorities()
+        # or research-rotation.js at all, so agent/history/
+        # research-rotation-state.json is structurally unreachable from
+        # this step. Never attaches to, or is interpreted as, a research
+        # verdict — see agent/lib/local-source-evidence.js's header.
+        if: inputs.run_type == 'diagnostic-denver-leafdrop'
+        run: node agent/cli.js --fetch-local-source-strict=denver-leafdrop
 
       - name: Persist Agent artifacts (safe-commit)
         # Runs even if the step above failed: runner.js (see its own

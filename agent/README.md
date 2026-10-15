@@ -3384,3 +3384,236 @@ additive and gated to `weekly` only).
    even on the (common) healthy case where no mismatch fires; nothing
    currently surfaces that raw query text anywhere beyond
    `report.firstPartyEvidence.items`'s existing generic display.
+
+# Phase 10 — Curated Official Source Evidence ($0 external/local research, Tier A only)
+
+The Agent's remaining intelligence gap was external/local information:
+Search Console/GA4 (Phase 6+) describe this property's OWN
+search/analytics behavior; `research.js` (Phase 2+) captures a
+human/Claude session's actual read-and-judge verdict about an external
+source. Neither closes the gap of *mechanically, autonomously, at $0*
+checking a known official municipal/county/state source for current
+information relevant to an existing opportunity (e.g. a seasonal
+disposal/recycling program) — without a paid search API, and without
+pretending a general web-research/discovery capability exists when it
+doesn't.
+
+## Goal and explicit non-goal
+
+Prove the Agent can safely retrieve and normalize ONE human-vetted
+official local source at $0, through the SAME network-layer /
+normalized-evidence / deterministic-consumer separation that has
+already worked for first-party evidence — nothing more. This is
+explicitly **not** autonomous general web research: there is no search
+provider, no sitemap-based discovery, no RSS monitoring, no competitor
+fetching, and no mechanism for discovering a BRAND NEW official source
+for a city this registry doesn't already know about. A locality/topic
+with no curated entry correctly surfaces as "external discovery
+unavailable" — never faked.
+
+## Architecture
+
+```
+agent/context/local-source-registry.json   (human-curated, human-VERIFIED — like business-profile.json)
+        v
+agent/lib/local-source-registry.js         (loader + validation — domain/authorityClass consistency enforced)
+        v
+agent/lib/robots.js                        (minimal, NOT standards-complete robots.txt check — fails conservative, always)
+        v
+agent/lib/local-source-fetch.js            (network layer: robots gate -> known-URL GET only -> bounded extraction)
+        v
+agent/lib/local-source-evidence.js         (normalized schema — mirrors firstparty-evidence.js's shape; NO verdict/confidence/recommendation field)
+        v
+agent/research/local-sources/*.json        (committed, git-tracked, one file per fetch)
+        v
+agent/lib/local-source-intake.js           (deterministic load; NOT attached to any finding/rotation pick in Phase 1)
+        v
+report.js's own, independent `localSourceEvidence` section
+```
+
+`agent/runner.js` remains network-free: it only calls
+`loadLocalSourceEvidence()`, a pure filesystem read, the same category
+as its existing `attachFirstPartyEvidence()` call. The only thing that
+ever touches the network is `agent/lib/local-source-fetch.js`, invoked
+exclusively via the separate, explicit `node agent/cli.js
+--fetch-local-source-strict=<registry-entry-id>` CLI step — never by the
+deterministic pipeline itself.
+
+## Registry (`agent/context/local-source-registry.json`)
+
+Human-maintained, human-VERIFIED, and **not autonomously editable** —
+`.github/scripts/safe-commit.js`'s allowlist deliberately excludes
+`agent/context/**` entirely (same treatment `business-profile.json`
+already gets). Phase 1 holds exactly one entry:
+
+- **id**: `denver-leafdrop`
+- **locality**: Denver, CO
+- **domain**: `denvergov.org`
+- **url**: `https://www.denvergov.org/My-Property/Recycle-Compost-Trash/Seasonal-Programs/LeafDrop-and-Pumpkin-Recycling`
+- **topic**: `leafdrop-pumpkin-composting-program`
+- **authorityClass**: `official-government`
+- **expectedTemporality**: `temporary`
+
+This URL was independently re-verified during this phase's design — NOT
+assumed valid merely because the Phase 3 Denver LeafDrop research result
+(`agent/research/results/content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop.json`)
+referenced the same program under a different (dated news-article) URL.
+Verification: resolved the City's own short link
+(`https://denvergov.org/leafdrop`, a live HTTP 302) to this exact
+canonical destination; fetched and fully parsed the real,
+7629-line `https://www.denvergov.org/robots.txt` (a single
+`User-agent: *` block, zero `Allow`/`Crawl-delay` directives) and
+confirmed this exact path is not matched by any `Disallow` rule — the
+only LeafDrop-related rules on that host cover two *different*, older
+path families. See the registry entry's own `verificationNotes` for the
+full detail.
+
+`local-source-registry.js`'s `validateEntry()` enforces that an entry's
+`url` host must equal its own declared `domain` (apex or `www.`
+variant) — a malformed entry can never claim authority over a host it
+doesn't actually point to, and `authorityClass` must be one of
+`research.js`'s existing `SOURCE_TYPES` (reused, not a second taxonomy).
+
+## Fetch safety (Tier A only)
+
+`local-source-fetch.js`'s `fetchLocalSourceEvidence()` takes a REGISTRY
+ENTRY OBJECT, never a raw URL — there is no parameter through which an
+arbitrary or caller-supplied URL could ever reach it, and an unknown
+registry id refuses outright rather than falling back to treating the
+id as a literal URL. Per-fetch: `robots.txt` is checked exactly ONCE
+(see "Robots retrieval cadence" below), the known URL is fetched with a
+10s timeout and an honest, identifying User-Agent
+(`MileHighJunkRemovalAgent/1.0 (+contact@milehighjunkremoval.net)`, no
+cookies/login/session), and any 3xx response is treated as a `failed`
+outcome requiring a human to re-verify the registry entry — **redirects
+are never followed automatically**, to the same host or any other. No
+sitemap discovery, no RSS, no competitor fetching, no retry/bypass of
+any kind (a response that looks like a bot-protection challenge is just
+another `failed` outcome, never something to work around).
+
+### Robots retrieval cadence
+
+Fetched exactly ONCE per CLI invocation (one host per registry entry in
+Phase 1), reused for the one page fetched in that same call — not
+cached across separate process runs, and not re-fetched per-page within
+one run. Chosen over "fetch robots.txt before every individual page
+fetch" because, within one short-lived GitHub Actions job (well under
+the existing 20-minute timeout), robots.txt cannot meaningfully change
+between two fetches to the same host in the same run — re-fetching it a
+second time for the same host would be pure redundant load on the
+target server with zero correctness benefit. Chosen over "cache across
+runs" because persisting a robots.txt decision across days/weeks risks
+silently acting on stale rules — a fresh in-memory-only check every
+invocation is simpler and strictly safer.
+
+`agent/lib/robots.js` is explicitly, deliberately NOT a
+standards-complete robots.txt implementation — it supports only the
+subset the real, verified `denvergov.org` host actually uses (one
+`User-agent: *` block, `Disallow` prefix matching with trailing `*`
+treated as a no-op, zero `Allow`/`Crawl-delay` reliance) and **fails
+conservatively, always**: an unreachable robots.txt, a non-2xx
+response, or no matching block at all is treated as DISALLOWED, never
+as "no file means fetch freely."
+
+## Extraction — bounded, mechanical, never structured facts
+
+`stripHtmlToText()` strips `<head>` (so a page's own `<title>` text,
+which frequently contains its `<h1>` text as a prefix, can't
+self-defeat anchoring), scripts, styles, and all tags, then
+`extractAnchorText()` locates the page's own `<h1>` (falling back to
+`<title>`) so the bounded snippet starts from the page's real content
+rather than nav/header chrome. The result is capped at
+`MAX_SNIPPET_CHARS` (2000) — raw HTML is never persisted. This is
+deliberately NOT structured field extraction: no dates, locations, or
+program rules are ever mechanically parsed into claimed authoritative
+facts — a human (or Claude session) must read the snippet and the live
+page before treating anything in it as confirmed for site copy, same
+discipline the real Phase 3 Denver LeafDrop research result already
+modeled by hand.
+
+## Evidence schema (`agent/lib/local-source-evidence.js`)
+
+Mirrors `firstparty-evidence.js`'s structural discipline exactly: **no
+`verdict`/`confidence`/`recommendation` field at all** —
+`sourceUrl`, `sourceDomain`, `authorityClass` (one of `research.js`'s
+`SOURCE_TYPES`), `locality`, `topic`, `discoveryMethod` (`"known-url"`
+only in Phase 1), `retrievedAt`, `extractedSnippet` (bounded),
+`expectedTemporality` (one of `research.js`'s `TEMPORALITY_VALUES`,
+reused directly), `limitations` (required), and `robots: {checkedAt,
+allowed}` — the constructor structurally refuses to build evidence for
+any fetch that wasn't explicitly robots-allowed. Freshness
+(`computeLocalSourceFreshness()`) reuses `research.js`'s existing
+`FRESHNESS_WINDOWS_DAYS` directly (no new, invented aging numbers).
+
+## Reporting
+
+`report.localSourceEvidence` is its own, independent section — **never
+merged into** `firstPartyEvidence`, `firstPartySignals`, or `research`.
+Every non-empty section carries the literal disclaimer: *"Retrieved
+official-source evidence — not yet interpreted as a research verdict."*
+`agent/lib/decision.js`, `agent/lib/research.js`, `agent/lib/risk.js`,
+`agent/lib/proposals-sync.js`, and every `*-audit.js` module are all
+independently confirmed (by source-grep, not just by not-currently-
+calling-it) to never `require()` any `local-source-*.js` module — see
+`tests/agent-local-source-safety.test.js`, including an end-to-end proof
+that a real `runner.run()`'s findings/decisions are byte-identical
+whether or not local-source evidence exists on disk.
+
+## Diagnostic (manual, one-off — same precedent as Phase 7D/7E's Golden diagnostics)
+
+`node agent/cli.js --fetch-local-source-strict=denver-leafdrop` /
+`.github/workflows/website-agent.yml`'s `diagnostic-denver-leafdrop`
+`run_type`: fetches exactly the one curated Denver entry, checks robots
+first, writes one normalized evidence file, and EXITS NONZERO on any
+`skipped` outcome (robots disallow, network/HTTP failure, an unexpected
+redirect, or an unknown registry id) rather than logging and returning
+0. Needs **no Google Cloud/WIF credentials at all** — this is a plain,
+anonymous public HTTP fetch, not a Search Console/GA4 call — so both
+the Google Cloud config-check and the WIF auth step skip for this
+`run_type`, alongside the existing Supabase-config skip the two Golden
+diagnostics already use. Never runs `--daily`/`--weekly`, never touches
+rotation state, never creates a proposal, never changes the site.
+
+## Persistence
+
+New directory `agent/research/local-sources/*.json`, added to
+`.github/scripts/safe-commit.js`'s allowlist (same one-level-deep,
+`.json`-only treatment as `agent/research/firstparty/*.json`).
+`agent/context/local-source-registry.json` is deliberately **not** in
+that allowlist — the runner may read it, but can never autonomously
+commit a change to what it's allowed to fetch.
+
+## What this phase deliberately does NOT do
+
+No change to `decision.js`, `research.js` verdicts, proposals, or site
+changes. No sitemap-based discovery, RSS monitoring, content-hash/
+change detection, or competitor fetching (all genuinely deferred, not
+abandoned). No second city/source added to the registry yet — each
+future entry needs its own live, hands-on verification the same way
+Denver's was. No scheduling, no new Vercel function, no new npm
+dependency (native `fetch`/`AbortController` only), no paid search
+provider.
+
+## Tests
+
+New: `tests/agent-robots.test.js` (robots.txt parsing/matching —
+grouping, trailing-`*` handling, fail-conservative-always),
+`tests/agent-local-source-registry.test.js` (validation, the
+domain/authorityClass consistency guarantee, the real registry file),
+`tests/agent-local-source-evidence.test.js` (schema validation,
+freshness), `tests/agent-local-source-fetch.test.js` (mocked HTTP only —
+robots allow/disallow/unavailable, timeout, non-2xx, redirect-to-any-
+host rejection, bounded/anchored extraction, no raw HTML persisted),
+`tests/agent-local-source-intake.test.js`,
+`tests/agent-cli-fetch-local-source-strict.test.js` (strict-mode
+contract, mocked), `tests/agent-local-source-safety.test.js` (the
+decision/proposal/apply-authority structural proof). Extended:
+`tests/github-actions-safe-commit.test.js` (+5, the new allowlist entry
+and the registry's own exclusion from it),
+`tests/github-actions-workflow.test.js` (+6, the new diagnostic's
+gating/isolation). Full repository suite: **120/121 pass** — the same
+single pre-existing, unrelated failure as every prior phase. All real
+Denver verification (URL resolution, robots.txt content, live fetch,
+extraction quality) was performed by hand against the live network
+during design — the committed test suite itself never touches the real
+network (all HTTP is mocked).

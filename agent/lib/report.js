@@ -35,6 +35,17 @@ const { computeFreshness } = require("./research");
 const { computeFirstPartyFreshness, SOURCES: FIRST_PARTY_SOURCES } = require("./firstparty-evidence");
 const { isFirstPartyEvidenceCandidate, buildFirstPartyEvidenceQuestion } = require("./firstparty-candidates");
 const { isRotationEvidenceCandidate, classifyRotationConclusion } = require("./rotation-evidence");
+const { computeLocalSourceFreshness } = require("./local-source-evidence");
+
+// Phase 10 — Curated Official Source Evidence's own section banner.
+// Stated here, verbatim, every time this section is non-empty: this
+// evidence is retrieval-only (a bounded, mechanical snippet proving a
+// known, human-verified official page was fetched) and is NEVER itself
+// a research verdict — see agent/lib/local-source-evidence.js's header
+// on why it carries no verdict/confidence/recommendation field and is
+// never merged into firstPartyEvidence/firstPartySignals/research
+// below.
+const LOCAL_SOURCE_EVIDENCE_DISCLAIMER = "Retrieved official-source evidence — not yet interpreted as a research verdict.";
 
 // Phase 7B — surfaced verbatim on every rotation pick and in
 // rotation.summary: this unattended runner has no research-capable
@@ -147,8 +158,11 @@ function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingAppr
  *   parseWorkflowStartedAt() header above for why `initialTimestamp` alone cannot answer this). Absent/
  *   invalid/future values degrade safely to `initialTimestamp`'s existing behavior — see the
  *   firstPartyEvidence section below.
+ * @param {object} [args.localSourceEvidence] - Phase 10: runner.js's loadLocalSourceEvidence() result
+ *   ({entries, warnings}), a pure filesystem read (never a network call). Surfaced as report.localSourceEvidence,
+ *   its own section — deliberately NEVER merged into firstPartyEvidence/firstPartySignals/research below.
  */
-function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp, workflowStartedAt }) {
+function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp, workflowStartedAt, localSourceEvidence }) {
   const findings = record.findings || [];
   const now = new Date(record.timestamp);
   const runStartedAt = new Date(initialTimestamp || record.timestamp);
@@ -426,6 +440,37 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     items: firstPartySignalItems,
   };
 
+  // Phase 10 — Curated Official Source Evidence. Deliberately its OWN
+  // section, never merged into firstPartyEvidence (Search Console/GA4
+  // data about OUR OWN site/search behavior) or firstPartySignals (a
+  // mechanical PATTERN noticed in that first-party data) or `research`
+  // (a human/Claude session's actual read-and-judge verdict about an
+  // external source) above — this is a THIRD, independent evidence
+  // category: a bounded, mechanical record that a known, human-verified
+  // official page was retrieved, carrying no verdict of its own. Never
+  // folded into status/healthSummary — same "zero evidence is a valid,
+  // ordinary result" rule every other evidence section here follows.
+  const localSourceEntries = (localSourceEvidence && localSourceEvidence.entries) || [];
+  const localSourceWarnings = (localSourceEvidence && localSourceEvidence.warnings) || [];
+  const localSourceEvidenceSection = {
+    disclaimer: LOCAL_SOURCE_EVIDENCE_DISCLAIMER,
+    count: localSourceEntries.length,
+    warnings: localSourceWarnings,
+    items: localSourceEntries.map((e) => ({
+      sourceUrl: e.sourceUrl,
+      sourceDomain: e.sourceDomain,
+      authorityClass: e.authorityClass,
+      locality: e.locality,
+      topic: e.topic,
+      discoveryMethod: e.discoveryMethod,
+      retrievedAt: e.retrievedAt,
+      expectedTemporality: e.expectedTemporality,
+      freshness: computeLocalSourceFreshness(e, now).status,
+      extractedSnippet: e.extractedSnippet,
+      robots: e.robots,
+    })),
+  };
+
   const status = computeRunStatus({
     failure,
     hasUnresolvedResearch: questionsPending.length > 0,
@@ -480,6 +525,7 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     changeDetection,
     firstPartyEvidence,
     firstPartySignals,
+    localSourceEvidence: localSourceEvidenceSection,
     validation: record.validation || null,
     proposalsSyncSkippedReason: record.proposalsSync && record.proposalsSync.skipped ? record.proposalsSync.reason : null,
     failure: failure || null,

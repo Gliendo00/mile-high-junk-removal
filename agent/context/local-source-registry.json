@@ -1,0 +1,19 @@
+{
+  "_comment": "Phase 10 -- curated, human-maintained registry of verified official local sources the Website Agent's local-source-fetch.js is permitted to fetch. NOT autonomously editable: the unattended runner only READS this file (see .github/scripts/safe-commit.js's allowlist, which deliberately excludes agent/context/** entirely -- the same treatment business-profile.json already gets). Every entry below requires a human (or Claude session) to have manually, LIVE-verified both the exact URL and its robots.txt behavior at humanVerifiedAt -- never add an entry, and never assume a previously-verified entry is still valid, without re-doing that verification. See agent/README.md's Phase 10 section for the full writeup, and agent/lib/local-source-registry.js for the loader/validator this file is read through.",
+
+  "entries": [
+    {
+      "id": "denver-leafdrop",
+      "locality": "Denver, CO",
+      "citySlug": "denver",
+      "domain": "denvergov.org",
+      "url": "https://www.denvergov.org/My-Property/Recycle-Compost-Trash/Seasonal-Programs/LeafDrop-and-Pumpkin-Recycling",
+      "topic": "leafdrop-pumpkin-composting-program",
+      "authorityClass": "official-government",
+      "expectedTemporality": "temporary",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (curl, with this agent's own identifying User-Agent): HTTP 200, Content-Type text/html, page title/breadcrumb 'Home / My Property / Trash, Recycle & Compost / Seasonal Programs / LeafDrop and Pumpkin Recycling', body text confirms the live 2026 season ('2026 Drop Sites ... Oct. 5 - Nov. 25'). This exact URL was NOT assumed from repository history -- it was independently re-derived by resolving the City's own short link (https://denvergov.org/leafdrop, a live HTTP 302) to confirm the canonical destination, which differs from the dated news-article URL (.../News-Outreach/News/LeafDrop-Program-2024) that search results also surface for this program. robots.txt (https://www.denvergov.org/robots.txt, 7629 lines) fetched and checked in full: exactly one 'User-agent: *' block, no Allow/Crawl-delay directives anywhere. This exact path is NOT matched by any Disallow rule on the host -- the only LeafDrop-related Disallow rules cover two DIFFERENT, older path families (/Government/.../Recycle-Compost-Trash/Leafdrop/* and /My-Property/Recycle-Compost-Trash/Locations/*), neither of which this URL falls under.",
+      "notes": "City and County of Denver's own seasonal leaf/pumpkin composting drop-off program (DOTI + Office of the City Forester + CASR + Ace Hardware). Dates/locations are set annually by the city and are NOT evergreen -- never treat a retrieved snippet's specific dates/locations as still current without re-fetching; see expectedTemporality and local-source-evidence.js's freshness model."
+    }
+  ]
+}

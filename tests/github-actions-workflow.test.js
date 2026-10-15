@@ -264,6 +264,57 @@ await test("Phase 7E: the GA4 diagnostic step runs AFTER the Search Console diag
   assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(gscBlock), "the Search Console diagnostic's own gating must be unaffected by adding the GA4 diagnostic");
 });
 
+await test("Phase 10: the diagnostic-denver-leafdrop run_type option exists alongside daily/weekly/the two Golden diagnostics, which stay unchanged", () => {
+  assert.ok(/-\s*diagnostic-denver-leafdrop/.test(code), "expected a diagnostic-denver-leafdrop option on the run_type input");
+  assert.ok(/-\s*diagnostic-golden-search-console/.test(code) && /-\s*diagnostic-golden-ga4/.test(code), "both existing Golden diagnostic options must still exist, unchanged");
+  assert.ok(/-\s*daily/.test(code) && /-\s*weekly/.test(code), "daily/weekly options must still exist, unchanged");
+  assert.ok(/default:\s*daily/.test(code), "default must still be daily — the local-source diagnostic is opt-in only, never the default");
+});
+
+await test("Phase 10: the Denver LeafDrop diagnostic step reuses the EXISTING --fetch-local-source-strict= path against the registry's own 'denver-leafdrop' entry id — no raw URL, no new fetch path", () => {
+  const block = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "must be gated to the local-source diagnostic run_type only");
+  assert.ok(/--fetch-local-source-strict=denver-leafdrop/.test(block), "must invoke the strict path against the registry entry id, never a literal URL");
+});
+
+await test("Phase 10: the Denver LeafDrop diagnostic step is not marked continue-on-error — a robots/network/HTTP failure must fail the job visibly, not return green", () => {
+  const block = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+});
+
+await test("Phase 10: the Denver LeafDrop diagnostic needs NO Google Cloud/WIF credentials — the config-check and auth steps both skip for it, and the diagnostic step itself declares no Google env vars", () => {
+  const gcpCheckBlock = extractStepBlock(code, /Verify required Google Cloud configuration/);
+  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(gcpCheckBlock), "the Google Cloud config check must skip for this diagnostic");
+
+  const authBlock = extractStepBlock(code, /Authenticate to Google Cloud/);
+  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(authBlock), "the Google Cloud auth step must skip for this diagnostic");
+
+  const diagnosticBlock = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
+  assert.strictEqual(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/.test(diagnosticBlock), false, "this diagnostic has no Google Cloud dependency at all — it must never reference this variable");
+  assert.strictEqual(/GSC_SITE_URL|GA4_PROPERTY_ID/.test(diagnosticBlock), false);
+});
+
+await test("Phase 10: the diagnostic's own Supabase-config check is skipped (irrelevant — no Agent pipeline, no proposal sync ever runs for it), alongside the two Golden diagnostics", () => {
+  const block = extractStepBlock(code, /Verify required Supabase configuration/);
+  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-ga4['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "the Supabase check must also skip for the Denver LeafDrop diagnostic, alongside the existing two");
+});
+
+await test("Phase 10: the Denver LeafDrop diagnostic can never reach rotation state or the ordinary Agent pipeline — --refresh-rotation-evidence/--refresh-finding-evidence/--daily/--weekly are never invoked for it, and those steps stay gated to their own run_types only", () => {
+  const diagnosticBlock = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
+  assert.strictEqual(/--refresh-rotation-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--refresh-finding-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--daily|--weekly/.test(diagnosticBlock), false);
+  assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
+
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must stay gated OUT for every diagnostic run_type, including the new one");
+
+  const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock), "the rotation-evidence refresh step's own gating must be unaffected by adding this diagnostic");
+  const findingBlock = extractStepBlock(code, /Refresh finding-level query evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(findingBlock), "the finding-evidence refresh step's own gating must be unaffected by adding this diagnostic");
+});
+
 await test("Finding-level query evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the rotation-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
   const block = extractStepBlock(code, /Refresh finding-level query evidence/);
   assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
