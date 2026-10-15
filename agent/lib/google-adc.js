@@ -32,13 +32,30 @@
 //     reuses google-service-account-auth.js's signer, one implementation).
 // A third type, "external_account" (Workload Identity Federation — e.g.
 // a GitHub Actions OIDC identity federated into GCP with no Google
-// credential at all) is intentionally NOT implemented yet: there is no
-// WIF pool/provider configured for this project today, and reimplementing
-// the STS token-exchange protocol for a feature nobody can use yet would
-// be exactly the overbuilding this phase was asked to avoid. It fails
-// honestly with a clear "not yet supported" reason — see
-// agent/README.md's Phase 6 auth-hardening section for the documented
-// upgrade path once/if an external identity provider is ever wired up.
+// credential at all) IS now implemented, but only the one concrete shape
+// `google-github-actions/auth` actually writes when given a
+// `workload_identity_provider` with NO `service_account` input: a
+// URL-sourced credential (`credential_source.url`/`.headers`, JSON
+// format with a `subject_token_field_name`). That shape is fetched for
+// a fresh subject token (the short-lived GitHub Actions OIDC JWT — must
+// be re-fetched per resolution, never cached, since GitHub's own token
+// is only valid for a few minutes) and exchanged via RFC 8693 token
+// exchange against the file's own `token_url` (Google's STS endpoint)
+// for a `cloud-platform`-scoped ADC-equivalent token for the FEDERATED
+// identity itself — see exchangeExternalAccountToken() below. This is
+// deliberately the BASE identity only, exactly like an "authorized_user"
+// file: it still needs GOOGLE_IMPERSONATE_SERVICE_ACCOUNT (resolved by
+// google-auth.js, tier 1) to actually mint a scope-specific
+// (webmasters.readonly/analytics.readonly) token for
+// mile-high-site-agent@... — the federated identity is granted
+// `roles/iam.workloadIdentityUser` on that service account, the exact
+// same shape of grant a human's ADC identity needs
+// (roles/iam.serviceAccountTokenCreator is requested indirectly via that
+// impersonation call), never direct API scopes of its own. A
+// file-sourced (`credential_source.file`) or non-JSON-format external_
+// account config is NOT implemented (no such shape exists anywhere in
+// this project's intended CI) and fails honestly rather than guessing at
+// its handling.
 //
 // NEVER logs anything, and the only data this module ever returns is
 // {skipped, accessToken, expiresInSeconds, source} (or a skip reason
@@ -52,6 +69,8 @@ const path = require("path");
 const { signAndExchangeServiceAccountKey } = require("./google-service-account-auth");
 
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const STS_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
+const STS_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
 const METADATA_TOKEN_ENDPOINT = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 // Short — a non-GCP machine (e.g. this Windows dev box) has no route to
 // this hostname at all, but a bounded timeout keeps a slow/odd network
@@ -118,6 +137,104 @@ async function exchangeAuthorizedUserRefreshToken(credential, fetchImpl) {
   }
 }
 
+// Fetches the subject token for a URL-sourced "external_account"
+// credential_source — the shape `google-github-actions/auth` writes for
+// GitHub Actions: a GET to `credential_source.url` (GitHub's own
+// short-lived OIDC token-request endpoint, pre-bound with the right
+// `audience`) carrying `credential_source.headers` (the bearer token
+// GitHub's Actions runtime issued for THIS job step only), returning a
+// JSON body whose `credential_source.format.subject_token_field_name`
+// field (GitHub's convention: "value") is the actual OIDC JWT. Returns
+// `{token}` or `{error}` — never throws, never logs either the header
+// or the fetched token.
+async function fetchExternalAccountSubjectToken(credentialSource, fetchImpl) {
+  const f = fetchImpl || fetch;
+  const format = credentialSource.format || { type: "json", subject_token_field_name: "value" };
+  if (format.type && format.type !== "json") {
+    return { error: `credential_source.format.type "${format.type}" is not supported (only a JSON-formatted subject token is)` };
+  }
+  const fieldName = format.subject_token_field_name || "value";
+  try {
+    const res = await f(credentialSource.url, { headers: credentialSource.headers || {} });
+    if (!res.ok) {
+      return { error: `subject-token request failed: HTTP ${res.status}` };
+    }
+    const body = await res.json();
+    const token = body && body[fieldName];
+    if (!token) {
+      return { error: `subject-token response had no "${fieldName}" field` };
+    }
+    return { token };
+  } catch (e) {
+    return { error: `subject-token request error: ${e && e.message ? e.message : String(e)}` };
+  }
+}
+
+/**
+ * Resolves a base access token for a Workload Identity Federation
+ * ("external_account") ADC credential file — see this file's header for
+ * exactly which shape is supported (URL-sourced, JSON format; e.g.
+ * `google-github-actions/auth`'s GitHub Actions output). Two network
+ * calls, in order: (1) fetch a fresh subject token from
+ * `credential_source.url` (never cached — GitHub's OIDC token is only
+ * valid briefly), (2) RFC 8693 token exchange against the file's own
+ * `token_url` (Google's STS endpoint) for a token scoped to `scope`,
+ * representing the FEDERATED identity itself (see google-auth.js's
+ * header on why that identity still needs
+ * GOOGLE_IMPERSONATE_SERVICE_ACCOUNT to reach the target service
+ * account). Never thrown; degrades to {skipped:true, reason}. Neither
+ * the fetched subject token nor any request header is ever included in
+ * the returned result.
+ * @param {object} credential - a parsed "external_account" ADC credential file
+ * @param {string} scope - the OAuth scope the exchanged token should carry
+ * @param {function} [fetchImpl] - injectable for tests
+ */
+async function exchangeExternalAccountToken(credential, scope, fetchImpl) {
+  const source = credential.credential_source;
+  if (!source || !source.url) {
+    return {
+      skipped: true,
+      reason:
+        'ADC credential file is a Workload Identity Federation ("external_account") config with no URL-sourced credential_source — only that shape (e.g. GitHub Actions OIDC, as written by google-github-actions/auth) is supported',
+    };
+  }
+  if (!credential.token_url || !credential.audience) {
+    return { skipped: true, reason: 'ADC credential file ("external_account") is missing a required "token_url"/"audience" field' };
+  }
+  if (!scope) {
+    return { skipped: true, reason: 'ADC (external_account) token exchange requires an OAuth scope, none was requested' };
+  }
+
+  const subject = await fetchExternalAccountSubjectToken(source, fetchImpl);
+  if (subject.error) {
+    return { skipped: true, reason: `ADC (external_account) ${subject.error}` };
+  }
+
+  const f = fetchImpl || fetch;
+  try {
+    const res = await f(credential.token_url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: STS_GRANT_TYPE,
+        audience: credential.audience,
+        scope,
+        requested_token_type: STS_REQUESTED_TOKEN_TYPE,
+        subject_token: subject.token,
+        subject_token_type: credential.subject_token_type || "urn:ietf:params:oauth:token-type:jwt",
+      }).toString(),
+    });
+    const body = await res.json();
+    if (!res.ok || !body || !body.access_token) {
+      const reason = (body && (body.error_description || body.error)) || `HTTP ${res.status}`;
+      return { skipped: true, reason: `ADC (external_account) STS token exchange failed: ${reason}` };
+    }
+    return { skipped: false, accessToken: body.access_token, expiresInSeconds: body.expires_in || 3600, source: "adc-external-account" };
+  } catch (e) {
+    return { skipped: true, reason: `ADC (external_account) STS token exchange error: ${e && e.message ? e.message : String(e)}` };
+  }
+}
+
 async function fetchMetadataServerToken(scope, fetchImpl) {
   const f = fetchImpl || fetch;
   try {
@@ -168,11 +285,7 @@ async function getAdcAccessToken(scope, options = {}) {
       return signAndExchangeServiceAccountKey(credential, scope, fetchImpl);
     }
     if (credential.type === "external_account") {
-      return {
-        skipped: true,
-        reason:
-          'ADC credential file is a Workload Identity Federation ("external_account") config — not yet supported by this agent (see agent/README.md\'s Phase 6 auth-hardening section for the planned upgrade path)',
-      };
+      return exchangeExternalAccountToken(credential, scope, fetchImpl);
     }
     return { skipped: true, reason: `ADC credential file at "${filePath}" has an unrecognized type "${credential && credential.type}"` };
   }

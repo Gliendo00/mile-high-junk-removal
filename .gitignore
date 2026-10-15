@@ -7,3 +7,9 @@ node_modules
 # Site Improvement Agent — per-machine run lock, never committed (see
 # agent/lib/run-lock.js's header).
 agent/history/.run.lock
+
+# google-github-actions/auth writes the Workload Identity Federation
+# credential file here during a GitHub Actions run (GOOGLE_APPLICATION_
+# CREDENTIALS) — never committed, defense-in-depth alongside the
+# workflow's own safe-commit allowlist (.github/scripts/safe-commit.js).
+gha-creds-*.json

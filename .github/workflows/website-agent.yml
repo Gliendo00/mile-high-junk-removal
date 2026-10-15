@@ -1,0 +1,148 @@
+name: Website Agent — unattended runner
+
+# Phase 7 — permanent unattended execution path for the ALREADY-BUILT,
+# already-deployed Website Agent (agent/cli.js). This workflow does not
+# change the Agent's decision logic, audits, or dashboard in any way —
+# it only gives the existing `node agent/cli.js --daily`/`--weekly`
+# deterministic pass a secure, scheduled-capable place to run.
+#
+# DELIBERATELY manual-dispatch-only for now (see "on:" below) — no
+# `schedule:` trigger exists in this file yet. Enabling a recurring
+# cadence is a separate, later, explicitly-authorized change; see
+# agent/README.md §13 for the originally-recommended cadence (daily
+# 04:00 America/Denver, weekly Sunday 04:00 America/Denver) once that
+# step is taken.
+#
+# Mutation stays OFF: this workflow never passes --apply-safe, so it can
+# never write to the public site's own HTML/sitemap/robots/vercel.json —
+# only the two Agent-artifact files .github/scripts/safe-commit.js
+# allowlists (agent/history/log.ndjson, and, on weekly runs,
+# agent/history/research-rotation-state.json) are ever committed back.
+#
+# If a run comes back `research_pending` (a finding needs external
+# research — see agent/README.md §5-8), this workflow does NOT attempt
+# to resume it: there is no secure, non-interactive way for a GitHub
+# Actions job to perform the Claude-driven research step the existing
+# architecture relies on (see agent/README.md §13's own comparison —
+# the scheduled-Claude-session model, not this runner, owns that half of
+# the lifecycle). The run is still persisted honestly as
+# `research_pending`; the existing orchestrator resumes it later via
+# `node agent/cli.js --resume=<runId>`, same as today.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_type:
+        description: "Which Agent run to execute"
+        type: choice
+        options:
+          - daily
+          - weekly
+        default: daily
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  # ONE group for the whole workflow — daily and weekly share it on
+  # purpose (not keyed by run_type). Both read/write the same
+  # agent/history/log.ndjson and take the same agent/lib/run-lock.js
+  # lock FILE, but that lock only protects within a single checkout;
+  # two separate GitHub-hosted runner VMs have no shared filesystem, so
+  # the actual "never let Daily and Weekly race" guarantee has to come
+  # from here. `cancel-in-progress: false` queues a second dispatch
+  # instead of cancelling an in-progress run mid-pipeline (which could
+  # leave an uncommitted/partial history entry).
+  group: website-agent-runner
+  cancel-in-progress: false
+
+jobs:
+  run-agent:
+    name: Run Website Agent (${{ inputs.run_type }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required Supabase configuration
+        # The brief for this permanent runner: silently skipping proposal
+        # sync is no longer acceptable (it was fine for earlier phases'
+        # local dry-runs). Fail loudly, before Node even starts, rather
+        # than let agent/lib/proposals-sync.js degrade to its normal
+        # (otherwise correct) {skipped:true} behavior unnoticed. Never
+        # echoes either value.
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
+            echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured. This permanent runner requires both so CRM proposal sync is never silently skipped. See the setup documentation in the workflow run summary / PR description."
+            exit 1
+          fi
+
+      - name: Verify required Google Cloud configuration
+        run: |
+          if [ -z "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER repository/environment variable is not configured (the Workload Identity Federation provider resource name)."
+            exit 1
+          fi
+          if [ -z "${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}" ]; then
+            echo "::error::GOOGLE_IMPERSONATE_SERVICE_ACCOUNT repository/environment variable is not configured."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # Deliberately NOT impersonating a service account here (no
+          # `service_account:` input) — that would mint one broad,
+          # fixed-scope token for the whole job, which Search Console/
+          # GA4 don't accept anyway (they need their own specific
+          # webmasters.readonly/analytics.readonly scopes, minted
+          # per-call). This step only establishes the FEDERATED base
+          # identity; agent/lib/google-auth.js's existing impersonation
+          # tier (GOOGLE_IMPERSONATE_SERVICE_ACCOUNT below) does the
+          # actual, scope-specific impersonation — exactly the same
+          # mechanism already used for local/human ADC. Avoids the
+          # redundant-impersonation setup the brief asked to avoid.
+
+      - name: Run Website Agent (${{ inputs.run_type }})
+        run: node agent/cli.js "--${RUN_TYPE}" --json
+        env:
+          RUN_TYPE: ${{ inputs.run_type }}
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+
+      - name: Persist Agent artifacts (safe-commit)
+        # Runs even if the step above failed: runner.js (see its own
+        # header) still persists an honest "failed" record to
+        # agent/history/log.ndjson BEFORE re-throwing, and that failure
+        # record is itself a legitimate Agent artifact worth keeping —
+        # see .github/scripts/safe-commit.js for the actual allowlist/
+        # credential-scan logic (also independently unit- and
+        # integration-tested — tests/github-actions-safe-commit.test.js).
+        if: always()
+        run: |
+          node .github/scripts/safe-commit.js "chore(agent): ${{ inputs.run_type }} run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Push to main
+        # A no-op ("Everything up-to-date") whenever safe-commit made no
+        # commit — always safe to run. Never force-pushed: if `main` has
+        # moved on since checkout, this fails loudly rather than
+        # overwriting anything, same "fail clearly, don't guess" posture
+        # as the rest of this workflow.
+        if: always()
+        run: git push origin HEAD:main

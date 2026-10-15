@@ -16,9 +16,16 @@
 //      google-impersonation.js's generateAccessToken() for a short-lived
 //      token scoped to EXACTLY what was requested. No key file, ever —
 //      satisfies org policy iam.disableServiceAccountKeyCreation by
-//      construction. This is the path BOTH a human on this Windows
-//      machine (via one-time `gcloud auth application-default login`)
-//      and an eventual unattended orchestrator use.
+//      construction. This is the path a human on this Windows machine
+//      (via one-time `gcloud auth application-default login`) uses, AND
+//      the path the unattended GitHub Actions runner uses: there, the
+//      "base identity" is a Workload Identity Federation credential
+//      (google-adc.js's "external_account" branch — a GitHub OIDC token
+//      exchanged for a federated GCP identity via STS, written to disk
+//      by google-github-actions/auth, never a Google credential at
+//      rest). Either way, this module's own logic is unchanged — it
+//      just asks google-adc.js for a cloud-platform-scoped base token
+//      and impersonates from there, same as a human's refresh token.
 //   2. DIRECT ADC (keyless, narrower applicability) — no impersonation
 //      configured, but an ADC credential FILE is present
 //      (GOOGLE_APPLICATION_CREDENTIALS, or the well-known gcloud path).

@@ -2308,3 +2308,117 @@ See the final report's own file list and commit SHA.
    orchestrating session itself, not something a Node test can
    meaningfully simulate), but the first real scheduled run will be the
    first true end-to-end proof.
+
+---
+
+# Phase 7 — GitHub Actions unattended runner (manual-dispatch only)
+
+A secure, GitHub-Actions-hosted execution path for the already-built,
+already-deployed Agent — `.github/workflows/website-agent.yml` can run
+`node agent/cli.js --daily --json` or `--weekly --json` unattended. This
+phase builds and validates the runner infrastructure; it deliberately
+does **not** enable a recurring schedule (no `schedule:` trigger exists
+in the workflow file) — `workflow_dispatch` only, until explicitly
+authorized.
+
+**Nothing about the Agent itself changed** — no new providers, no
+decision-logic changes, no dashboard changes. The one functional code
+change is in the auth layer, and it was already the documented upgrade
+path (§3A/§3B above, and point 7 of Phase 6's "Remaining risks"):
+`agent/lib/google-adc.js` now implements the `"external_account"`
+(Workload Identity Federation) branch that was previously an honest
+"not yet supported" — specifically the one concrete shape
+`google-github-actions/auth` writes for GitHub Actions (a URL-sourced
+credential, JSON format). It fetches a fresh GitHub OIDC subject token
+and exchanges it via RFC 8693 token exchange (Google's STS endpoint)
+for a `cloud-platform`-scoped base token — exactly the same "base
+identity" role a human's `gcloud auth application-default login`
+refresh token already played. `agent/lib/google-auth.js`'s tier-1
+impersonation logic is completely unchanged: it still calls
+`getAdcAccessToken()` for a base token, then
+`google-impersonation.js`'s `generateAccessToken()` to mint the actual
+scope-specific (`webmasters.readonly`/`analytics.readonly`) token for
+`mile-high-site-agent@...`. **`GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`
+remains necessary** — the GitHub auth action is deliberately configured
+WITHOUT its own `service_account:` impersonation input, so there is
+exactly one impersonation step, not two.
+
+## Workflow architecture
+
+`.github/workflows/website-agent.yml`:
+checkout → fail-fast config checks (Supabase secrets, WIF
+provider/impersonation vars) → Node 24 + `npm ci` → `google-github-
+actions/auth@v2` (WIF, base identity only) → `node agent/cli.js
+--daily|--weekly --json` → `.github/scripts/safe-commit.js` (`if:
+always()`) → `git push origin HEAD:main`. `permissions: {contents:
+write, id-token: write}` only (a non-empty `permissions:` map implies
+every other scope is `none`). One `concurrency` group
+(`website-agent-runner`, `cancel-in-progress: false`) covers BOTH daily
+and weekly, since they share one history file/lock and two GitHub-hosted
+runners have no shared filesystem for `agent/lib/run-lock.js`'s own file
+lock to protect against each other.
+
+## Safe persistence back to `main`
+
+`.github/scripts/safe-commit.js` — not a generic "commit whatever
+changed" helper. With mutation disabled (no `--apply-safe`), the ONLY
+files `--daily`/`--weekly` ever write are `agent/history/log.ndjson`
+(every run) and `agent/history/research-rotation-state.json` (weekly
+only); the script's allowlist is exactly those two paths. Any other
+changed/untracked path (a website source file, an unexpected new file,
+a stray `agent/research/**` artifact) makes it refuse to commit
+anything and fail the job loudly. Every allowed file's new content is
+also scanned for credential-shaped strings (PEM blocks,
+`refresh_token`/`client_secret` fields, a live `SUPABASE_SECRET_KEY`
+value, Google/Stripe token shapes, an `external_account` credential
+blob) before committing — never printing the matched text. Runs with
+`if: always()` so a genuinely failed Agent run (runner.js's own
+honest "failed" history record — see this file's failure-safety
+sections) still gets persisted. Unit- and real-temp-git-repo-integration
+tested by `tests/github-actions-safe-commit.test.js`.
+
+## `research_pending` handling
+
+This runner does the deterministic pass only. If a run comes back
+`research_pending`, it is persisted exactly as such (same as any local
+run) and the workflow does nothing further to resolve it — no Claude
+API key, no other AI provider, no attempt to fake/bypass the research
+step was added. The existing scheduled-Claude-session orchestrator
+(§5/§13 above) still owns resuming it via `node agent/cli.js
+--resume=<runId>`, unchanged.
+
+## Tests
+
+New: `tests/github-actions-safe-commit.test.js` (15 cases — pure
+parsing/classification/leak-scan functions, plus a real temp-git-repo
+end-to-end CLI check), `tests/github-actions-workflow.test.js` (14
+structural/regex invariant checks against the workflow YAML itself: no
+schedule/cron, exact two permissions, concurrency group, no
+`--apply-safe`, fail-fast secret/var checks ordered before the Agent
+runs, no `git add -A`/`git commit` in the workflow, `if: always()` on
+the persistence step, Node 24). Modified: `tests/agent-google-adc.test.js`
+(replaced the old "external_account not yet supported" test with real
+coverage of the implemented URL-sourced exchange, a subject-token-
+fetch-failure case, an STS-exchange-failure case, and a file-sourced-
+not-supported case). Full repository suite: **104/105 pass** — the same
+single pre-existing, unrelated failure as every prior phase
+(`phase3c-batch5-intake-ui.test.js`, confirmed via `git stash` against
+unmodified `main` to predate this work).
+
+## Remaining risks / open questions (Phase 7)
+
+1. Not yet exercised against a REAL GitHub Actions run (no Workload
+   Identity Pool/provider exists yet — Rocky's manual setup is a
+   prerequisite). Everything Google-auth-related is covered by fixture-
+   injected `fetchImpl` tests, same rigor as every other tier, but a
+   real end-to-end WIF exchange is still unproven until the first
+   manual dispatch.
+2. `git push origin HEAD:main` fails loudly (not resolved/retried) if
+   `main` moved on since checkout — deliberate (no rebase, no force
+   push), but means a run that races a human push just fails and must
+   be re-dispatched; acceptable at today's manual-only, low-frequency
+   cadence.
+3. Scheduling is still fully OFF, per explicit instruction — enabling it
+   is a separate, later, explicitly-authorized step (just adding a
+   `schedule:` trigger to the existing workflow; no other change
+   needed).

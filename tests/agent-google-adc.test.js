@@ -1,8 +1,11 @@
-// Site Improvement Agent, Phase 6 auth-hardening — tests for
-// agent/lib/google-adc.js (Application Default Credentials loader: a
-// credential FILE — "authorized_user" from `gcloud auth
-// application-default login`, or a "service_account" key file — or, as
-// a last resort, the GCE/Cloud Run metadata server). No real network,
+// Site Improvement Agent, Phase 6 auth-hardening (+ Phase 7 GitHub
+// Actions runner follow-up) — tests for agent/lib/google-adc.js
+// (Application Default Credentials loader: a credential FILE —
+// "authorized_user" from `gcloud auth application-default login`, a
+// "service_account" key file, or a URL-sourced "external_account"
+// Workload Identity Federation config (e.g. GitHub Actions OIDC, as
+// written by google-github-actions/auth) — or, as a last resort, the
+// GCE/Cloud Run metadata server). No real network,
 // no real gcloud install required: every fetch is injected, and every
 // "file" is a throwaway fixture written to a temp directory and pointed
 // at via GOOGLE_APPLICATION_CREDENTIALS (never this machine's real
@@ -121,13 +124,98 @@ async function main() {
     assert.strictEqual(JSON.stringify(result).includes(credential.private_key), false);
   });
 
-  await test('getAdcAccessToken() refuses an "external_account" (Workload Identity Federation) file honestly — not yet supported, no network attempted', async () => {
-    writeAdcFixture("external-account.json", { type: "external_account", audience: "//iam.googleapis.com/...", token_url: "https://sts.googleapis.com/v1/token" });
+  function githubActionsExternalAccountFixture() {
+    return {
+      type: "external_account",
+      audience: "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider",
+      subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+      token_url: "https://sts.googleapis.com/v1/token",
+      credential_source: {
+        url: "https://token.actions.githubusercontent.com/.well-known/fake?audience=...",
+        headers: { Authorization: "Bearer GH-ACTIONS-RUNTIME-TOKEN-DO-NOT-LEAK" },
+        format: { type: "json", subject_token_field_name: "value" },
+      },
+    };
+  }
+
+  await test('getAdcAccessToken() resolves a URL-sourced "external_account" (Workload Identity Federation / GitHub Actions OIDC) file via subject-token fetch + STS exchange, and never echoes the subject token/bearer header', async () => {
+    writeAdcFixture("external-account.json", githubActionsExternalAccountFixture());
+    const { getAdcAccessToken } = freshModule();
+
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, init });
+      if (String(url).startsWith("https://token.actions.githubusercontent.com/")) {
+        assert.strictEqual(init.headers.Authorization, "Bearer GH-ACTIONS-RUNTIME-TOKEN-DO-NOT-LEAK");
+        return { ok: true, status: 200, json: async () => ({ value: "GITHUB-OIDC-JWT-DO-NOT-LEAK" }) };
+      }
+      if (url === "https://sts.googleapis.com/v1/token") {
+        const params = new URLSearchParams(init.body);
+        assert.strictEqual(params.get("grant_type"), "urn:ietf:params:oauth:grant-type:token-exchange");
+        assert.strictEqual(params.get("audience"), "//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider");
+        assert.strictEqual(params.get("scope"), "https://www.googleapis.com/auth/cloud-platform");
+        assert.strictEqual(params.get("subject_token"), "GITHUB-OIDC-JWT-DO-NOT-LEAK");
+        assert.strictEqual(params.get("subject_token_type"), "urn:ietf:params:oauth:token-type:jwt");
+        return { ok: true, status: 200, json: async () => ({ access_token: "fake-federated-token", expires_in: 3599 }) };
+      }
+      throw new Error(`unexpected fetch to ${url}`);
+    };
+
+    const result = await getAdcAccessToken("https://www.googleapis.com/auth/cloud-platform", { fetchImpl });
+    assert.strictEqual(result.skipped, false);
+    assert.strictEqual(result.accessToken, "fake-federated-token");
+    assert.strictEqual(result.source, "adc-external-account");
+    assert.strictEqual(calls.length, 2);
+
+    const resultJson = JSON.stringify(result);
+    assert.strictEqual(resultJson.includes("GITHUB-OIDC-JWT-DO-NOT-LEAK"), false, "the GitHub OIDC subject token must never appear in the returned result");
+    assert.strictEqual(resultJson.includes("GH-ACTIONS-RUNTIME-TOKEN-DO-NOT-LEAK"), false, "the bearer header used to fetch it must never appear in the returned result");
+  });
+
+  await test('getAdcAccessToken() on "external_account" degrades honestly (no STS attempt) when the subject-token fetch itself fails', async () => {
+    writeAdcFixture("external-account-subject-fail.json", githubActionsExternalAccountFixture());
+    const { getAdcAccessToken } = freshModule();
+    let stsCalled = false;
+    const fetchImpl = async (url) => {
+      if (String(url).startsWith("https://token.actions.githubusercontent.com/")) {
+        return { ok: false, status: 401, json: async () => ({}) };
+      }
+      stsCalled = true;
+      throw new Error("STS should never be reached if the subject-token fetch failed");
+    };
+    const result = await getAdcAccessToken("https://www.googleapis.com/auth/cloud-platform", { fetchImpl });
+    assert.strictEqual(result.skipped, true);
+    assert.ok(/subject-token request failed/.test(result.reason));
+    assert.strictEqual(stsCalled, false);
+  });
+
+  await test('getAdcAccessToken() on "external_account" degrades honestly when the STS token exchange itself fails', async () => {
+    writeAdcFixture("external-account-sts-fail.json", githubActionsExternalAccountFixture());
+    const { getAdcAccessToken } = freshModule();
+    const fetchImpl = async (url) => {
+      if (String(url).startsWith("https://token.actions.githubusercontent.com/")) {
+        return { ok: true, status: 200, json: async () => ({ value: "a-jwt" }) };
+      }
+      return { ok: false, status: 400, json: async () => ({ error: "invalid_target", error_description: "audience mismatch" }) };
+    };
+    const result = await getAdcAccessToken("https://www.googleapis.com/auth/cloud-platform", { fetchImpl });
+    assert.strictEqual(result.skipped, true);
+    assert.ok(/STS token exchange failed/.test(result.reason));
+    assert.ok(/audience mismatch/.test(result.reason));
+  });
+
+  await test('getAdcAccessToken() refuses a file-sourced "external_account" config honestly — only URL-sourced is supported, no network attempted', async () => {
+    writeAdcFixture("external-account-file-sourced.json", {
+      type: "external_account",
+      audience: "//iam.googleapis.com/...",
+      token_url: "https://sts.googleapis.com/v1/token",
+      credential_source: { file: "/some/local/token/file" },
+    });
     const { getAdcAccessToken } = freshModule();
     let called = false;
     const result = await getAdcAccessToken("some-scope", { fetchImpl: () => { called = true; } });
     assert.strictEqual(result.skipped, true);
-    assert.ok(/Workload Identity Federation|not yet supported/i.test(result.reason));
+    assert.ok(/URL-sourced/i.test(result.reason));
     assert.strictEqual(called, false);
   });
 
