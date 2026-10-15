@@ -80,9 +80,14 @@ test("admin-chrome.js's currentSectionKey() marks /admin/website-agent/ (and its
 // see this pass's own commit for the full writeup.
 // =======================================================================
 
-test("final polish: top metrics are split into CURRENT STATUS (latest-run/live numbers) and a separately labeled ALL-TIME TOTALS group, never one undifferentiated row", () => {
-  assert.ok(waHtml.includes("CURRENT STATUS"));
-  assert.ok(waHtml.includes("ALL-TIME TOTALS"));
+test("final polish: top metrics are split into a Current Status group (latest-run/live numbers) and a separately labeled All-Time Totals group, never one undifferentiated row", () => {
+  // Visual redesign pass (2026-10): section-label markup is now normal-
+  // case text ("Current Status"/"All-Time Totals") with CSS doing the
+  // uppercase display transform (text-transform: uppercase in admin.css),
+  // same convention as .admin-home-metric-label elsewhere in this app —
+  // so this checks the actual source text, not the rendered case.
+  assert.ok(waHtml.includes("Current Status"));
+  assert.ok(waHtml.includes("All-Time Totals"));
   assert.ok(waHtml.includes('id="wa-metrics-current"'));
   assert.ok(waHtml.includes('id="wa-metrics-lifetime"'));
   // Pages Monitored / Needs Review are current-state; the 4 cumulative
@@ -90,7 +95,7 @@ test("final polish: top metrics are split into CURRENT STATUS (latest-run/live n
   assert.ok(/currentWrap\.appendChild\(buildMetricCard\('Pages Monitored'/.test(waJs));
   assert.ok(/currentWrap\.appendChild\(buildMetricCard\('Needs Review'/.test(waJs));
   assert.ok(/lifetimeWrap\.appendChild\(buildMetricCard\('Findings'/.test(waJs));
-  assert.ok(!/currentWrap\.appendChild\(buildMetricCard\('Findings'/.test(waJs), "Findings is a lifetime total, must not render into the CURRENT STATUS group");
+  assert.ok(!/currentWrap\.appendChild\(buildMetricCard\('Findings'/.test(waJs), "Findings is a lifetime total, must not render into the Current Status group");
 });
 
 test("final polish: the needs-attention reason line reuses the real healthSummary.text (no new/invented data) and hides for healthy/not-connected", () => {
@@ -104,11 +109,12 @@ test("final polish: PROPOSAL SYNC label is unchanged (renaming it to CRM SYNC wo
   assert.ok(!waJs.includes("'CRM SYNC'"));
 });
 
-test("final polish: the dark command-center background wraps only the loading/not-connected/body states (.admin-wa-console), not .admin-main's own bottom-nav-clearance padding — the fix for the empty dark slab below Agent Activity", () => {
-  assert.ok(waHtml.includes('class="admin-wa-console"'));
+test("visual redesign (2026-10): the dark terminal-console wrapper is gone — the page uses the same light-card chrome as every other admin page, flowing directly in .admin-main with no separate dark/bordered box (so the old 'empty dark slab below Agent Activity' bug class can't recur, since there's no dark background left to leave a slab)", () => {
+  assert.ok(!/class="[^"]*\badmin-wa-console\b/.test(waHtml), "the dark command-center wrapper should be removed, not just restyled");
+  assert.ok(waHtml.includes('class="admin-list-heading admin-wa-heading"'), "the page title should reuse the shared .admin-list-heading component, same as every other admin page");
   const adminCss = fs.readFileSync(path.join(__dirname, "..", "admin", "admin.css"), "utf8");
-  assert.ok(/\.admin-wa-console\s*\{[^}]*background:\s*#0d0e0a/.test(adminCss), "the dark background must be on .admin-wa-console");
-  assert.ok(!/\.admin-wa-main\s*\{[^}]*background:\s*#0d0e0a/.test(adminCss), ".admin-wa-main itself must stay transparent so the bottom-nav-clearance padding shows as ordinary page background");
+  assert.ok(!/\.admin-wa-console\s*\{/.test(adminCss), "no .admin-wa-console rule should remain in admin.css");
+  assert.ok(/\.admin-wa-panel\s*\{[^}]*background:\s*#fff/.test(adminCss), "Website Agent panels should be white cards like .admin-home-card/.admin-proposal-card elsewhere, not dark");
 });
 
 if (process.exitCode) {

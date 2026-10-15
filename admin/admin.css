@@ -4045,98 +4045,88 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 
 /* ===========================================================================
    Website Agent dashboard (/admin/website-agent/) — CRM UI-organization
-   pass around the existing Site Improvement Agent. Deliberately more
-   "technical monitoring console" than the rest of this light-background
-   CRM: a dark charcoal/near-black page with neon-green + the CRM's own
-   brand-green as accents (same neon #39ff14 the login page already uses
-   — see .admin-login-card's own header — so this isn't a brand-new
-   palette, just the second place in this app that commits to it). Still
-   built from the SAME component shapes (card radius/spacing, status-
-   badge pills, buttons) as every other admin page — the Approval Queue
-   cards in particular deliberately keep the existing light
-   .admin-proposal-card look unchanged (same component as
-   admin/agent-proposals/), so a review card reads as "a real form", not
-   console chrome. Namespaced admin-wa-* throughout to avoid collisions.
-   =========================================================================== */
-/* Final-polish fix: the dark background lives on .admin-wa-console (which
-   wraps only the loading/not-connected/body states — see
-   admin/website-agent/index.html), NOT on .admin-wa-main itself.
-   .admin-main's own bottom padding (reserved to clear the fixed mobile
-   bottom nav) sits OUTSIDE this box, so it reads as ordinary page margin
-   again instead of a tall empty dark slab under the last section. */
-.admin-wa-console {
-  background: #0d0e0a;
-  color: #e9ebe4;
-  border-radius: var(--admin-radius-lg);
-  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.3);
-}
-.admin-wa-console .admin-loading,
-.admin-wa-console .admin-empty {
-  color: rgba(233, 235, 228, 0.7);
-}
+   pass around the existing Site Improvement Agent.
 
-.admin-wa-header {
-  background: #000;
-  border: 1px solid rgba(57, 255, 20, 0.35);
-  border-radius: var(--admin-radius-lg);
-  padding: 16px;
-  margin-bottom: 18px;
-}
-.admin-wa-header-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+   Visual redesign (2026-10): previously a dark charcoal/near-black
+   "terminal console" page with neon-green borders on nearly everything
+   and heavy monospace typography throughout — it read as a separate app
+   embedded inside the CRM rather than a native page. Rebuilt here to
+   match the SAME light-card component language every other admin page
+   already uses: .admin-list-heading for the page title, white
+   .admin-wa-panel/.admin-wa-metric-card cards (same shell as
+   .admin-home-card/.admin-home-metric-card on /admin/home/), and the
+   SAME solid status-color tokens already defined for
+   .admin-status-badge/.admin-report-row-outcome-*/.admin-proposal-status-*
+   elsewhere in this file (healthy=#2f6f13 brand green,
+   needs-attention/proposed=#b45309 amber, failed/rejected=#b91c1c red,
+   research-pending=#1d4ed8 blue) rather than inventing a new palette.
+   Brand green is now an ACCENT (status dots, the brand-green "healthy"
+   state, link text) rather than the default color of every border/
+   heading/number. Monospace is kept ONLY on the small technical labels
+   where it genuinely reads as a system/status label (section labels,
+   the status pill, connection chips) — every KPI number, heading, and
+   body line uses the CRM's normal type (var(--font-heading) /
+   var(--font-body)). No outer bordered/dark wrapper anymore — the page
+   flows directly inside .admin-main like every other admin page, so it
+   uses the same content width and the same zoomed-out behavior as
+   Home/Leads/etc. instead of a second, narrower box floating inside it.
+   The Approval Queue cards still reuse the existing light
+   .admin-proposal-card component unmodified (same as
+   admin/agent-proposals/) — it now finally sits on a matching light
+   page instead of inside a dark box. Namespaced admin-wa-* throughout
+   to avoid collisions; every id below is unchanged, so website-agent.js
+   needed no changes for this pass.
+   =========================================================================== */
+
+.admin-wa-heading { margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
+/* ../styles.css (the public marketing site's own stylesheet, shared by
+   every admin page) sets a mobile `h1 { font-size: 34px !important; }`
+   (<=560px, meant for its own hero text) that otherwise overrides
+   .admin-list-heading h1's 22px here — invisible before this pass since
+   the old .admin-wa-title was already close to 30px, but this page's
+   deliberately compact title needs its own !important to actually win
+   at mobile widths. Scoped to this page's heading only. */
+.admin-wa-heading h1 { font-size: 22px !important; }
 .admin-wa-eyebrow {
   font-family: 'Courier New', Consolas, monospace;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.12em;
-  color: rgba(57, 255, 20, 0.75);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600, #82796a);
   margin-bottom: 2px;
 }
-.admin-wa-title {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-style: italic;
-  font-size: 30px;
-  color: #39ff14;
-  letter-spacing: 0.01em;
-  margin: 0;
-}
+
 .admin-wa-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
+  gap: 7px;
+  padding: 4px 11px;
   border-radius: var(--admin-radius-full);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-neutral-300, #dcd3c4);
+  background: #fff;
   font-family: 'Courier New', Consolas, monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  color: #e9ebe4;
+  letter-spacing: 0.04em;
+  color: var(--color-text, #201e1d);
   white-space: nowrap;
 }
 .admin-wa-status-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex: none;
   background: #6b7280;
-  box-shadow: 0 0 6px rgba(107, 114, 128, 0.8);
 }
-.admin-wa-status-dot-healthy { background: #39ff14; box-shadow: 0 0 6px rgba(57, 255, 20, 0.8); }
-.admin-wa-status-dot-needs-attention { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.8); }
-.admin-wa-status-dot-failed { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.8); }
-.admin-wa-status-dot-research-pending { background: #3b82f6; box-shadow: 0 0 6px rgba(59, 130, 246, 0.8); }
-.admin-wa-status-pill-healthy { border-color: rgba(57, 255, 20, 0.4); }
-.admin-wa-status-pill-needs-attention { border-color: rgba(245, 158, 11, 0.4); }
-.admin-wa-status-pill-failed { border-color: rgba(239, 68, 68, 0.4); }
-.admin-wa-status-pill-research-pending { border-color: rgba(59, 130, 246, 0.4); }
+.admin-wa-status-dot-healthy { background: #2f6f13; }
+.admin-wa-status-dot-needs-attention { background: #b45309; }
+.admin-wa-status-dot-failed { background: #b91c1c; }
+.admin-wa-status-dot-research-pending { background: #1d4ed8; }
+.admin-wa-status-pill-healthy { border-color: rgba(47, 111, 19, 0.35); }
+.admin-wa-status-pill-needs-attention { border-color: rgba(180, 83, 9, 0.35); }
+.admin-wa-status-pill-failed { border-color: rgba(185, 28, 28, 0.35); }
+.admin-wa-status-pill-research-pending { border-color: rgba(29, 78, 216, 0.35); }
 
 /* Final-polish addition: the real reason behind a non-healthy status,
    right under the pill — reuses the SAME healthSummary.text
@@ -4146,13 +4136,14 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  gap: 5px;
+  flex: none;
 }
 .admin-wa-status-reason {
   font-family: var(--font-body);
   font-size: 12px;
   font-weight: 600;
-  color: rgba(233, 235, 228, 0.75);
+  color: var(--color-neutral-600, #82796a);
   text-align: right;
   max-width: 260px;
 }
@@ -4161,81 +4152,77 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   .admin-wa-status-reason { text-align: left; max-width: none; }
 }
 
+/* Connection status — lowest-priority signal on the page, so these are
+   deliberately tiny, muted, outline-only chips (no fill, no glow) that
+   never compete with Needs Your Review or the KPI cards below them. */
 .admin-wa-integrations {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 6px;
+  margin-bottom: 20px;
 }
 .admin-wa-integration-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 5px;
+  padding: 3px 9px;
   border-radius: var(--admin-radius-full);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  font-family: 'Courier New', Consolas, monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: rgba(233, 235, 228, 0.6);
-}
-.admin-wa-integration-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #6b7280;
-}
-.admin-wa-integration-chip.is-connected { color: #e9ebe4; border-color: rgba(57, 255, 20, 0.3); }
-.admin-wa-integration-chip.is-connected .admin-wa-integration-dot { background: #39ff14; box-shadow: 0 0 4px rgba(57, 255, 20, 0.8); }
-
-.admin-wa-metrics {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-/* Final-polish reorg: CURRENT STATUS (pages monitored / needs review —
-   both latest-run/live numbers) always gets its own 2-up row, kept
-   visually distinct from the 4-up ALL-TIME TOTALS row below it so the two
-   timeframes can never be confused for one undifferentiated metrics wall. */
-.admin-wa-metrics-current { grid-template-columns: repeat(2, 1fr); }
-.admin-wa-metrics-lifetime { grid-template-columns: repeat(2, 1fr); }
-@media (min-width: 860px) {
-  .admin-wa-metrics-lifetime { grid-template-columns: repeat(4, 1fr); }
-}
-.admin-wa-metric-card {
-  background: #16170f;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: 2px solid rgba(57, 255, 20, 0.4);
-  border-radius: var(--admin-radius-md);
-  padding: 12px 10px;
-  text-align: center;
-}
-.admin-wa-metric-value {
-  font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 24px;
-  color: #39ff14;
-}
-.admin-wa-metric-label {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
   font-family: 'Courier New', Consolas, monospace;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  color: var(--color-neutral-600, #82796a);
+}
+.admin-wa-integration-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a3a79a;
+}
+.admin-wa-integration-chip.is-connected { color: var(--color-accent-700, #2f6f13); border-color: rgba(47, 111, 19, 0.25); }
+.admin-wa-integration-chip.is-connected .admin-wa-integration-dot { background: var(--color-accent-700, #2f6f13); }
+
+.admin-wa-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.admin-wa-metric-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: var(--admin-radius-lg);
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 13px 14px 12px;
+}
+.admin-wa-metric-value {
+  font-family: var(--font-heading);
+  font-weight: 900;
+  font-style: italic;
+  font-size: 26px;
+  line-height: 1.1;
+  color: var(--color-text, #201e1d);
+}
+.admin-wa-metric-label {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: rgba(233, 235, 228, 0.55);
-  margin-top: 2px;
+  color: var(--color-neutral-600, #82796a);
+  margin-top: 4px;
 }
 
 .admin-wa-section-label {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgba(57, 255, 20, 0.7);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--color-neutral-600, #82796a);
+  border-bottom: 1px solid var(--color-neutral-200, #eee7db);
   padding-bottom: 6px;
   margin: 22px 0 10px;
   display: flex;
@@ -4243,12 +4230,12 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   justify-content: space-between;
   gap: 10px;
 }
-.admin-wa-section-count { color: rgba(233, 235, 228, 0.6); }
+.admin-wa-section-count { color: var(--color-neutral-500, #8ba88e); }
 .admin-wa-more-link {
   font-family: var(--font-body);
   font-weight: 700;
-  font-size: 12px;
-  color: #39ff14;
+  font-size: 12.5px;
+  color: var(--color-accent-700, #2f6f13);
   text-decoration: none;
   display: inline-block;
   margin-top: 10px;
@@ -4257,42 +4244,61 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-wa-more-link-inline { margin-top: 0; text-transform: none; letter-spacing: normal; font-family: var(--font-body); }
 
 .admin-wa-panel {
-  background: #16170f;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #eee7db);
   border-radius: var(--admin-radius-lg);
-  padding: 14px;
+  box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+  padding: 14px 16px;
   margin-bottom: 14px;
 }
 .admin-wa-panel-title {
-  font-family: 'Courier New', Consolas, monospace;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: rgba(233, 235, 228, 0.7);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--color-neutral-700, #4b4438);
   margin-bottom: 8px;
 }
-.admin-wa-muted { color: rgba(233, 235, 228, 0.5); font-size: 12.5px; }
+.admin-wa-muted { color: var(--color-neutral-600, #82796a); font-size: 12.5px; }
+
+/* Needs Your Review — the one section on this page that earns visual
+   priority (explicit "needs attention deserves priority" feedback). A
+   restrained amber top accent (the SAME amber already used for
+   .admin-proposal-status-proposed/.admin-report-row-outcome-needs-
+   attention below) rather than a louder shadow/size change, so it reads
+   as "look here first" even when the queue is empty, without ever
+   looking alarmist. */
+.admin-wa-queue-panel.admin-wa-panel-priority { border-top: 3px solid #b45309; }
+.admin-wa-queue-panel { background: transparent; border: none; box-shadow: none; padding: 0; }
+.admin-wa-panel-priority.admin-wa-queue-panel { padding-top: 14px; }
+.admin-wa-queue-card { margin-bottom: 12px; }
+.admin-wa-empty-note {
+  color: var(--color-neutral-600, #82796a);
+  font-size: 13px;
+  background: #fff;
+  border: 1px dashed var(--color-neutral-300, #dcd3c4);
+  border-radius: var(--admin-radius-lg);
+  padding: 14px;
+  text-align: center;
+}
 
 .admin-wa-schedule-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 10px;
-}
-@media (max-width: 560px) {
-  .admin-wa-schedule-grid { grid-template-columns: 1fr; }
 }
 .admin-wa-schedule-card .admin-wa-schedule-line {
   font-size: 13px;
   margin-bottom: 6px;
-  color: #e9ebe4;
+  color: var(--color-text, #201e1d);
 }
 .admin-wa-schedule-next {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  color: rgba(233, 235, 228, 0.4);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
+  letter-spacing: 0.03em;
+  color: var(--color-neutral-500, #8ba88e);
+  border: 1px dashed var(--color-neutral-300, #dcd3c4);
   border-radius: var(--admin-radius-sm);
   padding: 4px 8px;
   display: inline-block;
@@ -4304,91 +4310,71 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 .admin-wa-latest-run-time {
-  font-family: 'Courier New', Consolas, monospace;
   font-size: 12px;
-  color: rgba(233, 235, 228, 0.6);
+  color: var(--color-neutral-600, #82796a);
 }
 .admin-wa-latest-run-health {
-  font-size: 13px;
+  font-family: var(--font-body);
+  font-size: 13.5px;
   font-weight: 700;
   margin: 0 0 10px;
 }
-.admin-wa-health-text-all-clear { color: #39ff14; }
-.admin-wa-health-text-needs-attention { color: #f59e0b; }
-.admin-wa-health-text-failed { color: #ef4444; }
-.admin-wa-health-text-research-pending { color: #3b82f6; }
+.admin-wa-health-text-all-clear { color: #2f6f13; }
+.admin-wa-health-text-needs-attention { color: #b45309; }
+.admin-wa-health-text-failed { color: #b91c1c; }
+.admin-wa-health-text-research-pending { color: #1d4ed8; }
 .admin-wa-latest-run-stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 8px;
-}
-@media (max-width: 560px) {
-  .admin-wa-latest-run-stats { grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
 }
 .admin-wa-latest-run-stat { text-align: center; }
 .admin-wa-latest-run-stat-value {
   font-family: var(--font-heading);
-  font-weight: 700;
-  font-size: 18px;
-  color: #e9ebe4;
+  font-weight: 900;
+  font-style: italic;
+  font-size: 19px;
+  color: var(--color-text, #201e1d);
 }
 .admin-wa-latest-run-stat-label {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: rgba(233, 235, 228, 0.5);
-}
-
-/* Approval Queue — the panel/section chrome stays dark-console like the
-   rest of this page, but each actual proposal reuses the EXISTING light
-   .admin-proposal-card component (admin/agent-proposals.js's own card),
-   unmodified, so a reviewer sees the identical control surface on both
-   pages. */
-.admin-wa-queue-panel { background: transparent; border: none; padding: 0; }
-.admin-wa-queue-card { margin-bottom: 12px; }
-.admin-wa-empty-note {
-  color: rgba(233, 235, 228, 0.55);
-  font-size: 13px;
-  background: #16170f;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--admin-radius-lg);
-  padding: 14px;
+  color: var(--color-neutral-600, #82796a);
 }
 
 .admin-wa-evidence-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
-}
-@media (max-width: 680px) {
-  .admin-wa-evidence-grid { grid-template-columns: 1fr; }
 }
 .admin-wa-evidence-meta {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 11px;
-  color: rgba(233, 235, 228, 0.55);
+  color: var(--color-neutral-500, #8ba88e);
   margin: 0 0 4px;
 }
 .admin-wa-evidence-context {
   font-size: 12.5px;
-  color: #e9ebe4;
+  color: var(--color-text, #201e1d);
   margin: 0 0 8px;
 }
 .admin-wa-evidence-limitations {
   font-size: 11px;
   font-style: italic;
-  color: rgba(233, 235, 228, 0.45);
+  color: var(--color-neutral-500, #8ba88e);
   margin: 8px 0 4px;
 }
 .admin-wa-evidence-rows {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--color-neutral-100, #f9f4ed);
+  border-bottom: 1px solid var(--color-neutral-100, #f9f4ed);
   padding: 6px 0;
 }
 .admin-wa-evidence-row {
@@ -4397,7 +4383,7 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
-  color: #e9ebe4;
+  color: var(--color-text, #201e1d);
 }
 .admin-wa-evidence-row-key {
   flex: 1 1 auto;
@@ -4405,13 +4391,14 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(233, 235, 228, 0.8);
+  color: var(--color-neutral-700, #4b4438);
 }
 .admin-wa-evidence-row-val {
   flex: none;
   font-family: 'Courier New', Consolas, monospace;
   font-size: 11px;
-  color: #39ff14;
+  font-weight: 700;
+  color: var(--color-accent-700, #2f6f13);
 }
 
 .admin-wa-activity-panel { max-height: 480px; overflow-y: auto; }
@@ -4420,7 +4407,7 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  border-left: 2px solid rgba(255, 255, 255, 0.1);
+  border-left: 2px solid var(--color-neutral-200, #eee7db);
   padding-left: 10px;
 }
 .admin-wa-activity-icon {
@@ -4428,44 +4415,39 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   width: 16px;
   text-align: center;
   font-weight: 800;
-  font-family: 'Courier New', Consolas, monospace;
-  color: rgba(233, 235, 228, 0.5);
+  color: var(--color-neutral-500, #8ba88e);
 }
 .admin-wa-activity-icon-scan-complete,
 .admin-wa-activity-icon-safe-fix,
-.admin-wa-activity-icon-approved { color: #39ff14; }
-.admin-wa-activity-icon-proposal { color: #f59e0b; }
-.admin-wa-activity-icon-research { color: #3b82f6; }
+.admin-wa-activity-icon-approved { color: #2f6f13; }
+.admin-wa-activity-icon-proposal { color: #b45309; }
+.admin-wa-activity-icon-research { color: #1d4ed8; }
 .admin-wa-activity-icon-rejected,
-.admin-wa-activity-icon-error { color: #ef4444; }
-.admin-wa-activity-icon-observation { color: rgba(233, 235, 228, 0.4); }
+.admin-wa-activity-icon-error { color: #b91c1c; }
+.admin-wa-activity-icon-observation { color: var(--color-neutral-400, #c0b6a5); }
 .admin-wa-activity-body { flex: 1 1 auto; min-width: 0; }
 .admin-wa-activity-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .admin-wa-activity-label {
-  font-family: 'Courier New', Consolas, monospace;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: rgba(233, 235, 228, 0.6);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--color-neutral-700, #4b4438);
 }
 .admin-wa-activity-time {
-  font-family: 'Courier New', Consolas, monospace;
-  font-size: 10.5px;
-  color: rgba(233, 235, 228, 0.4);
+  font-size: 11px;
+  color: var(--color-neutral-500, #8ba88e);
   white-space: nowrap;
   flex: none;
 }
 .admin-wa-activity-text {
   font-size: 12.5px;
-  color: #e9ebe4;
+  color: var(--color-text, #201e1d);
   margin-top: 2px;
-}
-
-@media (min-width: 860px) {
-  .admin-wa-title { font-size: 36px; }
 }
