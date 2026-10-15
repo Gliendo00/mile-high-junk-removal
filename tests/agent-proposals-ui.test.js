@@ -54,8 +54,18 @@ test("admin/agent-proposals/index.html loads admin-chrome.js/admin-fetch.js and 
   assert.ok(/never writes anything to the website/i.test(proposalsHtml));
 });
 
-test("admin/home/index.html's connected marketing card links to the proposals review page", () => {
-  assert.ok(homeHtml.includes('href="/admin/agent-proposals/"'));
+// Website Agent dashboard pass — Home's card now links to the consolidated
+// /admin/website-agent/ command-center dashboard (which embeds the
+// approval queue directly, and itself still links on to this exact
+// review page for the full list) rather than linking straight to
+// /admin/agent-proposals/ itself. The approve/reject workflow this page
+// hosts is unchanged — see the file-existence test below and
+// tests/website-agent-dashboard-ui.test.js for the dashboard's own
+// wiring checks.
+test("admin/home/index.html's connected marketing card links to the Website Agent dashboard (which itself still links to proposals review)", () => {
+  assert.ok(homeHtml.includes('href="/admin/website-agent/"'));
+  const waHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "website-agent", "index.html"), "utf8");
+  assert.ok(waHtml.includes('href="/admin/agent-proposals/"'), "the dashboard must still link on to the full proposals review page");
 });
 
 test("Phase 4 hardening: admin/agent-proposals.js states, right at the point of action, that Approve/Reject only records a decision and never changes the website", () => {

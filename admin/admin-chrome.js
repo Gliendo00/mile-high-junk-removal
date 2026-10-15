@@ -42,7 +42,12 @@
     // inline SVG in this app, rather than commissioning a new mascot image
     // for a menu that isn't a real CRM section.
     moreGrid: '<circle cx="6" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.6" fill="currentColor" stroke="none"/><circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="18" cy="18" r="1.6" fill="currentColor" stroke="none"/>',
-    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+    // Website Agent — also no mascot asset, same reasoning as "More" above:
+    // a plain monitor-with-a-pulse-line glyph, same stroke language as
+    // every other non-mascot icon in this file, rather than commissioning
+    // one just for this pass.
+    websiteAgent: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 10l2.5 2.5L12 8l2.5 4.5L17 10"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>'
   };
 
   function icon(name, cls) {
@@ -66,24 +71,42 @@
     return '<img class="' + cls + '" src="' + MASCOT_SRC[key] + '" alt="" width="26" height="26">';
   }
 
+  // A section's nav icon is its mascot image when one exists (MASCOT_SRC),
+  // else a plain inline SVG from ICONS (same dual-support
+  // .admin-sheet-option-icon/.admin-nav-item-icon/.admin-bottom-nav-item-icon
+  // already size both identically — see admin.css) — "More"/"Website
+  // Agent" are the only sections with no mascot asset.
+  var PLAIN_ICON_BY_KEY = { 'website-agent': 'websiteAgent' };
+  function sectionIcon(key, cls) {
+    if (MASCOT_SRC[key]) return mascotIcon(key, cls);
+    return icon(PLAIN_ICON_BY_KEY[key] || 'moreGrid', cls);
+  }
+
   // Section destinations — single source of truth for the desktop nav, the
   // mobile bottom nav's first 4 items, AND the mobile More sheet's items
   // (filtered by key below, never duplicated as separate data). Every
-  // section shows its mascot icon + a text label everywhere it appears.
+  // section shows its icon (mascot where one exists, see sectionIcon()
+  // above) + a text label everywhere it appears.
   var SECTIONS = [
     { key: 'home', href: '/admin/home/', label: 'Home' },
     { key: 'schedule', href: '/admin/', label: 'Schedule' },
     { key: 'leads', href: '/admin/leads/', label: 'Leads' },
     { key: 'clients', href: '/admin/clients/', label: 'Clients' },
     { key: 'expenses', href: '/admin/expenses/', label: 'Expenses' },
-    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue' }
+    { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue' },
+    // Website Agent dashboard — UI-organization pass around the existing
+    // Site Improvement Agent. Desktop shows it inline like every other
+    // section; mobile puts it in the existing More sheet (see
+    // MORE_SHEET_KEYS below) rather than bumping something off the 4-item
+    // bottom nav.
+    { key: 'website-agent', href: '/admin/website-agent/', label: 'Website Agent' }
   ];
 
   // Mobile bottom nav shows only these 4 as direct links; the rest live in
   // the More sheet. Desktop's inline nav still shows the full SECTIONS list
   // via buildDesktopNav() below, untouched.
   var BOTTOM_NAV_KEYS = ['home', 'schedule', 'leads', 'clients'];
-  var MORE_SHEET_KEYS = ['expenses', 'other-revenue'];
+  var MORE_SHEET_KEYS = ['expenses', 'other-revenue', 'website-agent'];
 
   // Which section is "current" — by URL path, so no page needs a data
   // attribute or any other per-page marker. Booking/intake/request/lead
@@ -101,6 +124,12 @@
     if (path.indexOf('/admin/client') === 0) return 'clients'; // /admin/client/ and /admin/clients/
     if (path.indexOf('/admin/other-revenue/') === 0) return 'other-revenue';
     if (path.indexOf('/admin/expenses/') === 0) return 'expenses';
+    // Website Agent report/proposal pages are reached FROM the dashboard
+    // (deep links, not their own nav destination) but should still show
+    // the dashboard's nav item as "current" while viewing them.
+    if (path.indexOf('/admin/website-agent/') === 0 ||
+        path.indexOf('/admin/agent-reports/') === 0 ||
+        path.indexOf('/admin/agent-proposals/') === 0) return 'website-agent';
     return 'schedule'; // /admin/, /admin/booking*/
   }
 
@@ -109,7 +138,7 @@
       var active = s.key === activeKey;
       return '<a href="' + s.href + '" class="admin-nav-item' + (active ? ' is-active' : '') + '"' +
         (active ? ' aria-current="page"' : '') + '>' +
-        mascotIcon(s.key, 'admin-nav-item-icon') +
+        sectionIcon(s.key, 'admin-nav-item-icon') +
         '<span>' + s.label + '</span></a>';
     }).join('');
   }
@@ -152,7 +181,7 @@
     var itemsHtml = MORE_SHEET_KEYS.map(function (key) {
       var s = bySectionKey[key];
       return '<a href="' + s.href + '" class="admin-sheet-option admin-more-sheet-option">' +
-        mascotIcon(s.key, 'admin-sheet-option-icon') +
+        sectionIcon(s.key, 'admin-sheet-option-icon') +
         '<span class="admin-sheet-option-label">' + s.label + '</span></a>';
     }).join('');
 

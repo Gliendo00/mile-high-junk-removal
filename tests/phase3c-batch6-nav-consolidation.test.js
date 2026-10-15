@@ -94,12 +94,16 @@ ALL_NAV_PAGES.forEach((rel) => {
 // first shipped bottom-nav-only, then extended to the desktop nav too at
 // Rocky's explicit request the same day. No more icon-only/SVG-only
 // special-casing anywhere in SECTIONS.
-test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, in that order, with no Requests/Intakes destination", () => {
+// UPDATED AGAIN (Website Agent dashboard pass, 2026-10): a 7th
+// destination, Website Agent, was appended LAST — see
+// tests/website-agent-dashboard-ui.test.js for its own nav-wiring checks.
+// Same non-regression note applies.
+test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, Website Agent, in that order, with no Requests/Intakes destination", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
   const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue"]);
+  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue", "Website Agent"]);
   assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
@@ -112,16 +116,27 @@ test("admin/admin-chrome.js: no SECTIONS entry carries an icon-only or desktop-s
   assert.ok(!/desktopIcon/.test(sectionsMatch[1]), "no SECTIONS entry should carry a separate desktopIcon anymore");
 });
 
-test("admin/admin-chrome.js: every SECTIONS key has a mascot image in MASCOT_SRC, used by both navs", () => {
+// Website Agent dashboard pass — Website Agent joined SECTIONS with no
+// mascot asset (same reasoning "More" has always had — see
+// admin-chrome.js's own header comment), so both navs now resolve a
+// section's icon through a generalized sectionIcon(key, cls) helper
+// (mascot image where MASCOT_SRC has one, else a plain inline SVG) rather
+// than always calling mascotIcon(s.key, ...) directly. Every REAL mascot-
+// backed section still must have one — this just allows one explicit,
+// documented exception rather than requiring every future utility
+// section to commission a new mascot image.
+test("admin/admin-chrome.js: every mascot-backed SECTIONS key has an image in MASCOT_SRC; website-agent is the one documented plain-icon exception", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   const keys = Array.from(sectionsMatch[1].matchAll(/key:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "expenses", "other-revenue"]);
+  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "expenses", "other-revenue", "website-agent"]);
   const mascotSrcMatch = src.match(/var MASCOT_SRC = \{([\s\S]*?)\n\s*\};/);
   assert.ok(mascotSrcMatch, "admin-chrome.js must define MASCOT_SRC");
-  keys.forEach((key) => {
+  keys.filter((key) => key !== "website-agent").forEach((key) => {
     assert.ok(new RegExp("'?\\b" + key + "\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), key + " must map to a mascot image in MASCOT_SRC");
   });
+  assert.ok(!new RegExp("'?\\bwebsite-agent\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), "website-agent should NOT have a mascot entry — it must use the plain-icon fallback");
+  assert.ok(src.includes("PLAIN_ICON_BY_KEY"), "a plain-icon fallback map must exist for non-mascot sections");
 });
 
 test("admin/admin-chrome.js: buildBottomNav renders a mascot icon + visible <span> label for every section (Other Revenue included)", () => {
@@ -134,12 +149,12 @@ test("admin/admin-chrome.js: buildBottomNav renders a mascot icon + visible <spa
   assert.ok(!/admin-bottom-nav-item-icon-only/.test(src), "the bottom nav no longer has an icon-only item");
 });
 
-test("admin/admin-chrome.js: buildDesktopNav renders a mascot icon + visible <span> label for every section (Other Revenue included), no icon-only branch left", () => {
+test("admin/admin-chrome.js: buildDesktopNav renders every section's icon (via sectionIcon(), mascot or plain-fallback) + visible <span> label, no icon-only branch left", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const buildDesktopNavMatch = src.match(/function buildDesktopNav[\s\S]*?\n {2}\}/);
   assert.ok(buildDesktopNavMatch, "buildDesktopNav function not found");
   const body = buildDesktopNavMatch[0];
-  assert.ok(/mascotIcon\(s\.key, 'admin-nav-item-icon'\)/.test(body));
+  assert.ok(/sectionIcon\(s\.key, 'admin-nav-item-icon'\)/.test(body));
   assert.ok(/<span>' \+ s\.label \+ '<\/span>/.test(body), "desktop nav must render every section's label, unconditionally");
   assert.ok(!/admin-nav-item-icon-only/.test(src), "the desktop nav no longer has an icon-only item");
 });

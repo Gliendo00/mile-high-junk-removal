@@ -153,6 +153,20 @@ module.exports = async (req, res) => {
     return handleGetAgentReport(req, res);
   }
 
+  // Website Agent dashboard (CRM UI consolidation pass) — ?view=agent-dashboard
+  // bundles everything the dedicated /admin/website-agent/ command-center
+  // page needs into ONE call: overall health status, integration
+  // configured-flags, cumulative telemetry counters, the latest/daily/
+  // weekly run summaries, a flattened recent-activity feed, and whatever
+  // real first-party search evidence the agent has actually gathered (see
+  // handleAgentDashboard()'s own header below). Same "never touches
+  // Supabase for a query, only checks whether it's configured" posture as
+  // the CRM DATA/PROPOSAL SYNC indicators need — no new Vercel function,
+  // same file that already hosts every other agent-* view.
+  if (req.query.view === "agent-dashboard") {
+    return handleAgentDashboard(req, res);
+  }
+
   // Site Improvement Agent, Phase 3 — the CRM-visible, approvable list
   // behind the Home dashboard's activity row (see handleAgentActivity()
   // just above for the read-only log, and handleReviewAgentProposal()
@@ -656,6 +670,256 @@ function handleGetAgentReport(req, res) {
     console.error("Admin agent-report detail failed to read agent/history/log.ndjson", e);
     res.status(500).json({ error: "Could not load this report." });
   }
+}
+
+// ---------------------------------------------------------------------
+// Website Agent dashboard — ?view=agent-dashboard
+//
+// A UI-consolidation endpoint, not a new subsystem: everything below is
+// read straight from agent/history/log.ndjson (same file/require path as
+// agent-activity/agent-reports above) or is a pure env-var "is this
+// integration configured" check (no network call, no secret ever
+// returned) — see agent/lib/search-console-client.js's/
+// agent/lib/ga4-client.js's own isXConfigured(). Nothing here changes
+// Agent decision logic, and nothing here queries Supabase (the one
+// Supabase-backed number this page needs — live "needs review" proposal
+// count — is read client-side from the existing ?view=agent-proposals
+// response, not duplicated here).
+//
+// `metrics` are cumulative counters over the ENTIRE persisted run history
+// (deduped by runId — see history.latestByRunId()), i.e. real totals this
+// agent has actually recorded, never an invented score. `pagesMonitored`
+// is the one exception: a snapshot of the MOST RECENT run's page count,
+// since "pages monitored" doesn't make sense as a running sum.
+function handleAgentDashboard(req, res) {
+  const history = loadAgentHistoryModule(res);
+  if (!history) return;
+
+  let searchConsoleConfigured = false;
+  let ga4Configured = false;
+  try {
+    searchConsoleConfigured = require("../../agent/lib/search-console-client").isSearchConsoleConfigured();
+  } catch (e) {
+    searchConsoleConfigured = false;
+  }
+  try {
+    ga4Configured = require("../../agent/lib/ga4-client").isGa4Configured();
+  } catch (e) {
+    ga4Configured = false;
+  }
+  // Plain env-var presence check — deliberately NOT getServiceClient()
+  // (which constructs a real @supabase/supabase-js client): this view
+  // must never touch Supabase at all, same hard rule as agent-activity/
+  // agent-reports above (see this function's header) — CRM DATA/PROPOSAL
+  // SYNC both ultimately depend on these same two credentials being
+  // configured, so one shared check is the honest answer for both.
+  const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
+
+  try {
+    const allRuns = history.readAllRuns();
+    if (!allRuns.length) {
+      res.status(200).json({
+        ok: true,
+        connected: false,
+        status: "not-connected",
+        integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+        metrics: null,
+        latestRun: null,
+        daily: { lastRun: null },
+        weekly: { lastRun: null },
+        activity: [],
+        searchIntelligence: { searchConsole: { available: false }, ga4: { available: false } },
+      });
+      return;
+    }
+
+    const deduped = history.latestByRunId(allRuns);
+    const sorted = [...deduped].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const latestRun = sorted[0];
+    const latestDaily = sorted.find((r) => dashboardRunType(r) === "daily") || null;
+    const latestWeekly = sorted.find((r) => dashboardRunType(r) === "weekly") || null;
+
+    let findingsTotal = 0;
+    let changesAppliedTotal = 0;
+    let researchCompletedTotal = 0;
+    let noChangeDecisionsTotal = 0;
+    for (const run of deduped) {
+      const findings = Array.isArray(run.findings) ? run.findings : [];
+      findingsTotal += findings.length;
+      changesAppliedTotal += findings.filter((f) => f.status === "applied").length;
+      researchCompletedTotal += findings.filter((f) => Array.isArray(f.research) && f.research.length > 0).length;
+      noChangeDecisionsTotal += findings.filter((f) => f.decision === "NO_CHANGE").length;
+    }
+
+    const latestSummary = dashboardRunSummary(latestRun);
+
+    res.status(200).json({
+      ok: true,
+      connected: true,
+      status: dashboardOverallStatus(latestSummary),
+      integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+      metrics: {
+        pagesMonitored: latestSummary.pagesChecked,
+        findingsTotal,
+        changesAppliedTotal,
+        researchCompletedTotal,
+        noChangeDecisionsTotal,
+        runsRecorded: deduped.length,
+      },
+      latestRun: latestSummary,
+      daily: { lastRun: dashboardRunSummary(latestDaily) },
+      weekly: { lastRun: dashboardRunSummary(latestWeekly) },
+      activity: dashboardActivityFeed(sorted),
+      searchIntelligence: {
+        searchConsole: dashboardSearchIntelligence(sorted, "search-console-search-analytics"),
+        ga4: dashboardSearchIntelligence(sorted, "ga4"),
+      },
+    });
+  } catch (e) {
+    console.error("Admin agent-dashboard failed to read/summarize agent/history/log.ndjson", e);
+    res.status(200).json({
+      ok: true,
+      connected: false,
+      status: "unknown",
+      integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+      metrics: null,
+      latestRun: null,
+      daily: { lastRun: null },
+      weekly: { lastRun: null },
+      activity: [],
+      searchIntelligence: { searchConsole: { available: false }, ga4: { available: false } },
+    });
+  }
+}
+
+function dashboardRunType(run) {
+  return (run.report && run.report.runType) || run.runType || "manual";
+}
+
+// A compact, UI-ready summary of one run — same spirit as reportListEntry()
+// above (list view), plus the few extra counts the dashboard's Latest
+// Run / Daily / Weekly panels show (observations/opportunities/proposals
+// created). Degrades to nulls for a pre-Phase-5 record with no `report`.
+function dashboardRunSummary(run) {
+  if (!run) return null;
+  const report = run.report || null;
+  return {
+    runId: run.runId,
+    timestamp: run.timestamp,
+    runType: dashboardRunType(run),
+    failed: Boolean(run.failed),
+    status: report ? report.status : run.failed ? "failed" : "completed",
+    healthSummary: report ? report.healthSummary : null,
+    pagesChecked: report ? report.pagesChecked : run.summary && typeof run.summary.pagesScanned === "number" ? run.summary.pagesScanned : null,
+    observationsCount: report ? report.observationsCount : null,
+    opportunitiesCount: report ? report.opportunitiesCount : null,
+    actionableOpenCount: report ? report.technicalIssues.actionableOpen : null,
+    safeFixesAppliedCount: report && report.safeFixes ? report.safeFixes.appliedCount : 0,
+    researchQuestionsRaisedCount: report && report.research ? report.research.questionsRaisedCount : 0,
+    proposalsCreatedOrUpdatedCount: report && report.proposals ? report.proposals.createdOrUpdatedCount : 0,
+    proposalsAwaitingApprovalCount: report && report.proposals ? report.proposals.awaitingApprovalCount : 0,
+    failureMessage: report && report.failure ? report.failure.message : null,
+  };
+}
+
+function dashboardOverallStatus(latestSummary) {
+  if (!latestSummary) return "unknown";
+  if (latestSummary.failed) return "failed";
+  const s = latestSummary.healthSummary && latestSummary.healthSummary.status;
+  if (s === "failed") return "failed";
+  if (s === "research-pending") return "research-pending";
+  if (s === "needs-attention") return "needs-attention";
+  if (s === "all-clear") return "healthy";
+  return "unknown";
+}
+
+// Flattens the most recent runs into one chronological event feed — a
+// "SCAN COMPLETE" line per run plus one line per finding worth surfacing
+// (reusing agent/lib/history.js's own icon/description logic, the exact
+// same text already shown on Home/report-history, never re-derived
+// differently here), newest first. Approve/reject events are NOT included
+// here (those live in Supabase's agent_proposals, not this log) — the
+// dashboard page merges those in client-side from its own
+// ?view=agent-proposals fetch. Capped to a sane number of runs so one very
+// old, very noisy run can't dominate the feed.
+const DASHBOARD_ACTIVITY_RUN_LIMIT = 12;
+function dashboardActivityFeed(sortedRuns) {
+  const historyLib = require("../../agent/lib/history");
+  const events = [];
+  for (const run of sortedRuns.slice(0, DASHBOARD_ACTIVITY_RUN_LIMIT)) {
+    const pagesScanned = run.summary && typeof run.summary.pagesScanned === "number" ? run.summary.pagesScanned : null;
+    events.push({
+      runId: run.runId,
+      timestamp: run.timestamp,
+      type: run.failed ? "error" : "scan-complete",
+      label: run.failed ? "ERROR" : "SCAN COMPLETE",
+      text: run.failed
+        ? (run.report && run.report.failure && run.report.failure.message) || "This run did not complete successfully."
+        : pagesScanned !== null
+        ? `Checked ${pagesScanned} page${pagesScanned === 1 ? "" : "s"}`
+        : "Run completed.",
+    });
+    const findings = Array.isArray(run.findings) ? run.findings : [];
+    for (const f of findings) {
+      events.push({
+        runId: run.runId,
+        timestamp: run.timestamp,
+        type: ACTIVITY_TYPE_BY_ICON[historyLib.iconForFinding(f)] || "observation",
+        label: ACTIVITY_LABEL_BY_ICON[historyLib.iconForFinding(f)] || "OBSERVATION",
+        text: f.summary || historyLib.describeFinding(f),
+      });
+    }
+  }
+  return events;
+}
+
+const ACTIVITY_LABEL_BY_ICON = {
+  check: "SAFE FIX",
+  flag: "PROPOSAL",
+  research: "RESEARCH",
+  reject: "REJECTED",
+  observation: "OBSERVATION",
+};
+const ACTIVITY_TYPE_BY_ICON = {
+  check: "safe-fix",
+  flag: "proposal",
+  research: "research",
+  reject: "rejected",
+  observation: "observation",
+};
+
+// Most recent real, persisted first-party evidence entry of the given
+// source found anywhere in a finding's `.firstPartyEvidence[]` (attached
+// by agent/lib/firstparty-intake.js — see that file's header), scanning
+// the most recent runs only (never a full-history crawl). Returns an
+// honest {available:false} when nothing has ever been gathered — never a
+// fabricated chart.
+const DASHBOARD_EVIDENCE_SCAN_RUN_LIMIT = 20;
+function dashboardSearchIntelligence(sortedRuns, source) {
+  const { computeFirstPartyFreshness } = require("../../agent/lib/firstparty-evidence");
+  for (const run of sortedRuns.slice(0, DASHBOARD_EVIDENCE_SCAN_RUN_LIMIT)) {
+    const findings = Array.isArray(run.findings) ? run.findings : [];
+    for (const f of findings) {
+      const entries = Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence : [];
+      const match = entries.find((e) => e.source === source);
+      if (match) {
+        return {
+          available: true,
+          runId: run.runId,
+          gatheredAt: match.fetchedAt,
+          freshness: computeFirstPartyFreshness(match, new Date()).status,
+          metric: match.metric,
+          dimension: match.dimension,
+          scope: match.scope,
+          window: match.window,
+          context: match.context,
+          limitations: match.limitations,
+          rows: match.observed && Array.isArray(match.observed.topRows) ? match.observed.topRows : [],
+        };
+      }
+    }
+  }
+  return { available: false };
 }
 
 // ---------------------------------------------------------------------

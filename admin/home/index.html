@@ -156,45 +156,35 @@
       </div>
     </div>
 
-    <!-- Website & Marketing Activity — Site Improvement Agent (Phase 2).
-         Two mutually-exclusive states, toggled by admin/home.js from
+    <!-- Website Agent — compact Home summary only (CRM UI-organization
+         pass: the full technical detail this card used to show line-by-
+         line now lives on the dedicated /admin/website-agent/ command-
+         center dashboard — see that page for the real breakdown). Two
+         mutually-exclusive states, toggled by admin/home.js from
          GET /api/admin/bookings?view=agent-activity's `connected` flag:
          the original compact "Not connected yet" row (shown whenever the
          agent has never logged a run, or the fetch itself fails — never a
-         fabricated status), or a small card with a few real {icon, text}
-         activity lines. Never a full technical audit dump — see that
-         endpoint's own header. -->
+         fabricated status), or this summary card. -->
     <div class="admin-home-marketing-row" id="marketing-not-connected">
-      <span class="admin-home-marketing-row-label">Website &amp; Marketing Activity</span>
+      <span class="admin-home-marketing-row-label">Website Agent</span>
       <span class="admin-home-marketing-row-status">Not connected yet</span>
     </div>
-    <div class="admin-home-marketing-card" id="marketing-connected" hidden>
-      <div class="admin-home-marketing-card-label">Website Agent</div>
-      <!-- Phase 5 — compact summary built from the most recent run's own
-           `report` (agent/lib/report.js): last-run time, pages checked,
-           and a short honest health line (never a 0-100 score — see
-           report.js's header). Hidden entirely for an older-shaped log
-           entry with no `report` field (pre-Phase5), so this degrades
-           gracefully to exactly the original per-line view below. -->
-      <div class="admin-home-marketing-summary" id="marketing-summary" hidden></div>
-      <div class="admin-home-marketing-lines" id="marketing-lines"></div>
-      <!-- Phase 5 — fixes applied / research performed / proposals
-           awaiting approval, the three numbers agent/README.md's CRM
-           Home mockup asks for. Same hide-if-no-report posture as the
-           summary above. -->
-      <div class="admin-home-marketing-stats" id="marketing-stats" hidden></div>
-      <!-- Phase 3 — the detailed review surface (approve/reject) lives on
-           its own small page, not here (see admin/agent-proposals/index.html's
-           own header for why: "keep Home concise" / "don't dump raw
-           research JSON onto the dashboard"). Always shown once connected
-           — the review page itself handles the empty-state when there's
-           nothing pending. Phase 5 adds a sibling link to the new report-
-           history page. -->
-      <div class="admin-home-marketing-links">
-        <a href="/admin/agent-reports/" class="admin-home-marketing-review-link">View report →</a>
-        <a href="/admin/agent-proposals/" class="admin-home-marketing-review-link">Review proposals →</a>
+    <a href="/admin/website-agent/" class="admin-home-marketing-card admin-home-marketing-card-link" id="marketing-connected" hidden>
+      <div class="admin-home-marketing-card-top">
+        <div class="admin-home-marketing-card-label">Website Agent</div>
+        <span class="admin-home-marketing-health-dot" id="marketing-health-dot"></span>
       </div>
-    </div>
+      <!-- Hidden entirely for an older-shaped log entry with no `report`
+           field (pre-Phase5) — degrades to just the label + "Not
+           connected" posture is impossible here (connected implies at
+           least one run), so this simply stays hidden if there's truly
+           nothing to summarize yet. -->
+      <div class="admin-home-marketing-summary" id="marketing-summary" hidden>
+        <div class="admin-home-marketing-summary-run" id="marketing-run-line"></div>
+        <div class="admin-home-marketing-grid" id="marketing-grid"></div>
+      </div>
+      <div class="admin-home-marketing-open-link">Open Agent Dashboard →</div>
+    </a>
 
   </div>
 </main>
