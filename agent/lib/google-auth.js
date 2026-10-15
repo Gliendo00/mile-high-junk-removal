@@ -26,6 +26,12 @@
 //      rest). Either way, this module's own logic is unchanged — it
 //      just asks google-adc.js for a cloud-platform-scoped base token
 //      and impersonates from there, same as a human's refresh token.
+//      Phase 7C — GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is validated
+//      (validateServiceAccountEmail() below) BEFORE any network call:
+//      a real incident sent a value containing embedded newlines
+//      straight through to google-impersonation.js's URL-building,
+//      which Google only rejected after the fact with an opaque error.
+//      See that function's own header for the full root-cause writeup.
 //   2. DIRECT ADC (keyless, narrower applicability) — no impersonation
 //      configured, but an ADC credential FILE is present
 //      (GOOGLE_APPLICATION_CREDENTIALS, or the well-known gcloud path).
@@ -59,6 +65,53 @@ const { generateImpersonatedAccessToken } = require("./google-impersonation");
 const legacy = require("./google-service-account-auth");
 
 const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+
+// A real GCP service-account email: one "@", no whitespace at all, and
+// ending in a *.gserviceaccount.com domain (covers both the common
+// user-managed form, <name>@<project-id>.iam.gserviceaccount.com, and
+// the legacy default-compute form, <number>-compute@developer.
+// gserviceaccount.com) — deliberately not stricter than that (this is
+// a shape/corruption check, not a GCP-naming-rules validator).
+const SERVICE_ACCOUNT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.gserviceaccount\.com$/;
+
+/**
+ * Validates GOOGLE_IMPERSONATE_SERVICE_ACCOUNT is exactly one
+ * well-formed service-account email, with nothing else appended —
+ * see this module's header on why a misconfigured preferred tier must
+ * fail loudly and specifically rather than being used as-is. Returns
+ * null when valid, or a specific, human-readable problem description
+ * when not (never throws).
+ *
+ * Root-cause context (do not remove): a real production incident sent
+ * a value containing embedded newlines — literally
+ * "<email>\nGSC_SITE_URL <value>\nGA4_PROPERTY_ID <value>" — all the way
+ * through to google-impersonation.js's generateImpersonatedAccessToken(),
+ * which `encodeURIComponent()`s the email straight into the IAM
+ * Credentials API's request URL with no validation at all. Google
+ * correctly rejected the resulting URL (an invalid resource name), but
+ * only after a network round trip, and with an opaque API error that
+ * named the whole garbled string rather than explaining what was wrong.
+ * Investigation traced every other link in the pipeline (this
+ * workflow's `env:` blocks, google-github-actions/auth's own outputs,
+ * process.env, every line of code that reads this variable) and found
+ * no concatenation/parsing logic anywhere — each is read and passed
+ * through completely independently. This check exists so that whatever
+ * produces a malformed value next time (however it happens) is caught
+ * immediately, with a specific reason, before any network call at all.
+ */
+function validateServiceAccountEmail(value) {
+  if (/[\r\n]/.test(value)) {
+    const lines = value.split(/\r?\n/).filter((l) => l.length > 0);
+    return `contains ${lines.length - 1} unexpected newline(s) — looks like more than one configuration value was pasted into this single variable (first line: "${lines[0]}")`;
+  }
+  if (/\s/.test(value)) {
+    return `contains unexpected whitespace — expected a single service-account email with no spaces/tabs (got: "${value}")`;
+  }
+  if (!SERVICE_ACCOUNT_EMAIL_PATTERN.test(value)) {
+    return `does not look like a valid service-account email — expected the form <name>@<project-id>.iam.gserviceaccount.com (got: "${value}")`;
+  }
+  return null;
+}
 
 function isImpersonationConfigured() {
   return Boolean(process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT);
@@ -99,6 +152,16 @@ async function getAccessToken(scope, options = {}) {
 
   if (isImpersonationConfigured()) {
     const serviceAccountEmail = process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT;
+    const validationError = validateServiceAccountEmail(serviceAccountEmail);
+    if (validationError) {
+      // Fails BEFORE any network call at all (no base-ADC fetch, no IAM
+      // Credentials request) — see validateServiceAccountEmail()'s own
+      // header for exactly why this check exists. Tier 1 is still
+      // "configured" (never falls through to tier 2/3/4 — see this
+      // module's header), it just fails loudly and specifically instead
+      // of sending a malformed value to Google at all.
+      return { skipped: true, reason: `Impersonation configured, but GOOGLE_IMPERSONATE_SERVICE_ACCOUNT ${validationError}.` };
+    }
     const base = await getAdcAccessToken(CLOUD_PLATFORM_SCOPE, { fetchImpl });
     if (base.skipped) {
       return {
@@ -131,4 +194,5 @@ module.exports = {
   isImpersonationConfigured,
   isDirectAdcConfigured,
   isLegacyServiceAccountConfigured,
+  validateServiceAccountEmail,
 };

@@ -142,6 +142,110 @@ async function main() {
     assert.strictEqual(legacyTokenEndpointCalled, false, "a configured-but-failing impersonation tier must never silently fall through to the legacy key");
   });
 
+  // --- Phase 7C: GOOGLE_IMPERSONATE_SERVICE_ACCOUNT validation --------
+  // Root cause: a real production run sent a value containing embedded
+  // newlines (literally "<email>\nGSC_SITE_URL <value>\nGA4_PROPERTY_ID
+  // <value>") all the way to google-impersonation.js's URL-building,
+  // which Google rejected only after a network round trip, with an
+  // opaque error naming the whole garbled string. Every other link in
+  // the pipeline (this workflow's env: blocks, google-github-actions/
+  // auth's own outputs, process.env, every line of code that reads this
+  // variable) was traced and found to do no concatenation/parsing at
+  // all — see agent/lib/google-auth.js's validateServiceAccountEmail()
+  // header for the full writeup. These tests prove the defensive catch
+  // this phase adds, and that the three variables genuinely stay
+  // independent end to end.
+
+  await test("validateServiceAccountEmail(): a well-formed service-account email is valid (returns null)", () => {
+    const { validateServiceAccountEmail } = freshModule();
+    assert.strictEqual(validateServiceAccountEmail("mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com"), null);
+    assert.strictEqual(validateServiceAccountEmail("123456789-compute@developer.gserviceaccount.com"), null);
+  });
+
+  await test("validateServiceAccountEmail(): catches the EXACT real-incident shape — other config lines appended via embedded newlines — and names the real email on the first line", () => {
+    const { validateServiceAccountEmail } = freshModule();
+    const corrupted = "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com\nGSC_SITE_URL sc-domain:milehighjunkremoval.net\nGA4_PROPERTY_ID 549425042";
+    const problem = validateServiceAccountEmail(corrupted);
+    assert.ok(problem, "a multi-line value must be rejected");
+    assert.ok(/2 unexpected newline/.test(problem));
+    assert.ok(/mile-high-site-agent@mile-high-site-agent\.iam\.gserviceaccount\.com/.test(problem), "should surface the real (first-line) email for diagnosis");
+  });
+
+  await test("validateServiceAccountEmail(): catches plain whitespace (space/tab), and a value missing the gserviceaccount.com domain", () => {
+    const { validateServiceAccountEmail } = freshModule();
+    assert.ok(/whitespace/.test(validateServiceAccountEmail("sa@example.com extra text")));
+    assert.ok(/whitespace/.test(validateServiceAccountEmail("sa@example.com\textra")));
+    assert.ok(/valid service-account email/.test(validateServiceAccountEmail("not-a-service-account@gmail.com")));
+    assert.ok(/valid service-account email/.test(validateServiceAccountEmail("no-at-sign.iam.gserviceaccount.com")));
+  });
+
+  await test("TIER 1 (impersonation): a malformed/multi-line GOOGLE_IMPERSONATE_SERVICE_ACCOUNT fails IMMEDIATELY — zero network calls at all, not even the base-ADC fetch — and NEVER falls through to an also-configured legacy key", async () => {
+    clearAllAuthEnv();
+    pointAdcAt("authorized-user.json", { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" }); // base ADC WOULD succeed if ever attempted
+    process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT =
+      "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com\nGSC_SITE_URL sc-domain:milehighjunkremoval.net\nGA4_PROPERTY_ID 549425042";
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON = fakeServiceAccountJson(); // also configured — must be ignored
+    const { getAccessToken } = freshModule();
+
+    let anyFetchCalled = false;
+    const fetchImpl = async (url) => {
+      anyFetchCalled = true;
+      throw new Error(`should never be called — got ${url}`);
+    };
+
+    const result = await getAccessToken("https://www.googleapis.com/auth/webmasters.readonly", { fetchImpl });
+    assert.strictEqual(result.skipped, true);
+    assert.ok(/Impersonation configured, but GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/.test(result.reason));
+    assert.ok(/unexpected newline/.test(result.reason));
+    assert.strictEqual(anyFetchCalled, false, "a malformed email must be caught before any network call — no base-ADC fetch, no IAM Credentials request");
+  });
+
+  await test("the three Google/first-party env vars (GOOGLE_IMPERSONATE_SERVICE_ACCOUNT, GSC_SITE_URL, GA4_PROPERTY_ID) stay three fully independent, exact values end to end — none is read, trimmed, or combined by any of the others' consumers", async () => {
+    clearAllAuthEnv();
+    pointAdcAt("authorized-user.json", { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" });
+    const EXACT_EMAIL = "mile-high-site-agent@mile-high-site-agent.iam.gserviceaccount.com";
+    const EXACT_GSC = "sc-domain:milehighjunkremoval.net";
+    const EXACT_GA4 = "549425042";
+    process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT = EXACT_EMAIL;
+    process.env.GSC_SITE_URL = EXACT_GSC;
+    process.env.GA4_PROPERTY_ID = EXACT_GA4;
+
+    const { getAccessToken } = freshModule();
+    delete require.cache[require.resolve("../agent/lib/search-console-client")];
+    delete require.cache[require.resolve("../agent/lib/ga4-client")];
+    const { isSearchConsoleConfigured } = require("../agent/lib/search-console-client");
+    const { isGa4Configured } = require("../agent/lib/ga4-client");
+
+    let capturedAccountIdSegment = null;
+    const fetchImpl = async (url, init) => {
+      if (url === "https://oauth2.googleapis.com/token") {
+        return { ok: true, status: 200, json: async () => ({ access_token: "base-adc-token", expires_in: 3600 }) };
+      }
+      if (url.includes("iamcredentials.googleapis.com")) {
+        // The account-id path segment must be EXACTLY the email, encoded —
+        // never the email plus the other two variables' names/values.
+        capturedAccountIdSegment = decodeURIComponent(url.match(/serviceAccounts\/([^:]+):generateAccessToken/)[1]);
+        return { ok: true, status: 200, json: async () => ({ accessToken: "impersonated-token", expireTime: "2026-10-15T05:00:00Z" }) };
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    };
+
+    const result = await getAccessToken("https://www.googleapis.com/auth/webmasters.readonly", { fetchImpl });
+    assert.strictEqual(result.skipped, false);
+    assert.strictEqual(capturedAccountIdSegment, EXACT_EMAIL, "the IAM Credentials request must use EXACTLY the email — no concatenation with GSC_SITE_URL/GA4_PROPERTY_ID");
+
+    // Each variable is still exactly what it was set to — reading/using
+    // one never mutated or consumed another.
+    assert.strictEqual(process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT, EXACT_EMAIL);
+    assert.strictEqual(process.env.GSC_SITE_URL, EXACT_GSC);
+    assert.strictEqual(process.env.GA4_PROPERTY_ID, EXACT_GA4);
+    assert.strictEqual(isSearchConsoleConfigured(), true);
+    assert.strictEqual(isGa4Configured(), true);
+
+    delete process.env.GSC_SITE_URL;
+    delete process.env.GA4_PROPERTY_ID;
+  });
+
   await test("TIER 2 (direct ADC file) beats TIER 3 (legacy key) when both are configured and impersonation is not", async () => {
     clearAllAuthEnv();
     pointAdcAt("authorized-user.json", { type: "authorized_user", client_id: "a", client_secret: "b", refresh_token: "c" });

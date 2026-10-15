@@ -2661,3 +2661,65 @@ unrelated failure as every prior phase.
    scheduled Claude/Agent-SDK orchestrator session (agent/README.md §13's
    original recommendation, still valid) or a different, explicitly-
    authorized research-provider integration — neither is in scope here.
+
+---
+
+# Phase 7C — GOOGLE_IMPERSONATE_SERVICE_ACCOUNT corruption incident
+
+A real controlled Weekly run sent a malformed, multi-line value to
+service-account impersonation — literally
+`"<email>\nGSC_SITE_URL <value>\nGA4_PROPERTY_ID <value>"` — which
+Google correctly rejected as an invalid IAM Credentials resource name,
+but only after a network round trip, and with an opaque error naming
+the whole garbled string.
+
+**Investigation** traced every link between the three independently-
+configured GitHub repository variables and the code that consumes
+them: the pushed workflow's `env:` blocks (plain `KEY: ${{ vars.X }}`
+mappings, no block scalars, no `$GITHUB_ENV`/`$GITHUB_OUTPUT` writes
+anywhere in this repo's own files), `google-github-actions/auth@v2`'s
+own outputs (it only ever exports `GOOGLE_APPLICATION_CREDENTIALS`-
+related variables — it has no knowledge of `GOOGLE_IMPERSONATE_
+SERVICE_ACCOUNT` at all), `process.env` (no `dotenv` or any custom env-
+parsing exists anywhere in this codebase), and every line of code that
+reads this variable (exactly one: `google-auth.js`'s `getAccessToken()`
+— a direct, unmodified read). Every one of those links is clean. The
+one remaining link — the GitHub variable's own stored bytes — cannot
+be read back via the GitHub API without authentication this
+environment doesn't have, and this phase was explicitly told not to
+ask for it to be changed; by elimination, and consistent with the exact
+symptom (the garbled text is literally two "OTHER_VAR value" lines
+appended after the real email, matching how a multi-line paste into
+one variable's value field would look), the corruption most plausibly
+originated there, not in this repository's code.
+
+**What WAS a real, fixable gap**, regardless of where the corruption
+originated: nothing anywhere validated `GOOGLE_IMPERSONATE_SERVICE_
+ACCOUNT`'s shape before use.
+`google-impersonation.js`'s `generateImpersonatedAccessToken()`
+`encodeURIComponent()`s it directly into the IAM Credentials API's
+request URL — a multi-line value just gets percent-encoded in place,
+producing exactly the "Google rejected the whole garbled string"
+symptom reported, and only after wasting a base-ADC network round
+trip first. `google-auth.js` now validates it (`validateServiceAccountEmail()`)
+BEFORE any network call: no embedded whitespace/newlines, and it must
+match `<name>@<project-id-or-number>.gserviceaccount.com`. Tier 1
+stays "configured" either way (never silently falls through to tier
+2/3/4 — this module's existing, unchanged rule) — it just fails
+immediately with a specific, actionable reason instead of a cryptic
+Google API error.
+
+**No change to**: the pushed workflow YAML (clean — nothing to fix
+there), Google Cloud IAM/WIF permissions (no evidence they're wrong),
+or any other env var's handling — `GSC_SITE_URL`/`GA4_PROPERTY_ID` are
+read completely independently and were never implicated.
+
+**Tests**: `tests/agent-google-auth.test.js` (+5) —
+`validateServiceAccountEmail()` unit cases including the exact real-
+incident shape, a TIER-1 test proving a malformed email fails before
+ANY network call (not even the base-ADC fetch) and never falls through,
+and an end-to-end test proving all three env vars
+(`GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`/`GSC_SITE_URL`/`GA4_PROPERTY_ID`)
+reach their respective consumers as three fully independent, exact
+values. Full repository suite: **106/107 pass** — the same single
+pre-existing, unrelated failure as every prior phase.
