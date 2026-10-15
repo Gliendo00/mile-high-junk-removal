@@ -331,21 +331,30 @@ async function main() {
     }
   });
 
-  await test("safe-commit CLI does NOT override an identity already configured locally", () => {
-    const dir = initTempRepo(); // initTempRepo() already sets a custom local identity
+  await test("safe-commit CLI ALWAYS stamps the commit with the automation identity, even when a different identity is already configured locally", () => {
+    // Earlier behavior only filled in whichever of user.name/user.email
+    // wasn't already configured. That conditional logic was never
+    // actually disproven by the real failure (see this file's header
+    // and .github/scripts/safe-commit.js's AUTOMATION_IDENTITY comment
+    // for why) — it's unconditional now purely to remove any remaining
+    // doubt, per explicit instruction. This test locks in the NEW
+    // contract: the Agent's commits are always attributed to the
+    // automation identity, never whatever identity happened to be
+    // lying around in that ephemeral checkout.
+    const dir = initTempRepo(); // initTempRepo() sets a different, custom local identity
     try {
       fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "ci-existing-local" }) + "\n", "utf8");
       const result = runSafeCommit(dir, "chore(agent): daily run ci-existing-local");
       assert.strictEqual(result.status, 0);
       const after = headSha(dir);
       const authorLine = runGit(["show", "-s", "--format=%an <%ae>", after], dir).trim();
-      assert.strictEqual(authorLine, "Safe Commit Test <test@example.com>", "a pre-existing local identity must never be overridden by the automation identity");
+      assert.strictEqual(authorLine, `${AUTOMATION_IDENTITY.name} <${AUTOMATION_IDENTITY.email}>`, "the automation identity must always be used, overriding whatever was configured before");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  await test("safe-commit CLI relies on an identity configured only at the GLOBAL scope, without adding a redundant local override", () => {
+  await test("safe-commit CLI ALWAYS stamps the commit with the automation identity, even when a different identity is configured only at the GLOBAL scope", () => {
     const { dir, env } = initTempRepoNoIdentity('[user]\n\tname = Some Org-Wide Runner\n\temail = runner@example.org\n');
     try {
       fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "ci-existing-global" }) + "\n", "utf8");
@@ -354,10 +363,74 @@ async function main() {
 
       const after = headSha(dir, env);
       const authorLine = runGit(["show", "-s", "--format=%an <%ae>", after], dir, env).trim();
-      assert.strictEqual(authorLine, "Some Org-Wide Runner <runner@example.org>", "the already-resolvable global identity should be used as-is");
+      assert.strictEqual(authorLine, `${AUTOMATION_IDENTITY.name} <${AUTOMATION_IDENTITY.email}>`, "a local override must always be added, even when a different identity already resolves from the global scope");
 
-      // No local override should have been added when one wasn't needed.
-      assert.throws(() => runGit(["config", "--local", "user.name"], dir, env), /./, "ensureGitIdentity() should not add a local override when an identity already resolves from a broader scope");
+      // Still local-only — the global fixture file itself was never
+      // rewritten with the automation identity.
+      assert.strictEqual(fs.readFileSync(env.GIT_CONFIG_GLOBAL, "utf8"), "[user]\n\tname = Some Org-Wide Runner\n\temail = runner@example.org\n");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- Exercises the ACTUAL functions safe-commit.js calls immediately
+  // before `git commit` (not a reimplementation) — directly proving the
+  // "verify the effective identity before commit" invariant the brief
+  // asked for, independent of the full CLI's allowlist/scan steps.
+
+  function callEnsureIdentityDirectly(dir, env) {
+    const driverPath = path.join(dir, "__call-ensure-identity.js");
+    fs.writeFileSync(
+      driverPath,
+      [
+        `const { ensureGitIdentity, assertGitIdentityIsValid } = require(${JSON.stringify(SCRIPT_PATH)});`,
+        "ensureGitIdentity();",
+        "console.log(JSON.stringify(assertGitIdentityIsValid()));",
+      ].join("\n"),
+      "utf8"
+    );
+    try {
+      const out = execFileSync("node", [driverPath], { cwd: dir, env, encoding: "utf8" });
+      return JSON.parse(out.trim().split("\n").pop());
+    } finally {
+      fs.unlinkSync(driverPath);
+    }
+  }
+
+  await test("ensureGitIdentity() + assertGitIdentityIsValid() — the real production functions, called directly — resolve to a valid automation identity on a no-identity checkout", () => {
+    const { dir, env } = initTempRepoNoIdentity();
+    try {
+      const identity = callEnsureIdentityDirectly(dir, env);
+      assert.strictEqual(identity.name, AUTOMATION_IDENTITY.name);
+      assert.strictEqual(identity.email, AUTOMATION_IDENTITY.email);
+
+      // What assertGitIdentityIsValid() returned is exactly what git
+      // itself would resolve right before a real `git commit`.
+      const localName = runGit(["config", "--local", "user.name"], dir, env).trim();
+      const localEmail = runGit(["config", "--local", "user.email"], dir, env).trim();
+      assert.strictEqual(localName, AUTOMATION_IDENTITY.name);
+      assert.strictEqual(localEmail, AUTOMATION_IDENTITY.email);
+      assert.strictEqual(fs.readFileSync(env.GIT_CONFIG_GLOBAL, "utf8"), "");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("assertGitIdentityIsValid() throws a clear, specific error (never a bare git crash) if the identity is somehow still invalid", () => {
+    const { dir, env } = initTempRepoNoIdentity();
+    try {
+      const driverPath = path.join(dir, "__call-assert-only.js");
+      fs.writeFileSync(
+        driverPath,
+        `const { assertGitIdentityIsValid } = require(${JSON.stringify(SCRIPT_PATH)}); assertGitIdentityIsValid();`,
+        "utf8"
+      );
+      // Deliberately do NOT call ensureGitIdentity() first — this repo
+      // genuinely has no identity at any scope (see initTempRepoNoIdentity).
+      assert.throws(
+        () => execFileSync("node", [driverPath], { cwd: dir, env, encoding: "utf8" }),
+        /Git identity is still invalid/,
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

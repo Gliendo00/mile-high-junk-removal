@@ -31,9 +31,12 @@
 // Exits 0 and does nothing (no commit) if nothing in the allowlist
 // actually changed — a "no worthwhile change today" run is a normal,
 // successful outcome, not an error.
-// Before actually committing, fills in a repository-local Git author
-// identity (ensureGitIdentity() below) IF AND ONLY IF none is already
-// configured at any scope — see AUTOMATION_IDENTITY above.
+// Before actually committing, UNCONDITIONALLY sets a repository-local
+// Git author identity (ensureGitIdentity() below), then re-reads it
+// back and refuses to proceed to `git commit` at all if it isn't
+// actually valid (assertGitIdentityIsValid() below) — see
+// AUTOMATION_IDENTITY's own comment for why this is unconditional, not
+// an "only if missing" check.
 
 const { execSync } = require("child_process");
 
@@ -42,10 +45,20 @@ const { execSync } = require("child_process");
 // machine, which almost always has one; that's exactly why this gap
 // went unnoticed until the first real Actions run: `git commit` fails
 // outright with "Author identity unknown"/"empty ident name ... not
-// allowed"). ensureGitIdentity() below fills in ONLY the missing
-// piece, as REPOSITORY-LOCAL config (`git config --local`, never
-// `--global`) — a human or environment that already has user.name/
-// user.email configured at any level is never overridden.
+// allowed").
+//
+// An EARLIER version of this fix only set this identity conditionally
+// ("only if nothing is already configured at any scope"). That logic
+// was never actually proven wrong — investigation of the real failing
+// run showed it was never even executed: GitHub Actions' "re-run jobs"
+// re-executes a run against the SAME commit SHA it originally
+// resolved, not the branch's current tip, so the run that appeared to
+// "still fail after the fix" had in fact checked out the commit from
+// BEFORE the fix existed. To remove any remaining doubt or scope-
+// resolution subtlety, this is now UNCONDITIONAL: every commit this
+// script makes is explicitly, locally stamped with this identity,
+// immediately before `git commit` — never `--global`, never
+// conditional on what might already be configured.
 const AUTOMATION_IDENTITY = {
   name: "Mile High Website Agent",
   email: "41898282+github-actions[bot]@users.noreply.github.com",
@@ -121,16 +134,31 @@ function getGitConfigValue(key) {
   }
 }
 
-// Sets ONLY whichever of user.name/user.email isn't already configured
-// at any scope, and ONLY as repository-local config — see this file's
-// header comment on AUTOMATION_IDENTITY for why.
+// Unconditionally sets BOTH user.name and user.email as repository-
+// local config (`git config --local`, never `--global`) — see this
+// file's header comment on AUTOMATION_IDENTITY for why this is no
+// longer a conditional "only if missing" check.
 function ensureGitIdentity() {
-  if (!getGitConfigValue("user.name")) {
-    execSync(`git config --local user.name ${JSON.stringify(AUTOMATION_IDENTITY.name)}`);
+  execSync(`git config --local user.name ${JSON.stringify(AUTOMATION_IDENTITY.name)}`);
+  execSync(`git config --local user.email ${JSON.stringify(AUTOMATION_IDENTITY.email)}`);
+}
+
+// Re-reads the identity back, immediately before `git commit`, and
+// throws (never a bare opaque `git commit` crash) if it is somehow
+// still not valid — defense in depth: even if ensureGitIdentity() above
+// were ever bypassed or ineffective for some reason this file's author
+// didn't anticipate, THIS is the last checkpoint before a commit is
+// attempted, so the failure mode is always this script's own clear
+// error, never git's cryptic "empty ident name ... not allowed".
+function assertGitIdentityIsValid() {
+  const name = getGitConfigValue("user.name");
+  const email = getGitConfigValue("user.email");
+  if (!name || !email) {
+    throw new Error(
+      `safe-commit: Git identity is still invalid immediately before commit (user.name="${name}", user.email="${email}") — refusing to attempt "git commit".`
+    );
   }
-  if (!getGitConfigValue("user.email")) {
-    execSync(`git config --local user.email ${JSON.stringify(AUTOMATION_IDENTITY.email)}`);
-  }
+  return { name, email };
 }
 
 function main() {
@@ -183,6 +211,13 @@ function main() {
   }
 
   ensureGitIdentity();
+  try {
+    assertGitIdentityIsValid();
+  } catch (err) {
+    console.error(err.message);
+    process.exitCode = 1;
+    return;
+  }
 
   const paths = allowed.map((e) => e.path);
   execSync(`git add -- ${paths.map((p) => JSON.stringify(p)).join(" ")}`, { stdio: "inherit" });
@@ -200,6 +235,7 @@ module.exports = {
   scanForCredentialLeak,
   getGitConfigValue,
   ensureGitIdentity,
+  assertGitIdentityIsValid,
 };
 
 if (require.main === module) {

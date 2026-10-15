@@ -121,13 +121,41 @@ async function main() {
     assert.strictEqual(/\brebase\b/.test(code), false);
   });
 
-  await test("the safe-commit/push steps run even if the Agent step failed (if: always()), so a failed-run record is still persisted", () => {
-    const lines = code.split("\n");
-    const safeCommitStepIdx = lines.findIndex((l) => /safe-commit\.js/.test(l));
-    assert.ok(safeCommitStepIdx > -1);
-    const precedingLines = lines.slice(Math.max(0, safeCommitStepIdx - 6), safeCommitStepIdx).join("\n");
-    assert.ok(/if:\s*always\(\)/.test(precedingLines), "the safe-commit step should run with if: always()");
-  });
+// Extracts one step's YAML block from a `- name:` line (matched by
+// `nameMatcher`) up to (but not including) the next `- name:` line, so
+// a test can assert on exactly that step's own `id:`/`if:`/`run:`
+// without false-matching some unrelated step.
+function extractStepBlock(code, nameMatcher) {
+  const lines = code.split("\n");
+  const startIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && nameMatcher.test(l));
+  assert.ok(startIdx > -1, `expected to find a step matching ${nameMatcher}`);
+  let endIdx = lines.length;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (/^\s*- name:/.test(lines[i])) {
+      endIdx = i;
+      break;
+    }
+  }
+  return lines.slice(startIdx, endIdx).join("\n");
+}
+
+await test("the safe-commit (persist) step has an explicit id and runs even if the Agent step failed (if: always()), so a failed-run record is still persisted", () => {
+  const block = extractStepBlock(code, /Persist Agent artifacts/);
+  assert.ok(/id:\s*persist\b/.test(block), "the persist step needs a stable id so the Push step can gate on its outcome");
+  assert.ok(/if:\s*always\(\)/.test(block), "the persist step should still run with if: always()");
+});
+
+await test("Push to main is gated on the persist step's own outcome — NOT merely a bare if: always()", () => {
+  const block = extractStepBlock(code, /Push to main/);
+  assert.ok(/steps\.persist\.outcome\s*==\s*['"]success['"]/.test(block), 'the Push step must check steps.persist.outcome == "success" before running');
+  // always() alone is insufficient (that was the actual bug this test
+  // guards against — see tests/github-actions-safe-commit.test.js's
+  // identity-regression history): assert the if: condition is NOT
+  // *just* always() with nothing else.
+  const ifLineMatch = block.match(/if:\s*(.+)/);
+  assert.ok(ifLineMatch, "Push to main must have an explicit if: condition");
+  assert.notStrictEqual(ifLineMatch[1].trim(), "always()", "Push to main must not run on a bare always() — it must also require persist to have succeeded");
+});
 
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));

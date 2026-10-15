@@ -134,15 +134,36 @@ jobs:
         # see .github/scripts/safe-commit.js for the actual allowlist/
         # credential-scan logic (also independently unit- and
         # integration-tested — tests/github-actions-safe-commit.test.js).
+        # `id: persist` so the Push step below can gate on ITS specific
+        # outcome rather than just "did something earlier fail."
+        id: persist
         if: always()
         run: |
           node .github/scripts/safe-commit.js "chore(agent): ${{ inputs.run_type }} run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Push to main
-        # A no-op ("Everything up-to-date") whenever safe-commit made no
-        # commit — always safe to run. Never force-pushed: if `main` has
-        # moved on since checkout, this fails loudly rather than
-        # overwriting anything, same "fail clearly, don't guess" posture
-        # as the rest of this workflow.
-        if: always()
+        # Gated on `steps.persist.outcome == 'success'` — NOT a bare
+        # `always()`. `always()` alone previously also ran this step
+        # when safe-commit itself failed (e.g. the allowlist/credential
+        # gate refusing to commit, or the earlier "Author identity
+        # unknown" bug) — harmless when nothing had been committed
+        # (`git push` with nothing new is a no-op "Everything
+        # up-to-date"), but wrong in principle: this step must never
+        # even ATTEMPT to push when the step that decides what's safe to
+        # commit didn't succeed. `always()` is still needed here too —
+        # without it, this step would use the implicit default
+        # `if: success()` and get skipped outright whenever the AGENT
+        # step above failed, even when persist still correctly committed
+        # that failure record and should still be pushed.
+        #
+        # Never force-pushed: if `main` has moved on since checkout,
+        # this fails loudly rather than overwriting anything. One
+        # concrete way that happens: re-running an OLD workflow run
+        # (GitHub's "Re-run jobs") re-executes against that run's
+        # ORIGINAL commit SHA, not main's current tip — if main has
+        # since advanced (e.g. a later push fixing this very workflow),
+        # that stale checkout's push is correctly rejected as a non-
+        # fast-forward ("fetch first"). The fix is to re-dispatch a NEW
+        # run (which resolves main's current tip), never to force-push.
+        if: always() && steps.persist.outcome == 'success'
         run: git push origin HEAD:main
