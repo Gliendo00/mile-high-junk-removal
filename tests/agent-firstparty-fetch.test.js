@@ -125,6 +125,28 @@ async function main() {
     assert.strictEqual(ga4Result.evidence.rotationSlug, "golden");
   });
 
+  await test("fetchSearchAnalyticsEvidence() threads `requestFingerprint` straight through to the written evidence when the caller supplies one, and defaults to null when it doesn't — finding-evidence.js's needsFindingEvidenceRefresh() relies on this", async () => {
+    configureAllIntegrations();
+    const { fetchSearchAnalyticsEvidence } = freshModule("../agent/lib/firstparty-fetch");
+
+    const withFingerprint = await fetchSearchAnalyticsEvidence({
+      findingKey: "content-gap::blog-seasonal-cleanout-guide.html",
+      scope: { type: "page", value: "blog-seasonal-cleanout-guide.html" },
+      requestFingerprint: "seasonal cleanout guide",
+      fetchImpl: tokenOrApi(() => ({ ok: true, status: 200, json: async () => ({ rows: [] }) })),
+    });
+    assert.strictEqual(withFingerprint.skipped, false);
+    assert.strictEqual(withFingerprint.evidence.requestFingerprint, "seasonal cleanout guide");
+
+    const withoutFingerprint = await fetchSearchAnalyticsEvidence({
+      findingKey: "content-gap::furniture-removal.html",
+      scope: { type: "page", value: "furniture-removal.html" },
+      fetchImpl: tokenOrApi(() => ({ ok: true, status: 200, json: async () => ({ rows: [] }) })),
+    });
+    assert.strictEqual(withoutFingerprint.skipped, false);
+    assert.strictEqual(withoutFingerprint.evidence.requestFingerprint, null);
+  });
+
   await test("fetchUrlInspectionEvidence() produces one evidence entry per URL and never leaks the raw inspectionResult payload", async () => {
     configureAllIntegrations();
     const { fetchUrlInspectionEvidence } = freshModule("../agent/lib/firstparty-fetch");

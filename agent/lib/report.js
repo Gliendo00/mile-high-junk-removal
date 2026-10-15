@@ -47,6 +47,38 @@ const { isRotationEvidenceCandidate, classifyRotationConclusion } = require("./r
 const EXTERNAL_RESEARCH_CAPABILITY_MISSING =
   "Not available in this environment — this unattended run has no research-capable orchestrator session (no Claude/Anthropic or other AI provider, no web-research access configured). External/local research (municipal, county, state sources; competitor landscape as context only) for this pick still requires a human or a future research-capable orchestrator session.";
 
+// Website Agent workflow provenance (generic — not specific to finding
+// evidence): a multi-step CI job (e.g. .github/workflows/website-agent.yml's
+// --refresh-rotation-evidence / --refresh-finding-evidence / --weekly
+// sequence) runs each step as its OWN separate `node` process. The
+// existing `runStartedAt` below (this PROCESS's own start time) can
+// therefore never recognize evidence fetched by an EARLIER step of the
+// SAME workflow dispatch as anything but "already existed before this
+// run" — it was only ever designed to catch a --resume picking something
+// up mid-process. `workflowStartedAt`, if the caller supplies one
+// (read from the CI-wide `WORKFLOW_STARTED_AT` env var, set once via
+// $GITHUB_ENV near the top of that job — see runner.js), is an
+// independent, EARLIER reference point spanning the whole workflow
+// dispatch, not just this one process.
+//
+// Must degrade safely: an absent, empty, or unparsable value is NEVER
+// treated as "everything is newly gathered" — parseWorkflowStartedAt()
+// returns null for all of those, and buildReport() below then falls
+// back to the EXACT existing `runStartedAt` reference, so every
+// existing caller (local/manual CLI runs, daily, diagnostics, resumes,
+// and every historical record) is completely unaffected. A parsed value
+// that is somehow AFTER `now` (clock skew, a malformed future
+// timestamp) is also rejected the same way, for the same reason — it
+// could never honestly classify anything as "gathered by this
+// workflow" anyway.
+function parseWorkflowStartedAt(value, now) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (now && parsed.getTime() > now.getTime()) return null;
+  return parsed;
+}
+
 function countBy(findings, predicate) {
   return findings.filter(predicate).length;
 }
@@ -110,11 +142,17 @@ function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingAppr
  *   itself, on a fresh single-pass run). Used only to tell "evidence gathered DURING this logical run"
  *   (fetched after the initial pass, picked up by a resume) apart from "evidence that already existed
  *   and was simply reused" — see the firstPartyEvidence section below.
+ * @param {string} [args.workflowStartedAt] - optional, CI-wide workflow-execution boundary (runner.js
+ *   reads this from the generic `WORKFLOW_STARTED_AT` env var — see this file's own
+ *   parseWorkflowStartedAt() header above for why `initialTimestamp` alone cannot answer this). Absent/
+ *   invalid/future values degrade safely to `initialTimestamp`'s existing behavior — see the
+ *   firstPartyEvidence section below.
  */
-function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp }) {
+function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp, workflowStartedAt }) {
   const findings = record.findings || [];
   const now = new Date(record.timestamp);
   const runStartedAt = new Date(initialTimestamp || record.timestamp);
+  const workflowBoundary = parseWorkflowStartedAt(workflowStartedAt, now) || runStartedAt;
 
   const changeDetection = classifyChanges(findings, previousRun);
 
@@ -215,6 +253,18 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   // step, run moments earlier in the same job).
   const firstPartyItems = firstPartyAttached.map(({ entry, findingKey, rotationSlug }) => {
     const gatheredDuringThisRun = new Date(entry.fetchedAt) > runStartedAt;
+    // New, separate from gatheredDuringThisRun above (kept byte-for-byte
+    // unchanged — still answers its own original, narrower "picked up
+    // mid-run by a --resume" question). gatheredByWorkflow answers a
+    // different question: "did one of THIS CI workflow dispatch's own
+    // steps (the evidence-refresh steps immediately before this one, or
+    // this run itself) produce this evidence" — see parseWorkflowStartedAt()'s
+    // header above. At/after, not strictly after, per the workflow
+    // boundary's own spec (the boundary is captured BEFORE any step
+    // runs, so anything fetched by this dispatch is >= it, never ==
+    // runStartedAt the way a resume case could be).
+    const gatheredByWorkflow = new Date(entry.fetchedAt).getTime() >= workflowBoundary.getTime();
+    const freshness = computeFirstPartyFreshness(entry, now).status;
     return {
       findingKey,
       rotationSlug,
@@ -222,12 +272,27 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
       metric: entry.metric,
       scope: entry.scope,
       window: entry.window.label,
-      freshness: computeFirstPartyFreshness(entry, now).status,
+      freshness,
       context: entry.context,
       gatheredDuringThisRun,
+      gatheredByWorkflow,
     };
   });
+  // Kept exactly as before — same computation, same meaning, same name
+  // (a resume-only signal) — never silently repurposed. See the new,
+  // separate gatheredByWorkflow* fields below for the workflow-boundary
+  // question this phase actually needed answered.
   const gatheredDuringThisRunCount = firstPartyItems.filter((i) => i.gatheredDuringThisRun).length;
+  // New, additive, mutually-exclusive three-way split that always sums
+  // to firstPartyAttached.length: fetched by this workflow dispatch /
+  // pre-existing and still fresh-or-aging / pre-existing and stale.
+  // Stale evidence CAN still appear here (attachFirstPartyEvidence()
+  // attaches every entry for a key regardless of age — see that file's
+  // header), so it is genuinely worth counting separately rather than
+  // silently folding into "reused."
+  const gatheredByWorkflowCount = firstPartyItems.filter((i) => i.gatheredByWorkflow).length;
+  const staleReusedCount = firstPartyItems.filter((i) => !i.gatheredByWorkflow && i.freshness === "stale").length;
+  const reusedFreshOrAgingCount = firstPartyAttached.length - gatheredByWorkflowCount - staleReusedCount;
 
   // Lifecycle-tightening — which open findings would genuinely benefit
   // from a targeted first-party check, raised NOW (only for a finding
@@ -249,6 +314,13 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     gatheredThisRunCount: firstPartyAttached.length,
     gatheredDuringThisRunCount,
     reusedFromBeforeCount: firstPartyAttached.length - gatheredDuringThisRunCount,
+    // New fields (additive — the three above are untouched, see this
+    // function's own header): gatheredByWorkflowCount +
+    // reusedFreshOrAgingCount + staleReusedCount always equals
+    // gatheredThisRunCount.
+    gatheredByWorkflowCount,
+    reusedFreshOrAgingCount,
+    staleReusedCount,
     countsBySource: firstPartyCountsBySource,
     sourcesNotConsulted,
     questionsRaisedCount: firstPartyQuestionsPending.length,
@@ -426,4 +498,4 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   return report;
 }
 
-module.exports = { buildReport, buildHealthSummary, computeRunStatus };
+module.exports = { buildReport, buildHealthSummary, computeRunStatus, parseWorkflowStartedAt };

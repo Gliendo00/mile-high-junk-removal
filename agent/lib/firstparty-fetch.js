@@ -91,9 +91,13 @@ function computeWindow(days, lagDays) {
  * @param {string[]} [args.dimensions] - default ["query","page"]
  * @param {object[]} [args.dimensionFilterGroups] - raw Search Console filter groups
  * @param {string} [args.context]
+ * @param {string} [args.requestFingerprint] - threaded straight through to
+ *   makeFirstPartyEvidence() untouched, same pattern as findingKey/rotationSlug
+ *   above — see finding-evidence.js's needsFindingEvidenceRefresh() for the
+ *   one caller that actually uses it today.
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, fetchImpl } = {}) {
+async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, requestFingerprint, fetchImpl } = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -116,6 +120,7 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
   const evidence = makeFirstPartyEvidence({
     findingKey,
     rotationSlug,
+    requestFingerprint,
     source: "search-console-search-analytics",
     metric: "clicks-impressions-ctr-position",
     dimension: dims.join("+"),

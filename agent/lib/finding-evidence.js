@@ -92,6 +92,8 @@
 // rotation-evidence.js's header gives for why ITS request needs no
 // judgment either).
 
+const { isBlogPage } = require("./page-groups");
+
 const SOURCE = "search-console-search-analytics";
 
 const QUERY_PAGE_CANDIDATE_TYPES = new Set(["content-gap", "structural-inconsistency"]);
@@ -114,13 +116,21 @@ function isQueryPageEvidenceCandidate(finding) {
  * ")`), reused here rather than re-invented. Not a guessed keyword, not
  * an assumption about demand — just this page's own existing identity,
  * turned into the string a real searcher might plausibly type.
+ *
+ * For a page isBlogPage() classifies as a blog post, the leading
+ * "blog-" is ALSO stripped first — that token is this repo's own
+ * repository/page-type convention (see page-groups.js's BLOG_PAGE_RE),
+ * never part of a real search topic, so leaving it in produced a
+ * semantically weak filter term (e.g. "blog seasonal cleanout guide"
+ * instead of "seasonal cleanout guide"). City/service pages have no
+ * such structural prefix and are completely unaffected — this never
+ * widens into H1/title parsing or any other guessed-keyword source.
  * @param {string} page - a repo-relative file name, e.g. "furniture-removal.html"
  */
 function deriveQueryFilterTerm(page) {
-  return String(page)
-    .replace(/\.html$/i, "")
-    .replace(/-/g, " ")
-    .trim();
+  let base = String(page).replace(/\.html$/i, "");
+  if (isBlogPage(page)) base = base.replace(/^blog-/, "");
+  return base.replace(/-/g, " ").trim();
 }
 
 /**
@@ -152,6 +162,15 @@ function buildQueryPageEvidenceRequest(finding, options = {}) {
     days,
     dimensions: ["query", "page"],
     dimensionFilterGroups: [{ filters: [{ dimension: "query", operator: "contains", expression: term }] }],
+    // Recorded onto the written evidence (firstparty-fetch.js threads
+    // this straight through to makeFirstPartyEvidence()) so
+    // needsFindingEvidenceRefresh() below can tell "this evidence was
+    // fetched using the query term deriveQueryFilterTerm() would
+    // produce TODAY" apart from "this evidence was fetched using some
+    // OLDER term" — the latter must never be treated as a redundant
+    // repeat just because it is still date-fresh. See that function's
+    // own header.
+    requestFingerprint: term,
     context: `Weekly first-party-evidence refresh for "${finding.type}" on ${page} — does this property's real Search Console query data mentioning "${term}" (this page's own topic) land on ${page}, or on a different URL? Deliberately NOT page-filtered — see this module's own header on why a page filter would make a mismatch structurally undetectable.`,
   };
 }
@@ -179,6 +198,69 @@ function freshlyEvidencedFindingKeys(entries, now = new Date()) {
   return keys;
 }
 
+/**
+ * The requestFingerprint recorded on findingKey's MOST RECENTLY FETCHED
+ * fresh-or-aging (never stale — same rule freshlyEvidencedFindingKeys()
+ * applies) search-console-search-analytics entry, or `undefined` when
+ * there is no such entry at all. Returns `null` specifically when the
+ * most recent fresh-or-aging entry predates this field (every entry
+ * written before this phase) — `needsFindingEvidenceRefresh()` below
+ * treats `null` exactly like a mismatch, never like "confirmed current."
+ *
+ * Deliberately the MOST RECENT matching entry, not just the first one
+ * encountered: evidence files are never overwritten (each fetch is its
+ * own new file — see firstparty-fetch.js's writeFirstPartyEvidence()),
+ * so more than one fresh-or-aging entry can legitimately exist for the
+ * same key at once (e.g. an older, pre-fix evidence file sitting
+ * alongside a newer, corrected one). The most recent attempt is the
+ * authoritative answer to "what term did we most recently check this
+ * with" — an older entry's fingerprint (or its ABSENCE of one) must
+ * never override what a newer, already-corrected fetch recorded.
+ * @param {object[]} entries
+ * @param {string} findingKey
+ * @param {Date} [now]
+ * @returns {string|null|undefined}
+ */
+function freshFindingEvidenceFingerprint(entries, findingKey, now = new Date()) {
+  const { computeFirstPartyFreshness } = require("./firstparty-evidence");
+  let mostRecent = null; // {fetchedAt, fingerprint} | null
+  for (const e of entries || []) {
+    if (e.source !== SOURCE || e.findingKey !== findingKey) continue;
+    if (computeFirstPartyFreshness(e, now).status === "stale") continue;
+    if (!mostRecent || new Date(e.fetchedAt).getTime() > new Date(mostRecent.fetchedAt).getTime()) {
+      mostRecent = { fetchedAt: e.fetchedAt, fingerprint: e.requestFingerprint || null };
+    }
+  }
+  return mostRecent ? mostRecent.fingerprint : undefined;
+}
+
+/**
+ * True when `finding` genuinely needs a --refresh-finding-evidence
+ * fetch this run: either no fresh-or-aging evidence exists for it at
+ * all, or the fresh-or-aging evidence on file was recorded under a
+ * DIFFERENT query term than deriveQueryFilterTerm() would produce for it
+ * RIGHT NOW (including evidence written before requestFingerprint
+ * existed, which always reads as a mismatch).
+ *
+ * This is the deliberate, narrow mechanism that lets a corrected
+ * deriveQueryFilterTerm() (e.g. the "blog-" prefix fix above) self-heal
+ * its own prior evidence — a finding whose existing evidence used the
+ * OLD, weaker term is automatically re-eligible for exactly one honest
+ * re-fetch with the CURRENT term, with no manual one-time deletion of
+ * the obsolete evidence file and no weakening of the freshness windows
+ * for anything else. Evidence is never deleted by this — the obsolete
+ * file stays on disk/in git history; it is simply no longer treated as
+ * "already answered" for this candidate going forward.
+ * @param {object} finding
+ * @param {object[]} entries
+ * @param {Date} [now]
+ */
+function needsFindingEvidenceRefresh(finding, entries, now = new Date()) {
+  const recorded = freshFindingEvidenceFingerprint(entries, finding.key, now);
+  if (recorded === undefined) return true; // no fresh-or-aging evidence at all
+  return recorded !== deriveQueryFilterTerm(finding.pages[0]);
+}
+
 module.exports = {
   SOURCE,
   QUERY_PAGE_CANDIDATE_TYPES,
@@ -186,4 +268,6 @@ module.exports = {
   deriveQueryFilterTerm,
   buildQueryPageEvidenceRequest,
   freshlyEvidencedFindingKeys,
+  freshFindingEvidenceFingerprint,
+  needsFindingEvidenceRefresh,
 };

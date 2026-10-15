@@ -90,6 +90,13 @@ function computeFirstPartyFreshness(evidence, now = new Date()) {
  * @param {string} args.context - what was queried and why, in plain language (ties back to the finding/question)
  * @param {string} args.limitations - required, like research.js — what this evidence does NOT establish
  * @param {string} [args.fetchedAt] - ISO timestamp; defaults to now
+ * @param {string} [args.requestFingerprint] - optional, caller-supplied identity of the
+ *   exact request that produced this evidence (e.g. finding-evidence.js's
+ *   deriveQueryFilterTerm() output) — lets a caller later tell "this
+ *   evidence answers the SAME question I'd ask today" apart from "this
+ *   evidence answers a question my own derivation logic no longer asks,"
+ *   even while the evidence is still date-fresh. Purely descriptive, like
+ *   `scope` — never read by decision.js, never affects freshness itself.
  */
 function makeFirstPartyEvidence(args) {
   if (!args || typeof args !== "object") throw new Error("makeFirstPartyEvidence requires an object");
@@ -125,6 +132,9 @@ function makeFirstPartyEvidence(args) {
   if (args.rotationSlug !== undefined && args.rotationSlug !== null) {
     assertNonEmptyString(args.rotationSlug, "rotationSlug");
   }
+  if (args.requestFingerprint !== undefined && args.requestFingerprint !== null) {
+    assertNonEmptyString(args.requestFingerprint, "requestFingerprint");
+  }
 
   return {
     findingKey: args.findingKey || null,
@@ -141,6 +151,7 @@ function makeFirstPartyEvidence(args) {
     context: args.context,
     limitations: args.limitations,
     fetchedAt: args.fetchedAt || new Date().toISOString(),
+    requestFingerprint: args.requestFingerprint || null,
   };
 }
 

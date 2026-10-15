@@ -9,7 +9,7 @@
 // Run with:  node tests/agent-report.test.js
 
 const assert = require("assert");
-const { buildReport } = require("../agent/lib/report");
+const { buildReport, parseWorkflowStartedAt } = require("../agent/lib/report");
 const { makeFirstPartyEvidence, SOURCES: FIRST_PARTY_SOURCES } = require("../agent/lib/firstparty-evidence");
 const { SOURCE: ROTATION_SOURCE } = require("../agent/lib/rotation-evidence");
 
@@ -394,6 +394,137 @@ test("report.firstPartySignals is a genuinely separate section from report.first
   for (const field of ["verdict", "recommendation", "confidence", "decision"]) {
     assert.strictEqual(Object.prototype.hasOwnProperty.call(report.firstPartySignals.items[0], field), false);
   }
+});
+
+// -----------------------------------------------------------------------
+// Website Agent workflow provenance — workflowStartedAt / gatheredByWorkflow
+// -----------------------------------------------------------------------
+
+test("parseWorkflowStartedAt(): undefined/null/empty all degrade to null (fall back to existing runStartedAt-based behavior)", () => {
+  assert.strictEqual(parseWorkflowStartedAt(undefined), null);
+  assert.strictEqual(parseWorkflowStartedAt(null), null);
+  assert.strictEqual(parseWorkflowStartedAt(""), null);
+});
+
+test("parseWorkflowStartedAt(): an unparsable string degrades to null, never throws, never produces an Invalid Date", () => {
+  assert.strictEqual(parseWorkflowStartedAt("not-a-timestamp"), null);
+  assert.strictEqual(parseWorkflowStartedAt("WORKFLOW_STARTED_AT"), null); // the literal var name, e.g. a misconfigured workflow
+});
+
+test("parseWorkflowStartedAt(): a valid ISO timestamp parses to the equivalent Date", () => {
+  const parsed = parseWorkflowStartedAt("2026-10-15T17:30:00Z");
+  assert.ok(parsed instanceof Date);
+  assert.strictEqual(parsed.getTime(), new Date("2026-10-15T17:30:00Z").getTime());
+});
+
+test("parseWorkflowStartedAt(): a value AFTER `now` also degrades to null — a workflow cannot honestly have started in the future", () => {
+  const now = new Date("2026-10-15T12:00:00Z");
+  assert.strictEqual(parseWorkflowStartedAt("2026-10-15T13:00:00Z", now), null);
+});
+
+function findingEvidence(findingKey, fetchedAt, overrides) {
+  return makeFirstPartyEvidence({
+    findingKey,
+    source: "search-console-search-analytics",
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "blog-seasonal-cleanout-guide.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "c",
+    limitations: "l",
+    fetchedAt,
+    ...overrides,
+  });
+}
+
+test("with NO workflowStartedAt supplied: gatheredByWorkflow/gatheredByWorkflowCount degrade to the EXACT existing gatheredDuringThisRun/gatheredDuringThisRunCount behavior — zero change for local/manual CLI runs, daily, diagnostics, and every historical record", () => {
+  const record = {
+    runId: "r1",
+    timestamp: "2026-10-15T18:00:00.000Z",
+    runType: "weekly",
+    mode: "dry-run",
+    summary: { pagesScanned: 51, byCategory: {} },
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "NO_CHANGE", status: "proposed", summary: "s", pages: ["blog-seasonal-cleanout-guide.html"], firstPartyEvidence: [findingEvidence("a", "2026-10-15T17:39:22.391Z")] },
+    ],
+    validation: { performed: false, confirmed: 0, reverted: 0 },
+    proposalsSync: { skipped: true, reason: "x" },
+  };
+  const report = buildReport({ record, previousRun: null, firstPartyIntegrations: { searchConsole: true, ga4: false } });
+  const item = report.firstPartyEvidence.items[0];
+  assert.strictEqual(item.gatheredByWorkflow, item.gatheredDuringThisRun);
+  assert.strictEqual(report.firstPartyEvidence.gatheredByWorkflowCount, report.firstPartyEvidence.gatheredDuringThisRunCount);
+  assert.strictEqual(report.firstPartyEvidence.reusedFreshOrAgingCount + report.firstPartyEvidence.gatheredByWorkflowCount + report.firstPartyEvidence.staleReusedCount, report.firstPartyEvidence.gatheredThisRunCount);
+});
+
+test("WITH a valid workflowStartedAt BEFORE the evidence's own fetchedAt (the Controlled Weekly #11 scenario — evidence fetched by an earlier --refresh-finding-evidence step in the SAME job): gatheredByWorkflow is true even though gatheredDuringThisRun (the unchanged, resume-only field) stays false", () => {
+  const record = {
+    runId: "r1",
+    timestamp: "2026-10-15T18:00:00.000Z", // the main --weekly process's own, LATER start time
+    runType: "weekly",
+    mode: "dry-run",
+    summary: { pagesScanned: 51, byCategory: {} },
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "NO_CHANGE", status: "proposed", summary: "s", pages: ["blog-seasonal-cleanout-guide.html"], firstPartyEvidence: [findingEvidence("a", "2026-10-15T17:39:22.391Z")] }, // fetched by the EARLIER refresh step
+    ],
+    validation: { performed: false, confirmed: 0, reverted: 0 },
+    proposalsSync: { skipped: true, reason: "x" },
+  };
+  const report = buildReport({
+    record,
+    previousRun: null,
+    firstPartyIntegrations: { searchConsole: true, ga4: false },
+    workflowStartedAt: "2026-10-15T17:38:00.000Z", // captured at the TOP of the job, before either refresh step ran
+  });
+  const item = report.firstPartyEvidence.items[0];
+  assert.strictEqual(item.gatheredDuringThisRun, false, "unchanged field: this process's own start was 18:00, after fetchedAt — never silently reinterpreted");
+  assert.strictEqual(item.gatheredByWorkflow, true, "new field: the workflow boundary (17:38) was before fetchedAt (17:39:22) — correctly recognized as gathered by this SAME workflow dispatch");
+  assert.strictEqual(report.firstPartyEvidence.gatheredByWorkflowCount, 1);
+  assert.strictEqual(report.firstPartyEvidence.reusedFreshOrAgingCount, 0);
+  assert.strictEqual(report.firstPartyEvidence.staleReusedCount, 0);
+});
+
+test("stale evidence reused from before this workflow is counted in staleReusedCount, separately from fresh/aging reused evidence — never silently folded into one 'reused' bucket", () => {
+  const now = "2026-10-15T18:00:00.000Z";
+  const staleFetchedAt = new Date(new Date(now).getTime() - 25 * 24 * 60 * 60 * 1000).toISOString(); // >21d, stale for search-console-search-analytics
+  const record = {
+    runId: "r1",
+    timestamp: now,
+    runType: "weekly",
+    mode: "dry-run",
+    summary: { pagesScanned: 51, byCategory: {} },
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "NO_CHANGE", status: "proposed", summary: "s", pages: ["blog-seasonal-cleanout-guide.html"], firstPartyEvidence: [findingEvidence("a", staleFetchedAt)] },
+    ],
+    validation: { performed: false, confirmed: 0, reverted: 0 },
+    proposalsSync: { skipped: true, reason: "x" },
+  };
+  const report = buildReport({ record, previousRun: null, firstPartyIntegrations: { searchConsole: true, ga4: false }, workflowStartedAt: now });
+  assert.strictEqual(report.firstPartyEvidence.items[0].freshness, "stale");
+  assert.strictEqual(report.firstPartyEvidence.items[0].gatheredByWorkflow, false);
+  assert.strictEqual(report.firstPartyEvidence.staleReusedCount, 1);
+  assert.strictEqual(report.firstPartyEvidence.gatheredByWorkflowCount, 0);
+  assert.strictEqual(report.firstPartyEvidence.reusedFreshOrAgingCount, 0);
+});
+
+test("an INVALID workflowStartedAt (garbage string) degrades safely to existing behavior — never misclassifies pre-existing evidence as newly gathered by this workflow", () => {
+  const record = {
+    runId: "r1",
+    timestamp: "2026-10-15T18:00:00.000Z",
+    runType: "weekly",
+    mode: "dry-run",
+    summary: { pagesScanned: 51, byCategory: {} },
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "NO_CHANGE", status: "proposed", summary: "s", pages: ["blog-seasonal-cleanout-guide.html"], firstPartyEvidence: [findingEvidence("a", "2026-10-15T17:39:22.391Z")] },
+    ],
+    validation: { performed: false, confirmed: 0, reverted: 0 },
+    proposalsSync: { skipped: true, reason: "x" },
+  };
+  const report = buildReport({ record, previousRun: null, firstPartyIntegrations: { searchConsole: true, ga4: false }, workflowStartedAt: "not-a-real-timestamp" });
+  const item = report.firstPartyEvidence.items[0];
+  assert.strictEqual(item.gatheredByWorkflow, item.gatheredDuringThisRun, "an invalid boundary must fall back to the exact same reference gatheredDuringThisRun already uses, never default to 'everything is new'");
+  assert.strictEqual(item.gatheredByWorkflow, false, "a fresh, single-pass run (no resume) correctly reads as reused, not newly gathered, same as gatheredDuringThisRun always has");
 });
 
 if (process.exitCode) {

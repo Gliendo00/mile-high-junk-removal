@@ -91,6 +91,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Record workflow start time
+        # Generic Website Agent workflow-execution boundary — NOT
+        # specific to finding evidence (see agent/lib/report.js's
+        # parseWorkflowStartedAt() header for the full root-cause
+        # writeup this closes). Exported exactly once, here, via
+        # $GITHUB_ENV, which GitHub Actions automatically carries into
+        # EVERY later step's own process environment for the rest of
+        # this job — no need to re-list WORKFLOW_STARTED_AT in any
+        # step's own `env:` block below. Lets the final --daily/--weekly
+        # Agent step's report correctly recognize evidence fetched by
+        # the earlier --refresh-rotation-evidence/--refresh-finding-
+        # evidence steps (weekly only) as "gathered by this workflow,"
+        # not "reused from before," even though each of those steps is
+        # its own separate `node` process with no shared in-memory
+        # state. Unconditional (always set, even for daily/diagnostic
+        # dispatches) because it's simply unused there — report.js
+        # already defaults to its existing behavior when this is absent,
+        # so gating it per run_type would add YAML complexity for zero
+        # behavioral difference.
+        run: echo "WORKFLOW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Verify required Supabase configuration
         # The brief for this permanent runner: silently skipping proposal
         # sync is no longer acceptable (it was fine for earlier phases'

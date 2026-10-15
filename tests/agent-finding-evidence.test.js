@@ -14,6 +14,8 @@ const {
   deriveQueryFilterTerm,
   buildQueryPageEvidenceRequest,
   freshlyEvidencedFindingKeys,
+  freshFindingEvidenceFingerprint,
+  needsFindingEvidenceRefresh,
 } = require("../agent/lib/finding-evidence");
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 
@@ -94,7 +96,23 @@ test("isQueryPageEvidenceCandidate(null/undefined) degrades to false, never thro
 test("deriveQueryFilterTerm() turns a page file name into its plain-words form, reusing decision.js's own existing transform", () => {
   assert.strictEqual(deriveQueryFilterTerm("furniture-removal.html"), "furniture removal");
   assert.strictEqual(deriveQueryFilterTerm("aurora-junk-removal.html"), "aurora junk removal");
-  assert.strictEqual(deriveQueryFilterTerm("blog-seasonal-cleanout-guide.html"), "blog seasonal cleanout guide");
+});
+
+test("deriveQueryFilterTerm() strips the leading 'blog-' structural prefix for a REAL blog page — that token is a repo convention, never part of the real search topic", () => {
+  assert.strictEqual(deriveQueryFilterTerm("blog-seasonal-cleanout-guide.html"), "seasonal cleanout guide");
+  assert.strictEqual(deriveQueryFilterTerm("blog-example-post.html"), "example post");
+});
+
+test("deriveQueryFilterTerm() leaves a normal service page completely unchanged (no 'blog-' prefix to strip)", () => {
+  assert.strictEqual(deriveQueryFilterTerm("furniture-removal.html"), "furniture removal");
+});
+
+test("deriveQueryFilterTerm() leaves a normal city page completely unchanged (no 'blog-' prefix to strip)", () => {
+  assert.strictEqual(deriveQueryFilterTerm("aurora-junk-removal.html"), "aurora junk removal");
+});
+
+test("deriveQueryFilterTerm() does NOT strip a filename that merely starts with similar letters but isn't classified a blog page by isBlogPage() — e.g. 'blogger-...', which has no literal 'blog-' prefix", () => {
+  assert.strictEqual(deriveQueryFilterTerm("blogger-marketing-tips.html"), "blogger marketing tips");
 });
 
 // -----------------------------------------------------------------------
@@ -114,6 +132,12 @@ test("buildQueryPageEvidenceRequest() produces a search-analytics request with d
   assert.strictEqual(filter.operator, "contains");
   assert.strictEqual(filter.expression, "furniture removal");
   assert.ok(typeof request.context === "string" && request.context.length > 0);
+});
+
+test("buildQueryPageEvidenceRequest() records the derived term as requestFingerprint, including the blog-prefix fix", () => {
+  assert.strictEqual(buildQueryPageEvidenceRequest(contentGapFinding()).requestFingerprint, "furniture removal");
+  const blogFinding = contentGapFinding({ key: "content-gap::blog-seasonal-cleanout-guide.html", pages: ["blog-seasonal-cleanout-guide.html"] });
+  assert.strictEqual(buildQueryPageEvidenceRequest(blogFinding).requestFingerprint, "seasonal cleanout guide");
 });
 
 test("buildQueryPageEvidenceRequest() NEVER includes a page-dimension filter anywhere in dimensionFilterGroups — structural proof, not just today's one example", () => {
@@ -195,6 +219,117 @@ test("freshlyEvidencedFindingKeys() ignores evidence from a different source (e.
 test("freshlyEvidencedFindingKeys() on an empty/missing entries list returns an empty set, never throws", () => {
   assert.strictEqual(freshlyEvidencedFindingKeys([]).size, 0);
   assert.strictEqual(freshlyEvidencedFindingKeys(undefined).size, 0);
+});
+
+// -----------------------------------------------------------------------
+// Fingerprint-aware freshness — lets a corrected deriveQueryFilterTerm()
+// self-heal its own prior evidence without a one-time manual deletion
+// -----------------------------------------------------------------------
+
+function contentGapFindingFor(page) {
+  return contentGapFinding({ key: `content-gap::${page}`, pages: [page] });
+}
+
+test("freshFindingEvidenceFingerprint() returns undefined when there is no fresh-or-aging entry for the key at all", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  assert.strictEqual(freshFindingEvidenceFingerprint([], "a", now), undefined);
+});
+
+test("freshFindingEvidenceFingerprint() returns null for a fresh-or-aging entry written before requestFingerprint existed (no field at all)", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const entries = [searchAnalyticsEvidence("a", now.toISOString())]; // no requestFingerprint passed
+  assert.strictEqual(freshFindingEvidenceFingerprint(entries, "a", now), null);
+});
+
+test("freshFindingEvidenceFingerprint() returns the recorded fingerprint when present", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const entry = makeFirstPartyEvidence({
+    findingKey: "a",
+    requestFingerprint: "furniture removal",
+    source: SOURCE,
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "c",
+    limitations: "l",
+    fetchedAt: now.toISOString(),
+  });
+  assert.strictEqual(freshFindingEvidenceFingerprint([entry], "a", now), "furniture removal");
+});
+
+test("needsFindingEvidenceRefresh() is true when there is no fresh-or-aging evidence at all", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  assert.strictEqual(needsFindingEvidenceRefresh(contentGapFindingFor("furniture-removal.html"), [], now), true);
+});
+
+test("needsFindingEvidenceRefresh() is false when fresh evidence was recorded under the SAME current-derivation fingerprint — a genuinely redundant fetch is correctly skipped", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const finding = contentGapFindingFor("furniture-removal.html");
+  const entry = makeFirstPartyEvidence({
+    findingKey: finding.key,
+    requestFingerprint: "furniture removal",
+    source: SOURCE,
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "c",
+    limitations: "l",
+    fetchedAt: now.toISOString(),
+  });
+  assert.strictEqual(needsFindingEvidenceRefresh(finding, [entry], now), false);
+});
+
+test("THE ONE-TIME FIX: needsFindingEvidenceRefresh() is TRUE for fresh, legacy evidence written before requestFingerprint existed (e.g. the real blog-seasonal-cleanout-guide.html evidence fetched under the old 'blog seasonal cleanout guide' term) — self-heals without deleting the obsolete file or weakening freshness", () => {
+  const now = new Date("2026-10-15T18:00:00.000Z");
+  const finding = contentGapFindingFor("blog-seasonal-cleanout-guide.html");
+  // Simulates the real, already-committed evidence file: fetched moments
+  // ago (date-fresh) but with NO requestFingerprint field at all, because
+  // it predates this fix and was fetched using the OLD, weaker term.
+  const legacyEntry = searchAnalyticsEvidence(finding.key, now.toISOString());
+  assert.strictEqual(needsFindingEvidenceRefresh(finding, [legacyEntry], now), true, "legacy evidence recorded under an unknown/older term must never block a corrected re-fetch, even while date-fresh");
+});
+
+test("needsFindingEvidenceRefresh() is TRUE when fresh evidence exists but was recorded under an explicitly DIFFERENT fingerprint (derivation logic changed again in the future)", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const finding = contentGapFindingFor("furniture-removal.html");
+  const entry = makeFirstPartyEvidence({
+    findingKey: finding.key,
+    requestFingerprint: "some older term",
+    source: SOURCE,
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "c",
+    limitations: "l",
+    fetchedAt: now.toISOString(),
+  });
+  assert.strictEqual(needsFindingEvidenceRefresh(finding, [entry], now), true);
+});
+
+test("needsFindingEvidenceRefresh() is TRUE for STALE evidence even if its fingerprint matches — staleness alone is still sufficient, unchanged from freshlyEvidencedFindingKeys()'s existing rule", () => {
+  const now = new Date("2026-10-15T12:00:00.000Z");
+  const finding = contentGapFindingFor("furniture-removal.html");
+  const staleFetchedAt = new Date(now.getTime() - 25 * 24 * 60 * 60 * 1000).toISOString();
+  const entry = makeFirstPartyEvidence({
+    findingKey: finding.key,
+    requestFingerprint: "furniture removal",
+    source: SOURCE,
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-08-01", end: "2026-08-28", label: "28 days ending 2026-08-28" },
+    observed: { totalRowsReturned: 0, topRows: [] },
+    context: "c",
+    limitations: "l",
+    fetchedAt: staleFetchedAt,
+  });
+  assert.strictEqual(needsFindingEvidenceRefresh(finding, [entry], now), true);
 });
 
 if (process.exitCode) {

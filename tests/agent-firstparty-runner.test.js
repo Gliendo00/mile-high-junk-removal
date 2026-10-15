@@ -88,14 +88,22 @@ test("BUG FIX regression: a finding's `.firstPartyEvidence` AND `.firstPartySign
 
     const persisted = record.findings.find((f) => f.key === target.key);
     assert.ok(persisted, "expected the target finding to appear in the persisted record");
-    assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length === 1, "persisted finding must carry its attached firstPartyEvidence");
-    assert.strictEqual(persisted.firstPartyEvidence[0].findingKey, target.key);
-    assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length === 1, "persisted finding must carry its derived firstPartySignals");
-    assert.strictEqual(persisted.firstPartySignals[0].type, "query-page-mismatch");
+    // >= 1, not strictly 1: the real site may already carry an older,
+    // still-fresh, genuinely-committed evidence file for this same
+    // finding key (evidence files are never overwritten/deleted), and
+    // this test's own fixture adds one more on top of whatever already
+    // exists. The firstPartySignals assertions below are what actually
+    // prove THIS fixture's mismatch row was recognized and mapped
+    // through to the persisted record/report, independent of how many
+    // evidence entries exist in total.
+    assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length >= 1, "persisted finding must carry its attached firstPartyEvidence");
+    assert.ok(persisted.firstPartyEvidence.some((e) => e.findingKey === target.key && e.context === "regression-test fixture"), "the test's own fixture evidence specifically must be among what's attached");
+    assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length >= 1, "persisted finding must carry its derived firstPartySignals");
+    assert.ok(persisted.firstPartySignals.some((s) => s.type === "query-page-mismatch"), "expected the mismatch this fixture's evidence describes to have produced a query-page-mismatch signal");
 
-    assert.strictEqual(record.report.firstPartyEvidence.gatheredThisRunCount, 1, "the report's raw-evidence summary must reflect the finding-attached evidence, not just rotation evidence");
-    assert.strictEqual(record.report.firstPartySignals.count, 1, "the report's derived-signals summary must reflect the finding-attached signal");
-    assert.strictEqual(record.report.firstPartySignals.items[0].type, "query-page-mismatch");
+    assert.ok(record.report.firstPartyEvidence.gatheredThisRunCount >= 1, "the report's raw-evidence summary must reflect the finding-attached evidence, not just rotation evidence");
+    assert.ok(record.report.firstPartySignals.count >= 1, "the report's derived-signals summary must reflect the finding-attached signal");
+    assert.ok(record.report.firstPartySignals.items.some((i) => i.type === "query-page-mismatch"));
 
     // And the decision itself is still completely unaffected.
     assert.strictEqual(persisted.decision, target.decision);

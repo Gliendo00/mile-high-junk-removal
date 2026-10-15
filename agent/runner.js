@@ -253,7 +253,14 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     };
     const { previousRun } = readPreviousRun(options.logPath, priorRecord ? runId : null);
     const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };
-    failedRecord.report = buildReport({ record: failedRecord, previousRun, failure, firstPartyIntegrations, initialTimestamp: priorRecord ? priorRecord.timestamp : failedRecord.timestamp });
+    failedRecord.report = buildReport({
+      record: failedRecord,
+      previousRun,
+      failure,
+      firstPartyIntegrations,
+      initialTimestamp: priorRecord ? priorRecord.timestamp : failedRecord.timestamp,
+      workflowStartedAt: process.env.WORKFLOW_STARTED_AT,
+    });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
   }
@@ -449,6 +456,14 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     rotationPriorities,
     firstPartyIntegrations,
     initialTimestamp: priorRecord ? priorRecord.timestamp : record.timestamp,
+    // Generic Website Agent workflow-execution boundary (not specific to
+    // finding evidence) — set once via $GITHUB_ENV near the top of
+    // .github/workflows/website-agent.yml's job, so every step after it
+    // (including this one) automatically inherits it. Absent for
+    // local/manual CLI runs — buildReport() falls back to
+    // initialTimestamp's existing behavior in that case (see
+    // report.js's parseWorkflowStartedAt()).
+    workflowStartedAt: process.env.WORKFLOW_STARTED_AT,
   });
 
   appendRun(record, options.logPath);

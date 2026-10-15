@@ -157,7 +157,7 @@ const { fetchFirstPartyEvidence, writeFirstPartyEvidence } = require("./lib/firs
 const { loadCompletedJobEvidence, summarizeByCity } = require("./lib/completed-job-intake");
 const { loadRotationState, computePriorities } = require("./lib/research-rotation");
 const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
-const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, freshlyEvidencedFindingKeys } = require("./lib/finding-evidence");
+const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, needsFindingEvidenceRefresh } = require("./lib/finding-evidence");
 const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
 
 function parseResumeArg(args) {
@@ -283,12 +283,17 @@ function classifyFindingEvidenceOutcome(result) {
 // posture as runRefreshRotationEvidence() above.
 //
 // A candidate with STALE existing evidence is still eligible — only
-// evidence that's still FRESH-or-AGING (freshlyEvidencedFindingKeys(),
-// same freshness windows report.js/rotation-evidence.js already use)
-// counts as "already evidenced" and skips a re-fetch. See
-// finding-evidence.js's header on why this is freshness-based, not the
-// EXISTING firstparty-candidates.js mechanism's permanent-suppression
-// rule (a deliberately separate, unchanged lifecycle).
+// evidence that's still FRESH-or-AGING AND recorded under the SAME
+// query term deriveQueryFilterTerm() would produce today
+// (needsFindingEvidenceRefresh(), same freshness windows report.js/
+// rotation-evidence.js already use) counts as "already evidenced" and
+// skips a re-fetch. See finding-evidence.js's header on why this is
+// freshness-AND-fingerprint-based, not the EXISTING
+// firstparty-candidates.js mechanism's permanent-suppression rule (a
+// deliberately separate, unchanged lifecycle) — and on how the
+// fingerprint half is what lets a corrected deriveQueryFilterTerm()
+// self-heal its own obsolete evidence without a one-time manual
+// deletion.
 //
 // Returns the per-candidate outcomes array (not currently persisted
 // anywhere beyond this console log and the evidence files' own natural
@@ -296,8 +301,8 @@ function classifyFindingEvidenceOutcome(result) {
 // on it directly without parsing console output.
 async function runRefreshFindingEvidence() {
   const { findings } = gatherFindings();
-  const freshKeys = freshlyEvidencedFindingKeys(loadFirstPartyEvidence().entries);
-  const candidates = findings.filter((f) => isQueryPageEvidenceCandidate(f) && !freshKeys.has(f.key));
+  const entries = loadFirstPartyEvidence().entries;
+  const candidates = findings.filter((f) => isQueryPageEvidenceCandidate(f) && needsFindingEvidenceRefresh(f, entries));
 
   console.log(`Finding evidence refresh: ${candidates.length} candidate finding(s) needing first-party query/page evidence.`);
   const outcomes = [];

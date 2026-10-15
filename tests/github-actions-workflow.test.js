@@ -293,6 +293,24 @@ await test("Daily dispatches remain behaviorally unchanged by the finding-level 
   assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
+await test("a generic 'Record workflow start time' step exists, runs unconditionally (no if: gate), right after Checkout, and exports WORKFLOW_STARTED_AT via $GITHUB_ENV so every later step in the job inherits it automatically", () => {
+  const lines = code.split("\n");
+  const checkoutIdx = lines.findIndex((l) => /^\s*- name:\s*Checkout\b/.test(l));
+  const workflowStartIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Record workflow start time/.test(l));
+  assert.ok(checkoutIdx > -1 && workflowStartIdx > -1, "expected both a Checkout step and a Record workflow start time step");
+  const nextNamedStepAfterCheckout = lines.findIndex((l, i) => i > checkoutIdx && /^\s*- name:/.test(l));
+  assert.strictEqual(workflowStartIdx, nextNamedStepAfterCheckout, "the workflow-start-time step must be the step IMMEDIATELY after Checkout (no other named step in between), before any other step reads/needs it");
+
+  const block = extractStepBlock(code, /Record workflow start time/);
+  assert.strictEqual(/^\s*if:/m.test(block), false, "must run unconditionally — it is generic, not weekly/run_type-specific, and is simply unused by daily/diagnostic dispatches");
+  assert.ok(/WORKFLOW_STARTED_AT=.*>>\s*["']?\$GITHUB_ENV["']?/.test(block), "expected it to append WORKFLOW_STARTED_AT to $GITHUB_ENV (which GitHub Actions then carries into every later step automatically, with no per-step env: entry needed)");
+
+  const rotationIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
+  const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+  assert.ok(workflowStartIdx < rotationIdx && workflowStartIdx < findingIdx && workflowStartIdx < mainRunIdx, "the workflow-start-time step must precede every step whose report-building needs to read WORKFLOW_STARTED_AT");
+});
+
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));
     assert.ok(/npm ci\b/.test(code));

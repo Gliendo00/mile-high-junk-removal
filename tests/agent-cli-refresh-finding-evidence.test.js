@@ -25,7 +25,7 @@ const path = require("path");
 const runner = require("../agent/runner");
 const { gatherFindings } = runner;
 const { runRefreshFindingEvidence, classifyFindingEvidenceOutcome } = require("../agent/cli");
-const { isQueryPageEvidenceCandidate } = require("../agent/lib/finding-evidence");
+const { isQueryPageEvidenceCandidate, deriveQueryFilterTerm } = require("../agent/lib/finding-evidence");
 const { writeFirstPartyEvidence, EVIDENCE_DIR } = require("../agent/lib/firstparty-fetch");
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 const config = require("../agent/config");
@@ -127,19 +127,20 @@ async function main() {
     }
   });
 
-  await test("a candidate finding with FRESH existing evidence is excluded entirely — zero candidates attempted, never a redundant fetch", async () => {
+  await test("a candidate finding with FRESH existing evidence recorded under the CURRENT query term is excluded entirely — zero candidates attempted, never a redundant fetch", async () => {
     const target = findRealCandidate();
     const saved = saveGoogleEnv();
     for (const k of GOOGLE_ENV_KEYS) delete process.env[k];
     const freshEvidence = makeFirstPartyEvidence({
       findingKey: target.key,
+      requestFingerprint: deriveQueryFilterTerm(target.pages[0]),
       source: "search-console-search-analytics",
       metric: "clicks-impressions-ctr-position",
       dimension: "query+page",
       scope: { type: "page", value: target.pages[0] },
       window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
       observed: { totalRowsReturned: 0, topRows: [] },
-      context: "test fixture (fresh)",
+      context: "test fixture (fresh, current term)",
       limitations: "test fixture",
       fetchedAt: new Date().toISOString(),
     });
@@ -147,8 +148,42 @@ async function main() {
     const before = filesBeforeIn(EVIDENCE_DIR);
     try {
       const outcomes = await runRefreshFindingEvidence();
-      assert.strictEqual(outcomes.some((o) => o.findingKey === target.key), false, "a finding with fresh evidence must not be re-attempted");
+      assert.strictEqual(outcomes.some((o) => o.findingKey === target.key), false, "a finding with fresh, current-term evidence must not be re-attempted");
       assert.deepStrictEqual(newFilesSince(EVIDENCE_DIR, before), []);
+    } finally {
+      fs.unlinkSync(written);
+      restoreGoogleEnv(saved);
+      cleanupNewFiles(EVIDENCE_DIR, before);
+    }
+  });
+
+  await test("THE ONE-TIME SELF-HEAL: a candidate finding with FRESH existing evidence recorded WITHOUT a requestFingerprint (i.e. legacy evidence fetched under an older/weaker query term, before this field existed) IS re-attempted despite being date-fresh — self-heals without deleting the obsolete evidence file", async () => {
+    const target = findRealCandidate();
+    const saved = saveGoogleEnv();
+    for (const k of GOOGLE_ENV_KEYS) delete process.env[k];
+    const legacyEvidence = makeFirstPartyEvidence({
+      findingKey: target.key,
+      // No requestFingerprint — simulates evidence fetched before this
+      // field existed (exactly the real, already-committed
+      // blog-seasonal-cleanout-guide.html evidence file).
+      source: "search-console-search-analytics",
+      metric: "clicks-impressions-ctr-position",
+      dimension: "query+page",
+      scope: { type: "page", value: target.pages[0] },
+      window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+      observed: { totalRowsReturned: 0, topRows: [] },
+      context: "test fixture (fresh, legacy — no requestFingerprint)",
+      limitations: "test fixture",
+      fetchedAt: new Date().toISOString(),
+    });
+    const written = writeFirstPartyEvidence(legacyEvidence, "zzz-test-fixture-legacy-finding-evidence.json", EVIDENCE_DIR);
+    const before = filesBeforeIn(EVIDENCE_DIR);
+    try {
+      const outcomes = await runRefreshFindingEvidence();
+      assert.ok(outcomes.some((o) => o.findingKey === target.key), "legacy evidence with no requestFingerprint must never block a corrected re-fetch, even while date-fresh");
+      for (const o of outcomes) {
+        assert.strictEqual(o.outcome, "skipped", "no Google env configured in this test — the re-attempt itself is what's under test, not a real fetch");
+      }
     } finally {
       fs.unlinkSync(written);
       restoreGoogleEnv(saved);
@@ -300,8 +335,15 @@ async function main() {
       const record = await runner.run({ mode: "dry-run", runType: "weekly", logPath, skipLock: true, syncProposals: false, computeRotation: false });
       const persisted = record.findings.find((f) => f.key === target.key);
       assert.ok(persisted, "expected the target finding to appear in the persisted weekly record");
-      assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length === 1);
-      assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length === 1, "expected query-page-mismatch to have fired");
+      // >= 1, not strictly 1: the real site may already carry an older,
+      // still-fresh evidence file for this same key (evidence files are
+      // never overwritten/deleted — see finding-evidence.js's own
+      // header), and this fetch adds one more. The firstPartySignals
+      // assertion below is what actually proves THIS fetch's mismatch
+      // row was recognized, independent of how many evidence entries
+      // exist in total.
+      assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length >= 1);
+      assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length === 1, "expected query-page-mismatch to have fired exactly once, from THIS fetch's mismatch row — any older, already-committed evidence for this key is a legitimate zero-row/non-mismatch result that correctly produces no additional signal");
       assert.strictEqual(persisted.firstPartySignals[0].type, "query-page-mismatch");
       assert.strictEqual(persisted.firstPartySignals[0].mismatchedQueries.length, 1);
       assert.strictEqual(persisted.firstPartySignals[0].mismatchedQueries[0].observedPage, `${config.SITE_ORIGIN}/contact.html`);

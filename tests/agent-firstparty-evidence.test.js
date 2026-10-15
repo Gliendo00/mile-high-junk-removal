@@ -75,8 +75,15 @@ test("makeFirstPartyEvidence has NO verdict/confidence/recommendation field — 
   assert.strictEqual(evidence.recommendation, undefined);
   assert.deepStrictEqual(
     Object.keys(evidence).sort(),
-    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "rotationSlug", "limitations", "metric", "observed", "scope", "source", "window"].sort()
+    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "rotationSlug", "requestFingerprint", "limitations", "metric", "observed", "scope", "source", "window"].sort()
   );
+});
+
+test("requestFingerprint is optional — defaults to null, and round-trips when provided", () => {
+  const a = makeFirstPartyEvidence(validArgs());
+  assert.strictEqual(a.requestFingerprint, null);
+  const b = makeFirstPartyEvidence(validArgs({ requestFingerprint: "seasonal cleanout guide" }));
+  assert.strictEqual(b.requestFingerprint, "seasonal cleanout guide");
 });
 
 test("makeFirstPartyEvidence never stores a raw API payload field — only the bounded `observed` shape the caller provided", () => {
