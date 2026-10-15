@@ -1,0 +1,24 @@
+{
+  "type": "search-analytics",
+  "rotationSlug": "golden",
+  "scope": {
+    "type": "city",
+    "value": "Golden"
+  },
+  "days": 28,
+  "dimensions": [
+    "query"
+  ],
+  "dimensionFilterGroups": [
+    {
+      "filters": [
+        {
+          "dimension": "query",
+          "operator": "contains",
+          "expression": "golden"
+        }
+      ]
+    }
+  ],
+  "context": "Manual diagnostic (GitHub Actions -> WIF -> service-account impersonation -> Search Console) — does this property's real Search Console query data contain any organic search query mentioning \"Golden\"? One-off controlled test of the production auth/fetch path, independent of the weekly rotation — never attached to a rotation report, never a page/opportunity decision."
+}

@@ -2723,3 +2723,98 @@ and an end-to-end test proving all three env vars
 reach their respective consumers as three fully independent, exact
 values. Full repository suite: **106/107 pass** — the same single
 pre-existing, unrelated failure as every prior phase.
+
+---
+
+# Phase 7D — Golden Search Console diagnostic (manual, one-off)
+
+With `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` corrected (Phase 7C) and the
+weekly rotation mechanism confirmed to be excluding candidates
+correctly (Phase 7B follow-up — all 7 pageless cities had simply
+already been reviewed today, the first day the mechanism ever ran, so
+nothing had a chance to re-select one), the one thing still genuinely
+unproven live was the real GitHub Actions -> WIF -> service-account
+impersonation -> Search Console path itself. Waiting for weekly
+rotation to naturally re-draw a pageless city could take real-world
+weeks (7 cities out of 20, staleness-scored); manually editing
+`research-rotation-state.json` to force it was explicitly ruled out.
+
+**Added a third, narrow `run_type` option** on the existing
+`workflow_dispatch`: `diagnostic-golden-search-console`. It runs ONLY
+the existing `--fetch-firstparty` path (via a new
+`--fetch-firstparty-strict=` variant — see below) against a single,
+pre-committed, reviewable request file
+(`agent/diagnostics/golden-search-console-request.json` — search-
+analytics, 28-day window, `query` dimension, `contains "golden"`,
+`rotationSlug: "golden"`) through the SAME WIF/impersonation/
+`GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`/`GSC_SITE_URL`/search-console-
+client.js/normalization/write path unattended daily/weekly runs use —
+no new Google client, no new auth code. `daily`/`weekly` behavior is
+completely unchanged (same steps, same gating, same env). The main
+Agent step and the weekly-only rotation-evidence step are both
+explicitly gated OUT for this run_type, so it can never run the
+ordinary pipeline, touch `research-rotation-state.json`, create a
+proposal, or make a website change — there is no code path from this
+step that reaches any of those.
+
+**New: `--fetch-firstparty-strict=<path>` (`agent/cli.js`).** The
+existing `--fetch-firstparty=` is orchestrator-facing: a `{skipped:
+true}` result (misconfiguration, auth failure, API error) logs and
+returns exit 0, correctly, because a human/Claude session reads the
+reason and decides what to do next. An unattended diagnostic dispatch
+has no one reading the log in real time — the SAME graceful skip would
+make a genuinely broken credential look like a green run. The strict
+variant calls the identical `fetchFirstPartyEvidence()`/
+`writeFirstPartyEvidence()` functions and only changes what happens on
+a skip: `process.exitCode = 1`. A real, successful fetch — including a
+legitimate **zero-row** Search Console response — is never a skip
+(`fetchFirstPartyEvidence()` only returns `skipped:true` for an actual
+problem), so it is written and reported exactly the same in both
+modes: honestly, as zero observed rows, never as a failure and never
+as a claim that no opportunity exists (unchanged from Phase 7B's own
+wording guarantee — this diagnostic doesn't even reach
+`classifyRotationConclusion()`, since it never runs inside a weekly
+report at all).
+
+**A real, pre-existing bug was found and fixed while building this**:
+`fetchSearchAnalyticsEvidence()`/`fetchUrlInspectionEvidence()`/
+`fetchGa4Evidence()` (`agent/lib/firstparty-fetch.js`) destructured and
+forwarded `findingKey` to `makeFirstPartyEvidence()`, but never
+`rotationSlug` — silently dropping it. This meant the ENTIRE Phase 7B
+`--refresh-rotation-evidence` mechanism, once it ever reached a real
+(or realistically-mocked) fetch call, would write evidence that could
+never attach back to the rotation pick that requested it — Phase 7B's
+own tests never caught this because they exercised
+`writeFirstPartyEvidence()`/`attachRotationEvidence()` directly with
+hand-built evidence objects, never the real `fetchSearchAnalyticsEvidence()`
+call in between. Caught by this phase's own new end-to-end test
+(`tests/agent-cli-fetch-firstparty-strict.test.js`'s zero-row success
+case, which — deliberately, to actually exercise the real code path —
+injects a fetch mock at the `global.fetch` level rather than hand-
+building the evidence object). Fixed by threading `rotationSlug`
+through all three fetch functions, same as `findingKey`.
+
+## Tests
+
+New: `tests/agent-cli-fetch-firstparty-strict.test.js` (5 cases —
+strict-vs-non-strict exit-code behavior, the committed request file's
+exact shape proven byte-identical to `buildRotationEvidenceRequest()`'s
+real output except `context`, and the zero-row-is-success case that
+caught the `rotationSlug` bug above). Extended:
+`tests/agent-firstparty-fetch.test.js` (+1, all three fetch functions'
+`rotationSlug` pass-through), `tests/github-actions-workflow.test.js`
+(+6 — the new run_type option, the diagnostic step's path/env/no-
+continue-on-error, and that it cannot reach rotation state or the
+ordinary pipeline). `agent/cli.js` also gained a `require.main ===
+module` guard so it can be `require()`'d for testing without auto-
+running a real pass. Full repository suite: **107/108 pass** — the
+same single pre-existing, unrelated failure as every prior phase.
+
+## How to run it
+
+GitHub → Actions → "Website Agent — unattended runner" → **Run
+workflow** → `run_type` dropdown → **diagnostic-golden-search-console**
+→ Run workflow. A real, bounded, reviewable Search Console evidence
+file for "Golden" is committed to `agent/research/firstparty/` on
+success; the job itself fails (not green) on any auth/config/API
+problem.

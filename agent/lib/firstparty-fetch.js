@@ -20,6 +20,16 @@
 // {skipped:true, reason}, exactly like every other optional-integration
 // path in this codebase (api/_lib/supabase-admin.js's getServiceClient(),
 // completed-job-fetch.js) — never thrown.
+//
+// Also invoked, unchanged, via `--fetch-firstparty-strict=` (Phase 7D —
+// the Golden Search Console diagnostic) and by `--refresh-rotation-
+// evidence` (Phase 7B, agent/lib/rotation-evidence.js's
+// buildRotationEvidenceRequest()) — both pass `rotationSlug` instead of
+// `findingKey` on the request object. Every fetch* function below
+// threads BOTH fields straight through to makeFirstPartyEvidence()
+// untouched, even though only one is ever set on a given request — see
+// tests/agent-cli-fetch-firstparty-strict.test.js for the regression
+// that caught this being silently dropped once already.
 
 const fs = require("fs");
 const path = require("path");
@@ -69,6 +79,13 @@ function computeWindow(days, lagDays) {
  * Aurora opportunity this finding raised", not a full-site dump.
  * @param {object} args
  * @param {string} [args.findingKey]
+ * @param {string} [args.rotationSlug] - Phase 7B/7D: mutually independent of
+ *   findingKey — see firstparty-evidence.js's header. Must be threaded
+ *   through to makeFirstPartyEvidence() below exactly like findingKey;
+ *   dropping it silently is the exact bug tests/agent-cli-fetch-firstparty-
+ *   strict.test.js exists to catch (a rotation pick's evidence would be
+ *   fetched and written, but never attach back to the pick that asked
+ *   for it).
  * @param {object} args.scope - {type, value} — see firstparty-evidence.js
  * @param {number} [args.days] - default 28
  * @param {string[]} [args.dimensions] - default ["query","page"]
@@ -76,7 +93,7 @@ function computeWindow(days, lagDays) {
  * @param {string} [args.context]
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function fetchSearchAnalyticsEvidence({ findingKey, scope, days, dimensions, dimensionFilterGroups, context, fetchImpl } = {}) {
+async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, fetchImpl } = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -98,6 +115,7 @@ async function fetchSearchAnalyticsEvidence({ findingKey, scope, days, dimension
 
   const evidence = makeFirstPartyEvidence({
     findingKey,
+    rotationSlug,
     source: "search-console-search-analytics",
     metric: "clicks-impressions-ctr-position",
     dimension: dims.join("+"),
@@ -125,11 +143,12 @@ async function fetchSearchAnalyticsEvidence({ findingKey, scope, days, dimension
  * (never every page). One evidence entry per URL.
  * @param {object} args
  * @param {string} [args.findingKey]
+ * @param {string} [args.rotationSlug] - see fetchSearchAnalyticsEvidence()'s jsdoc
  * @param {string[]} args.urls - fully-qualified URLs to inspect
  * @param {string} [args.context]
  * @param {function} [args.fetchImpl]
  */
-async function fetchUrlInspectionEvidence({ findingKey, urls, context, fetchImpl } = {}) {
+async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, context, fetchImpl } = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -146,6 +165,7 @@ async function fetchUrlInspectionEvidence({ findingKey, urls, context, fetchImpl
     evidence.push(
       makeFirstPartyEvidence({
         findingKey,
+        rotationSlug,
         source: "search-console-url-inspection",
         metric: "indexStatus",
         scope: { type: "page", value: url },
@@ -171,6 +191,7 @@ async function fetchUrlInspectionEvidence({ findingKey, urls, context, fetchImpl
  * for the page(s) a finding concerns, not a site-wide analytics dump.
  * @param {object} args
  * @param {string} [args.findingKey]
+ * @param {string} [args.rotationSlug] - see fetchSearchAnalyticsEvidence()'s jsdoc
  * @param {object} args.scope - {type, value}
  * @param {number} [args.days] - default 28
  * @param {string[]} [args.dimensions] - default ["landingPage"]
@@ -179,7 +200,7 @@ async function fetchUrlInspectionEvidence({ findingKey, urls, context, fetchImpl
  * @param {string} [args.context]
  * @param {function} [args.fetchImpl]
  */
-async function fetchGa4Evidence({ findingKey, scope, days, dimensions, metrics, dimensionFilter, context, fetchImpl } = {}) {
+async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensions, metrics, dimensionFilter, context, fetchImpl } = {}) {
   if (!isGa4Configured()) {
     return { skipped: true, reason: "GA4 not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GA4_PROPERTY_ID missing)" };
   }
@@ -214,6 +235,7 @@ async function fetchGa4Evidence({ findingKey, scope, days, dimensions, metrics, 
   const metricNames = result.metricHeaders.map((h) => h.name);
   const evidence = makeFirstPartyEvidence({
     findingKey,
+    rotationSlug,
     source: "ga4",
     metric: (metricNames.length ? metricNames : mets).join("+"),
     dimension: (dimNames.length ? dimNames : dims).join("+"),

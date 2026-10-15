@@ -65,6 +65,22 @@
 //     only a count and the file path (these aren't private, unlike
 //     completed-job evidence, but the convention stays consistent).
 //
+//   node agent/cli.js --fetch-firstparty-strict=<path/to/request.json>
+//     Phase 7D — identical to --fetch-firstparty= above (same request
+//     shape, same fetchFirstPartyEvidence()/writeFirstPartyEvidence()
+//     code path, same normalized/bounded evidence file — no second
+//     Google client or auth path exists) with exactly one behavioral
+//     difference: a {skipped:true} result (misconfiguration, auth
+//     failure, API error) EXITS NONZERO instead of logging and
+//     returning 0. Exists for the one-off "Golden Search Console
+//     diagnostic" GitHub Actions dispatch (see
+//     .github/workflows/website-agent.yml's diagnostic-golden-search-
+//     console run_type) — an unattended job with no orchestrator
+//     reading the log in real time must not look green when the
+//     underlying fetch actually failed. A real zero-row result is
+//     NEVER treated as a failure in either mode — only a genuine
+//     skip is.
+//
 //   node agent/cli.js --refresh-rotation-evidence
 //     Phase 7B — closes the "rotation picks a deep-review target but
 //     nothing performs the review" gap (see agent/lib/rotation-evidence.js's
@@ -172,7 +188,34 @@ function parseFetchFirstPartyArg(args) {
   return prefixed ? prefixed.slice("--fetch-firstparty=".length) : null;
 }
 
-async function runFetchFirstParty(requestPath) {
+function parseFetchFirstPartyStrictArg(args) {
+  const prefixed = args.find((a) => a.startsWith("--fetch-firstparty-strict="));
+  return prefixed ? prefixed.slice("--fetch-firstparty-strict=".length) : null;
+}
+
+/**
+ * @param {string} requestPath
+ * @param {object} [options]
+ * @param {boolean} [options.strict] - Phase 7D: when true (the
+ *   --fetch-firstparty-strict= CLI flag — see this file's top-of-file
+ *   comment), a `{skipped:true}` result (misconfiguration, auth
+ *   failure, or an API error) is treated as a HARD FAILURE
+ *   (process.exitCode = 1), not a graceful no-op. The default
+ *   (non-strict, --fetch-firstparty=) behavior is UNCHANGED — it still
+ *   logs and returns 0, because that path is driven by a research-
+ *   capable orchestrator session that can read the reason and decide
+ *   what to do next. Strict mode exists for the opposite case: an
+ *   unattended, one-off diagnostic dispatch with no one reading the
+ *   log in real time, where a swallowed failure would look identical
+ *   to a successful green run. A ZERO-ROW result is NEVER a failure in
+ *   either mode — `fetchFirstPartyEvidence()` only returns
+ *   `{skipped:true}` for an actual auth/config/API problem; a real,
+ *   successful API call that legitimately found zero matching rows
+ *   returns `{skipped:false, evidence}` same as any other count, and
+ *   is written and reported exactly the same way.
+ */
+async function runFetchFirstParty(requestPath, options = {}) {
+  const strict = options.strict === true;
   let request;
   try {
     request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -184,7 +227,12 @@ async function runFetchFirstParty(requestPath) {
 
   const result = await fetchFirstPartyEvidence(request);
   if (result.skipped) {
-    console.log(`First-party evidence fetch skipped: ${result.reason}`);
+    if (strict) {
+      console.error(`First-party evidence fetch FAILED: ${result.reason}`);
+      process.exitCode = 1;
+    } else {
+      console.log(`First-party evidence fetch skipped: ${result.reason}`);
+    }
     return;
   }
   const filePath = writeFirstPartyEvidence(result.evidence);
@@ -280,6 +328,12 @@ async function main() {
     return;
   }
 
+  const fetchFirstPartyStrictPath = parseFetchFirstPartyStrictArg(args);
+  if (fetchFirstPartyStrictPath) {
+    await runFetchFirstParty(fetchFirstPartyStrictPath, { strict: true });
+    return;
+  }
+
   const fetchFirstPartyPath = parseFetchFirstPartyArg(args);
   if (fetchFirstPartyPath) {
     await runFetchFirstParty(fetchFirstPartyPath);
@@ -320,7 +374,14 @@ async function main() {
   printRecord(record, asJson);
 }
 
-main().catch((err) => {
-  console.error("Site Improvement Agent run failed:", err && err.stack ? err.stack : err);
-  process.exitCode = 1;
-});
+module.exports = { runFetchFirstParty, parseFetchFirstPartyArg, parseFetchFirstPartyStrictArg };
+
+// Guards against auto-running the CLI when this file is require()'d
+// for testing (tests/agent-cli-fetch-firstparty-strict.test.js) rather
+// than executed directly as `node agent/cli.js`.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Site Improvement Agent run failed:", err && err.stack ? err.stack : err);
+    process.exitCode = 1;
+  });
+}

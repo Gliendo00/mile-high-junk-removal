@@ -38,6 +38,17 @@ on:
         options:
           - daily
           - weekly
+          # Phase 7D — a narrow, manual, one-off diagnostic: runs ONLY
+          # the existing --fetch-firstparty path for one hardcoded
+          # request (agent/diagnostics/golden-search-console-request.json)
+          # through the SAME GitHub WIF -> impersonation -> Search
+          # Console path unattended daily/weekly runs use. Never runs
+          # the ordinary Agent pipeline, never touches rotation state,
+          # never creates a proposal, never touches the public site —
+          # see the dedicated step below and
+          # tests/github-actions-workflow.test.js's diagnostic-specific
+          # assertions.
+          - diagnostic-golden-search-console
         default: daily
 
 permissions:
@@ -74,6 +85,12 @@ jobs:
         # than let agent/lib/proposals-sync.js degrade to its normal
         # (otherwise correct) {skipped:true} behavior unnoticed. Never
         # echoes either value.
+        # Skipped for the Golden diagnostic (run_type above) — that mode
+        # never runs the Agent pipeline or proposal sync at all, so
+        # Supabase configuration is simply irrelevant to it; requiring it
+        # anyway would make a pure Google-auth diagnostic depend on an
+        # unrelated credential.
+        if: inputs.run_type != 'diagnostic-golden-search-console'
         run: |
           if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
             echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured. This permanent runner requires both so CRM proposal sync is never silently skipped. See the setup documentation in the workflow run summary / PR description."
@@ -135,6 +152,14 @@ jobs:
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
       - name: Run Website Agent (${{ inputs.run_type }})
+        # Only for daily/weekly — the Golden diagnostic (run_type above)
+        # must NEVER run the ordinary Agent pipeline: no scan, no
+        # findings, no proposal sync, no rotation, no history/rotation-
+        # state write. Without this gate, an unrecognized run_type value
+        # would fall through to cli.js's default ("manual" dry-run),
+        # which is exactly the full pipeline this diagnostic must not
+        # trigger.
+        if: inputs.run_type == 'daily' || inputs.run_type == 'weekly'
         run: node agent/cli.js "--${RUN_TYPE}" --json
         env:
           RUN_TYPE: ${{ inputs.run_type }}
@@ -143,6 +168,39 @@ jobs:
           GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+
+      - name: Run Golden Search Console diagnostic (diagnostic only)
+        # Phase 7D — a narrow, manual, one-off proof that the GitHub
+        # Actions -> WIF -> service-account impersonation -> Search
+        # Console path (the exact path unattended daily/weekly runs use
+        # — same auth step above, same GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/
+        # GSC_SITE_URL, same agent/lib/google-auth.js resolver, same
+        # search-console-client.js) actually works end to end, now that
+        # GOOGLE_IMPERSONATE_SERVICE_ACCOUNT has been corrected. Reuses
+        # the EXISTING --fetch-firstparty-strict= path (no new Google
+        # client, no new auth code — see cli.js's own header) against a
+        # single, pre-committed, reviewable request file
+        # (agent/diagnostics/golden-search-console-request.json — the
+        # exact search-analytics/28-day/query-contains-"golden" shape).
+        # --fetch-firstparty-strict (NOT the plain, orchestrator-facing
+        # --fetch-firstparty) is used deliberately: a skip here
+        # (misconfiguration, auth failure, API error) must fail this
+        # job visibly, not log-and-return-0 the way an orchestrator-
+        # driven fetch correctly does. A real zero-row Search Console
+        # response is NOT a skip — fetchFirstPartyEvidence() returns
+        # {skipped:false} for it — so it still exits 0 and is still
+        # written as a normal, honest, zero-row evidence file.
+        #
+        # Never runs --daily/--weekly, never calls computePriorities()
+        # or research-rotation.js at all, so agent/history/
+        # research-rotation-state.json is structurally unreachable from
+        # this step — nothing to "not mutate" because nothing in this
+        # code path ever touches it in the first place.
+        if: inputs.run_type == 'diagnostic-golden-search-console'
+        run: node agent/cli.js --fetch-firstparty-strict=agent/diagnostics/golden-search-console-request.json
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
       - name: Persist Agent artifacts (safe-commit)
         # Runs even if the step above failed: runner.js (see its own

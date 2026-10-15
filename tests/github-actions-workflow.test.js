@@ -170,6 +170,51 @@ await test("Phase 7B: the rotation-evidence refresh step exists, runs ONLY for w
   assert.ok(mainRunIdx > stepIdx, "rotation-evidence refresh must run BEFORE the main --daily/--weekly Agent pass, mirroring --refresh-completed-jobs's precedent");
 });
 
+await test("Phase 7D: the diagnostic-golden-search-console run_type option exists alongside daily/weekly, which stay unchanged", () => {
+  assert.ok(/-\s*diagnostic-golden-search-console/.test(code), "expected a diagnostic-golden-search-console option on the run_type input");
+  assert.ok(/-\s*daily/.test(code) && /-\s*weekly/.test(code), "daily/weekly options must still exist, unchanged");
+  assert.ok(/default:\s*daily/.test(code), "default must still be daily — the diagnostic is opt-in only, never the default");
+});
+
+await test("Phase 7D: the Golden diagnostic step (1) reuses the EXISTING --fetch-firstparty path (the strict variant) against the committed request file — no new Google client/path", () => {
+  const block = extractStepBlock(code, /Run Golden Search Console diagnostic/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(block), "must be gated to the diagnostic run_type only");
+  assert.ok(/--fetch-firstparty-strict=agent\/diagnostics\/golden-search-console-request\.json/.test(block), "must invoke the existing --fetch-firstparty-strict path against the committed, reviewable request file");
+  assert.strictEqual(/--fetch-firstparty=/.test(block.replace("--fetch-firstparty-strict=", "")), false, "must use the STRICT variant, not the plain orchestrator-facing one (a config/auth/API failure must fail this job)");
+  assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block), "must use the SAME GOOGLE_IMPERSONATE_SERVICE_ACCOUNT variable production runs use — no separate/local credential path");
+  assert.ok(/GSC_SITE_URL:\s*\$\{\{\s*vars\.GSC_SITE_URL\s*\}\}/.test(block));
+});
+
+await test("Phase 7D: the Golden diagnostic step (4) is not marked continue-on-error — an auth/API/config failure (strict-mode exit 1) must fail the job visibly, not return green", () => {
+  const block = extractStepBlock(code, /Run Golden Search Console diagnostic/);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+});
+
+await test("Phase 7D: the diagnostic (2) can never reach rotation state — --refresh-rotation-evidence/--weekly are never invoked for it, and the rotation-evidence step stays gated to weekly only", () => {
+  const diagnosticBlock = extractStepBlock(code, /Run Golden Search Console diagnostic/);
+  assert.strictEqual(/--refresh-rotation-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--weekly/.test(diagnosticBlock), false);
+  // The ONLY step that ever calls --refresh-rotation-evidence remains
+  // gated to weekly alone (re-asserted here, not just in the Phase 7B
+  // test above, because this is exactly the invariant that keeps the
+  // diagnostic from ever mutating research-rotation-state.json).
+  const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock));
+});
+
+await test("Phase 7D: the diagnostic (3) can never run the ordinary Agent pipeline, so it can never create/apply a proposal or make a website change — the main Agent step is gated to daily/weekly only", () => {
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for the diagnostic run_type");
+  const diagnosticBlock = extractStepBlock(code, /Run Golden Search Console diagnostic/);
+  assert.strictEqual(/--daily/.test(diagnosticBlock), false);
+  assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
+});
+
+await test("Phase 7D: the diagnostic's own Supabase-config check is skipped (irrelevant — no Agent pipeline, no proposal sync ever runs for it)", () => {
+  const block = extractStepBlock(code, /Verify required Supabase configuration/);
+  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]/.test(block));
+});
+
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));
     assert.ok(/npm ci\b/.test(code));

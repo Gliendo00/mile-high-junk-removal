@@ -94,6 +94,37 @@ async function main() {
     assert.strictEqual(JSON.stringify(result.evidence).includes("rawOnlyMarker"), false, "raw-only API fields must never survive normalization");
   });
 
+  await test("fetchSearchAnalyticsEvidence()/fetchUrlInspectionEvidence()/fetchGa4Evidence() all thread `rotationSlug` straight through to the written evidence, exactly like `findingKey` — the real bug this guards against: buildRotationEvidenceRequest()'s rotationSlug being silently dropped so a rotation pick's evidence could never attach back to it", async () => {
+    configureAllIntegrations();
+    const { fetchSearchAnalyticsEvidence, fetchUrlInspectionEvidence, fetchGa4Evidence } = freshModule("../agent/lib/firstparty-fetch");
+
+    const saResult = await fetchSearchAnalyticsEvidence({
+      rotationSlug: "golden",
+      scope: { type: "city", value: "Golden" },
+      days: 28,
+      fetchImpl: tokenOrApi(() => ({ ok: true, status: 200, json: async () => ({ rows: [] }) })),
+    });
+    assert.strictEqual(saResult.skipped, false);
+    assert.strictEqual(saResult.evidence.rotationSlug, "golden");
+    assert.strictEqual(saResult.evidence.findingKey, null, "findingKey must stay null when only rotationSlug was requested — the two key spaces never both populate from one request");
+
+    const uiResult = await fetchUrlInspectionEvidence({
+      rotationSlug: "golden",
+      urls: ["https://www.milehighjunkremoval.net/golden-junk-removal.html"],
+      fetchImpl: tokenOrApi(() => ({ ok: true, status: 200, json: async () => ({ inspectionResult: { indexStatusResult: { verdict: "PASS" } } }) })),
+    });
+    assert.strictEqual(uiResult.skipped, false);
+    assert.strictEqual(uiResult.evidence[0].rotationSlug, "golden");
+
+    const ga4Result = await fetchGa4Evidence({
+      rotationSlug: "golden",
+      scope: { type: "city", value: "Golden" },
+      fetchImpl: tokenOrApi(() => ({ ok: true, status: 200, json: async () => ({ dimensionHeaders: [], metricHeaders: [], rows: [] }) })),
+    });
+    assert.strictEqual(ga4Result.skipped, false);
+    assert.strictEqual(ga4Result.evidence.rotationSlug, "golden");
+  });
+
   await test("fetchUrlInspectionEvidence() produces one evidence entry per URL and never leaks the raw inspectionResult payload", async () => {
     configureAllIntegrations();
     const { fetchUrlInspectionEvidence } = freshModule("../agent/lib/firstparty-fetch");
