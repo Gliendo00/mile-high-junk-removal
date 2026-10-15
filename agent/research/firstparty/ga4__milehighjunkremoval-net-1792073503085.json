@@ -1,0 +1,117 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "golden-ga4",
+    "source": "ga4",
+    "metric": "sessions+screenPageViews",
+    "dimension": "date",
+    "scope": {
+      "type": "site",
+      "value": "milehighjunkremoval.net"
+    },
+    "window": {
+      "start": "2026-09-17",
+      "end": "2026-10-14",
+      "label": "28 days ending 2026-10-14"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 10,
+      "topRows": [
+        {
+          "dimensions": [
+            "20260918"
+          ],
+          "metrics": [
+            "34",
+            "65"
+          ]
+        },
+        {
+          "dimensions": [
+            "20260919"
+          ],
+          "metrics": [
+            "29",
+            "44"
+          ]
+        },
+        {
+          "dimensions": [
+            "20261005"
+          ],
+          "metrics": [
+            "25",
+            "30"
+          ]
+        },
+        {
+          "dimensions": [
+            "20261004"
+          ],
+          "metrics": [
+            "23",
+            "93"
+          ]
+        },
+        {
+          "dimensions": [
+            "20261003"
+          ],
+          "metrics": [
+            "19",
+            "31"
+          ]
+        },
+        {
+          "dimensions": [
+            "20260923"
+          ],
+          "metrics": [
+            "18",
+            "33"
+          ]
+        },
+        {
+          "dimensions": [
+            "20260917"
+          ],
+          "metrics": [
+            "16",
+            "20"
+          ]
+        },
+        {
+          "dimensions": [
+            "20261010"
+          ],
+          "metrics": [
+            "13",
+            "17"
+          ]
+        },
+        {
+          "dimensions": [
+            "20261011"
+          ],
+          "metrics": [
+            "13",
+            "15"
+          ]
+        },
+        {
+          "dimensions": [
+            "20260920"
+          ],
+          "metrics": [
+            "11",
+            "16"
+          ]
+        }
+      ]
+    },
+    "context": "Manual diagnostic (GitHub Actions -> WIF -> service-account impersonation -> GA4 Data API) -- does this property's real GA4 Data API return real aggregate session/pageview data for the whole site? One-off controlled test of the production auth/fetch path, independent of the weekly rotation -- never attached to a rotation report, never a page/opportunity decision. Deliberately NOT scoped to a page named 'Golden' (Golden has no dedicated page -- a landingPage filter for it would mean nothing in GA4). Uses only universally-available, automatically-collected GA4 metrics (sessions, screenPageViews) -- deliberately avoids 'conversions'/'keyEvents', which depend on this property's own configured conversion/key-event setup and would not reliably prove the auth/fetch path alone.",
+    "limitations": "GA4 aggregate session/engagement/conversion data reflects visitor behavior only, and does not by itself establish that a page change would improve outcomes.",
+    "fetchedAt": "2026-10-15T14:11:43.085Z"
+  }
+]
