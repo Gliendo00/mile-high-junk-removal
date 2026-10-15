@@ -141,6 +141,18 @@ module.exports = async (req, res) => {
     return handleAgentActivity(req, res);
   }
 
+  // Site Improvement Agent, Phase 5 — the report-history list/detail
+  // behind the new /admin/agent-reports/ page. Same "never touches
+  // Supabase" posture as agent-activity just above (reads the same
+  // git-tracked log file) — a report is read-only, so there is no
+  // write-side counterpart to these two views.
+  if (req.query.view === "agent-reports") {
+    return handleListAgentReports(req, res);
+  }
+  if (req.query.view === "agent-report") {
+    return handleGetAgentReport(req, res);
+  }
+
   // Site Improvement Agent, Phase 3 — the CRM-visible, approvable list
   // behind the Home dashboard's activity row (see handleAgentActivity()
   // just above for the read-only log, and handleReviewAgentProposal()
@@ -515,10 +527,134 @@ function handleAgentActivity(req, res) {
       return;
     }
     const recent = history.buildDashboardSummary(runs, 5);
-    res.status(200).json({ ok: true, connected: true, recent });
+    // Phase 5 — the richer Home card (see agent/README.md's "CRM Home"
+    // section): a compact `latest` summary built from the most recent
+    // run's own persisted `report` (see agent/lib/report.js), when
+    // present. Older log entries (recorded before Phase 5) have no
+    // `report` field — `latest` is simply omitted for those, and the
+    // Home card falls back to its pre-existing `recent[0].lines`
+    // rendering, exactly as it already does today. Never thrown: a
+    // missing/malformed report degrades to `latest: null`.
+    let latest = null;
+    try {
+      // Phase 5B — dedupe by runId first (see history.latestByRunId()'s
+      // header) so a run still awaiting research never gets superseded
+      // by, or confusingly shown alongside, its own later "completed"
+      // line once resumed.
+      const sorted = history.latestByRunId(runs).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const mostRecent = sorted[0];
+      if (mostRecent && mostRecent.report) {
+        const r = mostRecent.report;
+        latest = {
+          runId: r.runId,
+          timestamp: r.timestamp,
+          runType: r.runType,
+          status: r.status,
+          pagesChecked: r.pagesChecked,
+          healthSummary: r.healthSummary,
+          safeFixesAppliedCount: r.safeFixes ? r.safeFixes.appliedCount : 0,
+          researchQuestionsRaisedCount: r.research ? r.research.questionsRaisedCount : 0,
+          proposalsAwaitingApprovalCount: r.proposals ? r.proposals.awaitingApprovalCount : 0,
+        };
+      }
+    } catch (e) {
+      latest = null;
+    }
+    res.status(200).json({ ok: true, connected: true, recent, latest });
   } catch (e) {
     console.error("Admin agent-activity failed to read/summarize agent/history/log.ndjson", e);
     res.status(200).json({ ok: true, connected: false, recent: [] });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent, Phase 5 — ?view=agent-reports (list) and
+// ?view=agent-report&runId=... (one report's full detail). Both read
+// ONLY agent/history/log.ndjson (same file/require path as
+// handleAgentActivity above) — never Supabase — and never return the
+// full per-finding `evidence`/`research` payload in the LIST response
+// (that would defeat the point of a compact history list); the DETAIL
+// response does include each finding's full shape, for the one report a
+// reviewer actually opened.
+// ---------------------------------------------------------------------
+function loadAgentHistoryModule(res) {
+  try {
+    return require("../../agent/lib/history");
+  } catch (e) {
+    console.error("Admin agent-reports: agent/lib/history.js not available in this deployment", e);
+    res.status(200).json({ ok: true, connected: false, reports: [] });
+    return null;
+  }
+}
+
+function reportListEntry(run) {
+  const report = run.report || null;
+  return {
+    runId: run.runId,
+    timestamp: run.timestamp,
+    runType: (report && report.runType) || run.runType || "manual",
+    mode: run.mode,
+    failed: Boolean(run.failed),
+    // Phase 5B — the explicit run-status lifecycle (see
+    // agent/lib/report.js's header): "completed" | "research_pending" |
+    // "failed". Falls back to the old failed/all-clear-only inference
+    // for a pre-Phase-5B record with no `report.status` at all.
+    status: report ? report.status : run.failed ? "failed" : "completed",
+    healthSummary: report ? report.healthSummary : null,
+    pagesChecked: report ? report.pagesChecked : run.summary && run.summary.pagesScanned,
+    proposalsAwaitingApprovalCount: report && report.proposals ? report.proposals.awaitingApprovalCount : 0,
+    // Phase 5B — for the list row's SHORT outcome label (e.g. "2
+    // Pending"), distinct from healthSummary.text's full sentence (which
+    // is for the detail view / Home card only — a full sentence does not
+    // fit a pill-shaped badge, especially on a narrow screen; see
+    // admin/agent-reports.js's outcomeLabel()).
+    researchQuestionsPendingCount: report && report.research ? report.research.questionsRaisedCount : 0,
+    safeFixesAppliedCount: report && report.safeFixes ? report.safeFixes.appliedCount : 0,
+  };
+}
+
+// Phase 5B — both views now dedupe by runId (history.latestByRunId())
+// BEFORE sorting/filtering, so a run that needed research (an initial
+// `research_pending` line, later superseded by a `completed`/`failed`
+// line once resumed — see runner.js's `resumeRunId`) is shown as ONE
+// report in its current state, never as two confusing "before research"/
+// "after research" entries. See history.js's own header for why this is
+// a read-time dedup rather than ever rewriting the append-only log.
+function handleListAgentReports(req, res) {
+  const history = loadAgentHistoryModule(res);
+  if (!history) return;
+  try {
+    const runs = history.latestByRunId(history.readAllRuns());
+    const sorted = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+    res.status(200).json({ ok: true, connected: true, reports: sorted.slice(0, limit).map(reportListEntry) });
+  } catch (e) {
+    console.error("Admin agent-reports list failed to read agent/history/log.ndjson", e);
+    res.status(200).json({ ok: true, connected: false, reports: [] });
+  }
+}
+
+function handleGetAgentReport(req, res) {
+  const history = loadAgentHistoryModule(res);
+  if (!history) return;
+  const runId = typeof req.query.runId === "string" ? req.query.runId.trim() : "";
+  if (!runId) {
+    res.status(400).json({ error: "A runId is required." });
+    return;
+  }
+  try {
+    // The single CURRENT state for this runId — if it was resumed after
+    // research, this is the finalized (completed/failed) line, not the
+    // superseded research_pending one.
+    const current = history.latestByRunId(history.readAllRuns()).find((r) => r.runId === runId);
+    if (!current) {
+      res.status(404).json({ error: "Report not found." });
+      return;
+    }
+    res.status(200).json({ ok: true, run: current });
+  } catch (e) {
+    console.error("Admin agent-report detail failed to read agent/history/log.ndjson", e);
+    res.status(500).json({ error: "Could not load this report." });
   }
 }
 

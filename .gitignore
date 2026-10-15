@@ -3,3 +3,7 @@ node_modules
 .env
 .env.local
 .env*.local
+
+# Site Improvement Agent — per-machine run lock, never committed (see
+# agent/lib/run-lock.js's header).
+agent/history/.run.lock

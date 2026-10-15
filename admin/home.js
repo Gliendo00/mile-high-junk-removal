@@ -394,10 +394,27 @@ document.addEventListener('DOMContentLoaded', function () {
   // connected yet" row — never a fabricated status.
   // -----------------------------------------------------------------
   var ICON_GLYPH = { check: '✓', flag: '!', research: '○', reject: '✕', observation: '·' };
+  function formatRunTimestamp(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var now = new Date();
+    var isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    var time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return (isToday ? 'Today, ' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ') + time;
+  }
+  function statRow(container, text) {
+    var row = document.createElement('div');
+    row.className = 'admin-home-marketing-stat';
+    row.textContent = text;
+    container.appendChild(row);
+  }
   function renderAgentActivity(agentActivityBody) {
     var notConnectedEl = document.getElementById('marketing-not-connected');
     var connectedEl = document.getElementById('marketing-connected');
+    var summaryEl = document.getElementById('marketing-summary');
     var linesEl = document.getElementById('marketing-lines');
+    var statsEl = document.getElementById('marketing-stats');
     var connected = !!(agentActivityBody && agentActivityBody.connected && agentActivityBody.recent && agentActivityBody.recent.length);
 
     if (!connected) {
@@ -425,6 +442,39 @@ document.addEventListener('DOMContentLoaded', function () {
       row.appendChild(text);
       linesEl.appendChild(row);
     });
+
+    // Phase 5 — the compact summary/stats rows built from the most
+    // recent run's own `report` (see agent/lib/report.js). `latest` is
+    // absent for an older-shaped log entry recorded before Phase 5 —
+    // both blocks simply stay hidden in that case, degrading to exactly
+    // the original per-line-only card.
+    var latest = agentActivityBody.latest;
+    if (!latest) {
+      summaryEl.hidden = true;
+      statsEl.hidden = true;
+      return;
+    }
+
+    clear(summaryEl);
+    summaryEl.hidden = false;
+    var runLine = document.createElement('div');
+    runLine.className = 'admin-home-marketing-summary-run';
+    runLine.textContent = 'Last run: ' + formatRunTimestamp(latest.timestamp) + (latest.runType ? ' (' + latest.runType + ')' : '');
+    summaryEl.appendChild(runLine);
+    var pagesLine = document.createElement('div');
+    pagesLine.className = 'admin-home-marketing-summary-pages';
+    pagesLine.textContent = (typeof latest.pagesChecked === 'number' ? latest.pagesChecked + ' pages checked' : '');
+    summaryEl.appendChild(pagesLine);
+    var healthLine = document.createElement('div');
+    healthLine.className = 'admin-home-marketing-summary-health admin-home-marketing-summary-health-' + ((latest.healthSummary && latest.healthSummary.status) || 'unknown');
+    healthLine.textContent = (latest.healthSummary && latest.healthSummary.text) || '';
+    summaryEl.appendChild(healthLine);
+
+    clear(statsEl);
+    statsEl.hidden = false;
+    statRow(statsEl, (latest.safeFixesAppliedCount || 0) + ' fix' + (latest.safeFixesAppliedCount === 1 ? '' : 'es') + ' applied');
+    statRow(statsEl, (latest.researchQuestionsRaisedCount || 0) + ' opportunit' + (latest.researchQuestionsRaisedCount === 1 ? 'y' : 'ies') + ' researched');
+    statRow(statsEl, (latest.proposalsAwaitingApprovalCount || 0) + ' proposal' + (latest.proposalsAwaitingApprovalCount === 1 ? '' : 's') + ' awaiting approval');
   }
 
   // -----------------------------------------------------------------

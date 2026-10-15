@@ -99,12 +99,18 @@ function toRow(finding, runId) {
 async function syncProposals(findings, runId, options = {}) {
   const supabase = options.client || getServiceClient();
   if (!supabase) {
-    return { skipped: true, reason: "Supabase not configured — proposals not synced to the CRM", synced: 0, total: 0, errors: [] };
+    return { skipped: true, reason: "Supabase not configured — proposals not synced to the CRM", synced: 0, total: 0, errors: [], statusByKey: {} };
   }
 
   const toSync = findings.filter(needsOwnerReview);
   let synced = 0;
   const errors = [];
+  // Phase 5 — the status each synced finding_key ends up at after this
+  // run's sync, so the report/change-detection layer can say "already
+  // proposed" / "previously rejected" / "already applied" without a
+  // second DB round-trip. Absent for anything sync didn't touch (e.g. a
+  // finding that failed to sync, or wasn't in `toSync` at all).
+  const statusByKey = {};
 
   for (const finding of toSync) {
     try {
@@ -125,6 +131,7 @@ async function syncProposals(findings, runId, options = {}) {
         }
         const { error } = await supabase.from("agent_proposals").update(row).eq("finding_key", finding.key);
         if (error) throw error;
+        statusByKey[finding.key] = row.status || existingRes.data.status;
       } else {
         const { error } = await supabase.from("agent_proposals").insert({
           finding_key: finding.key,
@@ -132,6 +139,7 @@ async function syncProposals(findings, runId, options = {}) {
           ...toRow(finding, runId),
         });
         if (error) throw error;
+        statusByKey[finding.key] = "proposed";
       }
       synced += 1;
     } catch (e) {
@@ -139,7 +147,7 @@ async function syncProposals(findings, runId, options = {}) {
     }
   }
 
-  return { skipped: false, synced, total: toSync.length, errors };
+  return { skipped: false, synced, total: toSync.length, errors, statusByKey };
 }
 
 module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields };

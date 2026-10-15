@@ -227,7 +227,6 @@ function auditSitemapAndRobots(pages) {
   const sitemapPaths = new Set(
     sitemapUrls.map((u) => normalizeHref(u.replace(config.SITE_ORIGIN, "")))
   );
-  const pageFiles = new Set(pages.map((p) => p.file));
   const cleanUrlMap = buildRewriteCleanUrlMap();
 
   for (const loc of sitemapUrls) {
@@ -245,10 +244,22 @@ function auditSitemapAndRobots(pages) {
     }
   }
 
-  for (const file of pageFiles) {
+  for (const page of pages) {
+    const file = page.file;
     const cleanUrl = cleanUrlMap.get(file);
     const inSitemap = sitemapPaths.has(file) || (cleanUrl && sitemapPaths.has(cleanUrl));
+
     if (!inSitemap) {
+      // A page that explicitly declares <meta name="robots"
+      // content="noindex"> (or an equivalent googlebot directive) is
+      // telling search engines not to index it — its ABSENCE from
+      // sitemap.xml is then consistent with that stated intent, not a
+      // defect. This is the general rule (derived from the page's own
+      // indexing intent, via scan.js's `noindex` field — never a
+      // per-filename special case): see
+      // tests/agent-link-audit.test.js's noindex-specific tests.
+      if (page.noindex) continue;
+
       const expectedUrl = cleanUrl ? "/" + cleanUrl : "/" + file;
       findings.push(
         makeFinding({
@@ -257,6 +268,30 @@ function auditSitemapAndRobots(pages) {
           pages: [file],
           evidence: [{ file: "sitemap.xml", field: "contains", value: false }],
           recommendation: `Consider adding ${expectedUrl} to sitemap.xml if it should be indexed.`,
+        })
+      );
+      continue;
+    }
+
+    // The opposite disagreement: a page IS in the sitemap despite
+    // explicitly declaring noindex — worth a human's attention
+    // (contradictory signals to search engines), but observation-tier
+    // only. Never auto-removed from the sitemap by this audit or
+    // anything downstream of it — see risk.js's RULES entry for this
+    // type (tier "observation" always resolves to NO_CHANGE in
+    // decision.js) and agent/README.md's note on why this stops short
+    // of automatic sitemap cleanup.
+    if (page.noindex) {
+      findings.push(
+        makeFinding({
+          type: "noindex-page-in-sitemap",
+          summary: `${file} declares noindex ("${page.robotsMeta}") but is still listed in sitemap.xml.`,
+          pages: [file],
+          evidence: [
+            { file, field: "robotsMeta", value: page.robotsMeta },
+            { file: "sitemap.xml", field: "contains", value: true },
+          ],
+          recommendation: `These two signals disagree: confirm whether ${file} should actually be indexed (remove the noindex directive) or should not be (consider removing it from sitemap.xml) — this audit does not decide which is correct.`,
         })
       );
     }
