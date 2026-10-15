@@ -308,6 +308,94 @@ test("'failed' always wins over 'research_pending' when both are true — a run 
   assert.strictEqual(report.status, "failed");
 });
 
+// -----------------------------------------------------------------------
+// First-Party Signals (agent/lib/firstparty-signals.js) — report.js's own
+// `firstPartySignals` section. Distinct from `firstPartyEvidence` (raw)
+// and from `proposals`/`safeFixes` (actual decisions) — see report.js's
+// own header comment on the three-way distinction this section exists to
+// preserve.
+// -----------------------------------------------------------------------
+
+function querySignal(findingKey, overrides) {
+  return {
+    type: "query-page-mismatch",
+    findingKey,
+    pages: ["furniture-removal.html"],
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    source: "search-console-search-analytics",
+    evidenceFetchedAt: "2026-10-14T00:00:00.000Z",
+    mismatchedQueries: [{ query: "sell my old couch", observedPage: "https://www.milehighjunkremoval.net/other.html", clicks: 1, impressions: 10, ctr: 0.1, position: 5 }],
+    reason: "test reason",
+    limitations: "test limitations",
+    posture: "investigation-only — never a decision, proposal, approval, or rejection.",
+    ...overrides,
+  };
+}
+
+test("a run with zero findings carrying first-party signals reports firstPartySignals.count 0 and an empty items array — a valid, successful result", () => {
+  const report = buildReport({ record: baseRecord(), previousRun: null });
+  assert.strictEqual(report.firstPartySignals.count, 0);
+  assert.deepStrictEqual(report.firstPartySignals.items, []);
+});
+
+test("report.firstPartySignals is built from findings' attached `.firstPartySignals`, aggregated across findings, and NEVER changes healthSummary/status by itself", () => {
+  const record = baseRecord({
+    findings: [
+      { key: "a", type: "content-gap", tier: "opportunity", decision: "NO_CHANGE", status: "proposed", summary: "s", pages: ["furniture-removal.html"], firstPartySignals: [querySignal("a")] },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null });
+  assert.strictEqual(report.firstPartySignals.count, 1);
+  assert.strictEqual(report.firstPartySignals.items[0].findingKey, "a");
+  assert.strictEqual(report.firstPartySignals.items[0].type, "query-page-mismatch");
+  // The finding is NO_CHANGE and there is nothing else actionable — the
+  // run must still read as healthy, regardless of a signal existing.
+  assert.strictEqual(report.healthSummary.status, "all-clear");
+  assert.strictEqual(report.status, "completed");
+});
+
+test("report.firstPartySignals is a genuinely separate section from report.firstPartyEvidence and from report.proposals/safeFixes — a signal is neither raw evidence nor a decision", () => {
+  const evidence = makeFirstPartyEvidence({
+    findingKey: "a",
+    source: "search-console-search-analytics",
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "furniture-removal.html" },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    observed: { totalRowsReturned: 1, topRows: [{ keys: ["sell my old couch", "https://www.milehighjunkremoval.net/other.html"], clicks: 1, impressions: 10, ctr: 0.1, position: 5 }] },
+    context: "c",
+    limitations: "l",
+  });
+  const record = baseRecord({
+    findings: [
+      {
+        key: "a",
+        type: "content-gap",
+        tier: "opportunity",
+        decision: "NO_CHANGE",
+        status: "proposed",
+        summary: "s",
+        pages: ["furniture-removal.html"],
+        firstPartyEvidence: [evidence],
+        firstPartySignals: [querySignal("a")],
+      },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null, firstPartyIntegrations: { searchConsole: true, ga4: false } });
+  assert.strictEqual(report.firstPartyEvidence.gatheredThisRunCount, 1);
+  assert.strictEqual(report.firstPartySignals.count, 1);
+  // Neither section contributed a proposal/safe-fix — this finding's
+  // decision (NO_CHANGE) is the only thing that determines those.
+  assert.strictEqual(report.proposals.createdOrUpdatedCount, 0);
+  assert.strictEqual(report.safeFixes.appliedCount, 0);
+  // And none of decision.js's vocabulary appears anywhere inside a
+  // signal item itself.
+  for (const field of ["verdict", "recommendation", "confidence", "decision"]) {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(report.firstPartySignals.items[0], field), false);
+  }
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

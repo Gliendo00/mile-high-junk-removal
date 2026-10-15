@@ -249,6 +249,21 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
+    // First-Party Signals — DERIVED investigation leads computed from
+    // the raw evidence above (agent/lib/firstparty-signals.js). Shown
+    // as its own, separately-labeled section so it is never confused
+    // with the raw evidence above it or the actual Findings/Proposals
+    // below it — a signal is neither. Zero signals (the common case) is
+    // a normal, successful result and renders nothing extra, same as
+    // "First-party evidence" renders nothing extra when nothing was
+    // gathered.
+    if (report.firstPartySignals && report.firstPartySignals.count > 0) {
+      detailEl.appendChild(el('h3', 'admin-report-detail-subheading', 'First-party signals (investigation leads, not decisions)'));
+      report.firstPartySignals.items.slice(0, 10).forEach(function (signal) {
+        detailEl.appendChild(el('p', 'admin-report-detail-stat', signal.reason));
+      });
+    }
+
     // Phase 5B — a run still awaiting external research shows exactly
     // what's pending, in plain language, instead of a dead end. This is
     // informational only — resuming the run happens via the orchestrator

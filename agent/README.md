@@ -2910,15 +2910,17 @@ for the exact pass count.
 
 ## Is real GA4 retrieval now exercised through GitHub Actions/WIF?
 
-**Not yet for real — this phase, like Phase 7D before it, was built and
-tested with injected `fetchImpl`/mocked-`fetch` coverage only; the
-actual dispatch is a deliberately separate, explicitly-authorized step
-(see this phase's own "How to run it" below), not performed by this
-phase itself.** Once dispatched successfully, the real WIF → STS → IAM
-Credentials impersonation → GA4 Data API chain will be proven the same
-way Phase 7D proved it for Search Console: a real, committed,
-zero-or-nonzero evidence file in `agent/research/firstparty/`, and a
-green (or honestly red) job.
+**RESOLVED — yes.** This diagnostic was dispatched (`run_type:
+diagnostic-golden-ga4`) and succeeded: `First-party evidence fetch: 1
+evidence entry(ies) written to
+.../agent/research/firstparty/ga4__milehighjunkremoval-net-....json`,
+with safe-commit and the push to `main` both succeeding. The real
+WIF → STS → IAM Credentials impersonation → GA4 Data API chain is now
+proven end to end, the same way Phase 7D proved it for Search Console —
+both real production first-party paths (Search Console and GA4) are now
+confirmed working through the unattended GitHub Actions/WIF identity,
+not just through a human's local ADC login (Phase 6 §Remaining-risks)
+or fixture-injected tests.
 
 ## How to run it
 
@@ -2928,3 +2930,254 @@ workflow. A real, bounded, reviewable GA4 evidence file (whole-site
 sessions/screenPageViews over the trailing 28 days) is committed to
 `agent/research/firstparty/` on success; the job itself fails (not
 green) on any auth/config/API problem.
+
+**Dispatched and succeeded** — see "Is real GA4 retrieval now exercised
+through GitHub Actions/WIF?" above.
+
+# Phase 8 — First-Party Signals (investigation-only, decision-isolated)
+
+With both real production first-party paths proven (Phase 7D: Search
+Console; Phase 7E: GA4 — both via GitHub Actions/WIF), the next step was
+to let GSC/GA4 evidence meaningfully PARTICIPATE in investigation
+without becoming a decision-maker: `agent/lib/firstparty-evidence.js`'s
+hard structural rule (no verdict/confidence/recommendation field;
+`agent/lib/decision.js` never reads it at all) stays exactly as strict
+as it always was — this phase adds a new, clearly-separated layer
+ABOVE evidence and BELOW decisions, never inside either.
+
+## Goal
+
+Convert normalized GSC/GA4 evidence into useful, bounded investigation
+SIGNALS — a named, provenance-carrying observation worth a human's
+attention — without creating a new way for a metric to control an Agent
+decision.
+
+## Preserved boundary (unchanged, reconfirmed)
+
+- `agent/lib/decision.js` still does not consume first-party evidence
+  OR first-party signals — zero code paths, in either direction. Proven
+  by `tests/agent-firstparty-signals-safety.test.js` the same way
+  `tests/agent-firstparty-safety.test.js` already proved it for
+  evidence: `decide()` produces byte-identical output with or without
+  `.firstPartySignals` attached, AND `decision.js`'s own source text
+  never mentions `firstPartySignals` or `require()`s
+  `firstparty-signals.js` at all.
+- A signal cannot produce `PROPOSE_CHANGE`, `APPLY_SAFE_FIX`, approval,
+  rejection, or any website change — there is no code path from
+  `agent/lib/firstparty-signals.js` into `decision.js`,
+  `proposals-sync.js`, or `apply/rewrite-href.js` at all.
+- First-party evidence is still never converted into an
+  `agent/lib/research.js`-shaped external-research verdict — the two
+  schemas stay completely separate (evidence has no
+  verdict/confidence/recommendation field; research results require
+  them). A signal doesn't have one either.
+- The automatic-change whitelist (`agent/lib/apply/rewrite-href.js`,
+  exactly the same two finding types since Phase 1/2) is untouched.
+
+## What evidence is actually available today (inspected before writing any signal logic)
+
+Before choosing a signal vocabulary, the real evidence schema and the
+real evidence currently committed in this repo were both inspected:
+
+- `agent/lib/firstparty-evidence.js`'s shape has no `verdict`/
+  `confidence`/`recommendation` field by design (unchanged).
+- A `comparisonWindow` field exists on the schema but **no caller
+  anywhere** (`fetchSearchAnalyticsEvidence`/`fetchUrlInspectionEvidence`/
+  `fetchGa4Evidence` in `agent/lib/firstparty-fetch.js`) ever populates
+  it — it is always `null` in real evidence.
+- `fetchSearchAnalyticsEvidence()`'s own DEFAULT dimensions (when a
+  caller doesn't override them) are `["query", "page"]` — so a Search
+  Console evidence entry fetched with default dimensions already
+  carries, per returned row, which URL Google actually associates with
+  that query.
+- Each targeted first-party fetch scopes to exactly ONE target (one
+  page, one city, or the whole site) — nothing in this codebase
+  co-locates a subject page's evidence together with its comparable
+  siblings' evidence in one place, the way `content-gap-audit.js`/
+  `coverage-audit.js` do for purely internal, network-free page facts.
+- The three real evidence files committed in `agent/research/firstparty/`
+  as of this phase (the Golden Search Console diagnostic, the
+  `privacy-policy.html` sitemap-finding evidence, and the Golden GA4
+  diagnostic) were read directly — none of them carry both `query` and
+  `page` dimensions together, and none has a sibling page's evidence
+  co-located anywhere nearby.
+
+## Signal vocabulary: one implemented, three deliberately deferred
+
+Four signal concepts were discussed when this phase was proposed. Only
+**`query-page-mismatch`** is implemented — the other three are
+documented, not built, because implementing them honestly today would
+require either an arbitrary magic-number threshold (explicitly ruled
+out) or evidence-gathering this codebase does not currently perform:
+
+- **`query-page-mismatch` (implemented).** Computable from a SINGLE
+  already-realistic evidence entry, no baseline/threshold needed: does
+  any returned query row's page differ from the finding's own subject
+  page? A direct identity comparison (`agent/lib/page-identity.js`'s
+  `normalizePageIdentifierForComparison()` handles URL-vs-relative-path
+  identity, tolerant of http/https and www/apex differences — an
+  identity check, not a canonicalization judgment), never an average or
+  a magic number.
+- **`weak-ctr-despite-impressions` (deferred).** "Weak" requires a
+  baseline. The only non-arbitrary options are (a) a same-site
+  comparable-page CTR average — not currently assembled anywhere — or
+  (b) an external CTR-by-position benchmark curve, which would itself be
+  exactly the kind of invented, non-site-specific magic number this
+  phase was told to avoid.
+- **`landing-page-weak-conversion-vs-comparable` (deferred).** Same
+  problem as weak-ctr, for GA4: "vs comparable" requires GA4 evidence
+  for the subject page AND its comparable siblings to exist
+  simultaneously, which nothing currently assembles.
+- **`declined-vs-prior-period` (deferred).** The schema's
+  `comparisonWindow` field is never populated by any real caller. An
+  honest alternative — comparing two separately-fetched, time-separated
+  evidence entries attached to the SAME finding — is structurally
+  possible (`firstparty-intake.js` already attaches every matching
+  entry, not just the first), but `firstparty-candidates.js`'s own
+  candidacy rule deliberately never re-flags a finding that already has
+  evidence attached (see that file's header, point 3), so a finding
+  essentially never accumulates two time-separated entries today outside
+  a human manually re-fetching by hand. Deferred until a concrete,
+  intentional re-fetch mechanism exists for findings (the way
+  `rotation-evidence.js`'s staleness-triggered refresh already exists
+  for rotation picks, but nothing analogous exists for findings yet).
+
+**Future extension (not this phase):** a later, separately-authorized
+phase could widen `firstparty-candidates.js` to request GSC/GA4 evidence
+for a comparable GROUP of pages at once, which would make the two
+deferred "vs comparable" signals honestly computable using the same
+relative/proportional comparison style `content-gap-audit.js` already
+uses internally (`count < avg * 0.5`) — new evidence-gathering scope,
+not something this phase backfills by inventing data.
+
+## New files
+
+- `agent/lib/firstparty-signals.js` — the signal detector registry
+  (`SIGNAL_TYPES`, currently `["query-page-mismatch"]`),
+  `deriveFirstPartySignals(finding)`, and
+  `attachFirstPartySignals(findings)` (mirrors
+  `firstparty-intake.js`'s `attachFirstPartyEvidence()` exactly).
+- `agent/lib/page-identity.js` — `normalizePageIdentifierForComparison()`,
+  the shared URL-vs-relative-path identity helper the mismatch detector
+  needs (and any future page-comparison signal will too).
+
+## Wiring (`agent/runner.js`, `agent/lib/report.js`)
+
+`gatherFindings()` now calls `attachFirstPartySignals()` strictly AFTER
+both `decideAll()` and `attachFirstPartyEvidence()` — the same ordering
+guarantee `firstparty-intake.js`'s header already documents for
+`.firstPartyEvidence` itself, extended one step further.
+
+**Bug fix found while wiring this in:** `agent/runner.js`'s persisted
+`record.findings.map()` computed `.firstPartyEvidence` on every finding
+(via `attachFirstPartyEvidence()`) but never copied it into the
+persisted/mapped shape — so a FINDING's own first-party evidence
+silently never reached `record.report.firstPartyEvidence` or
+`agent/history/log.ndjson`, even though `report.js` has always read
+`f.firstPartyEvidence` expecting it to be there. Only rotation-sourced
+evidence (passed through a separate `rotationPriorities` parameter, not
+through `record.findings`) ever actually showed up in a report. Same
+class of bug as the Phase 4 `tier` fix already documented at that exact
+line in `runner.js` — classification/decisions were never affected
+(computed from the in-memory finding either way), only what got WRITTEN
+for later display. Proven with a real end-to-end `runner.run()`
+regression test (not just a hand-built `record` fixture, which is
+exactly why this had gone uncaught) —
+`tests/agent-firstparty-runner.test.js`'s new "BUG FIX regression"
+case. Fixed by adding both `firstPartyEvidence` and the new
+`firstPartySignals` to that mapping.
+
+`report.js` now has THREE clearly-distinguished sections (see its own
+header comment at the `firstPartySignals` computation):
+
+1. `report.firstPartyEvidence` — RAW/NORMALIZED evidence, unchanged.
+2. `report.firstPartySignals` — NEW: `{count, items}`, derived
+   investigation leads. Never folded into `status`/`healthSummary`
+   computation (same rule `firstPartyEvidence` already follows) — zero
+   signals is a valid, ordinary, successful result.
+3. `report.proposals`/`report.safeFixes` — ACTUAL Agent decisions,
+   unchanged, computed entirely by `decision.js`.
+
+`admin/agent-reports.js` renders a "First-party signals (investigation
+leads, not decisions)" section, gated on `count > 0`, placed directly
+after the existing "First-party evidence" section — rendering only each
+signal's `reason` text (never a raw `mismatchedQueries` dump, never a
+decision-shaped field, since none exists on the shape).
+
+## Signal shape
+
+```json
+{
+  "type": "query-page-mismatch",
+  "findingKey": "content-gap::furniture-removal.html",
+  "pages": ["furniture-removal.html"],
+  "scope": { "type": "page", "value": "furniture-removal.html" },
+  "window": { "start": "...", "end": "...", "label": "28 days ending ..." },
+  "source": "search-console-search-analytics",
+  "evidenceFetchedAt": "...",
+  "mismatchedQueries": [
+    { "query": "...", "observedPage": "...", "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 5 }
+  ],
+  "reason": "...",
+  "limitations": "...",
+  "posture": "investigation-only — never a decision, proposal, approval, or rejection; agent/lib/decision.js does not read this signal and cannot be influenced by it."
+}
+```
+
+No `verdict`/`recommendation`/`confidence`/`propose`/`apply` field
+anywhere — `tests/agent-firstparty-signals-safety.test.js` asserts this
+both empirically (a real derived signal's own keys) and structurally
+(the module's source text never assigns any of those field names, and
+never references `decision.js`'s `APPLY_SAFE_FIX`/`PROPOSE_CHANGE`/
+`RESEARCH_MORE`/`REJECT_OPPORTUNITY` vocabulary at all).
+
+## Tests
+
+New: `tests/agent-firstparty-signals.test.js` (11 cases — the detector's
+correctness: mismatch detection, agreement (no signal), multiple
+entries, malformed-row handling, non-GSC-search-analytics sources
+produce nothing, and a documentation test proving the real evidence
+files currently committed in this repo produce zero signals today).
+New: `tests/agent-firstparty-signals-safety.test.js` (14 cases — the
+six safety properties this phase was explicitly scoped around: `decide()`
+byte-identical with/without signals; no signal code path can return a
+decision/proposal/apply state, checked both structurally and
+empirically; a zero-row evidence entry produces no signal, never a
+fabricated "no opportunity" claim; every degrade path — wrong
+dimensions, no pages, healthy/agreeing evidence, no evidence at all —
+produces no signal rather than a false one; no visitor/client-identifier
+field name anywhere in the module or in a real derived signal's
+serialized output). New: `tests/agent-page-identity.test.js` (7 cases).
+Extended: `tests/agent-firstparty-runner.test.js` (+2, including the bug-
+fix regression above), `tests/agent-report.test.js` (+3), `tests/agent-
+reports-ui.test.js` (+2). Full repository suite: same single
+pre-existing, unrelated failure as every prior phase (CRM intake UI) —
+see this phase's own commit for the exact pass count.
+
+## Compatibility
+
+Daily/Weekly behavior, the Search Console diagnostic, and the GA4
+diagnostic are all unaffected — re-run and confirmed passing unchanged
+alongside this phase's own new tests. No Vercel function was added, no
+paid external research provider was added, no scheduling was added, and
+no GitHub Actions workflow was dispatched by this phase.
+
+## Remaining risks / open questions (Phase 8)
+
+1. Against the real evidence currently committed in this repo,
+   `query-page-mismatch` produces zero signals today — none of the three
+   real files carry both `query` and `page` dimensions together. The
+   capability is real (it's `fetchSearchAnalyticsEvidence()`'s own
+   default shape), but nothing has exercised it against genuine
+   production data yet; that will only happen the next time a human/
+   orchestrator fetches page-scoped Search Console evidence without
+   overriding `dimensions`.
+2. The three deferred signal concepts remain genuinely useful ideas —
+   see "Signal vocabulary" above for exactly what evidence-gathering
+   extension each would need, so a future phase doesn't have to
+   re-derive that reasoning from scratch.
+3. `report.firstPartySignals.items` is currently uncapped beyond
+   whatever bound the upstream evidence already carries (`MAX_ROWS`=10
+   per evidence entry) — the same, already-accepted posture
+   `firstPartyEvidence.items` has (see Phase 6's own remaining-risks
+   list, item 3).

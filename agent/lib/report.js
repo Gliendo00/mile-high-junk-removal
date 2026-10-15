@@ -324,6 +324,36 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
       }
     : null;
 
+  // First-Party Signals — derived, investigation-only leads computed
+  // from the SAME attached `.firstPartyEvidence` the section above
+  // reads, by agent/lib/firstparty-signals.js (see that file's header).
+  // Deliberately kept as its own, separate, clearly-labeled report
+  // section — this report now distinguishes three genuinely different
+  // things, and conflating any two of them would recreate exactly the
+  // "metrics quietly become decisions" risk this architecture was built
+  // to avoid:
+  //   1. `firstPartyEvidence` (above)  — RAW/NORMALIZED first-party
+  //      evidence: what was actually observed, bounded and sourced, no
+  //      interpretation at all.
+  //   2. `firstPartySignals` (here)    — DERIVED investigation leads:
+  //      a bounded, named pattern noticed IN that evidence (e.g. a
+  //      query/page mismatch), with its own stated limitations and an
+  //      explicit investigation-only posture. Still not a decision.
+  //   3. `proposals`/`safeFixes` (above) — ACTUAL Agent decisions: the
+  //      only section this run's real site changes or owner-facing
+  //      proposals ever come from. Computed entirely by
+  //      agent/lib/decision.js, which never reads `.firstPartyEvidence`
+  //      or `.firstPartySignals` — see tests/agent-firstparty-safety.test.js
+  //      and tests/agent-firstparty-signals-safety.test.js.
+  // Never folded into status/healthSummary computation (same rule
+  // firstPartyEvidence already follows) — zero signals is a valid,
+  // ordinary, successful result, same as zero findings.
+  const firstPartySignalItems = findings.flatMap((f) => (Array.isArray(f.firstPartySignals) ? f.firstPartySignals : []));
+  const firstPartySignals = {
+    count: firstPartySignalItems.length,
+    items: firstPartySignalItems,
+  };
+
   const status = computeRunStatus({
     failure,
     hasUnresolvedResearch: questionsPending.length > 0,
@@ -377,6 +407,7 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     },
     changeDetection,
     firstPartyEvidence,
+    firstPartySignals,
     validation: record.validation || null,
     proposalsSyncSkippedReason: record.proposalsSync && record.proposalsSync.skipped ? record.proposalsSync.reason : null,
     failure: failure || null,

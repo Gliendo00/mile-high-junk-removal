@@ -141,6 +141,27 @@ test("no Phase 5 Adjust-workflow SQL migration file exists in sql/", () => {
   assert.ok(!sqlFiles.some((f) => /adjust/i.test(f)), "the deferred Adjust migration must not exist in sql/");
 });
 
+// -----------------------------------------------------------------------
+// First-Party Signals — admin/agent-reports.js renders report.firstPartySignals
+// as its own, separately-labeled section, distinct from the existing
+// "First-party evidence" section above it.
+// -----------------------------------------------------------------------
+
+test("admin/agent-reports.js renders a 'First-party signals' section, gated on report.firstPartySignals.count, placed after the 'First-party evidence' section", () => {
+  const evidenceIdx = reportsJs.indexOf("First-party evidence");
+  const signalsIdx = reportsJs.indexOf("First-party signals");
+  assert.ok(evidenceIdx > -1, "expected the existing First-party evidence section to still exist");
+  assert.ok(signalsIdx > -1, "expected a new First-party signals section");
+  assert.ok(signalsIdx > evidenceIdx, "the signals section must render after the raw-evidence section");
+  assert.ok(/report\.firstPartySignals\s*&&\s*report\.firstPartySignals\.count\s*>\s*0/.test(reportsJs), "the signals section must be gated on count > 0 — zero signals renders nothing extra, same as the evidence section");
+});
+
+test("admin/agent-reports.js's First-party signals section labels itself as investigation leads, not decisions, and renders only `signal.reason` (never a raw mismatchedQueries dump or a decision-shaped field)", () => {
+  assert.ok(/not decisions/i.test(reportsJs));
+  assert.ok(/signal\.reason/.test(reportsJs));
+  assert.ok(!/signal\.verdict|signal\.recommendation|signal\.confidence|signal\.decision/.test(reportsJs), "the UI must never read a decision-shaped field off a signal — none exists on the shape in the first place");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

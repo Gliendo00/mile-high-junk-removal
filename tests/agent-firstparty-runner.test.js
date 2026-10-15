@@ -22,8 +22,14 @@
 // Run with:  node tests/agent-firstparty-runner.test.js
 
 const assert = require("assert");
-const { gatherFindings } = require("../agent/runner");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const runner = require("../agent/runner");
+const { gatherFindings } = runner;
 const { buildReport } = require("../agent/lib/report");
+const { writeFirstPartyEvidence, EVIDENCE_DIR } = require("../agent/lib/firstparty-fetch");
+const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 
 function test(name, fn) {
   try {
@@ -43,6 +49,60 @@ test("gatherFindings() never throws against the real site content, and every fin
     assert.ok(Array.isArray(f.firstPartyEvidence), `finding ${f.key} must have a firstPartyEvidence array`);
   }
   assert.ok(firstPartyWarnings === undefined || Array.isArray(firstPartyWarnings));
+});
+
+test("First-Party Signals: gatherFindings() attaches a `.firstPartySignals` array to every finding, computed strictly after `.firstPartyEvidence`", () => {
+  const { findings } = gatherFindings();
+  for (const f of findings) {
+    assert.ok(Array.isArray(f.firstPartySignals), `finding ${f.key} must have a firstPartySignals array`);
+  }
+});
+
+test("BUG FIX regression: a finding's `.firstPartyEvidence` AND `.firstPartySignals` survive a real end-to-end runner.run() call into the persisted record and the report — not just the in-memory gatherFindings() output. (Found while wiring in First-Party Signals: runner.js's record.findings.map() computed `.firstPartyEvidence` on every finding but never copied it into the persisted shape, so it silently never reached record.report.firstPartyEvidence for any FINDING — only rotation-sourced evidence, via a separate parameter, ever actually showed up there.)", async () => {
+  const { findings } = gatherFindings();
+  const target = findings.find((f) => f.tier !== "observation");
+  assert.ok(target, "expected at least one non-observation finding in the real site content to attach test evidence to");
+
+  const dimensionAndRowsThatProduceAMismatch = {
+    dimension: "query+page",
+    observed: {
+      totalRowsReturned: 1,
+      topRows: [{ keys: ["unrelated query", "https://www.milehighjunkremoval.net/zzz-test-fixture-unrelated-page.html"], clicks: 1, impressions: 10, ctr: 0.1, position: 5 }],
+    },
+  };
+  const evidence = makeFirstPartyEvidence({
+    findingKey: target.key,
+    source: "search-console-search-analytics",
+    metric: "clicks-impressions-ctr-position",
+    scope: { type: "page", value: target.pages[0] },
+    window: { start: "2026-09-17", end: "2026-10-14", label: "28 days ending 2026-10-14" },
+    context: "regression-test fixture",
+    limitations: "regression-test fixture",
+    ...dimensionAndRowsThatProduceAMismatch,
+  });
+  const written = writeFirstPartyEvidence(evidence, "zzz-test-fixture-runner-mapping-bug.json", EVIDENCE_DIR);
+
+  const logPath = path.join(os.tmpdir(), `agent-firstparty-runner-mapping-bug-${process.pid}-${Math.random().toString(36).slice(2)}.ndjson`);
+  try {
+    const record = await runner.run({ mode: "dry-run", runType: "daily", logPath, skipLock: true, syncProposals: false });
+
+    const persisted = record.findings.find((f) => f.key === target.key);
+    assert.ok(persisted, "expected the target finding to appear in the persisted record");
+    assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length === 1, "persisted finding must carry its attached firstPartyEvidence");
+    assert.strictEqual(persisted.firstPartyEvidence[0].findingKey, target.key);
+    assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length === 1, "persisted finding must carry its derived firstPartySignals");
+    assert.strictEqual(persisted.firstPartySignals[0].type, "query-page-mismatch");
+
+    assert.strictEqual(record.report.firstPartyEvidence.gatheredThisRunCount, 1, "the report's raw-evidence summary must reflect the finding-attached evidence, not just rotation evidence");
+    assert.strictEqual(record.report.firstPartySignals.count, 1, "the report's derived-signals summary must reflect the finding-attached signal");
+    assert.strictEqual(record.report.firstPartySignals.items[0].type, "query-page-mismatch");
+
+    // And the decision itself is still completely unaffected.
+    assert.strictEqual(persisted.decision, target.decision);
+  } finally {
+    fs.unlinkSync(written);
+    if (fs.existsSync(logPath)) fs.unlinkSync(logPath);
+  }
 });
 
 test("gatherFindings()'s decision/category are unaffected by whatever first-party evidence currently exists in the repo (Phase 6 is additive-only) — proven by re-deciding with it stripped and comparing", () => {

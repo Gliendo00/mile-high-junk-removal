@@ -67,6 +67,7 @@ const { classifyAll } = require("./lib/risk");
 const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
 const { attachFirstPartyEvidence, attachRotationEvidence } = require("./lib/firstparty-intake");
+const { attachFirstPartySignals } = require("./lib/firstparty-signals");
 const { isSearchConsoleConfigured } = require("./lib/search-console-client");
 const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
@@ -117,7 +118,16 @@ function gatherFindings() {
   // never influence a decision via this pipeline's own call order, on
   // top of decision.js itself never reading this field at all.
   const { findings: withFirstParty, warnings: firstPartyWarnings } = attachFirstPartyEvidence(decided);
-  return { pages, findings: withFirstParty, researchWarnings, firstPartyWarnings };
+  // First-Party Signals — attached strictly AFTER both decideAll() AND
+  // attachFirstPartyEvidence() above, same ordering guarantee as
+  // firstparty-intake.js's own header describes: a signal is DERIVED
+  // FROM already-attached evidence, and agent/lib/decision.js has
+  // already produced every finding's `.decision` before this line runs
+  // (and never reads `.firstPartySignals` regardless — see
+  // agent/lib/firstparty-signals.js's header and
+  // tests/agent-firstparty-signals-safety.test.js).
+  const withFirstPartySignals = attachFirstPartySignals(withFirstParty);
+  return { pages, findings: withFirstPartySignals, researchWarnings, firstPartyWarnings };
 }
 
 function applyEligible(findings) {
@@ -341,6 +351,25 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       evidence: f.evidence,
       research: f.research && f.research.length ? f.research : undefined,
       researchQuestion: f.researchQuestion || undefined,
+      // Bug fix (found while wiring in First-Party Signals): this field
+      // was computed and attached to every finding by
+      // attachFirstPartyEvidence() (see firstparty-intake.js), but was
+      // never copied into THIS persisted/mapped record — so a finding's
+      // own first-party evidence silently never reached
+      // record.report.firstPartyEvidence or history, even though
+      // report.js has always read `f.firstPartyEvidence` expecting it to
+      // be there (only rotation-sourced evidence, passed through a
+      // separate parameter, ever actually showed up). Same class of bug
+      // as the Phase 4 `tier` fix above: classification/decisions were
+      // never affected (computed from the in-memory finding either way),
+      // only what got WRITTEN to the log for later display. See
+      // tests/agent-firstparty-runner.test.js's end-to-end case.
+      firstPartyEvidence: f.firstPartyEvidence && f.firstPartyEvidence.length ? f.firstPartyEvidence : undefined,
+      // First-Party Signals — same pattern, same ordering guarantee
+      // (attached strictly after decideAll() — see this file's
+      // gatherFindings()). Investigation-only; see
+      // agent/lib/firstparty-signals.js's header.
+      firstPartySignals: f.firstPartySignals && f.firstPartySignals.length ? f.firstPartySignals : undefined,
       recommendation: f.recommendation,
       appliedResult: f.appliedResult || null,
       applyRefusedReason: f.applyRefusedReason || null,
