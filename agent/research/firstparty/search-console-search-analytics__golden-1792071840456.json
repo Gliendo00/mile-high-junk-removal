@@ -1,0 +1,26 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "golden",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Golden"
+    },
+    "window": {
+      "start": "2026-09-15",
+      "end": "2026-10-12",
+      "label": "28 days ending 2026-10-12"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "Manual diagnostic (GitHub Actions -> WIF -> service-account impersonation -> Search Console) — does this property's real Search Console query data contain any organic search query mentioning \"Golden\"? One-off controlled test of the production auth/fetch path, independent of the weekly rotation — never attached to a rotation report, never a page/opportunity decision.",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-10-15T13:44:00.456Z"
+  }
+]
