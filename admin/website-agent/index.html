@@ -31,73 +31,97 @@
        admin/agent-proposals.js's own header for that contract, duplicated
        here rather than shared/imported (same per-page-duplication
        convention this project already follows throughout admin/*.js). -->
-  <div id="wa-loading" class="admin-loading">Loading Website Agent…</div>
-  <div id="wa-not-connected" class="admin-empty" style="display:none">
-    The Website Agent hasn't logged a run yet. Once it runs for the first time, its status, metrics, and activity will appear here.
-  </div>
+  <!-- admin-wa-console carries the dark command-center background. It
+       wraps ONLY these three states (loading/not-connected/body), not
+       .admin-wa-main itself — .admin-main's own bottom padding (reserved
+       to clear the fixed mobile bottom nav) stays OUTSIDE this box, so it
+       reads as ordinary page margin again instead of a big empty dark
+       slab under the last section (final-polish fix). -->
+  <div class="admin-wa-console">
+    <div id="wa-loading" class="admin-loading">Loading Website Agent…</div>
+    <div id="wa-not-connected" class="admin-empty" style="display:none">
+      The Website Agent hasn't logged a run yet. Once it runs for the first time, its status, metrics, and activity will appear here.
+    </div>
 
-  <div id="wa-body" style="display:none">
+    <div id="wa-body" style="display:none">
 
-    <!-- Header / status ------------------------------------------------ -->
-    <div class="admin-wa-header">
-      <div class="admin-wa-header-top">
-        <div>
-          <div class="admin-wa-eyebrow">SITE INTELLIGENCE &amp; MONITORING</div>
-          <h1 class="admin-wa-title">WEBSITE AGENT</h1>
+      <!-- Header / status ------------------------------------------------ -->
+      <div class="admin-wa-header">
+        <div class="admin-wa-header-top">
+          <div>
+            <div class="admin-wa-eyebrow">SITE INTELLIGENCE &amp; MONITORING</div>
+            <h1 class="admin-wa-title">WEBSITE AGENT</h1>
+          </div>
+          <div class="admin-wa-status-wrap">
+            <div class="admin-wa-status-pill" id="wa-status-pill">
+              <span class="admin-wa-status-dot" id="wa-status-dot"></span>
+              <span id="wa-status-text">—</span>
+            </div>
+            <!-- Final-polish addition: the real reason behind a non-
+                 healthy status (e.g. "1 proposal awaiting approval"),
+                 reusing the SAME healthSummary.text agent/lib/report.js
+                 already computes — no new data, just surfaced here too. -->
+            <div class="admin-wa-status-reason" id="wa-status-reason" hidden></div>
+          </div>
         </div>
-        <div class="admin-wa-status-pill" id="wa-status-pill">
-          <span class="admin-wa-status-dot" id="wa-status-dot"></span>
-          <span id="wa-status-text">—</span>
+        <div class="admin-wa-integrations" id="wa-integrations"></div>
+      </div>
+
+      <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
+           two numbers reflect the latest run / live queue, never a sum
+           across history, so they can sit beside "NEEDS ATTENTION"
+           without reading as unrelated lifetime trivia. -->
+      <div class="admin-wa-section-label">CURRENT STATUS</div>
+      <div class="admin-wa-metrics admin-wa-metrics-current" id="wa-metrics-current"></div>
+
+      <!-- Lifetime/cumulative counters — clearly labeled ALL-TIME so they
+           can never be mistaken for "right now" numbers. -->
+      <div class="admin-wa-section-label">ALL-TIME TOTALS</div>
+      <div class="admin-wa-metrics admin-wa-metrics-lifetime" id="wa-metrics-lifetime"></div>
+
+      <!-- Daily / Weekly ---------------------------------------------------- -->
+      <div class="admin-wa-section-label">MONITORING SCHEDULE</div>
+      <div class="admin-wa-schedule-grid">
+        <div class="admin-wa-panel admin-wa-schedule-card">
+          <div class="admin-wa-panel-title">DAILY MONITOR</div>
+          <div id="wa-daily-body"></div>
+        </div>
+        <div class="admin-wa-panel admin-wa-schedule-card">
+          <div class="admin-wa-panel-title">WEEKLY DEEP SCAN</div>
+          <div id="wa-weekly-body"></div>
         </div>
       </div>
-      <div class="admin-wa-integrations" id="wa-integrations"></div>
-    </div>
 
-    <!-- Top metrics ------------------------------------------------------ -->
-    <div class="admin-wa-metrics" id="wa-metrics"></div>
+      <!-- Latest run --------------------------------------------------------- -->
+      <div class="admin-wa-section-label">LATEST RUN</div>
+      <div class="admin-wa-panel" id="wa-latest-run"></div>
 
-    <!-- Daily / Weekly ---------------------------------------------------- -->
-    <div class="admin-wa-section-label">MONITORING SCHEDULE</div>
-    <div class="admin-wa-schedule-grid">
-      <div class="admin-wa-panel admin-wa-schedule-card">
-        <div class="admin-wa-panel-title">DAILY MONITOR</div>
-        <div id="wa-daily-body"></div>
+      <!-- Approval queue ------------------------------------------------------ -->
+      <div class="admin-wa-section-label">
+        NEEDS YOUR REVIEW <span class="admin-wa-section-count" id="wa-queue-count"></span>
       </div>
-      <div class="admin-wa-panel admin-wa-schedule-card">
-        <div class="admin-wa-panel-title">WEEKLY DEEP SCAN</div>
-        <div id="wa-weekly-body"></div>
+      <div class="admin-wa-panel admin-wa-queue-panel">
+        <div id="wa-queue-list"></div>
+        <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
+        <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
       </div>
-    </div>
 
-    <!-- Latest run --------------------------------------------------------- -->
-    <div class="admin-wa-section-label">LATEST RUN</div>
-    <div class="admin-wa-panel" id="wa-latest-run"></div>
+      <!-- Search intelligence --------------------------------------------------- -->
+      <div class="admin-wa-section-label">SEARCH INTELLIGENCE</div>
+      <div class="admin-wa-evidence-grid">
+        <div class="admin-wa-panel" id="wa-evidence-gsc"></div>
+        <div class="admin-wa-panel" id="wa-evidence-ga4"></div>
+      </div>
 
-    <!-- Approval queue ------------------------------------------------------ -->
-    <div class="admin-wa-section-label">
-      NEEDS YOUR REVIEW <span class="admin-wa-section-count" id="wa-queue-count"></span>
-    </div>
-    <div class="admin-wa-panel admin-wa-queue-panel">
-      <div id="wa-queue-list"></div>
-      <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
-      <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
-    </div>
+      <!-- Agent activity ----------------------------------------------------- -->
+      <div class="admin-wa-section-label">
+        AGENT ACTIVITY <a href="/admin/agent-reports/" class="admin-wa-more-link admin-wa-more-link-inline">Full report history →</a>
+      </div>
+      <div class="admin-wa-panel admin-wa-activity-panel">
+        <div id="wa-activity-list" class="admin-wa-activity-list"></div>
+      </div>
 
-    <!-- Search intelligence --------------------------------------------------- -->
-    <div class="admin-wa-section-label">SEARCH INTELLIGENCE</div>
-    <div class="admin-wa-evidence-grid">
-      <div class="admin-wa-panel" id="wa-evidence-gsc"></div>
-      <div class="admin-wa-panel" id="wa-evidence-ga4"></div>
     </div>
-
-    <!-- Agent activity ----------------------------------------------------- -->
-    <div class="admin-wa-section-label">
-      AGENT ACTIVITY <a href="/admin/agent-reports/" class="admin-wa-more-link admin-wa-more-link-inline">Full report history →</a>
-    </div>
-    <div class="admin-wa-panel admin-wa-activity-panel">
-      <div id="wa-activity-list" class="admin-wa-activity-list"></div>
-    </div>
-
   </div>
 </main>
 

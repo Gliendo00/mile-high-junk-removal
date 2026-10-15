@@ -75,6 +75,42 @@ test("admin-chrome.js's currentSectionKey() marks /admin/website-agent/ (and its
   assert.ok(/'\/admin\/website-agent\/'\)\s*===\s*0[\s\S]{0,80}return 'website-agent'/.test(chromeJs) || chromeJs.includes("return 'website-agent'"));
 });
 
+// =======================================================================
+// Final-polish pass (metric timeframes, status reason, dark-slab fix) —
+// see this pass's own commit for the full writeup.
+// =======================================================================
+
+test("final polish: top metrics are split into CURRENT STATUS (latest-run/live numbers) and a separately labeled ALL-TIME TOTALS group, never one undifferentiated row", () => {
+  assert.ok(waHtml.includes("CURRENT STATUS"));
+  assert.ok(waHtml.includes("ALL-TIME TOTALS"));
+  assert.ok(waHtml.includes('id="wa-metrics-current"'));
+  assert.ok(waHtml.includes('id="wa-metrics-lifetime"'));
+  // Pages Monitored / Needs Review are current-state; the 4 cumulative
+  // counters must NOT be rendered into the current-state container.
+  assert.ok(/currentWrap\.appendChild\(buildMetricCard\('Pages Monitored'/.test(waJs));
+  assert.ok(/currentWrap\.appendChild\(buildMetricCard\('Needs Review'/.test(waJs));
+  assert.ok(/lifetimeWrap\.appendChild\(buildMetricCard\('Findings'/.test(waJs));
+  assert.ok(!/currentWrap\.appendChild\(buildMetricCard\('Findings'/.test(waJs), "Findings is a lifetime total, must not render into the CURRENT STATUS group");
+});
+
+test("final polish: the needs-attention reason line reuses the real healthSummary.text (no new/invented data) and hides for healthy/not-connected", () => {
+  assert.ok(waHtml.includes('id="wa-status-reason"'));
+  assert.ok(/healthSummary\s*&&\s*latestRun\.healthSummary\.text/.test(waJs) || /latestRun\.healthSummary\s*&&\s*latestRun\.healthSummary\.text/.test(waJs));
+  assert.ok(/status === 'healthy'[\s\S]{0,40}reasonEl\.hidden = true/.test(waJs) || /reasonEl\.hidden = true/.test(waJs));
+});
+
+test("final polish: PROPOSAL SYNC label is unchanged (renaming it to CRM SYNC would blur it with the separate, already-distinct CRM DATA indicator)", () => {
+  assert.ok(waJs.includes("'PROPOSAL SYNC'"));
+  assert.ok(!waJs.includes("'CRM SYNC'"));
+});
+
+test("final polish: the dark command-center background wraps only the loading/not-connected/body states (.admin-wa-console), not .admin-main's own bottom-nav-clearance padding — the fix for the empty dark slab below Agent Activity", () => {
+  assert.ok(waHtml.includes('class="admin-wa-console"'));
+  const adminCss = fs.readFileSync(path.join(__dirname, "..", "admin", "admin.css"), "utf8");
+  assert.ok(/\.admin-wa-console\s*\{[^}]*background:\s*#0d0e0a/.test(adminCss), "the dark background must be on .admin-wa-console");
+  assert.ok(!/\.admin-wa-main\s*\{[^}]*background:\s*#0d0e0a/.test(adminCss), ".admin-wa-main itself must stay transparent so the bottom-nav-clearance padding shows as ordinary page background");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

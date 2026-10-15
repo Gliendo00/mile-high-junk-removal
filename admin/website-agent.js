@@ -91,6 +91,25 @@ document.addEventListener('DOMContentLoaded', function () {
     text.textContent = STATUS_TEXT[status] || STATUS_TEXT.unknown;
   }
 
+  // The immediate reason behind a non-healthy status, shown right under
+  // the pill — reuses the SAME healthSummary.text agent/lib/report.js
+  // already computes for the latest run (e.g. "1 proposal awaiting
+  // approval"), never a new/invented line. Hidden entirely once the
+  // status is healthy (or there's nothing to explain), same restrained
+  // posture as every other "only show it when it's real" state on this
+  // page.
+  function renderStatusReason(status, latestRun) {
+    var reasonEl = document.getElementById('wa-status-reason');
+    var text = latestRun && latestRun.healthSummary && latestRun.healthSummary.text;
+    if (status === 'healthy' || status === 'not-connected' || !text) {
+      reasonEl.hidden = true;
+      reasonEl.textContent = '';
+      return;
+    }
+    reasonEl.hidden = false;
+    reasonEl.textContent = text;
+  }
+
   // -----------------------------------------------------------------
   // Integration indicators — GSC / GA4 / CRM DATA / PROPOSAL SYNC. Pure
   // configured-or-not booleans from the server (no secret values ever
@@ -113,28 +132,37 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
-  // Top metrics — cumulative telemetry across the Agent's full run
-  // history (see the server's own header for why these are sums, not
-  // invented scores) plus the live "needs review" queue count.
+  // Top metrics — split into two unambiguous timeframes (final-polish
+  // fix: these used to sit in one undifferentiated row, where a lifetime
+  // sum like "126 Findings" could easily be misread as "126 things wrong
+  // right now"):
+  //   - CURRENT STATUS: pagesMonitored (the latest run's own page count)
+  //     and the LIVE needs-review queue count — both reflect right now,
+  //     never a sum across history.
+  //   - ALL-TIME TOTALS: cumulative counters across the Agent's full run
+  //     history (see the server's own header for why these are sums, not
+  //     invented scores), clearly labeled as such in the section heading.
   // -----------------------------------------------------------------
+  function buildMetricCard(label, value) {
+    var card = el('div', 'admin-wa-metric-card');
+    card.appendChild(el('div', 'admin-wa-metric-value', typeof value === 'number' ? String(value) : '—'));
+    card.appendChild(el('div', 'admin-wa-metric-label', label));
+    return card;
+  }
   function renderMetrics(metrics, liveNeedsReviewCount) {
-    var wrap = document.getElementById('wa-metrics');
-    clear(wrap);
+    var currentWrap = document.getElementById('wa-metrics-current');
+    var lifetimeWrap = document.getElementById('wa-metrics-lifetime');
+    clear(currentWrap);
+    clear(lifetimeWrap);
     if (!metrics) return;
-    var cards = [
-      ['Pages Monitored', metrics.pagesMonitored],
-      ['Findings', metrics.findingsTotal],
-      ['Needs Review', liveNeedsReviewCount],
-      ['Changes Applied', metrics.changesAppliedTotal],
-      ['Research Completed', metrics.researchCompletedTotal],
-      ['No-Change Decisions', metrics.noChangeDecisionsTotal],
-    ];
-    cards.forEach(function (pair) {
-      var card = el('div', 'admin-wa-metric-card');
-      card.appendChild(el('div', 'admin-wa-metric-value', typeof pair[1] === 'number' ? String(pair[1]) : '—'));
-      card.appendChild(el('div', 'admin-wa-metric-label', pair[0]));
-      wrap.appendChild(card);
-    });
+
+    currentWrap.appendChild(buildMetricCard('Pages Monitored', metrics.pagesMonitored));
+    currentWrap.appendChild(buildMetricCard('Needs Review', liveNeedsReviewCount));
+
+    lifetimeWrap.appendChild(buildMetricCard('Findings', metrics.findingsTotal));
+    lifetimeWrap.appendChild(buildMetricCard('Changes Applied', metrics.changesAppliedTotal));
+    lifetimeWrap.appendChild(buildMetricCard('Research Completed', metrics.researchCompletedTotal));
+    lifetimeWrap.appendChild(buildMetricCard('No-Change Decisions', metrics.noChangeDecisionsTotal));
   }
 
   // -----------------------------------------------------------------
@@ -470,6 +498,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var proposed = proposals.filter(function (p) { return p.status === 'proposed'; });
 
         renderStatusPill(dash.status);
+        renderStatusReason(dash.status, dash.latestRun);
         renderIntegrations(dash.integrations);
         renderMetrics(dash.metrics, proposed.length);
         renderScheduleCard('wa-daily-body', dash.daily && dash.daily.lastRun);
