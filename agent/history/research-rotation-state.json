@@ -1,8 +1,8 @@
 {
   "byCitySlug": {
     "golden": {
-      "lastReviewedAt": "2026-10-15T04:44:08.386Z",
-      "lastReviewedRunId": "2026-10-15T04-44-07-249Z-qz23e2"
+      "lastReviewedAt": "2026-10-15T18:13:01.951Z",
+      "lastReviewedRunId": "2026-10-15T18-13-00-486Z-u4dpwr"
     },
     "brighton": {
       "lastReviewedAt": "2026-10-15T04:44:08.386Z",
@@ -71,6 +71,14 @@
     "parker": {
       "lastReviewedAt": "2026-10-15T17:39:24.124Z",
       "lastReviewedRunId": "2026-10-15T17-39-22-493Z-4vgv09"
+    },
+    "highlands-ranch": {
+      "lastReviewedAt": "2026-10-15T18:13:01.951Z",
+      "lastReviewedRunId": "2026-10-15T18-13-00-486Z-u4dpwr"
+    },
+    "centennial": {
+      "lastReviewedAt": "2026-10-15T18:13:01.951Z",
+      "lastReviewedRunId": "2026-10-15T18-13-00-486Z-u4dpwr"
     }
   }
 }

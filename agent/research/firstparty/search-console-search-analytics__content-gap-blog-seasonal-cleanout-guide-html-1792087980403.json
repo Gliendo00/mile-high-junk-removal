@@ -1,0 +1,27 @@
+[
+  {
+    "findingKey": "content-gap::blog-seasonal-cleanout-guide.html",
+    "rotationSlug": null,
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query+page",
+    "scope": {
+      "type": "page",
+      "value": "blog-seasonal-cleanout-guide.html"
+    },
+    "window": {
+      "start": "2026-09-15",
+      "end": "2026-10-12",
+      "label": "28 days ending 2026-10-12"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "Weekly first-party-evidence refresh for \"content-gap\" on blog-seasonal-cleanout-guide.html — does this property's real Search Console query data mentioning \"seasonal cleanout guide\" (this page's own topic) land on blog-seasonal-cleanout-guide.html, or on a different URL? Deliberately NOT page-filtered — see this module's own header on why a page filter would make a mismatch structurally undetectable.",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-10-15T18:13:00.403Z",
+    "requestFingerprint": "seasonal cleanout guide"
+  }
+]
