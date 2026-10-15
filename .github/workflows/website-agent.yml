@@ -49,6 +49,19 @@ on:
           # tests/github-actions-workflow.test.js's diagnostic-specific
           # assertions.
           - diagnostic-golden-search-console
+          # Phase 7E — the GA4 analog of the diagnostic above: proves the
+          # SAME GitHub WIF -> impersonation path against the GA4 Data
+          # API specifically (never exercised unattended before this —
+          # GA4 has always been reachable only via a human/orchestrator's
+          # manual --fetch-firstparty=, never from this runner). Reuses
+          # --fetch-firstparty-strict= against a second hardcoded,
+          # committed request file
+          # (agent/diagnostics/golden-ga4-request.json) — no new Google
+          # client, no new auth path, identical gating/safety posture to
+          # diagnostic-golden-search-console above (see the dedicated
+          # step below and tests/github-actions-workflow.test.js's
+          # diagnostic-specific assertions).
+          - diagnostic-golden-ga4
         default: daily
 
 permissions:
@@ -85,12 +98,12 @@ jobs:
         # than let agent/lib/proposals-sync.js degrade to its normal
         # (otherwise correct) {skipped:true} behavior unnoticed. Never
         # echoes either value.
-        # Skipped for the Golden diagnostic (run_type above) — that mode
-        # never runs the Agent pipeline or proposal sync at all, so
-        # Supabase configuration is simply irrelevant to it; requiring it
-        # anyway would make a pure Google-auth diagnostic depend on an
+        # Skipped for the Golden diagnostics (run_type above) — neither
+        # mode ever runs the Agent pipeline or proposal sync at all, so
+        # Supabase configuration is simply irrelevant to them; requiring
+        # it anyway would make a pure Google-auth diagnostic depend on an
         # unrelated credential.
-        if: inputs.run_type != 'diagnostic-golden-search-console'
+        if: inputs.run_type != 'diagnostic-golden-search-console' && inputs.run_type != 'diagnostic-golden-ga4'
         run: |
           if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
             echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured. This permanent runner requires both so CRM proposal sync is never silently skipped. See the setup documentation in the workflow run summary / PR description."
@@ -152,12 +165,12 @@ jobs:
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
       - name: Run Website Agent (${{ inputs.run_type }})
-        # Only for daily/weekly — the Golden diagnostic (run_type above)
-        # must NEVER run the ordinary Agent pipeline: no scan, no
+        # Only for daily/weekly — neither Golden diagnostic (run_type
+        # above) must EVER run the ordinary Agent pipeline: no scan, no
         # findings, no proposal sync, no rotation, no history/rotation-
         # state write. Without this gate, an unrecognized run_type value
         # would fall through to cli.js's default ("manual" dry-run),
-        # which is exactly the full pipeline this diagnostic must not
+        # which is exactly the full pipeline these diagnostics must not
         # trigger.
         if: inputs.run_type == 'daily' || inputs.run_type == 'weekly'
         run: node agent/cli.js "--${RUN_TYPE}" --json
@@ -201,6 +214,47 @@ jobs:
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+
+      - name: Run Golden GA4 diagnostic (diagnostic only)
+        # Phase 7E — the GA4 analog of the Golden Search Console
+        # diagnostic immediately above: a narrow, manual, one-off proof
+        # that the GitHub Actions -> WIF -> service-account impersonation
+        # -> GA4 Data API path (the same auth step above, the same
+        # GOOGLE_IMPERSONATE_SERVICE_ACCOUNT, agent/lib/google-auth.js's
+        # SAME resolver, agent/lib/ga4-client.js) actually works end to
+        # end — GA4 has never been exercised unattended before this; it
+        # has only ever been reached via a human/orchestrator's manual
+        # `--fetch-firstparty=` from a machine with its own ADC login
+        # (see agent/README.md's Phase 6 §18/§Remaining-risks). Reuses
+        # the EXISTING --fetch-firstparty-strict= path (no new Google
+        # client, no new auth code, no new networking implementation —
+        # see cli.js's own header; agent/lib/firstparty-fetch.js's
+        # fetchGa4Evidence() is the SAME function a human orchestrator's
+        # `--fetch-firstparty=` already uses) against a single,
+        # pre-committed, reviewable request file
+        # (agent/diagnostics/golden-ga4-request.json — a whole-site,
+        # 28-day, date-dimension sessions/screenPageViews aggregate;
+        # deliberately NOT a landingPage filter for "Golden" — Golden has
+        # no dedicated page, so that would mean nothing in GA4; see that
+        # file's own `context` field). --fetch-firstparty-strict (NOT the
+        # plain, orchestrator-facing --fetch-firstparty) is used
+        # deliberately: a skip here (misconfiguration, auth failure, API
+        # error) must fail this job visibly, not log-and-return-0 the way
+        # an orchestrator-driven fetch correctly does. A real zero-row
+        # GA4 response is NOT a skip — fetchFirstPartyEvidence() returns
+        # {skipped:false} for it — so it still exits 0 and is still
+        # written as a normal, honest, zero-row evidence file.
+        #
+        # Never runs --daily/--weekly, never calls computePriorities()
+        # or research-rotation.js at all, so agent/history/
+        # research-rotation-state.json is structurally unreachable from
+        # this step — nothing to "not mutate" because nothing in this
+        # code path ever touches it in the first place.
+        if: inputs.run_type == 'diagnostic-golden-ga4'
+        run: node agent/cli.js --fetch-firstparty-strict=agent/diagnostics/golden-ga4-request.json
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
 
       - name: Persist Agent artifacts (safe-commit)
         # Runs even if the step above failed: runner.js (see its own

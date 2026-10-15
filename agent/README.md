@@ -2818,3 +2818,113 @@ workflow** → `run_type` dropdown → **diagnostic-golden-search-console**
 file for "Golden" is committed to `agent/research/firstparty/` on
 success; the job itself fails (not green) on any auth/config/API
 problem.
+
+# Phase 7E — Golden GA4 diagnostic (manual, one-off)
+
+Phase 7D proved the real GitHub Actions → WIF → service-account
+impersonation → **Search Console** path. GA4 was a separate, still-open
+question: `agent/lib/ga4-client.js`'s `runReport()` had only ever been
+exercised two ways — fixture-`fetchImpl` unit tests
+(`tests/agent-ga4-client.test.js`), and a real call against production
+GA4 data from a **human's own local ADC login** on Rocky's Windows
+machine (Phase 6 §18/§Remaining-risks item 2). Neither proves the
+unattended GitHub Actions runner's own WIF-federated identity can
+actually reach the GA4 Data API — `agent/lib/rotation-evidence.js`
+deliberately never calls GA4 at all (no `landingPage` for a pageless
+pick means nothing to query), so nothing in the existing unattended
+pipeline had ever exercised it, by design, until now.
+
+**Added a fourth, narrow `run_type` option**, mirroring Phase 7D's
+pattern exactly: `diagnostic-golden-ga4`. It runs ONLY the existing
+`--fetch-firstparty-strict=` path (the SAME variant Phase 7D added —
+no second GA4 networking implementation, no new Google client, no new
+auth code) against a second, pre-committed, reviewable request file,
+`agent/diagnostics/golden-ga4-request.json`:
+
+```json
+{
+  "type": "ga4",
+  "rotationSlug": "golden-ga4",
+  "scope": { "type": "site", "value": "milehighjunkremoval.net" },
+  "days": 28,
+  "dimensions": ["date"],
+  "metrics": ["sessions", "screenPageViews"]
+}
+```
+
+**Why this exact request, not a `landingPage` filter for "Golden"**:
+Golden has no dedicated page (that's precisely why the weekly rotation
+flagged it in the first place) — a `landingPage` dimension filter for
+it would be querying for data that structurally cannot exist, proving
+nothing about the auth/fetch path either way. A whole-site, `date`-
+dimension aggregate is the simplest request that still proves a real,
+well-formed GA4 Data API call succeeded: no dimension filter to get
+subtly wrong, no page-existence assumption to maintain as the site
+changes.
+
+**Why `sessions`/`screenPageViews`, not `conversions`/`keyEvents`**:
+both are core, automatically-collected GA4 metrics present on every
+GA4 property with zero configuration — they do not depend on this
+property's own conversion/key-event setup the way `conversions` (GA4's
+older metric name) or `keyEvents` (the newer one, properties migrated
+since 2024) do. Using either of those blindly risks a false failure
+signal (an API error, or a silently-empty result) that reflects this
+property's conversion-event configuration rather than the auth/fetch
+path this diagnostic actually exists to prove. A future phase that
+wants real conversion-attributed evidence should inspect the property's
+actual configured events first, not assume either name.
+
+**Reuses `agent/cli.js`'s `--fetch-firstparty-strict=` unchanged** — it
+was already generic over `request.type` (`"search-analytics"` |
+`"url-inspection"` | `"ga4"`, see `firstparty-fetch.js`'s
+`fetchFirstPartyEvidence()` dispatcher), so **zero changes to
+`agent/cli.js` or any Google client were needed** for this diagnostic.
+Same strict-mode contract as Phase 7D: a `{skipped:true}` result
+(misconfiguration, auth failure, API error) sets `process.exitCode = 1`
+— a legitimate zero-row GA4 response is never a skip and is written and
+reported exactly like any other successful count. `daily`/`weekly`
+behavior is completely unchanged; the main Agent step, the weekly-only
+rotation-evidence step, and the Search Console diagnostic step's own
+gating are all unaffected — the new step is gated to
+`inputs.run_type == 'diagnostic-golden-ga4'` only, and the Supabase-
+config check is skipped for both diagnostics now (neither ever runs
+proposal sync).
+
+## Tests
+
+New: `tests/agent-cli-fetch-firstparty-strict-ga4.test.js` (9 cases —
+the committed request's exact shape, its deliberate avoidance of
+`conversions`/`keyEvents`, a privacy check that its dimensions never
+match a visitor/client-identifier pattern, confirmation it is NOT
+page-scoped to "Golden", strict-vs-non-strict exit-code behavior, and
+the zero-row-is-success case — asserting the written evidence carries
+no raw GA4 API response shape, no visitor/client identifiers, and not
+even the GA4 property id itself). Extended:
+`tests/github-actions-workflow.test.js` (+7 — the new run_type option,
+the diagnostic step's path/env/no-continue-on-error, that it cannot
+reach rotation state or the ordinary pipeline, that the Supabase check
+now excludes both diagnostics, and that the two diagnostics' gating is
+mutually independent). Full repository suite: same single pre-existing,
+unrelated failure as every prior phase — see this phase's own commit
+for the exact pass count.
+
+## Is real GA4 retrieval now exercised through GitHub Actions/WIF?
+
+**Not yet for real — this phase, like Phase 7D before it, was built and
+tested with injected `fetchImpl`/mocked-`fetch` coverage only; the
+actual dispatch is a deliberately separate, explicitly-authorized step
+(see this phase's own "How to run it" below), not performed by this
+phase itself.** Once dispatched successfully, the real WIF → STS → IAM
+Credentials impersonation → GA4 Data API chain will be proven the same
+way Phase 7D proved it for Search Console: a real, committed,
+zero-or-nonzero evidence file in `agent/research/firstparty/`, and a
+green (or honestly red) job.
+
+## How to run it
+
+GitHub → Actions → "Website Agent — unattended runner" → **Run
+workflow** → `run_type` dropdown → **diagnostic-golden-ga4** → Run
+workflow. A real, bounded, reviewable GA4 evidence file (whole-site
+sessions/screenPageViews over the trailing 28 days) is committed to
+`agent/research/firstparty/` on success; the job itself fails (not
+green) on any auth/config/API problem.

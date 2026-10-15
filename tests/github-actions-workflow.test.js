@@ -213,6 +213,55 @@ await test("Phase 7D: the diagnostic (3) can never run the ordinary Agent pipeli
 await test("Phase 7D: the diagnostic's own Supabase-config check is skipped (irrelevant — no Agent pipeline, no proposal sync ever runs for it)", () => {
   const block = extractStepBlock(code, /Verify required Supabase configuration/);
   assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]/.test(block));
+  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-ga4['"]/.test(block), "the Supabase check must also be skipped for the GA4 diagnostic — same reasoning as the Search Console one");
+});
+
+await test("Phase 7E: the diagnostic-golden-ga4 run_type option exists alongside daily/weekly/diagnostic-golden-search-console, which stay unchanged", () => {
+  assert.ok(/-\s*diagnostic-golden-ga4/.test(code), "expected a diagnostic-golden-ga4 option on the run_type input");
+  assert.ok(/-\s*diagnostic-golden-search-console/.test(code), "the existing Search Console diagnostic option must still exist, unchanged");
+  assert.ok(/-\s*daily/.test(code) && /-\s*weekly/.test(code), "daily/weekly options must still exist, unchanged");
+  assert.ok(/default:\s*daily/.test(code), "default must still be daily — the GA4 diagnostic is opt-in only, never the default");
+});
+
+await test("Phase 7E: the Golden GA4 diagnostic step (1) reuses the EXISTING --fetch-firstparty path (the strict variant) against its own committed request file — no new Google client/path, no second GA4 networking implementation", () => {
+  const block = extractStepBlock(code, /Run Golden GA4 diagnostic/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-ga4['"]/.test(block), "must be gated to the GA4 diagnostic run_type only");
+  assert.ok(/--fetch-firstparty-strict=agent\/diagnostics\/golden-ga4-request\.json/.test(block), "must invoke the existing --fetch-firstparty-strict path against the committed, reviewable GA4 request file");
+  assert.strictEqual(/--fetch-firstparty=/.test(block.replace("--fetch-firstparty-strict=", "")), false, "must use the STRICT variant, not the plain orchestrator-facing one (a config/auth/API failure must fail this job)");
+  assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block), "must use the SAME GOOGLE_IMPERSONATE_SERVICE_ACCOUNT variable production runs use — no separate/local credential path");
+  assert.ok(/GA4_PROPERTY_ID:\s*\$\{\{\s*vars\.GA4_PROPERTY_ID\s*\}\}/.test(block));
+  assert.strictEqual(/GSC_SITE_URL/.test(block), false, "the GA4 diagnostic has no business referencing GSC_SITE_URL — that belongs only to the Search Console diagnostic");
+});
+
+await test("Phase 7E: the Golden GA4 diagnostic step is not marked continue-on-error — an auth/API/config failure (strict-mode exit 1) must fail the job visibly, not return green", () => {
+  const block = extractStepBlock(code, /Run Golden GA4 diagnostic/);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+});
+
+await test("Phase 7E: the GA4 diagnostic can never reach rotation state — --refresh-rotation-evidence/--weekly are never invoked for it, and the rotation-evidence step stays gated to weekly only", () => {
+  const diagnosticBlock = extractStepBlock(code, /Run Golden GA4 diagnostic/);
+  assert.strictEqual(/--refresh-rotation-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--weekly/.test(diagnosticBlock), false);
+  const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock));
+});
+
+await test("Phase 7E: the GA4 diagnostic can never run the ordinary Agent pipeline, so it can never create/apply a proposal or make a website change — the main Agent step stays gated to daily/weekly only", () => {
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for every diagnostic run_type, including the new GA4 one");
+  const diagnosticBlock = extractStepBlock(code, /Run Golden GA4 diagnostic/);
+  assert.strictEqual(/--daily/.test(diagnosticBlock), false);
+  assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
+});
+
+await test("Phase 7E: the GA4 diagnostic step runs AFTER the Search Console diagnostic step and does not alter its gating — the two diagnostics are independent, mutually exclusive run_type values, never both active in one dispatch", () => {
+  const lines = code.split("\n");
+  const gscIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Golden Search Console diagnostic/.test(l));
+  const ga4Idx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Golden GA4 diagnostic/.test(l));
+  assert.ok(gscIdx > -1 && ga4Idx > -1);
+  assert.ok(ga4Idx > gscIdx, "expected the GA4 diagnostic step to be declared after the Search Console diagnostic step");
+  const gscBlock = extractStepBlock(code, /Run Golden Search Console diagnostic/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(gscBlock), "the Search Console diagnostic's own gating must be unaffected by adding the GA4 diagnostic");
 });
 
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {

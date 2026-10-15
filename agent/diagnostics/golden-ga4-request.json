@@ -1,0 +1,17 @@
+{
+  "type": "ga4",
+  "rotationSlug": "golden-ga4",
+  "scope": {
+    "type": "site",
+    "value": "milehighjunkremoval.net"
+  },
+  "days": 28,
+  "dimensions": [
+    "date"
+  ],
+  "metrics": [
+    "sessions",
+    "screenPageViews"
+  ],
+  "context": "Manual diagnostic (GitHub Actions -> WIF -> service-account impersonation -> GA4 Data API) -- does this property's real GA4 Data API return real aggregate session/pageview data for the whole site? One-off controlled test of the production auth/fetch path, independent of the weekly rotation -- never attached to a rotation report, never a page/opportunity decision. Deliberately NOT scoped to a page named 'Golden' (Golden has no dedicated page -- a landingPage filter for it would mean nothing in GA4). Uses only universally-available, automatically-collected GA4 metrics (sessions, screenPageViews) -- deliberately avoids 'conversions'/'keyEvents', which depend on this property's own configured conversion/key-event setup and would not reliably prove the auth/fetch path alone."
+}
