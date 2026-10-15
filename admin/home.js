@@ -382,18 +382,17 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
-  // Website & Marketing Activity (Site Improvement Agent, Phase 2) — a
-  // compact activity-view render of GET ?view=agent-activity's
-  // {connected, recent} payload. `recent[0].lines` is already a short
-  // list of {icon, text} pairs (agent/lib/history.js's
-  // buildDashboardSummary() built it server-side) — this just turns each
-  // into one DOM row, via createElement/textContent only, never
-  // innerHTML, the same discipline every other admin page in this
-  // directory already follows. A null/failed fetch (agentActivityBody is
-  // null) renders identically to "connected: false" — the existing "Not
-  // connected yet" row — never a fabricated status.
+  // Website Agent — compact Home summary only (CRM UI-organization pass).
+  // Reuses the SAME GET ?view=agent-activity payload the card has always
+  // fetched (no backend change for Home itself — see admin/home.js's
+  // Stage 1 fetch list below); this just renders a much smaller summary
+  // than before (health dot, last-run line, a 4-up grid of pages
+  // monitored / needs review / changes applied / research done) plus a
+  // link to the full /admin/website-agent/ dashboard, instead of dumping
+  // every individual observation line here. A null/failed fetch
+  // (agentActivityBody is null) renders identically to "connected: false"
+  // — the existing "Not connected yet" row — never a fabricated status.
   // -----------------------------------------------------------------
-  var ICON_GLYPH = { check: '✓', flag: '!', research: '○', reject: '✕', observation: '·' };
   function formatRunTimestamp(iso) {
     if (!iso) return '';
     var d = new Date(iso);
@@ -403,18 +402,19 @@ document.addEventListener('DOMContentLoaded', function () {
     var time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     return (isToday ? 'Today, ' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ') + time;
   }
-  function statRow(container, text) {
-    var row = document.createElement('div');
-    row.className = 'admin-home-marketing-stat';
-    row.textContent = text;
-    container.appendChild(row);
+  function gridStat(container, value, label) {
+    var cell = el('div', 'admin-home-marketing-grid-cell');
+    cell.appendChild(el('div', 'admin-home-marketing-grid-value', value));
+    cell.appendChild(el('div', 'admin-home-marketing-grid-label', label));
+    container.appendChild(cell);
   }
   function renderAgentActivity(agentActivityBody) {
     var notConnectedEl = document.getElementById('marketing-not-connected');
     var connectedEl = document.getElementById('marketing-connected');
+    var healthDotEl = document.getElementById('marketing-health-dot');
     var summaryEl = document.getElementById('marketing-summary');
-    var linesEl = document.getElementById('marketing-lines');
-    var statsEl = document.getElementById('marketing-stats');
+    var runLineEl = document.getElementById('marketing-run-line');
+    var gridEl = document.getElementById('marketing-grid');
     var connected = !!(agentActivityBody && agentActivityBody.connected && agentActivityBody.recent && agentActivityBody.recent.length);
 
     if (!connected) {
@@ -425,56 +425,30 @@ document.addEventListener('DOMContentLoaded', function () {
 
     notConnectedEl.hidden = true;
     connectedEl.hidden = false;
-    clear(linesEl);
-    agentActivityBody.recent[0].lines.forEach(function (line) {
-      var row = document.createElement('div');
-      row.className = 'admin-home-marketing-line';
 
-      var icon = document.createElement('span');
-      icon.className = 'admin-home-marketing-line-icon admin-home-marketing-line-icon-' + (line.icon || 'flag');
-      icon.textContent = ICON_GLYPH[line.icon] || '•';
-      icon.setAttribute('aria-hidden', 'true');
-
-      var text = document.createElement('span');
-      text.textContent = line.text;
-
-      row.appendChild(icon);
-      row.appendChild(text);
-      linesEl.appendChild(row);
-    });
-
-    // Phase 5 — the compact summary/stats rows built from the most
-    // recent run's own `report` (see agent/lib/report.js). `latest` is
-    // absent for an older-shaped log entry recorded before Phase 5 —
-    // both blocks simply stay hidden in that case, degrading to exactly
-    // the original per-line-only card.
+    // `latest` is absent for an older-shaped log entry recorded before
+    // Phase 5 — the summary block simply stays hidden in that case
+    // (there's no per-run report to summarize yet), leaving just the
+    // label + "Open Agent Dashboard" link.
     var latest = agentActivityBody.latest;
     if (!latest) {
       summaryEl.hidden = true;
-      statsEl.hidden = true;
+      healthDotEl.className = 'admin-home-marketing-health-dot';
       return;
     }
 
-    clear(summaryEl);
-    summaryEl.hidden = false;
-    var runLine = document.createElement('div');
-    runLine.className = 'admin-home-marketing-summary-run';
-    runLine.textContent = 'Last run: ' + formatRunTimestamp(latest.timestamp) + (latest.runType ? ' (' + latest.runType + ')' : '');
-    summaryEl.appendChild(runLine);
-    var pagesLine = document.createElement('div');
-    pagesLine.className = 'admin-home-marketing-summary-pages';
-    pagesLine.textContent = (typeof latest.pagesChecked === 'number' ? latest.pagesChecked + ' pages checked' : '');
-    summaryEl.appendChild(pagesLine);
-    var healthLine = document.createElement('div');
-    healthLine.className = 'admin-home-marketing-summary-health admin-home-marketing-summary-health-' + ((latest.healthSummary && latest.healthSummary.status) || 'unknown');
-    healthLine.textContent = (latest.healthSummary && latest.healthSummary.text) || '';
-    summaryEl.appendChild(healthLine);
+    var status = (latest.healthSummary && latest.healthSummary.status) || 'unknown';
+    healthDotEl.className = 'admin-home-marketing-health-dot admin-home-marketing-health-dot-' + status;
+    healthDotEl.setAttribute('aria-label', (latest.healthSummary && latest.healthSummary.text) || status);
 
-    clear(statsEl);
-    statsEl.hidden = false;
-    statRow(statsEl, (latest.safeFixesAppliedCount || 0) + ' fix' + (latest.safeFixesAppliedCount === 1 ? '' : 'es') + ' applied');
-    statRow(statsEl, (latest.researchQuestionsRaisedCount || 0) + ' opportunit' + (latest.researchQuestionsRaisedCount === 1 ? 'y' : 'ies') + ' researched');
-    statRow(statsEl, (latest.proposalsAwaitingApprovalCount || 0) + ' proposal' + (latest.proposalsAwaitingApprovalCount === 1 ? '' : 's') + ' awaiting approval');
+    summaryEl.hidden = false;
+    runLineEl.textContent = 'Last run: ' + formatRunTimestamp(latest.timestamp) + (latest.runType ? ' (' + latest.runType + ')' : '');
+
+    clear(gridEl);
+    gridStat(gridEl, typeof latest.pagesChecked === 'number' ? String(latest.pagesChecked) : '—', 'Pages monitored');
+    gridStat(gridEl, String(latest.proposalsAwaitingApprovalCount || 0), 'Needs review');
+    gridStat(gridEl, (latest.safeFixesAppliedCount || 0) > 0 ? 'Yes (' + latest.safeFixesAppliedCount + ')' : 'No', 'Changes applied');
+    gridStat(gridEl, String(latest.researchQuestionsRaisedCount || 0), 'Researching');
   }
 
   // -----------------------------------------------------------------

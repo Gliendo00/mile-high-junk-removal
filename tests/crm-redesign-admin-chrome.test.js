@@ -69,11 +69,16 @@ test("admin-chrome.js: bottom nav is exactly Home, Schedule, Leads, Clients (in 
   assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients"]);
   assert.ok(/id="admin-more-toggle"/.test(chromeSrc), "bottom nav must render a More button");
 });
-test("admin-chrome.js: the More sheet contains exactly Expenses + Other Revenue (from SECTIONS) plus Log Out, reusing the existing .admin-sheet-* chrome", () => {
+// Website Agent dashboard pass — the More sheet now also carries Website
+// Agent (no mascot asset for it, same reasoning "More" itself has always
+// had — see admin-chrome.js's own header), so this project's existing
+// invariant becomes "Expenses + Other Revenue + Website Agent", not
+// "exactly those first two" forever.
+test("admin-chrome.js: the More sheet contains Expenses + Other Revenue + Website Agent (from SECTIONS) plus Log Out, reusing the existing .admin-sheet-* chrome", () => {
   const moreKeysMatch = chromeSrc.match(/var MORE_SHEET_KEYS = \[([^\]]*)\];/);
   assert.ok(moreKeysMatch, "admin-chrome.js must define MORE_SHEET_KEYS");
   const keys = Array.from(moreKeysMatch[1].matchAll(/'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(keys, ["expenses", "other-revenue"]);
+  assert.deepStrictEqual(keys, ["expenses", "other-revenue", "website-agent"]);
   assert.ok(
     /admin-sheet-overlay/.test(chromeSrc) && /admin-sheet-option/.test(chromeSrc) && /admin-sheet-cancel/.test(chromeSrc),
     "the More sheet must reuse the existing .admin-sheet-overlay/.admin-sheet-option/.admin-sheet-cancel chrome, not a new modal pattern"

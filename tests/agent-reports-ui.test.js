@@ -52,17 +52,24 @@ test("admin/agent-reports/index.html loads admin-chrome.js/admin-fetch.js and it
   assert.ok(/name="robots" content="noindex, nofollow"/.test(reportsHtml));
 });
 
-test("admin/home/index.html's connected marketing card links to BOTH the new report-history page and the existing proposals review page", () => {
-  assert.ok(homeHtml.includes('href="/admin/agent-reports/"'));
-  assert.ok(homeHtml.includes('href="/admin/agent-proposals/"'));
+// Website Agent dashboard pass — Home's card now links to the
+// consolidated /admin/website-agent/ dashboard instead of linking
+// straight to report-history/proposals itself; THAT dashboard is what
+// links on to both existing pages (preserving, not removing, either
+// surface — see tests/website-agent-dashboard-ui.test.js).
+test("admin/home/index.html's connected marketing card links to the Website Agent dashboard, which itself still links to BOTH report-history and proposals review", () => {
+  assert.ok(homeHtml.includes('href="/admin/website-agent/"'));
+  const waHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "website-agent", "index.html"), "utf8");
+  assert.ok(waHtml.includes('href="/admin/agent-reports/'));
+  assert.ok(waHtml.includes('href="/admin/agent-proposals/"'));
 });
 
-test("admin/home.js's renderAgentActivity degrades gracefully (hides the new summary/stats) when `latest` is absent — an older-shaped log entry from before Phase 5 must not break the Home card", () => {
+test("admin/home.js's renderAgentActivity degrades gracefully (hides the summary grid) when `latest` is absent — an older-shaped log entry from before Phase 5 must not break the Home card", () => {
   assert.ok(/if\s*\(\s*!latest\s*\)/.test(homeJs));
 });
 
 test("admin/home.js's health-status rendering reuses a named status class (all-clear/needs-attention/failed), never a raw numeric score", () => {
-  assert.ok(homeJs.includes("admin-home-marketing-summary-health-"));
+  assert.ok(homeJs.includes("admin-home-marketing-health-dot-"));
   assert.ok(!/healthScore|siteScore|seoScore/i.test(homeJs));
 });
 

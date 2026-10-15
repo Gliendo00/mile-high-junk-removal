@@ -1,18 +1,21 @@
-// Site Improvement Agent — static checks for the Home dashboard's
-// Website & Marketing Activity wiring (admin/home.js + admin/home/index.html).
-// No DOM/browser here (this project's convention for client JS it can't
-// run headlessly is a source-level static-analysis guard — see e.g.
-// tests/phase2-admin-api.test.js's innerHTML-ban test), so this proves
-// the wiring is present and follows the same no-innerHTML discipline
-// every other admin page's JS already does, and that the two markup
-// states actually exist with the right default visibility.
+// Website Agent — static checks for the Home dashboard's now-simplified
+// Website Agent summary card (admin/home.js + admin/home/index.html).
+//
+// CRM UI-organization pass: Home used to render every per-finding
+// {icon, text} line from GET ?view=agent-activity's `recent[0].lines`
+// directly (see git history for the original version of this test) —
+// that detail now lives on the dedicated /admin/website-agent/ command-
+// center dashboard. Home keeps only a compact summary card (health dot,
+// last-run line, a 4-up grid) linking to it. No DOM/browser here (this
+// project's convention for client JS it can't run headlessly is a
+// source-level static-analysis guard — see e.g.
+// tests/phase2-admin-api.test.js's innerHTML-ban test).
 //
 // Run with:  node tests/agent-activity-home-ui.test.js
 
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { iconForFinding } = require("../agent/lib/history");
 
 function test(name, fn) {
   try {
@@ -28,7 +31,7 @@ function test(name, fn) {
 const homeJs = fs.readFileSync(path.join(__dirname, "..", "admin", "home.js"), "utf8");
 const homeHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "home", "index.html"), "utf8");
 
-test("admin/home.js fetches the new agent-activity view as part of Stage 1", () => {
+test("admin/home.js still fetches the existing agent-activity view as part of Stage 1 (no backend change needed for Home's own card)", () => {
   assert.ok(homeJs.includes("/api/admin/bookings?view=agent-activity"));
 });
 
@@ -38,36 +41,27 @@ test("admin/home.js's agent-activity rendering never uses innerHTML/insertAdjace
   assert.ok(!/document\.write\s*\(/.test(homeJs));
 });
 
-test("admin/home.js builds each activity line via createElement + textContent, not string concatenation", () => {
+test("admin/home.js builds the summary grid via createElement + textContent, not string concatenation", () => {
   assert.ok(homeJs.includes("renderAgentActivity"));
-  assert.ok(homeJs.includes("document.createElement('div')"));
-  assert.ok(/text\.textContent\s*=\s*line\.text/.test(homeJs));
+  assert.ok(homeJs.includes("gridStat"));
 });
 
-test("admin/home.js's icon glyph map covers every icon agent/lib/history.js can actually produce", () => {
-  const sampleFindings = [
-    { decision: "APPLY_SAFE_FIX", status: "applied" },
-    { decision: "APPLY_SAFE_FIX", status: "proposed" },
-    { decision: "RESEARCH_MORE" },
-    { decision: "NO_CHANGE" },
-    { decision: "NO_CHANGE", tier: "observation" },
-    { decision: "REJECT_OPPORTUNITY" },
-    { decision: "PROPOSE_CHANGE" },
-  ];
-  const possibleIcons = new Set(sampleFindings.map(iconForFinding));
-  possibleIcons.add("check"); // the always-present "Checked N pages" line
-
-  const match = homeJs.match(/var ICON_GLYPH = \{([^}]*)\};/);
-  assert.ok(match, "expected an ICON_GLYPH map literal in admin/home.js");
-  for (const icon of possibleIcons) {
-    assert.ok(match[1].includes(icon + ":"), `ICON_GLYPH is missing an entry for icon "${icon}"`);
-  }
+test("admin/home.js no longer renders the old per-finding lines list or stats pills (moved to /admin/website-agent/)", () => {
+  assert.ok(!homeJs.includes("ICON_GLYPH"), "the per-finding icon glyph map should be gone from Home's own script");
+  assert.ok(!homeJs.includes("marketing-lines"));
+  assert.ok(!homeJs.includes("marketing-stats"));
 });
 
-test("admin/home/index.html has both marketing states, with the connected one hidden by default", () => {
+test("admin/home/index.html has both marketing states, with the connected one hidden by default and linking to the dashboard", () => {
   assert.ok(homeHtml.includes('id="marketing-not-connected"'));
   assert.ok(/id="marketing-connected"[^>]*\bhidden\b/.test(homeHtml), "the connected-state card must start hidden until the fetch resolves");
-  assert.ok(homeHtml.includes('id="marketing-lines"'));
+  assert.ok(homeHtml.includes('href="/admin/website-agent/"'), "the compact card must link to the full dashboard");
+  assert.ok(homeHtml.includes("Open Agent Dashboard"));
+});
+
+test("admin/home/index.html no longer has the old per-line/stats containers", () => {
+  assert.ok(!homeHtml.includes('id="marketing-lines"'));
+  assert.ok(!homeHtml.includes('id="marketing-stats"'));
 });
 
 if (process.exitCode) {
