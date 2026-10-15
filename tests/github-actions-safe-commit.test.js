@@ -5,15 +5,25 @@
 // safe to commit back to `main`. Covers the brief's explicit
 // invariants: only the two known Agent-artifact paths are ever
 // committed, any other changed path fails the run instead of being
-// silently committed, and a credential-shaped string anywhere in an
+// silently committed, a credential-shaped string anywhere in an
 // otherwise-allowed file also fails the run (without ever printing the
-// matched secret text).
+// matched secret text), and — the fix this file also covers — a
+// completely fresh GitHub-hosted checkout with NO Git author identity
+// configured anywhere can still reach a successful commit (the real
+// first-production-run failure: "Author identity unknown"/"empty ident
+// name ... not allowed").
 //
 // The first block tests the pure parsing/classification/scanning
 // functions directly (no git, no subprocess). The second block is a
 // real end-to-end check against a throwaway temp git repo, exercising
 // the actual CLI entry point exactly as the GitHub Actions workflow
-// invokes it.
+// invokes it — including, in the THIRD block, with the ambient Git
+// identity fully isolated away (not just unset in the temp repo, but
+// unreachable at the global/system scope too — see isolatedGitEnv()),
+// so these tests fail honestly on a machine that happens to have its
+// own global `user.name`/`user.email` configured, exactly as the
+// ORIGINAL bug was masked by every developer machine (and this repo's
+// own earlier test run) already having one.
 //
 // Run with:  node tests/github-actions-safe-commit.test.js
 
@@ -28,6 +38,7 @@ const {
   parsePorcelainStatus,
   classifyChangedPaths,
   scanForCredentialLeak,
+  AUTOMATION_IDENTITY,
 } = require("../.github/scripts/safe-commit");
 
 const SCRIPT_PATH = path.join(__dirname, "..", ".github", "scripts", "safe-commit.js");
@@ -43,8 +54,8 @@ function test(name, fn) {
     });
 }
 
-function runGit(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8" });
+function runGit(args, cwd, env) {
+  return execFileSync("git", args, { cwd, env, encoding: "utf8" });
 }
 
 function initTempRepo() {
@@ -60,17 +71,59 @@ function initTempRepo() {
   return dir;
 }
 
-function headSha(dir) {
-  return runGit(["rev-parse", "HEAD"], dir).trim();
+function headSha(dir, env) {
+  return runGit(["rev-parse", "HEAD"], dir, env).trim();
 }
 
-function runSafeCommit(dir, message) {
+function runSafeCommit(dir, message, env) {
   try {
-    execFileSync("node", [SCRIPT_PATH, message], { cwd: dir, encoding: "utf8" });
+    execFileSync("node", [SCRIPT_PATH, message], { cwd: dir, env, encoding: "utf8" });
     return { status: 0 };
   } catch (e) {
     return { status: e.status, stderr: e.stderr ? e.stderr.toString() : "" };
   }
+}
+
+// Builds an env where Git has NO identity reachable at ANY scope —
+// not local (a fresh `git init` has none), not global, not system.
+// GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM (Git >= 2.32) are pointed at a
+// genuinely empty file rather than merely unset, so this is immune to
+// whatever the HOST machine's own ~/.gitconfig happens to contain —
+// without this override, these tests would silently pass on any
+// machine that already has a global identity (which is exactly how the
+// real bug went unnoticed: every developer machine, and this repo's
+// own test runs, already had one). HOME/USERPROFILE are also pointed
+// at the throwaway dir so Git can't fall back to the real user profile
+// on either platform.
+function isolatedGitEnv(dir, extraGlobalConfig) {
+  const globalConfigPath = path.join(dir, "isolated-global.gitconfig");
+  const systemConfigPath = path.join(dir, "isolated-system.gitconfig");
+  fs.writeFileSync(globalConfigPath, extraGlobalConfig || "", "utf8");
+  fs.writeFileSync(systemConfigPath, "", "utf8");
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: globalConfigPath, GIT_CONFIG_SYSTEM: systemConfigPath, HOME: dir, USERPROFILE: dir };
+  delete env.GIT_AUTHOR_NAME;
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.GIT_COMMITTER_NAME;
+  delete env.GIT_COMMITTER_EMAIL;
+  return env;
+}
+
+// Like initTempRepo(), but with NO identity visible at any scope (see
+// isolatedGitEnv()) — simulating a fresh GitHub-hosted runner's
+// checkout exactly. The repo's own pre-existing history obviously had
+// SOME author at some point (as any real `actions/checkout` clone
+// does) — a one-off `-c` override supplies that for this ONE fixture
+// commit only, never persisted to any config file, so it proves
+// nothing about whether safe-commit.js itself can supply an identity.
+function initTempRepoNoIdentity(extraGlobalConfig) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "safe-commit-noid-test-"));
+  const env = isolatedGitEnv(dir, extraGlobalConfig);
+  runGit(["init", "--initial-branch=main"], dir, env);
+  fs.mkdirSync(path.join(dir, "agent", "history"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "history", "log.ndjson"), "", "utf8");
+  runGit(["-c", "user.name=Fixture Setup", "-c", "user.email=fixture@example.com", "add", "-A"], dir, env);
+  runGit(["-c", "user.name=Fixture Setup", "-c", "user.email=fixture@example.com", "commit", "-m", "initial"], dir, env);
+  return { dir, env };
 }
 
 async function main() {
@@ -236,6 +289,75 @@ async function main() {
       assert.notStrictEqual(after, before);
       const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
       assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/history/research-rotation-state.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- Git author identity regression (the real first-run failure) ---
+
+  await test("safe-commit CLI succeeds on a clean GitHub-style checkout with NO Git identity configured anywhere (local, global, or system), and sets ONLY a repository-local one", () => {
+    const { dir, env } = initTempRepoNoIdentity();
+    try {
+      // Sanity-check the fixture itself: confirm no identity is visible
+      // BEFORE running safe-commit — otherwise this test would prove
+      // nothing.
+      assert.throws(() => runGit(["config", "user.name"], dir, env), /./, "fixture setup is broken: a Git identity is already visible");
+
+      const before = headSha(dir, env);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "ci-fresh-1" }) + "\n", "utf8");
+
+      const result = runSafeCommit(dir, "chore(agent): daily run ci-fresh-1", env);
+      assert.strictEqual(result.status, 0, `expected safe-commit to succeed on a no-identity checkout; stderr: ${result.stderr}`);
+
+      const after = headSha(dir, env);
+      assert.notStrictEqual(after, before, "a new commit should have been created");
+
+      const localName = runGit(["config", "--local", "user.name"], dir, env).trim();
+      const localEmail = runGit(["config", "--local", "user.email"], dir, env).trim();
+      assert.strictEqual(localName, AUTOMATION_IDENTITY.name);
+      assert.strictEqual(localEmail, AUTOMATION_IDENTITY.email);
+
+      const authorLine = runGit(["show", "-s", "--format=%an <%ae>", after], dir, env).trim();
+      assert.strictEqual(authorLine, `${AUTOMATION_IDENTITY.name} <${AUTOMATION_IDENTITY.email}>`);
+
+      // The identity was set LOCALLY, never globally/system-wide — the
+      // override "global"/"system" config fixture files must still be
+      // untouched (empty).
+      assert.strictEqual(fs.readFileSync(env.GIT_CONFIG_GLOBAL, "utf8"), "");
+      assert.strictEqual(fs.readFileSync(env.GIT_CONFIG_SYSTEM, "utf8"), "");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI does NOT override an identity already configured locally", () => {
+    const dir = initTempRepo(); // initTempRepo() already sets a custom local identity
+    try {
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "ci-existing-local" }) + "\n", "utf8");
+      const result = runSafeCommit(dir, "chore(agent): daily run ci-existing-local");
+      assert.strictEqual(result.status, 0);
+      const after = headSha(dir);
+      const authorLine = runGit(["show", "-s", "--format=%an <%ae>", after], dir).trim();
+      assert.strictEqual(authorLine, "Safe Commit Test <test@example.com>", "a pre-existing local identity must never be overridden by the automation identity");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI relies on an identity configured only at the GLOBAL scope, without adding a redundant local override", () => {
+    const { dir, env } = initTempRepoNoIdentity('[user]\n\tname = Some Org-Wide Runner\n\temail = runner@example.org\n');
+    try {
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "ci-existing-global" }) + "\n", "utf8");
+      const result = runSafeCommit(dir, "chore(agent): daily run ci-existing-global", env);
+      assert.strictEqual(result.status, 0, `stderr: ${result.stderr}`);
+
+      const after = headSha(dir, env);
+      const authorLine = runGit(["show", "-s", "--format=%an <%ae>", after], dir, env).trim();
+      assert.strictEqual(authorLine, "Some Org-Wide Runner <runner@example.org>", "the already-resolvable global identity should be used as-is");
+
+      // No local override should have been added when one wasn't needed.
+      assert.throws(() => runGit(["config", "--local", "user.name"], dir, env), /./, "ensureGitIdentity() should not add a local override when an identity already resolves from a broader scope");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

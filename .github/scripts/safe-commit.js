@@ -31,8 +31,25 @@
 // Exits 0 and does nothing (no commit) if nothing in the allowlist
 // actually changed — a "no worthwhile change today" run is a normal,
 // successful outcome, not an error.
+// Before actually committing, fills in a repository-local Git author
+// identity (ensureGitIdentity() below) IF AND ONLY IF none is already
+// configured at any scope — see AUTOMATION_IDENTITY above.
 
 const { execSync } = require("child_process");
+
+// A fresh GitHub-hosted runner's checkout has NO Git author identity
+// configured anywhere (no ~/.gitconfig — unlike a developer's own
+// machine, which almost always has one; that's exactly why this gap
+// went unnoticed until the first real Actions run: `git commit` fails
+// outright with "Author identity unknown"/"empty ident name ... not
+// allowed"). ensureGitIdentity() below fills in ONLY the missing
+// piece, as REPOSITORY-LOCAL config (`git config --local`, never
+// `--global`) — a human or environment that already has user.name/
+// user.email configured at any level is never overridden.
+const AUTOMATION_IDENTITY = {
+  name: "Mile High Website Agent",
+  email: "41898282+github-actions[bot]@users.noreply.github.com",
+};
 
 const ALLOWED_PATH_PATTERNS = [/^agent\/history\/log\.ndjson$/, /^agent\/history\/research-rotation-state\.json$/];
 
@@ -93,6 +110,29 @@ function scanForCredentialLeak(text) {
   return null;
 }
 
+// Reads a single git config key, at whatever scope git itself would
+// resolve it from (local overrides global overrides system) — returns
+// "" if unset at every scope, never throws.
+function getGitConfigValue(key) {
+  try {
+    return execSync(`git config ${key}`, { encoding: "utf8" }).trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+// Sets ONLY whichever of user.name/user.email isn't already configured
+// at any scope, and ONLY as repository-local config — see this file's
+// header comment on AUTOMATION_IDENTITY for why.
+function ensureGitIdentity() {
+  if (!getGitConfigValue("user.name")) {
+    execSync(`git config --local user.name ${JSON.stringify(AUTOMATION_IDENTITY.name)}`);
+  }
+  if (!getGitConfigValue("user.email")) {
+    execSync(`git config --local user.email ${JSON.stringify(AUTOMATION_IDENTITY.email)}`);
+  }
+}
+
 function main() {
   const fs = require("fs");
   const message = process.argv[2];
@@ -142,13 +182,25 @@ function main() {
     }
   }
 
+  ensureGitIdentity();
+
   const paths = allowed.map((e) => e.path);
   execSync(`git add -- ${paths.map((p) => JSON.stringify(p)).join(" ")}`, { stdio: "inherit" });
   execSync(`git commit -m ${JSON.stringify(message)}`, { stdio: "inherit" });
   console.log(`safe-commit: committed ${paths.length} Agent-artifact file(s): ${paths.join(", ")}`);
 }
 
-module.exports = { ALLOWED_PATH_PATTERNS, CREDENTIAL_LEAK_PATTERNS, isPathAllowed, parsePorcelainStatus, classifyChangedPaths, scanForCredentialLeak };
+module.exports = {
+  ALLOWED_PATH_PATTERNS,
+  CREDENTIAL_LEAK_PATTERNS,
+  AUTOMATION_IDENTITY,
+  isPathAllowed,
+  parsePorcelainStatus,
+  classifyChangedPaths,
+  scanForCredentialLeak,
+  getGitConfigValue,
+  ensureGitIdentity,
+};
 
 if (require.main === module) {
   main();
