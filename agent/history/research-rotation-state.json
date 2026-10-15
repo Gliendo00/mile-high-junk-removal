@@ -23,6 +23,18 @@
     "commerce-city": {
       "lastReviewedAt": "2026-10-15T05:28:40.606Z",
       "lastReviewedRunId": "2026-10-15T05-28-39-213Z-6zirh0"
+    },
+    "sterling-ranch": {
+      "lastReviewedAt": "2026-10-15T12:57:51.566Z",
+      "lastReviewedRunId": "2026-10-15T12-57-49-928Z-rig2px"
+    },
+    "denver": {
+      "lastReviewedAt": "2026-10-15T12:57:51.566Z",
+      "lastReviewedRunId": "2026-10-15T12-57-49-928Z-rig2px"
+    },
+    "aurora": {
+      "lastReviewedAt": "2026-10-15T12:57:51.566Z",
+      "lastReviewedRunId": "2026-10-15T12-57-49-928Z-rig2px"
     }
   }
 }
