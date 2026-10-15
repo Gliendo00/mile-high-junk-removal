@@ -10,16 +10,26 @@
 // the run rather than silently get committed.
 //
 // With mutation disabled (this runner never passes --apply-safe — see
-// the workflow's own comments), the two files below are the ONLY ones
-// `node agent/cli.js --daily`/`--weekly` ever writes:
-//   - agent/history/log.ndjson              (every run, appended)
-//   - agent/history/research-rotation-state.json   (weekly runs only)
-// Both are already git-tracked, append-only/small-diff JSON — exactly
-// the "legitimate Agent artifacts" the brief describes. Nothing else is
-// in the allowlist: not agent/research/** (only written by
-// --refresh-completed-jobs/--fetch-firstparty/--resume, none of which
-// this runner invokes yet), and never any top-level *.html/sitemap.xml/
-// robots.txt/vercel.json (the actual public site).
+// the workflow's own comments), these are the ONLY files
+// `node agent/cli.js --daily`/`--weekly`/`--refresh-rotation-evidence`
+// ever writes:
+//   - agent/history/log.ndjson                      (every run, appended)
+//   - agent/history/research-rotation-state.json    (weekly runs only)
+//   - agent/research/firstparty/*.json               (weekly runs only —
+//     Phase 7B's --refresh-rotation-evidence step, run BEFORE --weekly;
+//     see agent/lib/rotation-evidence.js's header. Each file is a
+//     normalized, bounded Search Console evidence entry — never a raw
+//     API response, never a credential — written by
+//     firstparty-fetch.js's existing writeFirstPartyEvidence(), same as
+//     an orchestrator's --fetch-firstparty already produced before this
+//     phase; only WHEN it runs changed, not what it writes.)
+// All three are already git-tracked, append-only/small-diff JSON —
+// exactly the "legitimate Agent artifacts" the brief describes. Nothing
+// else is in the allowlist: not agent/research/results/ or
+// agent/research/completed-jobs/ (written only by --refresh-completed-
+// jobs/--resume, neither of which this runner invokes), and never any
+// top-level *.html/sitemap.xml/robots.txt/vercel.json (the actual
+// public site).
 //
 // Usage:
 //   node .github/scripts/safe-commit.js "commit message"
@@ -64,7 +74,14 @@ const AUTOMATION_IDENTITY = {
   email: "41898282+github-actions[bot]@users.noreply.github.com",
 };
 
-const ALLOWED_PATH_PATTERNS = [/^agent\/history\/log\.ndjson$/, /^agent\/history\/research-rotation-state\.json$/];
+const ALLOWED_PATH_PATTERNS = [
+  /^agent\/history\/log\.ndjson$/,
+  /^agent\/history\/research-rotation-state\.json$/,
+  // Phase 7B — narrowly scoped to exactly that one directory, one level
+  // deep, .json only — never agent/research/** broadly (results/ and
+  // completed-jobs/ stay OUT of this allowlist; see this file's header).
+  /^agent\/research\/firstparty\/[^/]+\.json$/,
+];
 
 // Deliberately pattern-based, not a secrets-scanning dependency — this
 // repo adds no new dependencies for this (matches the agent's own
@@ -183,7 +200,7 @@ function main() {
   if (disallowed.length > 0) {
     console.error("safe-commit: REFUSING to commit — unexpected path(s) changed outside the Agent-artifact allowlist:");
     for (const e of disallowed) console.error(`  ${e.status} ${e.path}`);
-    console.error("Only agent/history/log.ndjson and agent/history/research-rotation-state.json are ever expected to change from an unattended --daily/--weekly run. Investigate before re-running.");
+    console.error("Only agent/history/log.ndjson, agent/history/research-rotation-state.json, and agent/research/firstparty/*.json are ever expected to change from an unattended --daily/--weekly run. Investigate before re-running.");
     process.exitCode = 1;
     return;
   }

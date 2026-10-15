@@ -34,6 +34,18 @@ const { classifyChanges } = require("./change-detection");
 const { computeFreshness } = require("./research");
 const { computeFirstPartyFreshness, SOURCES: FIRST_PARTY_SOURCES } = require("./firstparty-evidence");
 const { isFirstPartyEvidenceCandidate, buildFirstPartyEvidenceQuestion } = require("./firstparty-candidates");
+const { isRotationEvidenceCandidate, classifyRotationConclusion } = require("./rotation-evidence");
+
+// Phase 7B — surfaced verbatim on every rotation pick and in
+// rotation.summary: this unattended runner has no research-capable
+// orchestrator session (no Claude/Anthropic or other AI provider is
+// configured — see agent/README.md's Phase 7 section) and therefore
+// cannot perform the EXTERNAL (municipal/county/state, competitor-
+// landscape) half of a genuine deep review. Stated once here so it is
+// never silently implied to have happened — see rotation-evidence.js's
+// header for the full boundary this documents.
+const EXTERNAL_RESEARCH_CAPABILITY_MISSING =
+  "Not available in this environment — this unattended run has no research-capable orchestrator session (no Claude/Anthropic or other AI provider, no web-research access configured). External/local research (municipal, county, state sources; competitor landscape as context only) for this pick still requires a human or a future research-capable orchestrator session.";
 
 function countBy(findings, predicate) {
   return findings.filter(predicate).length;
@@ -166,9 +178,23 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   // each finding's own `.firstPartyEvidence` (attached by
   // firstparty-intake.js strictly AFTER decideAll() already ran — see
   // that file's header), never from a live API call.
-  const firstPartyAttached = findings.flatMap((f) =>
-    Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence.map((entry) => ({ entry, findingKey: f.key })) : []
+  const findingFirstPartyAttached = findings.flatMap((f) =>
+    Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence.map((entry) => ({ entry, findingKey: f.key, rotationSlug: null })) : []
   );
+  // Phase 7B — a weekly run's rotation picks (agent/lib/research-
+  // rotation.js) can ALSO carry attached first-party evidence (by
+  // runner.js's call to firstparty-intake.js's attachRotationEvidence(),
+  // matched by rotationSlug — see that file's header). Folded into the
+  // SAME aggregate counts/sourcesNotConsulted below, since it is
+  // genuinely first-party evidence gathered this run, regardless of
+  // whether a Finding or a rotation pick prompted it — the earlier
+  // Weekly-run gap this closes was exactly that Search Console/GA4
+  // showed up as "not consulted" even when rotation evidence HAD been
+  // gathered, simply because nothing merged it into this summary.
+  const rotationFirstPartyAttached = (rotationPriorities || []).flatMap((p) =>
+    Array.isArray(p.firstPartyEvidence) ? p.firstPartyEvidence.map((entry) => ({ entry, findingKey: null, rotationSlug: p.slug })) : []
+  );
+  const firstPartyAttached = [...findingFirstPartyAttached, ...rotationFirstPartyAttached];
   const firstPartyCountsBySource = {};
   for (const source of FIRST_PARTY_SOURCES) firstPartyCountsBySource[source] = 0;
   for (const { entry } of firstPartyAttached) {
@@ -184,11 +210,14 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
   // (no resume) has `runStartedAt === now`, so nothing can postdate it —
   // everything attached on a single pass is correctly "reused" (the
   // network-free deterministic runner never fetches anything itself;
-  // anything attached was necessarily gathered by an earlier session).
-  const firstPartyItems = firstPartyAttached.map(({ entry, findingKey }) => {
+  // anything attached was necessarily gathered by an earlier session —
+  // for a rotation pick, that's the separate --refresh-rotation-evidence
+  // step, run moments earlier in the same job).
+  const firstPartyItems = firstPartyAttached.map(({ entry, findingKey, rotationSlug }) => {
     const gatheredDuringThisRun = new Date(entry.fetchedAt) > runStartedAt;
     return {
       findingKey,
+      rotationSlug,
       source: entry.source,
       metric: entry.metric,
       scope: entry.scope,
@@ -226,6 +255,74 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     questionsPending: firstPartyQuestionsPending,
     items: firstPartyItems,
   };
+
+  // Phase 7B — closes the "rotation selects a target but nothing
+  // reviews it" gap (see agent/lib/rotation-evidence.js's header for
+  // the full root-cause writeup). Rotation picks STILL never produce
+  // PROPOSE_CHANGE and STILL never block run finalization (§4/§11's
+  // rules are unchanged) — this only makes the report tell the truth
+  // about which picks were actually researched, with what, and why not
+  // when they weren't, instead of silently looking identical to a
+  // genuinely-completed deep review.
+  const rotationPicks = (rotationPriorities || []).map((p) => {
+    const candidate = isRotationEvidenceCandidate(p);
+    const evidenceList = Array.isArray(p.firstPartyEvidence) ? p.firstPartyEvidence : [];
+    if (!candidate) {
+      return {
+        slug: p.slug,
+        name: p.name,
+        hasPage: p.hasPage,
+        score: p.score,
+        reasons: p.reasons,
+        researched: false,
+        firstPartyEvidence: [],
+        evidenceFreshness: null,
+        conclusion: null,
+        conclusionReason: `${p.name} already has a dedicated page — reviewed through the ordinary daily audit + first-party-evidence pipeline for that page, not this rotation mechanism.`,
+        externalResearchPerformed: false,
+        externalResearchCapability: EXTERNAL_RESEARCH_CAPABILITY_MISSING,
+      };
+    }
+    const classified = classifyRotationConclusion(evidenceList[0] || null, {
+      searchConsoleConfigured: Boolean(firstPartyIntegrations && firstPartyIntegrations.searchConsole),
+    });
+    // Surfaces the evidence's own age alongside the conclusion — a
+    // reader must never mistake a `NO_CHANGE` grounded in months-old
+    // data for a fresh, current answer. `--refresh-rotation-evidence`
+    // (cli.js) already treats stale evidence as absent and re-fetches,
+    // so this should normally read "fresh"; a non-fresh value here
+    // means that re-fetch didn't happen this run (e.g. Search Console
+    // was unreachable) — visible, never hidden.
+    const evidenceFreshness = evidenceList[0] ? computeFirstPartyFreshness(evidenceList[0], now).status : null;
+    return {
+      slug: p.slug,
+      name: p.name,
+      hasPage: p.hasPage,
+      score: p.score,
+      reasons: p.reasons,
+      researched: classified.researched,
+      firstPartyEvidence: evidenceList,
+      evidenceFreshness,
+      conclusion: classified.conclusion,
+      conclusionReason: classified.reason,
+      externalResearchPerformed: false,
+      externalResearchCapability: EXTERNAL_RESEARCH_CAPABILITY_MISSING,
+    };
+  });
+
+  const rotationSummary = rotationPriorities
+    ? {
+        targetsSelected: rotationPicks.length,
+        targetsPageless: rotationPicks.filter((p) => !p.hasPage).length,
+        targetsActuallyResearched: rotationPicks.filter((p) => p.researched).length,
+        targetsConcludedNoChange: rotationPicks.filter((p) => p.conclusion === "NO_CHANGE").length,
+        targetsConcludedResearchMore: rotationPicks.filter((p) => p.conclusion === "RESEARCH_MORE").length,
+        targetsNotYetResearched: rotationPicks.filter((p) => !p.researched).length,
+        proposalsCreatedFromRotation: 0, // structurally always 0 — see §11's rule, unchanged by this phase
+        externalResearchPerformed: 0,
+        externalResearchCapability: EXTERNAL_RESEARCH_CAPABILITY_MISSING,
+      }
+    : null;
 
   const status = computeRunStatus({
     failure,
@@ -285,7 +382,8 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     failure: failure || null,
     rotation: rotationPriorities
       ? {
-          picks: rotationPriorities.map((p) => ({ slug: p.slug, name: p.name, hasPage: p.hasPage, score: p.score, reasons: p.reasons })),
+          picks: rotationPicks,
+          summary: rotationSummary,
         }
       : null,
     nextReviewHint:

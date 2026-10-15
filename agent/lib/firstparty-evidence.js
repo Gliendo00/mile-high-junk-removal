@@ -68,10 +68,15 @@ function computeFirstPartyFreshness(evidence, now = new Date()) {
 /**
  * @param {object} args
  * @param {string} [args.findingKey] - the Finding.key this evidence informs, if any — see
- *   findings.js's makeKey. Optional: some evidence (e.g. a weekly
- *   rotation sanity check) isn't tied to one specific finding, and is
- *   still valid evidence, just not attached to anything by
- *   firstparty-intake.js's attachFirstPartyEvidence().
+ *   findings.js's makeKey. Optional: some evidence isn't tied to one
+ *   specific finding, and is still valid evidence, just not attached to
+ *   any finding by firstparty-intake.js's attachFirstPartyEvidence().
+ * @param {string} [args.rotationSlug] - Phase 7B: the weekly-rotation pick
+ *   (agent/lib/research-rotation.js's `slug`) this evidence informs, if
+ *   any — mutually independent of `findingKey` (a rotation pick is a
+ *   claimed-but-pageless service area, never a Finding). Attached by
+ *   firstparty-intake.js's attachRotationEvidence(), same pattern as
+ *   findingKey/attachFirstPartyEvidence() but a separate key space.
  * @param {string} args.source - one of SOURCES
  * @param {string} args.metric - e.g. "clicks-impressions-ctr-position", "indexStatus", "sessions"
  * @param {string} [args.dimension] - e.g. "query", "page", "device" — null for a single aggregate metric
@@ -117,9 +122,13 @@ function makeFirstPartyEvidence(args) {
   if (args.findingKey !== undefined && args.findingKey !== null) {
     assertNonEmptyString(args.findingKey, "findingKey");
   }
+  if (args.rotationSlug !== undefined && args.rotationSlug !== null) {
+    assertNonEmptyString(args.rotationSlug, "rotationSlug");
+  }
 
   return {
     findingKey: args.findingKey || null,
+    rotationSlug: args.rotationSlug || null,
     source: args.source,
     metric: args.metric,
     dimension: args.dimension || null,

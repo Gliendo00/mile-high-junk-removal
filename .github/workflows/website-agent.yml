@@ -116,6 +116,24 @@ jobs:
           # mechanism already used for local/human ADC. Avoids the
           # redundant-impersonation setup the brief asked to avoid.
 
+      - name: Refresh weekly rotation evidence (weekly only)
+        # Phase 7B — closes the "rotation picks a deep-review target but
+        # nothing performs the review" gap (see
+        # agent/lib/rotation-evidence.js's header for the full root-
+        # cause writeup). Run BEFORE the main Agent pass below, mirroring
+        # --refresh-completed-jobs's existing precedent: a separate,
+        # explicit, network-touching step, never inside the deterministic
+        # core. Fetches ONE targeted, already-bounded Search Console
+        # query per claimed-but-pageless rotation pick — never a page
+        # decision, never external/municipal research (this unattended
+        # runner has no research-provider capability for that — see the
+        # main run step below and agent/README.md's Phase 7B section).
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --refresh-rotation-evidence
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+
       - name: Run Website Agent (${{ inputs.run_type }})
         run: node agent/cli.js "--${RUN_TYPE}" --json
         env:

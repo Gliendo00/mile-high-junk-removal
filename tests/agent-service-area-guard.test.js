@@ -63,7 +63,7 @@ test("a claimed-but-pageless city is never among the pages the daily/weekly audi
   }
 });
 
-test("buildReport()'s rotation section is a pure pass-through of computePriorities()'s picks — it never derives a proposal/finding from them, and the report's `proposals`/`technicalIssues` sections are computed ONLY from `findings`, never from `rotationPriorities`", () => {
+test("buildReport()'s rotation section never derives a proposal/finding from a pick, and the report's `proposals`/`technicalIssues` sections are computed ONLY from `findings`, never from `rotationPriorities` — and (Phase 7B) the richer per-pick research summary it now ALSO carries is still structurally incapable of ever reaching PROPOSE_CHANGE", () => {
   const rotationPriorities = [
     { slug: "golden", name: "Golden", hasPage: false, score: 60, reasons: ["never deep-reviewed by this rotation", "claimed as a service area (site's own areaServed) but has no dedicated page yet — evaluate, don't auto-create"] },
   ];
@@ -77,7 +77,26 @@ test("buildReport()'s rotation section is a pure pass-through of computePrioriti
   assert.strictEqual(report.proposals.createdOrUpdatedCount, 0, "zero findings means zero proposals, regardless of what the rotation picked");
   assert.strictEqual(report.technicalIssues.actionableOpen, 0);
   assert.strictEqual(report.healthSummary.status, "all-clear", "a pageless-city rotation pick alone must never make a run look like it needs attention");
-  assert.deepStrictEqual(report.rotation.picks[0], rotationPriorities[0]);
+
+  const pick = report.rotation.picks[0];
+  // The original investigation-signal fields are passed through with
+  // identical values — only ADDITIVE research-summary fields were ever
+  // introduced (Phase 7B — see agent/lib/rotation-evidence.js).
+  assert.strictEqual(pick.slug, rotationPriorities[0].slug);
+  assert.strictEqual(pick.name, rotationPriorities[0].name);
+  assert.strictEqual(pick.hasPage, rotationPriorities[0].hasPage);
+  assert.strictEqual(pick.score, rotationPriorities[0].score);
+  assert.deepStrictEqual(pick.reasons, rotationPriorities[0].reasons);
+
+  // Hard guard: whatever the new research-summary fields are, a
+  // rotation pick can NEVER carry a decision/recommendation/"create
+  // this page" field, and its `conclusion` is structurally capped —
+  // NEVER "PROPOSE_CHANGE", regardless of what evidence it carries.
+  assert.ok(!("decision" in pick));
+  assert.ok(!("recommendation" in pick));
+  assert.ok(!("proposeNewPage" in pick));
+  assert.ok([null, "NO_CHANGE", "RESEARCH_MORE"].includes(pick.conclusion), `conclusion must be null/NO_CHANGE/RESEARCH_MORE, never PROPOSE_CHANGE or anything else — got ${pick.conclusion}`);
+  assert.strictEqual(pick.externalResearchPerformed, false, "this unattended runner never performs external research — must always report false, never fabricated");
 });
 
 if (process.exitCode) {

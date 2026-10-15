@@ -66,6 +66,16 @@ function initTempRepo() {
   fs.mkdirSync(path.join(dir, "agent", "history"), { recursive: true });
   fs.writeFileSync(path.join(dir, "agent", "history", "log.ndjson"), "", "utf8");
   fs.writeFileSync(path.join(dir, "index.html"), "<html></html>", "utf8");
+  // Mirrors the REAL repo's state: agent/research/firstparty/ already
+  // exists and is already git-tracked (it holds real Phase 6 evidence
+  // today) — without a pre-existing tracked file here, git collapses a
+  // brand-new file under an entirely-untracked directory into one
+  // directory-level `?? agent/research/` porcelain line instead of the
+  // individual file path, which would make a safe-commit test against
+  // this fixture pass or fail for a reason that has nothing to do with
+  // the real repo's actual behavior.
+  fs.mkdirSync(path.join(dir, "agent", "research", "firstparty"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "research", "firstparty", "README.md"), "placeholder\n", "utf8");
   runGit(["add", "-A"], dir);
   runGit(["commit", "-m", "initial"], dir);
   return dir;
@@ -129,18 +139,23 @@ function initTempRepoNoIdentity(extraGlobalConfig) {
 async function main() {
   // --- pure function tests ---------------------------------------
 
-  await test("isPathAllowed() allows exactly the two known Agent-artifact paths", () => {
+  await test("isPathAllowed() allows the known Agent-artifact paths, including Phase 7B's agent/research/firstparty/*.json", () => {
     assert.strictEqual(isPathAllowed("agent/history/log.ndjson"), true);
     assert.strictEqual(isPathAllowed("agent/history/research-rotation-state.json"), true);
+    assert.strictEqual(isPathAllowed("agent/research/firstparty/search-console-search-analytics__golden-1234567890.json"), true);
   });
 
-  await test("isPathAllowed() refuses any other Agent path, website source, or credential-like file", () => {
+  await test("isPathAllowed() refuses any other Agent path, website source, or credential-like file — including sibling agent/research/ directories NOT in scope", () => {
     assert.strictEqual(isPathAllowed("agent/research/results/some-question.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/completed-jobs/latest-refresh.json"), false);
     assert.strictEqual(isPathAllowed("agent/history/.run.lock"), false);
     assert.strictEqual(isPathAllowed("index.html"), false);
     assert.strictEqual(isPathAllowed("vercel.json"), false);
     assert.strictEqual(isPathAllowed("gha-creds-abc123.json"), false);
     assert.strictEqual(isPathAllowed(".env"), false);
+    // the allowlist is one level deep only — never a nested subdirectory
+    assert.strictEqual(isPathAllowed("agent/research/firstparty/nested/evidence.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/firstparty/not-json.txt"), false);
   });
 
   await test("parsePorcelainStatus() parses modified/untracked/renamed and quoted-path lines", () => {
@@ -289,6 +304,43 @@ async function main() {
       assert.notStrictEqual(after, before);
       const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
       assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/history/research-rotation-state.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI: commits a new agent/research/firstparty/*.json evidence file (Phase 7B's --refresh-rotation-evidence output) alongside history", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r6" }) + "\n", "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "research", "firstparty"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "agent", "research", "firstparty", "search-console-search-analytics__golden-123.json"),
+        JSON.stringify([{ rotationSlug: "golden", source: "search-console-search-analytics", observed: { totalRowsReturned: 0 } }]),
+        "utf8"
+      );
+      const result = runSafeCommit(dir, "chore(agent): weekly run r6");
+      assert.strictEqual(result.status, 0, `stderr: ${result.stderr}`);
+      const after = headSha(dir);
+      assert.notStrictEqual(after, before);
+      const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
+      assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/research/firstparty/search-console-search-analytics__golden-123.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("safe-commit CLI: still REFUSES a firstparty evidence file outside the one-level-deep allowlist (e.g. a stray nested path)", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r7" }) + "\n", "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "research", "firstparty", "nested"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "research", "firstparty", "nested", "evidence.json"), "{}", "utf8");
+      const result = runSafeCommit(dir, "chore(agent): weekly run r7");
+      assert.notStrictEqual(result.status, 0);
+      assert.strictEqual(headSha(dir), before);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -93,4 +93,37 @@ function attachFirstPartyEvidence(findings, loaded) {
   return { findings, warnings };
 }
 
-module.exports = { loadFirstPartyEvidence, attachFirstPartyEvidence, EVIDENCE_DIR };
+/**
+ * Phase 7B — mirrors attachFirstPartyEvidence() exactly, but matches by
+ * `rotationSlug` instead of `findingKey`: a weekly rotation pick
+ * (agent/lib/research-rotation.js's computePriorities() shape) is never
+ * a Finding, so it needed its own, independent key space rather than
+ * overloading `findingKey` — see firstparty-evidence.js's header on
+ * why the two fields coexist without conflict (an evidence entry has
+ * exactly one of them set, never both, by construction of whoever wrote
+ * it: agent/lib/rotation-evidence.js's buildRotationEvidenceRequest()
+ * only ever sets `rotationSlug`).
+ *
+ * Same fail-safe contract as attachFirstPartyEvidence(): every pick
+ * gets a `.firstPartyEvidence` array, even when empty; a missing/empty/
+ * malformed evidence directory degrades to "nothing attached," never a
+ * thrown error.
+ */
+function attachRotationEvidence(picks, loaded) {
+  const { entries, warnings } = loaded || loadFirstPartyEvidence();
+  const bySlug = new Map();
+  for (const e of entries) {
+    if (!e.rotationSlug) continue;
+    const list = bySlug.get(e.rotationSlug) || [];
+    list.push(e);
+    bySlug.set(e.rotationSlug, list);
+  }
+
+  for (const pick of picks) {
+    pick.firstPartyEvidence = bySlug.get(pick.slug) || [];
+  }
+
+  return { picks, warnings };
+}
+
+module.exports = { loadFirstPartyEvidence, attachFirstPartyEvidence, attachRotationEvidence, EVIDENCE_DIR };

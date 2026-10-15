@@ -157,6 +157,19 @@ await test("Push to main is gated on the persist step's own outcome — NOT mere
   assert.notStrictEqual(ifLineMatch[1].trim(), "always()", "Push to main must not run on a bare always() — it must also require persist to have succeeded");
 });
 
+await test("Phase 7B: the rotation-evidence refresh step exists, runs ONLY for weekly dispatches, runs BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
+  const lines = code.split("\n");
+  const stepIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
+  assert.ok(stepIdx > -1, "expected a step that refreshes weekly rotation evidence");
+  const block = extractStepBlock(code, /Refresh weekly rotation evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/--refresh-rotation-evidence/.test(block));
+  assert.strictEqual(/apply-safe/.test(block), false);
+
+  const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+  assert.ok(mainRunIdx > stepIdx, "rotation-evidence refresh must run BEFORE the main --daily/--weekly Agent pass, mirroring --refresh-completed-jobs's precedent");
+});
+
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));
     assert.ok(/npm ci\b/.test(code));

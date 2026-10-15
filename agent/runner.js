@@ -66,7 +66,7 @@ const { auditFactualConsistency } = require("./lib/factual-consistency-audit");
 const { classifyAll } = require("./lib/risk");
 const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
-const { attachFirstPartyEvidence } = require("./lib/firstparty-intake");
+const { attachFirstPartyEvidence, attachRotationEvidence } = require("./lib/firstparty-intake");
 const { isSearchConsoleConfigured } = require("./lib/search-console-client");
 const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
@@ -399,6 +399,18 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       const nextState = markReviewed(rotationState, rotationPriorities.map((p) => p.slug), runId);
       saveRotationState(nextState, options.rotationStatePath);
     }
+  }
+
+  // Phase 7B — attaches any first-party evidence already written for
+  // this week's picks (by the separate `--refresh-rotation-evidence`
+  // step, run BEFORE this one — see that command's own header; this
+  // call itself does no network I/O, same read-only-local-files
+  // pattern as attachFirstPartyEvidence() above) so report.js can
+  // classify each pick's actual research outcome instead of just
+  // listing what was selected. A no-op when rotationPriorities is null
+  // (daily runs, or weekly runs with rotation disabled).
+  if (rotationPriorities) {
+    attachRotationEvidence(rotationPriorities);
   }
 
   const firstPartyIntegrations = { searchConsole: isSearchConsoleConfigured(), ga4: isGa4Configured() };

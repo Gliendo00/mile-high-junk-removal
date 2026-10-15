@@ -2407,12 +2407,17 @@ unmodified `main` to predate this work).
 
 ## Remaining risks / open questions (Phase 7)
 
-1. Not yet exercised against a REAL GitHub Actions run (no Workload
-   Identity Pool/provider exists yet — Rocky's manual setup is a
-   prerequisite). Everything Google-auth-related is covered by fixture-
-   injected `fetchImpl` tests, same rigor as every other tier, but a
-   real end-to-end WIF exchange is still unproven until the first
-   manual dispatch.
+1. ~~Not yet exercised against a REAL GitHub Actions run~~ —
+   **PARTIALLY RESOLVED**: a real Daily run and a real Weekly run have
+   now both succeeded end-to-end (WIF auth, Agent pass, safe-commit,
+   push). Still open: neither has yet made a REAL Google API call — the
+   real Weekly run that surfaced Phase 7B's gap had zero first-party-
+   evidence candidates under the OLD architecture, so Search Console was
+   never actually reached over the network, only its config-presence
+   checked. The real WIF->STS->IAM-Credentials->Search-Console network
+   chain is still proven only by fixture-injected `fetchImpl` tests
+   (same rigor as every other tier) — see Phase 7B's own section below
+   for exactly what the next controlled run will prove for real.
 2. `git push origin HEAD:main` fails loudly (not resolved/retried) if
    `main` moved on since checkout — deliberate (no rebase, no force
    push), but means a run that races a human push just fails and must
@@ -2422,3 +2427,237 @@ unmodified `main` to predate this work).
    is a separate, later, explicitly-authorized step (just adding a
    `schedule:` trigger to the existing workflow; no other change
    needed).
+
+---
+
+# Phase 7B — closing the "rotation selects a target but nothing reviews it" gap
+
+## Root cause
+
+The real Weekly run selected 3 rotation picks (Golden, Brighton,
+Morrison) correctly, but nothing ever performed a deep review of them.
+Investigation found this was NOT an auth/API failure — it was a pure
+orchestration gap, present since Phase 5: **a rotation pick was never
+wired to any evidence-gathering mechanism at all.**
+
+- `agent/lib/research-rotation.js`'s `computePriorities()` has always
+  produced ONLY a scored shortlist (`{slug, name, hasPage, score,
+  reasons}`) — never a Finding. Decision.js's `RESEARCH_MORE` path is
+  category-C-finding-only; `firstparty-candidates.js`'s `CANDIDATE_TYPES`
+  is a fixed set of EXISTING-PAGE mechanical finding types (sitemap/
+  canonical/orphan issues) — a pageless city structurally cannot match
+  any of them (there's no page to have a sitemap/canonical/orphan
+  problem on). So a rotation pick was NEVER eligible for either existing
+  evidence-gathering path — not a bug in either path, just a third case
+  neither was ever extended to cover.
+- §4's documented design for closing this gap (`agent/README.md`,
+  pre-Phase-7B) was: "the orchestrator should ALSO consider researching
+  the rotation picks while it has web access open... if there's
+  time/budget in this session" — i.e. a **Claude-driven orchestrator
+  session's own voluntary judgment**, with zero structural tracking of
+  whether it actually happened. That model assumed every Weekly run was
+  driven by such a session. Phase 7's GitHub Actions runner is NOT that
+  session (deliberately — no AI/research provider was added, per
+  explicit instruction) and never was; it only runs the deterministic
+  `--daily`/`--weekly` pass. So when Weekly runs unattended via GitHub
+  Actions, rotation picks are selected and persisted, but the "someone
+  with web access should look into these" step has no one to perform
+  it. Using the terms from the brief: **category 1 — orchestration
+  (of any kind, human or automated) never even requested the evidence**,
+  because no code path existed that could request it on a rotation
+  pick's behalf.
+- The SEPARATE symptom — `firstPartyEvidence.gatheredThisRunCount: 0`
+  and Search Analytics/URL Inspection/GA4 all in `sourcesNotConsulted` —
+  was investigated independently and is **working exactly as designed**
+  for the EXISTING (finding-based) first-party-evidence pipeline: zero
+  `CANDIDATE_TYPES`-eligible findings existed as NEW this run, so zero
+  evidence was correctly requested (also category 1, but the
+  CORRECT/intended category-1 outcome for that pipeline — nothing to
+  fix there). It LOOKED connected to the rotation gap only because both
+  symptoms shared the same root — an unattended run with nothing
+  requesting first-party evidence — and because, once Phase 7B's fix IS
+  in place, rotation evidence genuinely does move those sources off
+  `sourcesNotConsulted` (see below).
+
+## What Weekly was actually doing
+
+Selecting and scoring 3 topics correctly (§4/§11's rules intact), then
+immediately persisting the run as "completed" with those picks attached
+as inert data — no code path ever read them back to decide anything
+needed doing. A rotation pick and a "reviewed rotation pick" were
+visually indistinguishable in the report.
+
+## What changed
+
+**New:** `agent/lib/rotation-evidence.js` — the ONLY mechanical,
+judgment-free evidence available for a claimed-but-pageless rotation
+pick: does this property's real Search Console query data contain ANY
+query mentioning the city's name? `isRotationEvidenceCandidate()`
+(pageless only — a paged pick already has its own daily/first-party
+path), `buildRotationEvidenceRequest()` (a READY-TO-FETCH request — no
+orchestrator judgment needed, unlike a finding's first-party question,
+because the right scope here never varies), `classifyRotationConclusion()`
+(caps the outcome at `NO_CHANGE`/`RESEARCH_MORE` — **structurally never
+`PROPOSE_CHANGE`**, proven by a dedicated test). GA4 is deliberately NOT
+queried for a pageless pick — there is no `landingPage` dimension that
+would mean anything without a page.
+
+**New CLI command:** `node agent/cli.js --refresh-rotation-evidence` —
+mirrors `--refresh-completed-jobs`'s existing precedent exactly: a
+separate, explicit, network-touching step run BEFORE `--weekly`, never
+inside the deterministic core. Recomputes this week's picks (same
+inputs the `--weekly` pass will use moments later, so they match), and
+for each pageless candidate lacking evidence, fetches ONE targeted,
+bounded Search Analytics query and writes it to
+`agent/research/firstparty/` — same file convention, same normalized/
+bounded shape (`firstparty-evidence.js`'s `makeFirstPartyEvidence()`,
+now with an optional `rotationSlug` field alongside `findingKey` — two
+independent key spaces, never both set on one entry) as an
+orchestrator's `--fetch-firstparty` already produced.
+
+**Wired in:** `agent/lib/firstparty-intake.js`'s new
+`attachRotationEvidence()` (mirrors `attachFirstPartyEvidence()`, keyed
+by `rotationSlug`); `agent/runner.js`'s weekly path calls it right after
+computing `rotationPriorities`; `agent/lib/report.js` classifies each
+pick's conclusion and MERGES rotation-sourced evidence into the SAME
+aggregate `firstPartyEvidence` summary findings already use — this is
+the actual fix for the `sourcesNotConsulted` symptom, since Search
+Console now genuinely gets consulted and counted.
+
+**The report now distinguishes** (`report.rotation.picks[]` /
+`report.rotation.summary`): targets selected, targets actually
+researched (`researched: boolean`), first-party evidence gathered per
+pick (`firstPartyEvidence[]`, folded into the top-level
+`firstPartyEvidence` aggregate too), conclusions reached (`conclusion:
+null|"NO_CHANGE"|"RESEARCH_MORE"`, with a human-readable
+`conclusionReason`), proposals created from rotation (`summary.
+proposalsCreatedFromRotation` — always `0`, structurally), and targets
+where `NO_CHANGE` was the honest, evidence-grounded answer. Every pick
+and the summary also carry `externalResearchPerformed: false` and an
+explicit `externalResearchCapability` string — see below.
+
+**Workflow:** `.github/workflows/website-agent.yml` gained one step,
+"Refresh weekly rotation evidence (weekly only)" — `if: inputs.run_type
+== 'weekly'`, runs BEFORE the main Agent step. `.github/scripts/
+safe-commit.js`'s allowlist gained exactly `agent/research/firstparty/
+*.json` (one level deep only — not `agent/research/**` broadly;
+`results/`/`completed-jobs/` stay OUT of scope, since nothing newly
+writes there).
+
+## Is real GSC/GA4 retrieval now exercised?
+
+**Not yet for real, and this phase did not force that** — per explicit
+instruction not to dispatch another workflow run. Confirmed instead,
+without any network call:
+- All new/changed library code passes the same fixture-injected
+  `fetchImpl` test rigor as every existing Google-auth-related test
+  (`tests/agent-rotation-evidence.test.js`,
+  `tests/agent-firstparty-intake.test.js`'s new cases,
+  `tests/agent-report.test.js`'s new cases,
+  `tests/agent-runner-rotation-evidence.test.js`).
+- Running `node agent/cli.js --refresh-rotation-evidence` locally (no
+  Google env configured in this shell, so zero network attempted — by
+  construction, `isSearchConsoleConfigured()` gates the request before
+  any fetch) reproduced the EXACT 3 real picks from the actual Weekly
+  run — "Golden", "Brighton", "Morrison" — confirming the fix's
+  candidate-selection logic matches live production data, not just a
+  synthetic test fixture.
+- The real WIF->STS->IAM-Credentials-impersonation->Search-Console
+  network chain itself remains proven only by injected-`fetchImpl`
+  tests until the next controlled manual Weekly dispatch — see
+  "Recommended next controlled test" in the final report for this
+  phase.
+
+## What external research capability is still missing
+
+**Genuine municipal/county/state and competitor-landscape research for
+a rotation pick is NOT implemented, and this phase deliberately did not
+fake it.** This unattended GitHub Actions runner has no Claude/
+Anthropic or other AI provider, and no general web-research (WebSearch/
+WebFetch) access — by explicit instruction, none was added. A rotation
+pick's conclusion from this phase's fix is capped at `NO_CHANGE` (no
+first-party signal) or `RESEARCH_MORE` (genuine first-party signal found
+— a human, or a future research-capable orchestrator session, still
+needs to do the actual municipal/competitor research before any page
+decision) — it can NEVER reach `PROPOSE_CHANGE` from this mechanism
+alone, by construction (`classifyRotationConclusion()` has no code path
+that returns it — proven by a dedicated regression test). This is the
+SAME boundary Phase 7's own "Claude/research boundary" section already
+drew for category-C `RESEARCH_MORE` findings; Phase 7B does not move
+that boundary, it only makes the Weekly report tell the truth about
+where a rotation pick currently sits relative to it.
+
+**A `NO_CHANGE` conclusion here means "this specific first-party check
+found no signal" — it is explicitly, by wording AND by behavior, NEVER
+"no local opportunity exists in this city."** Zero rows is real
+evidence of absence-of-SIGNAL, never evidence of absence-of-
+OPPORTUNITY: a real searcher may describe the service without ever
+naming the city, Search Console only reports impressions for queries
+this property already surfaces for (a pageless city structurally has
+little to measure in the first place), and even a genuinely current
+local opportunity can show zero rows in any single 28-day window. Two
+separate, independently-tested guarantees enforce this:
+1. **Wording** — `classifyRotationConclusion()`'s `reason` text for a
+   zero-row result explicitly states the limitation (never just omits
+   it) — `tests/agent-rotation-evidence.test.js` and
+   `tests/agent-report.test.js` both assert the exact phrase appears.
+2. **Behavior** — `--refresh-rotation-evidence` treats STALE existing
+   evidence as absent (`rotation-evidence.js`'s
+   `freshlyEvidencedRotationSlugs()`, using the same freshness windows
+   `report.js` already computes) and re-fetches, so a zero-row result
+   can never permanently suppress future research for that city —
+   caught during this phase's own review before it shipped: an earlier
+   draft checked only "does ANY evidence file exist for this slug,"
+   which would have silently abandoned re-checking a city forever after
+   one zero-row result.
+
+## Tests
+
+New: `tests/agent-rotation-evidence.test.js` (16 cases — candidate
+rules, request shape, conclusion classification including the "never
+PROPOSE_CHANGE" structural guard, the "never claims no local
+opportunity" wording guard, and `freshlyEvidencedRotationSlugs()`'s
+stale-evidence-is-treated-as-absent behavior), `tests/agent-runner-
+rotation-evidence.test.js` (2 cases — real end-to-end wiring against the
+real site, using a throwaway fixture file in the real `agent/research/
+firstparty/` directory, always cleaned up). Extended: `tests/agent-
+firstparty-intake.test.js` (+4, `attachRotationEvidence` and the two
+key-spaces' independence), `tests/agent-report.test.js` (+8, the
+richer rotation shape, the aggregate-evidence merge, the
+`evidenceFreshness` field, and the "never claims no local opportunity"
+wording guard at the report level too),
+`tests/agent-firstparty-evidence.test.js` (updated field-allowlist for
+the new optional `rotationSlug`), `tests/agent-service-area-guard.test.js`
+(updated + strengthened — explicitly proves the new fields can never
+produce `PROPOSE_CHANGE`/a page-creation signal), `tests/github-
+actions-safe-commit.test.js` (+4, the new allowlist entry),
+`tests/github-actions-workflow.test.js` (+1, the new weekly-only step).
+Full repository suite: **106/107 pass** — the same single pre-existing,
+unrelated failure as every prior phase.
+
+## Remaining risks / open questions (Phase 7B)
+
+1. The real network chain (WIF -> STS -> IAM Credentials impersonation
+   -> Search Console Search Analytics) is still unproven live — see
+   "Is real GSC/GA4 retrieval now exercised?" above. The next controlled
+   manual Weekly dispatch is the first opportunity to prove it, and will
+   either produce real evidence files (git-diffable, reviewable before
+   trusting) or a clear, specific skip reason — never a silent gap.
+2. `--refresh-rotation-evidence` calls `gatherFindings()` (a full site
+   scan) once to determine this week's picks, and the `--weekly` pass
+   moments later calls it again — doubles the scan cost of a weekly run.
+   Accepted as negligible (scanning ~50 static HTML files is sub-second)
+   rather than threading a shared pre-computed findings list across two
+   separate CLI invocations, which would be more coupling for no
+   measurable benefit at this scale.
+3. A rotation pick's Search Analytics check uses one fixed, simple
+   query filter (`contains "<city name>"`) over a 28-day window — not
+   configurable, not multi-variant (e.g. "near me" phrasing, misspellings).
+   A reasonable, documented first pass; worth revisiting if it proves
+   too narrow to ever surface a real signal in practice.
+4. The external-research gap this section documents is not a TODO this
+   phase forgot — it is the honest current boundary of what this
+   unattended environment can do. Closing it for real requires either a
+   scheduled Claude/Agent-SDK orchestrator session (agent/README.md §13's
+   original recommendation, still valid) or a different, explicitly-
+   authorized research-provider integration — neither is in scope here.

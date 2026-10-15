@@ -75,7 +75,7 @@ test("makeFirstPartyEvidence has NO verdict/confidence/recommendation field — 
   assert.strictEqual(evidence.recommendation, undefined);
   assert.deepStrictEqual(
     Object.keys(evidence).sort(),
-    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "limitations", "metric", "observed", "scope", "source", "window"].sort()
+    ["comparisonWindow", "context", "dimension", "fetchedAt", "findingKey", "rotationSlug", "limitations", "metric", "observed", "scope", "source", "window"].sort()
   );
 });
 

@@ -65,14 +65,43 @@
 //     only a count and the file path (these aren't private, unlike
 //     completed-job evidence, but the convention stays consistent).
 //
+//   node agent/cli.js --refresh-rotation-evidence
+//     Phase 7B — closes the "rotation picks a deep-review target but
+//     nothing performs the review" gap (see agent/lib/rotation-evidence.js's
+//     header for the full root-cause writeup). Recomputes this week's
+//     rotation picks (same inputs/algorithm a --weekly run itself will
+//     use moments later — nothing in this repo changes between the two,
+//     so the picks are identical), and for each claimed-but-pageless
+//     pick that doesn't already have FRESH (non-stale) evidence —
+//     stale evidence is treated as absent, so a city is re-checked
+//     again once enough time passes, never silently abandoned forever
+//     because of one old result — fetches ONE targeted
+//     Search Console Search Analytics query ("does any real query
+//     mention this city?") and writes it to agent/research/firstparty/
+//     — same file convention as --fetch-firstparty, just mechanically
+//     triggered rather than orchestrator-composed, because the request
+//     shape here needs no judgment call (see that file's header). Run
+//     BEFORE --weekly (mirrors --refresh-completed-jobs's existing
+//     precedent exactly) so the evidence is already on disk by the time
+//     --weekly's own report is built. Never fetches for a city that
+//     already has a page (that goes through the ordinary daily/
+//     firstparty-candidates.js path instead) and never performs, or
+//     pretends to perform, the EXTERNAL (municipal/competitor) research
+//     half of a deep review — that still requires a research-capable
+//     orchestrator session this unattended runner does not have.
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
 
 const fs = require("fs");
-const { run } = require("./runner");
+const { run, gatherFindings } = require("./runner");
 const { fetchRecentCompletedJobEvidence, writeCompletedJobEvidence } = require("./lib/completed-job-fetch");
 const { fetchFirstPartyEvidence, writeFirstPartyEvidence } = require("./lib/firstparty-fetch");
+const { loadCompletedJobEvidence, summarizeByCity } = require("./lib/completed-job-intake");
+const { loadRotationState, computePriorities } = require("./lib/research-rotation");
+const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
+const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
 
 function parseResumeArg(args) {
   const prefixed = args.find((a) => a.startsWith("--resume="));
@@ -93,6 +122,49 @@ async function runRefreshCompletedJobs() {
   // completed-job-fetch.js's header for why (raw booking data must never
   // reach a log line, even indirectly).
   console.log(`Completed-job refresh: ${result.evidence.length} publication-safe entr(ies) written to ${written}.`);
+}
+
+// Phase 7B — see this file's own top-of-file comment on
+// --refresh-rotation-evidence, and agent/lib/rotation-evidence.js's
+// header for the full root-cause writeup this closes. Never throws:
+// every per-pick outcome (fetched / skipped+reason) is logged and the
+// loop continues — one pick's skip must never block another's fetch,
+// same fail-safe posture as every other optional-integration step in
+// this codebase.
+//
+// A pick with STALE existing evidence is still a candidate — only
+// evidence that's still FRESH-or-AGING (computeFirstPartyFreshness(),
+// the same freshness windows report.js already uses) counts as
+// "already evidenced" and skips a re-fetch. Without this, a city that
+// got a zero-row result once would never be re-checked again, EVER,
+// regardless of how much time passed — exactly the "zero city-query
+// evidence independently justifies abandoning future research for
+// that city" outcome agent/lib/rotation-evidence.js's header explicitly
+// rules out. A zero-row result is honest evidence of "no signal
+// THEN" — it must not calcify into "no signal forever."
+async function runRefreshRotationEvidence() {
+  const { findings } = gatherFindings();
+  const { evidence } = loadCompletedJobEvidence();
+  const citySummary = summarizeByCity(evidence);
+  const rotationState = loadRotationState();
+  const picks = computePriorities({ state: rotationState, currentFindings: findings, completedJobCitySummary: citySummary });
+
+  const freshlyEvidencedSlugs = freshlyEvidencedRotationSlugs(loadFirstPartyEvidence().entries);
+  const candidates = picks.filter((p) => isRotationEvidenceCandidate(p) && !freshlyEvidencedSlugs.has(p.slug));
+
+  console.log(`Rotation evidence refresh: ${picks.length} pick(s) selected this week, ${candidates.length} pageless candidate(s) needing first-party evidence.`);
+  if (candidates.length === 0) return;
+
+  for (const pick of candidates) {
+    const request = buildRotationEvidenceRequest(pick);
+    const result = await fetchFirstPartyEvidence(request);
+    if (result.skipped) {
+      console.log(`  "${pick.name}" (${pick.slug}): skipped — ${result.reason}`);
+      continue;
+    }
+    const written = writeFirstPartyEvidence(result.evidence);
+    console.log(`  "${pick.name}" (${pick.slug}): fetched, written to ${written}.`);
+  }
 }
 
 function parseFetchFirstPartyArg(args) {
@@ -200,6 +272,11 @@ async function main() {
 
   if (args.includes("--refresh-completed-jobs")) {
     await runRefreshCompletedJobs();
+    return;
+  }
+
+  if (args.includes("--refresh-rotation-evidence")) {
+    await runRefreshRotationEvidence();
     return;
   }
 

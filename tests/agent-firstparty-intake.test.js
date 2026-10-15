@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 const { makeFinding } = require("../agent/lib/findings");
-const { attachFirstPartyEvidence } = require("../agent/lib/firstparty-intake");
+const { attachFirstPartyEvidence, attachRotationEvidence } = require("../agent/lib/firstparty-intake");
 
 function test(name, fn) {
   try {
@@ -131,6 +131,50 @@ try {
     const loaded = loadFirstPartyEvidence();
     assert.ok(Array.isArray(loaded.entries));
     assert.ok(Array.isArray(loaded.warnings));
+  });
+
+  // --- Phase 7B: attachRotationEvidence() — same pattern, keyed by
+  // rotationSlug instead of findingKey (a rotation pick is never a
+  // Finding — see agent/lib/rotation-evidence.js's header) ------------
+
+  test("attachRotationEvidence gives every pick a `.firstPartyEvidence` array, even with zero entries loaded", () => {
+    const picks = [{ slug: "golden", name: "Golden", hasPage: false }];
+    const { picks: out } = attachRotationEvidence(picks, { entries: [], warnings: [] });
+    assert.deepStrictEqual(out[0].firstPartyEvidence, []);
+  });
+
+  test("attachRotationEvidence matches a loaded entry to the pick with the same rotationSlug, and only that one", () => {
+    const matching = { slug: "golden", name: "Golden", hasPage: false };
+    const other = { slug: "brighton", name: "Brighton", hasPage: false };
+    const entry = makeFirstPartyEvidence(validArgs({ findingKey: undefined, rotationSlug: "golden" }));
+    const { picks: out } = attachRotationEvidence([matching, other], { entries: [entry], warnings: [] });
+    assert.strictEqual(out[0].firstPartyEvidence.length, 1);
+    assert.strictEqual(out[0].firstPartyEvidence[0].rotationSlug, "golden");
+    assert.strictEqual(out[1].firstPartyEvidence.length, 0);
+  });
+
+  test("attachRotationEvidence never attaches a findingKey-only entry to a pick, and attachFirstPartyEvidence never attaches a rotationSlug-only entry to a finding — the two key spaces are fully independent", () => {
+    const findingEntry = makeFirstPartyEvidence(validArgs({ findingKey: "coverage-gap-candidate::aurora-junk-removal.html" }));
+    const rotationEntry = makeFirstPartyEvidence(validArgs({ findingKey: undefined, rotationSlug: "golden" }));
+    const loaded = { entries: [findingEntry, rotationEntry], warnings: [] };
+
+    const pick = { slug: "golden", name: "Golden", hasPage: false };
+    const { picks: outPicks } = attachRotationEvidence([pick], loaded);
+    assert.strictEqual(outPicks[0].firstPartyEvidence.length, 1);
+    assert.strictEqual(outPicks[0].firstPartyEvidence[0].rotationSlug, "golden");
+
+    const finding = makeFinding({ type: "coverage-gap-candidate", summary: "s", pages: ["aurora-junk-removal.html"], evidence: [{ x: 1 }] });
+    const { findings: outFindings } = attachFirstPartyEvidence([finding], loaded);
+    assert.strictEqual(outFindings[0].firstPartyEvidence.length, 1);
+    assert.strictEqual(outFindings[0].firstPartyEvidence[0].findingKey, finding.key);
+  });
+
+  test("attachRotationEvidence is resilient to an unavailable/missing firstparty evidence directory — returns empty, not a thrown error", () => {
+    cleanupFixtures();
+    const loaded = loadFromFixtureDir();
+    const picks = [{ slug: "golden", name: "Golden", hasPage: false }];
+    const { picks: out } = attachRotationEvidence(picks, loaded);
+    assert.deepStrictEqual(out[0].firstPartyEvidence, []);
   });
 } finally {
   cleanupFixtures();
