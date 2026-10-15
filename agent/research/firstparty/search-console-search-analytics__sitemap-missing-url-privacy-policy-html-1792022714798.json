@@ -1,0 +1,25 @@
+[
+  {
+    "findingKey": "sitemap-missing-url::privacy-policy.html",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "page",
+      "value": "privacy-policy.html"
+    },
+    "window": {
+      "start": "2026-09-15",
+      "end": "2026-10-12",
+      "label": "28 days ending 2026-10-12"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "privacy-policy.html is missing from sitemap.xml (today's sitemap-missing-url finding) — checking whether it already has real search visibility, to inform the pending PROPOSE_CHANGE proposal with first-party evidence rather than assuming.",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-10-15T00:05:14.797Z"
+  }
+]

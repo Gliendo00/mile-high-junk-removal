@@ -1,0 +1,28 @@
+[
+  {
+    "findingKey": "sitemap-missing-url::privacy-policy.html",
+    "source": "search-console-url-inspection",
+    "metric": "indexStatus",
+    "dimension": null,
+    "scope": {
+      "type": "page",
+      "value": "https://www.milehighjunkremoval.net/privacy-policy"
+    },
+    "window": {
+      "start": "2026-10-15",
+      "end": "2026-10-15",
+      "label": "point-in-time inspection"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "verdict": "NEUTRAL",
+      "coverageState": "Excluded by ‘noindex’ tag",
+      "googleCanonical": "https://www.milehighjunkremoval.net/privacy-policy",
+      "userCanonical": "https://www.milehighjunkremoval.net/privacy-policy",
+      "lastCrawlTime": "2026-09-22T23:43:36Z"
+    },
+    "context": "privacy-policy.html is missing from sitemap.xml (today's sitemap-missing-url finding) — an indexing-related finding per agent/README.md's URL Inspection trigger criteria — checking whether Google already knows/indexes this page and what canonical it sees.",
+    "limitations": "A single point-in-time inspection — indexing/canonical state can change, and this does not by itself establish an indexing or canonical problem requiring action.",
+    "fetchedAt": "2026-10-15T00:05:21.936Z"
+  }
+]
