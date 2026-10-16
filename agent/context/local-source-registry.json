@@ -1,11 +1,11 @@
 {
-  "_comment": "Phase 10 -- curated, human-maintained registry of verified official local sources the Website Agent's local-source-fetch.js is permitted to fetch. NOT autonomously editable: the unattended runner only READS this file (see .github/scripts/safe-commit.js's allowlist, which deliberately excludes agent/context/** entirely -- the same treatment business-profile.json already gets). Every entry below requires a human (or Claude session) to have manually, LIVE-verified both the exact URL and its robots.txt behavior at humanVerifiedAt -- never add an entry, and never assume a previously-verified entry is still valid, without re-doing that verification. See agent/README.md's Phase 10 section for the full writeup, and agent/lib/local-source-registry.js for the loader/validator this file is read through.",
+  "_comment": "Phase 10/11A -- curated, human-maintained registry of verified official local sources the Website Agent's local-source-fetch.js is permitted to fetch. NOT autonomously editable: the unattended runner only READS this file (see .github/scripts/safe-commit.js's allowlist, which deliberately excludes agent/context/** entirely -- the same treatment business-profile.json already gets). Every entry below requires a human (or Claude session) to have manually, LIVE-verified both the exact URL and its robots.txt behavior at humanVerifiedAt -- never add an entry, and never assume a previously-verified entry is still valid, without re-doing that verification. `relevantCities` is GEOGRAPHIC RELEVANCE ONLY -- it is never read anywhere as 'every resident of each listed city automatically qualifies for whatever this source describes'; each entry's own `eligibilityNotes` is the required, human-authored statement of what the source actually does and does NOT establish about eligibility. See agent/README.md's Phase 10/Phase 11 sections and agent/lib/local-source-registry.js for the loader/validator this file is read through.",
 
   "entries": [
     {
       "id": "denver-leafdrop",
       "locality": "Denver, CO",
-      "citySlug": "denver",
+      "relevantCities": ["denver"],
       "domain": "denvergov.org",
       "url": "https://www.denvergov.org/My-Property/Recycle-Compost-Trash/Seasonal-Programs/LeafDrop-and-Pumpkin-Recycling",
       "topic": "leafdrop-pumpkin-composting-program",
@@ -13,7 +13,78 @@
       "expectedTemporality": "temporary",
       "humanVerifiedAt": "2026-10-15",
       "verificationNotes": "Live-verified 2026-10-15 (curl, with this agent's own identifying User-Agent): HTTP 200, Content-Type text/html, page title/breadcrumb 'Home / My Property / Trash, Recycle & Compost / Seasonal Programs / LeafDrop and Pumpkin Recycling', body text confirms the live 2026 season ('2026 Drop Sites ... Oct. 5 - Nov. 25'). This exact URL was NOT assumed from repository history -- it was independently re-derived by resolving the City's own short link (https://denvergov.org/leafdrop, a live HTTP 302) to confirm the canonical destination, which differs from the dated news-article URL (.../News-Outreach/News/LeafDrop-Program-2024) that search results also surface for this program. robots.txt (https://www.denvergov.org/robots.txt, 7629 lines) fetched and checked in full: exactly one 'User-agent: *' block, no Allow/Crawl-delay directives anywhere. This exact path is NOT matched by any Disallow rule on the host -- the only LeafDrop-related Disallow rules cover two DIFFERENT, older path families (/Government/.../Recycle-Compost-Trash/Leafdrop/* and /My-Property/Recycle-Compost-Trash/Locations/*), neither of which this URL falls under.",
-      "notes": "City and County of Denver's own seasonal leaf/pumpkin composting drop-off program (DOTI + Office of the City Forester + CASR + Ace Hardware). Dates/locations are set annually by the city and are NOT evergreen -- never treat a retrieved snippet's specific dates/locations as still current without re-fetching; see expectedTemporality and local-source-evidence.js's freshness model."
+      "notes": "City and County of Denver's own seasonal leaf/pumpkin composting drop-off program (DOTI + Office of the City Forester + CASR + Ace Hardware). Dates/locations are set annually by the city and are NOT evergreen -- never treat a retrieved snippet's specific dates/locations as still current without re-fetching; see expectedTemporality and local-source-evidence.js's freshness model.",
+      "eligibilityNotes": "Relevant to Denver because this is the City and County of Denver's own program (single-jurisdiction city-and-county, so geographic relevance here is exact). This does NOT establish that every specific property/resident is eligible for every detail (a specific drop site's capacity, exact current-year dates, or any eligibility condition the city may impose) without checking the live page -- see expectedTemporality: temporary."
+    },
+    {
+      "id": "jeffco-slash",
+      "locality": "Jefferson County, CO",
+      "relevantCities": ["lakewood", "arvada", "golden", "morrison", "wheat-ridge"],
+      "domain": "jeffco.us",
+      "url": "https://www.jeffco.us/2493/Slash-Collection",
+      "topic": "slash-brush-branch-collection-program",
+      "authorityClass": "official-government",
+      "expectedTemporality": "temporary",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (fetched via tool, with this agent's own identifying context): HTTP reachable, page title 'SLASH: Sustainable Lands and Safer Homes | Jefferson County, CO', body confirms this is a tree-limb/pruning/brush drop-off program with named drop yards (Tincup Ridge SLASH Yard at 101 Rooney Rd.; Blue Mountain Rotational SLASH Yard at 23401 Coal Creek Canyon Rd, Arvada; a third yard in design). Page text states '2026 SLASH Season - Beginning May 15' with a rotating per-location schedule -- confirms expectedTemporality: temporary (seasonal, not year-round). robots.txt (https://www.jeffco.us/robots.txt) fetched and checked: three User-agent blocks -- Baiduspider and Yandex are fully disallowed; the wildcard 'User-agent: *' block disallows a fixed set of admin/search/map paths (e.g. /activedit, /admin, /search.aspx, /map.aspx) -- none of which match this entry's numeric content path '/2493/Slash-Collection'.",
+      "notes": "Jefferson County's seasonal slash (tree limb/brush/pruning) collection program, operated at multiple rotating drop-yard locations across the county. The source page itself states residency within Jefferson County is NOT a strict requirement to participate ('you do not need to be a JeffCo resident to participate') -- eligibility is explicitly broader than simple county/city membership.",
+      "eligibilityNotes": "relevantCities (Lakewood, Arvada, Golden, Morrison, Wheat Ridge) reflects GEOGRAPHIC RELEVANCE ONLY -- these are the service-area cities that lie within or border Jefferson County, which is the entity that curates/operates this program. This does NOT establish that a specific address in any of these cities falls within an unincorporated-Jeffco or participating-municipality boundary, nor that the current season's dates/locations/capacity apply identically everywhere. Notably, the source itself states JeffCo residency is NOT even strictly required to participate -- so eligibility here is actually broader than, and must never be inferred purely from, city/county membership in either direction. A resident must confirm participation directly via the source."
+    },
+    {
+      "id": "rooney-road-hhw",
+      "locality": "Jefferson County, CO (Rooney Road Recycling Center)",
+      "relevantCities": ["lakewood", "arvada", "golden", "morrison", "wheat-ridge"],
+      "domain": "rooneyroadrecycling.org",
+      "url": "https://www.rooneyroadrecycling.org/household-hazardous-waste/",
+      "topic": "household-hazardous-waste-dropoff",
+      "authorityClass": "other-authoritative",
+      "expectedTemporality": "evergreen",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (fetched via tool): page live, title 'Household Hazardous Waste - Rooney Road Recycling Center', body explains HHW ('any chemical or product that can cause serious illness or pose an environmental or health threat if not properly stored, transported, or disposed of') and lists accepted items (paint via PaintCare, batteries, motor oil, cleaners, pesticides, electronics) plus a free reuse room for residents. The facility is described as serving Jefferson County, with free service specifically for 'Jeffco residents'. robots.txt (https://www.rooneyroadrecycling.org/robots.txt) fetched and checked: a single wildcard 'User-agent: *' block with 11 Disallow rules, all WordPress-admin/system paths (/cgi-bin, /wp-admin, /wp-includes, /wp-content/plugins, /wp-content/cache, /wp-content/themes, /trackback, /feed, /comments and wildcard variants) -- none matches '/household-hazardous-waste/'.",
+      "notes": "Rooney Road Recycling Center's own household hazardous waste (HHW) drop-off program -- a Jefferson County facility, but not itself a .gov domain (hence authorityClass other-authoritative rather than official-government, consistent with research.js's SOURCE_TYPES).",
+      "eligibilityNotes": "relevantCities reflects the same geographic relevance as jeffco-slash (Lakewood, Arvada, Golden, Morrison, Wheat Ridge border/lie within Jefferson County) -- GEOGRAPHIC RELEVANCE ONLY. Unlike jeffco-slash, this source DOES state free service is specifically for 'Jeffco residents' -- but a city being in relevantCities never by itself establishes that a specific resident/address qualifies as a 'Jeffco resident' for this program's purposes, nor that non-resident fee tiers or capacity limits do or don't apply. A resident must confirm eligibility directly via the source."
+    },
+    {
+      "id": "douglas-greenworks-hhw",
+      "locality": "Douglas County, CO",
+      "relevantCities": ["castle-rock", "parker", "highlands-ranch", "lone-tree", "sterling-ranch"],
+      "domain": "douglasco.gov",
+      "url": "https://www.douglasco.gov/greenworks/household/",
+      "topic": "household-hazardous-waste-by-appointment",
+      "authorityClass": "official-government",
+      "expectedTemporality": "evergreen",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (fetched via tool): page live, title 'Household Hazardous Waste', body describes Douglas County's GreenWorks program -- year-round HHW disposal by appointment, free for county residents, for items like paints, automotive fluids, garden chemicals, household cleaners, and batteries. Location given as 5675 Delva Way, Sedalia, CO; hours Monday-Saturday 8am-5pm (closed Sundays); appointments must be booked online, 'Reservations open a week in advance'; 'Items not explicitly identified above cannot be accepted'. Year-round/by-appointment framing (not a dated seasonal event) confirms expectedTemporality: evergreen. robots.txt (https://www.douglasco.gov/robots.txt) fetched and checked: a single wildcard 'User-agent: *' block disallowing only /wp-login.php and /wp-admin/ -- neither matches '/greenworks/household/'.",
+      "notes": "Douglas County's GreenWorks household hazardous waste (HHW) program -- a year-round, appointment-based, free-for-residents disposal service at a single county facility.",
+      "eligibilityNotes": "relevantCities (Castle Rock, Parker, Highlands Ranch, Lone Tree, Sterling Ranch) reflects GEOGRAPHIC RELEVANCE ONLY -- these are the service-area cities within Douglas County. This does NOT establish that every specific address in each city is within Douglas County's own boundary (some service-area cities span county lines), that a given resident will be treated as a 'county resident' for the free-service rule, that appointment capacity is available on any given date, or that the accepted-materials list is exhaustive for a specific item. A resident must confirm directly via the source's own booking system."
+    },
+    {
+      "id": "thornton-click-haul",
+      "locality": "Thornton, CO",
+      "relevantCities": ["thornton"],
+      "domain": "thorntonco.gov",
+      "url": "https://www.thorntonco.gov/trashrecycling/click-haul-pickup-service",
+      "topic": "bulky-item-curbside-pickup-by-appointment",
+      "authorityClass": "official-government",
+      "expectedTemporality": "evergreen",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (fetched via tool): page live, title 'Click and Haul Pickup Service', body describes an appointment-based bulky-item curbside pickup service for Thornton residents, fees starting at $72, accepted items including 'Furniture, appliances, mattresses/box springs, hot water heaters, fence panels, branches, remodeling debris, yard waste, etc.', items must be placed at the street by 7am on the scheduled collection day. Ongoing/by-appointment framing (not a dated annual event) confirms expectedTemporality: evergreen. robots.txt (https://www.thorntonco.gov/robots.txt) fetched and checked: a single wildcard 'User-agent: *' block with roughly 30 Disallow rules, all administrative/user-management/system paths (e.g. /admin/, /search/, /user/login, comment/node-creation endpoints, media oEmbed paths) -- none matches '/trashrecycling/click-haul-pickup-service'.",
+      "notes": "City of Thornton's fee-based, appointment-scheduled bulky-item curbside pickup service ('Click & Haul') -- directly relevant to junk-removal-adjacent content for this one city.",
+      "eligibilityNotes": "relevantCities is exactly one city (Thornton) -- geographic relevance here is exact, not multi-jurisdiction. This still does NOT establish the current fee amount, current accepted-item list, or appointment availability for any specific resident/date without checking the live page -- the $72 starting fee and item list observed at verification time are not guaranteed to remain current."
+    },
+    {
+      "id": "broomfield-spring-cleanup",
+      "locality": "Broomfield, CO",
+      "relevantCities": ["broomfield"],
+      "domain": "broomfield.org",
+      "url": "https://broomfield.org/1457/Spring-Cleanup",
+      "topic": "spring-cleanup-bulky-item-curbside-pickup",
+      "authorityClass": "official-government",
+      "expectedTemporality": "temporary",
+      "humanVerifiedAt": "2026-10-15",
+      "verificationNotes": "Live-verified 2026-10-15 (fetched via tool): page live, title 'Spring Cleanup', body describes the City and County of Broomfield's annual Spring Cleanup -- a CURBSIDE PICKUP service (corrected from an earlier 'drop-off' characterization; live verification found residents place items at the curb by 7am on one of four designated Saturdays in April-May, and Western Disposal trucks collect them, sorted into recyclables, waste, and ARC Thrift Store donations), at no cost, for large non-hazardous items. Dated, annual, Saturday-schedule framing confirms expectedTemporality: temporary. robots.txt (https://broomfield.org/robots.txt) fetched and checked: Baiduspider and Yandex fully disallowed; Siteimprove bot variants allowed with a 20-second crawl delay; the wildcard 'User-agent: *' block disallows a fixed set of admin/search/map/event paths (e.g. /activedit, /admin, /support, /search.aspx, /currentevents.aspx, /map.aspx) -- none matches this entry's numeric content path '/1457/Spring-Cleanup'.",
+      "notes": "Broomfield's annual Spring Cleanup -- a dated, curbside (not self-haul drop-off) bulky-item collection event on one of several designated Saturdays each spring; topic/notes corrected during Phase 11A live verification to reflect the curbside mechanism actually observed on the page.",
+      "eligibilityNotes": "relevantCities is exactly one city (Broomfield, a combined city-and-county) -- geographic relevance here is exact. This does NOT establish the current year's specific Saturday dates, that a specific address is on the Western Disposal collection route, or that a specific item qualifies as non-hazardous/acceptable without checking the live page -- dates/logistics are reset annually and are never safe to hardcode as evergreen text from this registry entry alone."
     }
   ]
 }

@@ -244,6 +244,31 @@ jobs:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
+      - name: Refresh local-source evidence (weekly only)
+        # Phase 11B — closes the gap Phase 10 deliberately left open: a
+        # curated registry entry (agent/context/local-source-
+        # registry.json) existing is not the same as it being USEFUL to
+        # Weekly's actual work. Run AFTER the other two weekly-only
+        # refresh steps above and BEFORE the main Agent pass below, same
+        # placement precedent. Asks, for each of this week's rotation
+        # picks, whether a curated authoritative source is
+        # GEOGRAPHICALLY RELEVANT (never "every resident of this city is
+        # eligible" — see agent/lib/local-source-candidates.js's header),
+        # deduplicates a source shared by several relevant picks to
+        # exactly one fetch, skips any candidate with still-fresh
+        # evidence already on disk, and writes the small, overwritten
+        # agent/history/local-source-candidate-log.json recording any
+        # candidate that was blocked/failed this run (see
+        # agent/lib/local-source-candidate-log.js's header for why that
+        # file is necessary for an honest report).
+        #
+        # Needs NO Google Cloud/WIF credentials — agent/lib/local-
+        # source-fetch.js is a plain, anonymous public HTTP fetch, same
+        # as the Denver LeafDrop diagnostic above, not a Search
+        # Console/GA4 call.
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --refresh-local-source-evidence
+
       - name: Run Website Agent (${{ inputs.run_type }})
         # Only for daily/weekly — neither Golden diagnostic (run_type
         # above) must EVER run the ordinary Agent pipeline: no scan, no

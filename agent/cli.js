@@ -185,8 +185,11 @@ const { loadRotationState, computePriorities } = require("./lib/research-rotatio
 const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
 const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, needsFindingEvidenceRefresh } = require("./lib/finding-evidence");
 const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
-const { getEntryById } = require("./lib/local-source-registry");
+const { getEntryById, loadRegistry, getEntries } = require("./lib/local-source-registry");
 const { fetchLocalSourceEvidence, writeLocalSourceEvidence } = require("./lib/local-source-fetch");
+const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
+const { selectWeeklyLocalSourceCandidates, picksWithNoRelevantSource, needsFetchThisRun } = require("./lib/local-source-candidates");
+const { writeLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
 
 function parseResumeArg(args) {
   const prefixed = args.find((a) => a.startsWith("--resume="));
@@ -250,6 +253,80 @@ async function runRefreshRotationEvidence() {
     const written = writeFirstPartyEvidence(result.evidence);
     console.log(`  "${pick.name}" (${pick.slug}): fetched, written to ${written}.`);
   }
+}
+
+// Phase 11B — closes the gap Phase 10 deliberately left open: a
+// curated registry entry existing is not the same as it being USEFUL
+// to Weekly's actual work this week. See agent/lib/local-source-
+// candidates.js's header for the full architecture. Mirrors
+// runRefreshRotationEvidence() above exactly: a separate, explicit,
+// network-touching step, run BEFORE the main Agent pass, that never
+// throws — one candidate's skip must never block another's fetch.
+//
+// Candidate selection asks, for EVERY one of this week's rotation
+// picks (not just pageless ones — unlike isRotationEvidenceCandidate()
+// above, a curated official source is just as useful for reviewing an
+// EXISTING page's content as for a pageless city, so this deliberately
+// does not narrow to `!pick.hasPage`), "is a curated authoritative
+// source geographically relevant here?" (local-source-candidates.js's
+// getRelevantSourcesForCity()) — and nothing more; see that module's
+// header on why this is geographic relevance only, never program
+// eligibility. The SAME registry entry relevant to several picks (a
+// shared county source) is deduplicated to exactly one fetch — see
+// selectWeeklyLocalSourceCandidates()'s own header.
+//
+// Writes agent/history/local-source-candidate-log.json (OVERWRITTEN
+// each run, not appended) recording which relevant candidates were
+// blocked/failed this run and why — see local-source-candidate-log.js's
+// header for why this small side-file is necessary: a skip writes NO
+// evidence file (same Phase 10 rule as every other skip in this
+// codebase), so report.js, built later in a SEPARATE process, would
+// otherwise have no way to distinguish "blocked/failed this run" from
+// "relevant but never yet attempted."
+async function runRefreshLocalSourceEvidence() {
+  const { findings } = gatherFindings();
+  const { evidence: completedJobs } = loadCompletedJobEvidence();
+  const citySummary = summarizeByCity(completedJobs);
+  const rotationState = loadRotationState();
+  const picks = computePriorities({ state: rotationState, currentFindings: findings, completedJobCitySummary: citySummary });
+
+  const registryEntries = getEntries(loadRegistry());
+  const candidates = selectWeeklyLocalSourceCandidates(picks, registryEntries);
+  const noSourcePickSlugs = picksWithNoRelevantSource(picks, registryEntries);
+
+  console.log(
+    `Local-source candidate selection: ${picks.length} rotation pick(s) this week, ${candidates.length} geographically-relevant curated source(s) (deduplicated), ${noSourcePickSlugs.length} pick(s) with no curated authoritative source.`
+  );
+  if (noSourcePickSlugs.length > 0) {
+    console.log(`  No curated authoritative source for: ${noSourcePickSlugs.join(", ")}.`);
+  }
+
+  const { entries: existingEvidence } = loadLocalSourceEvidence();
+  const toFetch = needsFetchThisRun(candidates, existingEvidence);
+  const toFetchIds = new Set(toFetch.map((c) => c.entry.id));
+  const alreadyFresh = candidates.filter((c) => !toFetchIds.has(c.entry.id));
+
+  for (const { entry, matchedPickSlugs } of alreadyFresh) {
+    console.log(`  "${entry.id}" (relevant to ${matchedPickSlugs.join(", ")}): skipped — fresh evidence already on disk.`);
+  }
+
+  const blockedOrFailed = [];
+  for (const { entry, matchedPickSlugs } of toFetch) {
+    const result = await fetchLocalSourceEvidence(entry);
+    if (result.skipped) {
+      console.log(`  "${entry.id}" (relevant to ${matchedPickSlugs.join(", ")}): skipped — ${result.reason}`);
+      blockedOrFailed.push({ entryId: entry.id, matchedPickSlugs, reason: result.reason });
+      continue;
+    }
+    const written = writeLocalSourceEvidence(result.evidence);
+    console.log(`  "${entry.id}" (relevant to ${matchedPickSlugs.join(", ")}): fetched, written to ${written}.`);
+  }
+
+  writeLocalSourceCandidateLog({
+    at: new Date().toISOString(),
+    workflowStartedAt: process.env.WORKFLOW_STARTED_AT || null,
+    blockedOrFailed,
+  });
 }
 
 // Classifies a fetchFirstPartyEvidence() result into exactly one of
@@ -550,6 +627,11 @@ async function main() {
     return;
   }
 
+  if (args.includes("--refresh-local-source-evidence")) {
+    await runRefreshLocalSourceEvidence();
+    return;
+  }
+
   const fetchFirstPartyStrictPath = parseFetchFirstPartyStrictArg(args);
   if (fetchFirstPartyStrictPath) {
     await runFetchFirstParty(fetchFirstPartyStrictPath, { strict: true });
@@ -610,6 +692,7 @@ module.exports = {
   classifyFindingEvidenceOutcome,
   runFetchLocalSource,
   parseFetchLocalSourceStrictArg,
+  runRefreshLocalSourceEvidence,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

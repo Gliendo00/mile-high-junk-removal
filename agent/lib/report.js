@@ -36,6 +36,7 @@ const { computeFirstPartyFreshness, SOURCES: FIRST_PARTY_SOURCES } = require("./
 const { isFirstPartyEvidenceCandidate, buildFirstPartyEvidenceQuestion } = require("./firstparty-candidates");
 const { isRotationEvidenceCandidate, classifyRotationConclusion } = require("./rotation-evidence");
 const { computeLocalSourceFreshness } = require("./local-source-evidence");
+const { selectWeeklyLocalSourceCandidates, picksWithNoRelevantSource, latestEvidenceByUrl } = require("./local-source-candidates");
 
 // Phase 10 — Curated Official Source Evidence's own section banner.
 // Stated here, verbatim, every time this section is non-empty: this
@@ -46,6 +47,91 @@ const { computeLocalSourceFreshness } = require("./local-source-evidence");
 // never merged into firstPartyEvidence/firstPartySignals/research
 // below.
 const LOCAL_SOURCE_EVIDENCE_DISCLAIMER = "Retrieved official-source evidence — not yet interpreted as a research verdict.";
+
+// Phase 11B — this week's local-source CANDIDATE SELECTION section's own
+// banner, stated verbatim whenever rotationPriorities is present (weekly
+// runs only — see buildReport()'s own gating below). Says, up front,
+// that relevance here is geographic only — see agent/lib/local-source-
+// candidates.js's header for the full reasoning this enforces
+// structurally (by naming), not just in this one sentence.
+const LOCAL_SOURCE_CANDIDATES_DISCLAIMER =
+  "Geographic relevance only — selecting a curated source as relevant to a location/topic never establishes verified program eligibility, pricing, dates, or accepted materials for that location. See each source's own \"doesNotEstablish\" text (its registry eligibilityNotes) and, where evidence was actually retrieved, that evidence's own limitations.";
+
+/**
+ * Phase 11B — answers the exact questions agent/README.md's Phase 11
+ * section requires Weekly's report to answer: which curated sources
+ * were relevant this week, which were actually fetched, which evidence
+ * was reused because still fresh, which was stale, which locations had
+ * no curated source, and which source was blocked/failed — all read
+ * from already-computed/already-loaded data, never from a live call
+ * (this function does no I/O of its own). Deliberately manufactures NO
+ * interpretation beyond what's already curated/observed: `establishes`
+ * is just the entry's own topic/authorityClass/locality restated, and
+ * `doesNotEstablish` is just the entry's own required `eligibilityNotes`
+ * — never a new verdict, confidence, or recommendation (see
+ * tests/agent-local-source-safety.test.js).
+ *
+ * @param {object[]} picks - this week's rotation picks (rotationPriorities)
+ * @param {object[]} registryEntries - local-source-registry.js's getEntries()
+ * @param {object[]} evidenceEntries - local-source-intake.js's loadLocalSourceEvidence().entries
+ * @param {object} candidateLog - local-source-candidate-log.js's loadLocalSourceCandidateLog() shape
+ * @param {Date} workflowBoundary - same CI-workflow-or-run boundary buildReport() already computes
+ * @param {Date} now
+ */
+function buildLocalSourceCandidatesSection({ picks, registryEntries, evidenceEntries, candidateLog, workflowBoundary, now }) {
+  const candidates = selectWeeklyLocalSourceCandidates(picks, registryEntries);
+  const noCuratedSourcePicks = picksWithNoRelevantSource(picks, registryEntries);
+  const latestByUrl = latestEvidenceByUrl(evidenceEntries);
+  const blockedByEntryId = new Map((candidateLog.blockedOrFailed || []).map((b) => [b.entryId, b]));
+
+  const relevantSources = candidates.map(({ entry, matchedPickSlugs }) => {
+    const latest = latestByUrl.get(entry.url);
+    let status;
+    let freshness = null;
+    let blockedReason = null;
+
+    if (latest) {
+      freshness = computeLocalSourceFreshness(latest, now).status;
+      const retrievedAt = new Date(latest.retrievedAt);
+      if (retrievedAt.getTime() >= workflowBoundary.getTime()) {
+        status = "fetched-this-workflow";
+      } else if (freshness === "stale") {
+        status = "stale-needs-refresh";
+      } else {
+        status = "reused-fresh";
+      }
+    } else if (blockedByEntryId.has(entry.id)) {
+      status = "blocked-or-failed";
+      blockedReason = blockedByEntryId.get(entry.id).reason;
+    } else {
+      // Relevant and selected, but genuinely never attempted yet (new
+      // this week, or the candidate log is from an older/unrelated run)
+      // — an honest third option, never conflated with "blocked/failed".
+      status = "not-yet-fetched";
+    }
+
+    return {
+      id: entry.id,
+      domain: entry.domain,
+      topic: entry.topic,
+      authorityClass: entry.authorityClass,
+      locality: entry.locality,
+      matchedPickSlugs,
+      status,
+      freshness,
+      blockedReason,
+      establishes: `${entry.topic} — a ${entry.authorityClass} source for ${entry.locality}`,
+      doesNotEstablish: entry.eligibilityNotes,
+    };
+  });
+
+  return {
+    disclaimer: LOCAL_SOURCE_CANDIDATES_DISCLAIMER,
+    picksConsidered: (picks || []).map((p) => p.slug),
+    relevantSources,
+    noCuratedSourcePicks,
+  };
+}
 
 // Phase 7B — surfaced verbatim on every rotation pick and in
 // rotation.summary: this unattended runner has no research-capable
@@ -161,8 +247,26 @@ function buildHealthSummary({ status, actionableOpenCount, proposalsAwaitingAppr
  * @param {object} [args.localSourceEvidence] - Phase 10: runner.js's loadLocalSourceEvidence() result
  *   ({entries, warnings}), a pure filesystem read (never a network call). Surfaced as report.localSourceEvidence,
  *   its own section — deliberately NEVER merged into firstPartyEvidence/firstPartySignals/research below.
+ * @param {object[]} [args.localSourceRegistryEntries] - Phase 11B: local-source-registry.js's
+ *   getEntries(loadRegistry()) — a pure filesystem read, never written by this codebase's runner. Used
+ *   only to compute report.localSourceCandidates (weekly runs only — see below); has no effect at all
+ *   when rotationPriorities is absent (daily runs).
+ * @param {object} [args.localSourceCandidateLog] - Phase 11B: local-source-candidate-log.js's
+ *   loadLocalSourceCandidateLog() result — a pure filesystem read of the small, overwritten-each-run
+ *   record of what --refresh-local-source-evidence could NOT fetch this run (see that module's header).
  */
-function buildReport({ record, previousRun, rotationPriorities, failure, firstPartyIntegrations, initialTimestamp, workflowStartedAt, localSourceEvidence }) {
+function buildReport({
+  record,
+  previousRun,
+  rotationPriorities,
+  failure,
+  firstPartyIntegrations,
+  initialTimestamp,
+  workflowStartedAt,
+  localSourceEvidence,
+  localSourceRegistryEntries,
+  localSourceCandidateLog,
+}) {
   const findings = record.findings || [];
   const now = new Date(record.timestamp);
   const runStartedAt = new Date(initialTimestamp || record.timestamp);
@@ -471,6 +575,23 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     })),
   };
 
+  // Phase 11B — weekly-only (same gating as `rotation`/`rotationSummary`
+  // below: null on daily runs, since there is no "this week's picks" to
+  // ask relevance for). Deliberately its OWN section, never merged into
+  // localSourceEvidenceSection above (that section stays Phase 10's
+  // original "what evidence already exists on disk," regardless of
+  // run type) — see buildLocalSourceCandidatesSection()'s own header.
+  const localSourceCandidatesSection = rotationPriorities
+    ? buildLocalSourceCandidatesSection({
+        picks: rotationPriorities,
+        registryEntries: localSourceRegistryEntries || [],
+        evidenceEntries: localSourceEntries,
+        candidateLog: localSourceCandidateLog || { blockedOrFailed: [] },
+        workflowBoundary,
+        now,
+      })
+    : null;
+
   const status = computeRunStatus({
     failure,
     hasUnresolvedResearch: questionsPending.length > 0,
@@ -526,6 +647,7 @@ function buildReport({ record, previousRun, rotationPriorities, failure, firstPa
     firstPartyEvidence,
     firstPartySignals,
     localSourceEvidence: localSourceEvidenceSection,
+    localSourceCandidates: localSourceCandidatesSection,
     validation: record.validation || null,
     proposalsSyncSkippedReason: record.proposalsSync && record.proposalsSync.skipped ? record.proposalsSync.reason : null,
     failure: failure || null,

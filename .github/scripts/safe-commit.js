@@ -96,6 +96,14 @@ const ALLOWED_PATH_PATTERNS = [
   // header) — only the EVIDENCE this diagnostic writes is allowlisted,
   // never the list of what it's allowed to fetch.
   /^agent\/research\/local-sources\/[^/]+\.json$/,
+  // Phase 11B — the small, OVERWRITTEN-each-run log of which
+  // geographically-relevant candidates --refresh-local-source-evidence
+  // could not fetch this run (see agent/lib/local-source-candidate-
+  // log.js's header). Same single-file treatment as
+  // agent/history/research-rotation-state.json above — never a
+  // directory pattern, never agent/context/** (the registry itself
+  // stays excluded, unchanged).
+  /^agent\/history\/local-source-candidate-log\.json$/,
 ];
 
 // Deliberately pattern-based, not a secrets-scanning dependency — this

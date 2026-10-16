@@ -74,6 +74,36 @@ test("no finding-producing audit module (agent/lib/*-audit.js) requires any loca
   }
 });
 
+// --- Phase 11B additions: candidate SELECTION carries no authority ------
+
+test("agent/lib/local-source-candidates.js's exports carry no verdict/confidence/recommendation/decision authority — it is a pure, network-free SELECTOR, never a judge", () => {
+  const candidates = require("../agent/lib/local-source-candidates");
+  const entry = {
+    id: "x",
+    locality: "Example, CO",
+    relevantCities: ["denver"],
+    domain: "example.gov",
+    url: "https://www.example.gov/p",
+    topic: "t",
+    authorityClass: "official-government",
+    expectedTemporality: "temporary",
+    humanVerifiedAt: "2026-10-15",
+    eligibilityNotes: "n",
+  };
+  const selected = candidates.selectWeeklyLocalSourceCandidates([{ slug: "denver", name: "Denver", hasPage: true }], [entry]);
+  assert.strictEqual(selected.length, 1);
+  for (const field of ["verdict", "confidence", "recommendation", "decision", "eligible", "qualifies"]) {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(selected[0], field), false, `selectWeeklyLocalSourceCandidates()'s result must never carry a "${field}" field — relevance is geographic only, never an eligibility/decision verdict`);
+  }
+});
+
+test("agent/lib/local-source-candidates.js does not require()/import decision.js/research.js/risk.js/proposals-sync.js — a pure selector never reaches into decision authority", () => {
+  const src = fs.readFileSync(path.join(AGENT_LIB_DIR, "local-source-candidates.js"), "utf8");
+  for (const forbidden of ["./decision", "./research", "./risk", "./proposals-sync"]) {
+    assert.strictEqual(src.includes(`require("${forbidden}")`), false, `must not require("${forbidden}")`);
+  }
+});
+
 test("local-source-evidence.js's own schema has no verdict/confidence/recommendation/decision field — structurally cannot carry a judgment (re-confirmed here as part of the safety narrative, not just in its own unit tests)", () => {
   const { makeLocalSourceEvidence } = require("../agent/lib/local-source-evidence");
   const evidence = makeLocalSourceEvidence({

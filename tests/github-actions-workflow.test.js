@@ -344,6 +344,42 @@ await test("Daily dispatches remain behaviorally unchanged by the finding-level 
   assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
+await test("Phase 11B: the local-source-evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the finding-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
+  const block = extractStepBlock(code, /Refresh local-source evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/--refresh-local-source-evidence/.test(block));
+  assert.strictEqual(/apply-safe/.test(block), false);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+
+  const lines = code.split("\n");
+  const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const localSourceIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh local-source evidence/.test(l));
+  const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+  assert.ok(findingIdx > -1 && localSourceIdx > -1 && mainRunIdx > -1);
+  assert.ok(localSourceIdx > findingIdx, "local-source evidence refresh must run AFTER finding evidence refresh");
+  assert.ok(mainRunIdx > localSourceIdx, "local-source evidence refresh must run BEFORE the main --daily/--weekly Agent pass");
+});
+
+await test("Phase 11B: the local-source-evidence refresh step needs NO Google Cloud/WIF credentials — it declares no Google env vars (same plain-HTTP-fetch posture as the Denver LeafDrop diagnostic)", () => {
+  const block = extractStepBlock(code, /Refresh local-source evidence/);
+  assert.strictEqual(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT|GSC_SITE_URL|GA4_PROPERTY_ID/.test(block), false);
+});
+
+await test("Phase 11B: Daily dispatches remain behaviorally unchanged by the local-source-evidence refresh — it is gated to exactly 'weekly', same exclusivity as the other two weekly-only refresh steps", () => {
+  const block = extractStepBlock(code, /Refresh local-source evidence/);
+  const ifLineMatch = block.match(/if:\s*(.+)/);
+  assert.ok(ifLineMatch, "local-source-evidence refresh must have an explicit if: condition");
+  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+});
+
+await test("Phase 11B: the local-source-evidence refresh step's addition does not disturb the Denver LeafDrop diagnostic's own isolation — that diagnostic still never invokes --refresh-local-source-evidence, --refresh-rotation-evidence, --refresh-finding-evidence, or --daily/--weekly", () => {
+  const diagnosticBlock = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
+  assert.strictEqual(/--refresh-local-source-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--refresh-rotation-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--refresh-finding-evidence/.test(diagnosticBlock), false);
+  assert.strictEqual(/--daily|--weekly/.test(diagnosticBlock), false);
+});
+
 await test("a generic 'Record workflow start time' step exists, runs unconditionally (no if: gate), right after Checkout, and exports WORKFLOW_STARTED_AT via $GITHUB_ENV so every later step in the job inherits it automatically", () => {
   const lines = code.split("\n");
   const checkoutIdx = lines.findIndex((l) => /^\s*- name:\s*Checkout\b/.test(l));
@@ -358,8 +394,12 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
 
   const rotationIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
   const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const localSourceIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh local-source evidence/.test(l));
   const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
-  assert.ok(workflowStartIdx < rotationIdx && workflowStartIdx < findingIdx && workflowStartIdx < mainRunIdx, "the workflow-start-time step must precede every step whose report-building needs to read WORKFLOW_STARTED_AT");
+  assert.ok(
+    workflowStartIdx < rotationIdx && workflowStartIdx < findingIdx && workflowStartIdx < localSourceIdx && workflowStartIdx < mainRunIdx,
+    "the workflow-start-time step must precede every step whose report-building needs to read WORKFLOW_STARTED_AT"
+  );
 });
 
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {

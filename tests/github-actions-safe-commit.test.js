@@ -176,6 +176,12 @@ async function main() {
     assert.strictEqual(isPathAllowed("agent/context/business-profile.json"), false);
   });
 
+  await test("Phase 11B: isPathAllowed() allows the single, overwritten agent/history/local-source-candidate-log.json file, but not a nested/renamed variant", () => {
+    assert.strictEqual(isPathAllowed("agent/history/local-source-candidate-log.json"), true);
+    assert.strictEqual(isPathAllowed("agent/history/local-source-candidate-log/extra.json"), false);
+    assert.strictEqual(isPathAllowed("agent/history/local-source-candidate-log.json.bak"), false);
+  });
+
   await test("parsePorcelainStatus() parses modified/untracked/renamed and quoted-path lines", () => {
     const output = [
       "M  agent/history/log.ndjson",
@@ -366,6 +372,27 @@ async function main() {
       assert.notStrictEqual(after, before);
       const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
       assert.deepStrictEqual(committedFiles.sort(), ["agent/history/log.ndjson", "agent/research/local-sources/denvergov-org__leafdrop-pumpkin-composting-program-123.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("Phase 11B: safe-commit CLI: commits a new/updated agent/history/local-source-candidate-log.json alongside history and evidence", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r11b" }) + "\n", "utf8");
+      fs.writeFileSync(
+        path.join(dir, "agent", "history", "local-source-candidate-log.json"),
+        JSON.stringify({ at: "2026-10-16T00:00:00.000Z", workflowStartedAt: null, blockedOrFailed: [] }),
+        "utf8"
+      );
+      const result = runSafeCommit(dir, "chore(agent): weekly run r11b");
+      assert.strictEqual(result.status, 0, `stderr: ${result.stderr}`);
+      const after = headSha(dir);
+      assert.notStrictEqual(after, before);
+      const committedFiles = runGit(["show", "--name-only", "--pretty=format:", after], dir).trim().split("\n").filter(Boolean);
+      assert.deepStrictEqual(committedFiles.sort(), ["agent/history/local-source-candidate-log.json", "agent/history/log.ndjson"]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

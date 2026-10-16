@@ -3617,3 +3617,210 @@ Denver verification (URL resolution, robots.txt content, live fetch,
 extraction quality) was performed by hand against the live network
 during design — the committed test suite itself never touches the real
 network (all HTTP is mocked).
+
+# Phase 11 — Expanding the Registry, and Making It Useful to Weekly
+
+Two sub-phases, done together: 11A adds five new human-verified
+curated sources to the registry (the registry is still human-curated,
+still outside autonomous safe-commit permissions); 11B makes Weekly
+actually consult that registry, instead of leaving it a Phase 10
+diagnostic-only curiosity.
+
+## 11A — registry expansion
+
+Five new entries, live-verified the same way Denver was (this time via
+a web-fetch tool rather than `curl`, documented honestly as such in
+each entry's own `verificationNotes` rather than copying Denver's
+`curl`-specific wording):
+
+- **jeffco-slash** — Jefferson County SLASH (brush/branch collection),
+  `jeffco.us`, relevant to Lakewood/Arvada/Golden/Morrison/Wheat Ridge,
+  temporary (seasonal).
+- **rooney-road-hhw** — Rooney Road Recycling Center HHW, `other-
+  authoritative` (a county facility, not itself a `.gov` domain), same
+  five Jefferson County cities, evergreen.
+- **douglas-greenworks-hhw** — Douglas County GreenWorks HHW,
+  `douglasco.gov`, relevant to Castle Rock/Parker/Highlands Ranch/Lone
+  Tree/Sterling Ranch, evergreen (year-round, by appointment).
+- **thornton-click-haul** — City of Thornton Click & Haul (bulky-item
+  curbside pickup by appointment), `thorntonco.gov`, Thornton only,
+  evergreen.
+- **broomfield-spring-cleanup** — Broomfield Spring Cleanup, `broomfield.org`,
+  Broomfield only, temporary (dated annual Saturdays). Live verification
+  corrected this entry's own mechanism from an earlier "drop-off"
+  characterization to the CURBSIDE pickup actually described on the
+  page — exactly the kind of correction this phase's "do not redo the
+  research unless live verification reveals a change" instruction
+  anticipates.
+
+Arapahoe County, Aurora, and Adams County remain explicitly NOT
+onboarded (deferred, same researched-but-not-approved status as
+before). Aurora's query-string `robots.js` matching limitation stays
+backlog, untouched.
+
+### Jurisdiction safety — geographic relevance ≠ program eligibility
+
+The smallest clean structural distinction, not a jurisdiction engine:
+
+- **`relevantCities`** (replaces Phase 10's singular `citySlug`) — an
+  array of canonical service-area city slugs
+  (`business-profile.js`'s `getAllServiceAreaCities()`), validated at
+  load time; an unknown slug is rejected outright. This is GEOGRAPHIC
+  RELEVANCE ONLY — it says a source's own jurisdiction/subject matter
+  concerns these cities, nothing about who actually qualifies.
+- **`eligibilityNotes`** — a new REQUIRED, human-authored field (same
+  discipline as `local-source-evidence.js`'s required `limitations`)
+  stating what the source does and does NOT establish about
+  eligibility. A registry entry claiming geographic relevance with no
+  stated eligibility boundary is refused at `validateEntry()` time, not
+  left to convention. Every one of the six real entries (Denver
+  included — migrated to this shape, not exempted) carries one; the
+  Jefferson County SLASH entry's own `eligibilityNotes` even notes that
+  the source itself states county residency is NOT strictly required —
+  real evidence that relevance and eligibility can diverge in either
+  direction.
+- Duplicate SOURCE/TOPIC identity is now also rejected: an exact-url
+  duplicate, or the same `domain`+`topic` pair under two different ids,
+  both fail `loadRegistry()` loudly (entry-id uniqueness was already
+  enforced; this is the same guarantee for the underlying real-world
+  identity an entry represents).
+
+No jurisdiction/boundary engine was built — no address lookup, no
+polygon/zip matching. The validation above is the entire mechanism.
+
+## 11B — making the registry useful to Weekly
+
+```
+research-rotation.js's computePriorities() (this week's picks)
+        +
+local-source-registry.js's getEntries() (the curated registry)
+        v
+local-source-candidates.js — PURE, NETWORK-FREE SELECTOR
+  getRelevantSourcesForCity()        -- geographic relevance lookup
+  selectWeeklyLocalSourceCandidates() -- per-pick relevance, DEDUPED by registry id
+  picksWithNoRelevantSource()         -- honest "no curated source" list
+  needsFetchThisRun()                 -- freshness-gated (stale-or-absent only)
+        v
+cli.js's `--refresh-local-source-evidence` -- the ONE step that touches the network
+  (fetchLocalSourceEvidence() per candidate that needs it; never a candidate that's already fresh)
+        v
+agent/research/local-sources/*.json (Phase 10's existing evidence shape, unchanged)
+  +
+agent/history/local-source-candidate-log.json -- NEW, small, OVERWRITTEN each run:
+  which relevant candidates were blocked/failed this run, and why
+        v
+report.js's `localSourceCandidates` section (weekly runs only)
+```
+
+**Deterministic candidate selection, not "fetch every registry URL
+every week."** `selectWeeklyLocalSourceCandidates()` asks, for EVERY
+one of this week's rotation picks (not just pageless ones — a curated
+source is just as useful for reviewing an existing page's content),
+whether a registry entry is geographically relevant, and deduplicates
+a source shared by several picks (e.g. Lakewood and Golden both
+relevant to the Jefferson County SLASH entry) into exactly ONE fetch —
+proven end to end against the real registry/rotation state in
+`tests/agent-cli-refresh-local-source-evidence.test.js` (two real,
+distinct picks this run both resolved to the same two Jefferson County
+sources, each fetched exactly once).
+
+**Freshness/reuse.** `needsFetchThisRun()` reuses
+`local-source-evidence.js`'s existing `computeLocalSourceFreshness()` —
+a candidate with fresh-or-aging evidence already on disk is skipped;
+only stale-or-absent evidence is fetched. A stale TEMPORARY source is
+never silently treated as current — see the reporting section below.
+
+**Why `agent/history/local-source-candidate-log.json` exists.** A
+skipped/blocked fetch writes NO evidence file (same Phase 10 rule as
+every other skip in this codebase) — which means report.js, built in a
+SEPARATE `node` process by the main `--weekly` pass that runs AFTER
+this refresh step, has no way to tell "blocked/failed this run" apart
+from "relevant but never yet attempted" just by looking at the
+evidence directory. This small, OVERWRITTEN-each-run (never appended)
+file is the minimal bridge that makes that honestly answerable — it
+carries nothing but entry ids, matched pick slugs, and the same
+`reason` string `local-source-fetch.js` already produces. Added to
+`safe-commit.js`'s allowlist as a single file (same treatment as
+`research-rotation-state.json`); `agent/context/local-source-
+registry.json` itself remains excluded, unchanged.
+
+**Reporting (`report.localSourceCandidates`, weekly runs only — `null`
+on daily runs, same gating as `report.rotation`).** For every
+geographically-relevant source this week: which pick(s) made it
+relevant, and one of five honest statuses — `fetched-this-workflow`,
+`reused-fresh`, `stale-needs-refresh`, `blocked-or-failed` (with the
+real reason), or `not-yet-fetched`. Plus `noCuratedSourcePicks` (this
+week's picks with zero relevant sources — an honest "external
+discovery unavailable here," never faked). `establishes`/
+`doesNotEstablish` are RESTATED verbatim from the entry's own
+`topic`/`authorityClass`/`locality`/`eligibilityNotes` — no new
+interpretation is ever manufactured to fill the report (see
+`tests/agent-report-local-source-candidates.test.js`). Carries the same
+`RESEARCH_MORE`-is-a-valid-outcome spirit: a pick with no curated
+source is reported honestly as such, never papered over.
+
+**Authority boundary — unchanged, re-confirmed.** `local-source-
+candidates.js` does not `require()` `decision.js`/`research.js`/
+`risk.js`/`proposals-sync.js`, and its own exported shapes carry no
+`verdict`/`confidence`/`recommendation`/`decision`/`eligible`/
+`qualifies` field — see `tests/agent-local-source-safety.test.js`'s
+Phase 11B additions. A source being selected as a candidate, or even
+successfully fetched, still cannot create a proposal, change a
+decision, or authorize an edit — identical to Phase 10's boundary, just
+now exercised by Weekly automatically instead of a manual diagnostic
+only.
+
+**What this phase deliberately does NOT do.** No sitemap discovery,
+RSS, or competitor fetching (unchanged from Phase 10). No change to
+`decision.js` or the proposal pipeline. No scheduling enabled — Weekly
+is still manual-dispatch-only. No Phase 12 (deeper first-party GSC/GA4
+intelligence) or Phase 13 (cross-source synthesis) work.
+
+## Tests
+
+New: `tests/agent-local-source-candidates.test.js` (relevance
+matching, request deduplication, freshness/reuse),
+`tests/agent-local-source-candidate-log.test.js` (round-trip,
+overwrite-not-append, fail-safe-on-corrupt-file),
+`tests/agent-cli-refresh-local-source-evidence.test.js` (real end-to-
+end wiring against the live rotation/registry state, mocked network),
+`tests/agent-report-local-source-candidates.test.js` (every reporting
+status, the geographic-relevance disclaimer, no manufactured
+interpretation). Extended: `tests/agent-local-source-registry.test.js`
+(+9: `relevantCities` validation/unknown-slug rejection,
+`eligibilityNotes` requirement, duplicate url/source-topic rejection,
+the real registry's six entries), `tests/agent-local-source-safety.test.js`
+(+2: the new selector module carries no decision authority and
+doesn't require decision/research/risk/proposals-sync),
+`tests/github-actions-workflow.test.js` (+5: the new weekly-only
+step's gating/placement/credential-free posture),
+`tests/github-actions-safe-commit.test.js` (+2: the new single-file
+allowlist entry, end to end). Run serially
+(`node --test --test-concurrency=1`, or the per-file `node
+tests/<file>.test.js` convention every test in this suite already
+uses) — **803 passing**, the same two pre-existing failures as before
+this phase (the long-standing unrelated
+`tests/phase3c-batch5-intake-ui.test.js` failure, and one
+`tests/agent-local-source-safety.test.js` end-to-end assertion that
+assumed an empty `agent/research/local-sources/` directory — stale
+since the real Denver diagnostic evidence file was committed in Phase
+10's own follow-up run; confirmed via `git stash` to already fail on
+the pre-Phase-11 baseline, so it is investigated-and-understood, not a
+regression introduced here, and is left for a future test-fixture fix
+rather than expanding this phase's scope).
+
+## Safety proof
+
+`local-source-candidates.js`/`local-source-candidate-log.js` are
+required ONLY by `agent/cli.js`, `agent/lib/report.js`, and
+`agent/runner.js` (confirmed by repo-wide grep, not just by the
+dedicated unit tests) — never by `decision.js`, `research.js`,
+`risk.js`, `proposals-sync.js`, or any `*-audit.js` module. `runner.js`
+remains network-free: its two new reads (`getEntries(loadRegistry())`,
+`loadLocalSourceCandidateLog()`) are both pure filesystem reads, used
+only to build `report.localSourceCandidates`, never consulted by
+`gatherFindings()`/`classifyAll()`/`decideAll()`. There is still no
+path from local-source evidence (Phase 10) or candidate
+selection/reporting (Phase 11B) to a decision, a proposal, or an
+auto-applied edit — exactly Phase 10's original guarantee, now
+re-verified against the larger surface area this phase added.

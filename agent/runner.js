@@ -69,6 +69,8 @@ const { decideAll } = require("./lib/decision");
 const { attachFirstPartyEvidence, attachRotationEvidence } = require("./lib/firstparty-intake");
 const { attachFirstPartySignals } = require("./lib/firstparty-signals");
 const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
+const { getEntries, loadRegistry } = require("./lib/local-source-registry");
+const { loadLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
 const { isSearchConsoleConfigured } = require("./lib/search-console-client");
 const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
@@ -267,6 +269,14 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       // that otherwise failed, same honesty rule failure reporting
       // already follows elsewhere.
       localSourceEvidence: loadLocalSourceEvidence(),
+      // Phase 11B — same filesystem-only-read category: the curated
+      // registry itself (read-only; never written by the runner — see
+      // local-source-registry.js's header) and the small, overwritten
+      // outcome log --refresh-local-source-evidence leaves behind (see
+      // local-source-candidate-log.js's header). Included even on a
+      // failed run, same honesty rule as localSourceEvidence above.
+      localSourceRegistryEntries: getEntries(loadRegistry()),
+      localSourceCandidateLog: loadLocalSourceCandidateLog(),
     });
     appendRun(failedRecord, options.logPath);
     throw Object.assign(e, { recordedFailure: failedRecord });
@@ -478,6 +488,13 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
     // intake.js's own header on why) — report.js surfaces the whole
     // loaded list as its own, independent section instead.
     localSourceEvidence: loadLocalSourceEvidence(),
+    // Phase 11B — see the failed-run buildReport() call above for why
+    // these two are included unconditionally (cheap, network-free
+    // filesystem reads); report.js itself gates its derived
+    // localSourceCandidates section on rotationPriorities being present
+    // (weekly runs only), so these have no effect on a daily run.
+    localSourceRegistryEntries: getEntries(loadRegistry()),
+    localSourceCandidateLog: loadLocalSourceCandidateLog(),
   });
 
   appendRun(record, options.logPath);
