@@ -177,6 +177,12 @@ async function main() {
     const logPathA = path.join(os.tmpdir(), `local-source-safety-a-${process.pid}-${Math.random().toString(36).slice(2)}.ndjson`);
     const logPathB = path.join(os.tmpdir(), `local-source-safety-b-${process.pid}-${Math.random().toString(36).slice(2)}.ndjson`);
     const before = new Set(fs.existsSync(EVIDENCE_DIR) ? fs.readdirSync(EVIDENCE_DIR) : []);
+    // loadLocalSourceEvidence() (local-source-intake.js) only ever loads
+    // *.json files as evidence — EVIDENCE_DIR also legitimately holds a
+    // non-evidence README.md (see agent/research/local-sources/README.md),
+    // which `before` (a directory listing) correctly includes but which
+    // must never be counted toward the expected evidence count below.
+    const beforeEvidenceCount = [...before].filter((f) => f.endsWith(".json")).length;
 
     try {
       const recordWithout = await runner.run({ mode: "dry-run", runType: "daily", logPath: logPathA, skipLock: true, syncProposals: false });
@@ -214,9 +220,19 @@ async function main() {
       assert.deepStrictEqual(recordWith.findings.map(stripId), recordWithout.findings.map(stripId), "findings/decisions must be completely unaffected by the presence of local-source evidence on disk");
       assert.deepStrictEqual(recordWith.summary, recordWithout.summary);
       // But the REPORT's own localSourceEvidence section must still
-      // honestly reflect what was on disk during each run.
-      assert.strictEqual(recordWithout.report.localSourceEvidence.count, 0);
-      assert.strictEqual(recordWith.report.localSourceEvidence.count, 1);
+      // honestly reflect what was on disk during each run. Relative to
+      // `before.size` (whatever legitimately already exists on disk at
+      // test start — e.g. the real, committed Denver LeafDrop diagnostic
+      // evidence file), never hardcoded to an assumed-empty directory:
+      // this repo's agent/research/local-sources/ is NOT guaranteed empty
+      // (a real diagnostic run has already committed one file there),
+      // and asserting a literal 0 would make this test depend on that
+      // directory's real contents rather than on the actual property
+      // under test — that adding exactly one fixture file increases the
+      // count by exactly one, on top of whatever already legitimately
+      // existed.
+      assert.strictEqual(recordWithout.report.localSourceEvidence.count, beforeEvidenceCount, "the pre-fixture run's report must honestly reflect however many legitimate *.json evidence files already exist on disk");
+      assert.strictEqual(recordWith.report.localSourceEvidence.count, beforeEvidenceCount + 1, "adding exactly one fixture file must increase the count by exactly one on top of whatever already legitimately existed");
     } finally {
       if (fs.existsSync(logPathA)) fs.unlinkSync(logPathA);
       if (fs.existsSync(logPathB)) fs.unlinkSync(logPathB);
