@@ -4197,6 +4197,65 @@ testability — default behavior unchanged). Full suite, run serially:
 **134 files, 133 passing**, the same single pre-existing, unrelated
 `tests/phase3c-batch5-intake-ui.test.js` failure as every prior phase.
 
+## Pre-push review (2026-10-17) — three fixes before anything shipped
+
+A focused review before pushing the above found one real correctness
+gap and clarified two judgment calls, with no scope expansion (no
+Phase 13b, no new finding types):
+
+1. **GA4 relevance was re-derived per finding type, not re-asserted.**
+   Checked all five IN_SCOPE_FINDING_TYPES against decision.js's own
+   `questionTextFor()` premise text and against which types GA4
+   evidence is ever actually gathered for: content-gap/structural-
+   inconsistency measure GA4 as `different-question` (real evidence,
+   wrong dimension — traffic/conversion vs. content depth); the other
+   three are `unavailable` for the simpler reason that no mechanism
+   gathers GA4 for them at all (finding-evidence.js already excludes
+   them from its own candidate set, for reasons unrelated to this
+   phase). GA4 remains non-voting in 13a either way, but
+   `evidence-dossier.js`'s `buildGa4Family()` and header now say WHY
+   per type, not as one blanket rule.
+2. **Stale-support supersession (the important one).** Found: an old
+   `supports-opportunity`/`contradicts-opportunity` synthesis result
+   could remain the ONLY (and therefore "latest") cross-source-
+   synthesis file for a finding forever, even after the evidence that
+   produced it went stale, disappeared, or was recomputed as
+   insufficient — `run-synthesis.js`'s original "below threshold ->
+   write nothing" rule assumed nothing had ever been concluded, which
+   is false once a PRIOR synthesis result already drove a real
+   PROPOSE_CHANGE/REJECT_OPPORTUNITY. Fixed by having
+   `cross-source-synthesis.js`'s `buildSynthesisResultArgs()` accept
+   the finding's prior synthesis verdict and, whenever a fresh
+   fingerprint no longer reaches that same conclusion, explicitly write
+   a NEW `inconclusive`-verdict result that supersedes it (append-only
+   — the old file is never deleted or mutated; `run-synthesis.js`
+   additionally guarantees the new file's `accessedAt` is strictly
+   later than the prior one's, removing any dependency on file-system
+   iteration order). Proven end-to-end (not just unit-level) in
+   `tests/agent-stale-synthesis-supersession.test.js`: support -> stale,
+   -> evidence disappears, -> zero rows, -> below-threshold-with-no-
+   prior-to-supersede, -> contradiction, old/new coexistence, and the
+   unsupported-vs-RESEARCH_MORE distinction never blurring.
+3. **Human/Claude research precedence.** `decision.js`'s
+   `pickLatestResearch()` previously picked purely by `accessedAt`
+   across ANY research result for a finding — meaning an unattended
+   `--run-synthesis` pass could, in principle, outrank an EARLIER human/
+   Claude semantic judgment merely by running later in time. Fixed with
+   the smallest possible rule: a human/Claude-authored result (any
+   `sourceType` other than `"cross-source-synthesis"`) now always
+   outranks every cross-source-synthesis result for the same finding,
+   regardless of timestamp; "most recent" is still the tiebreaker
+   WITHIN one authority tier (unchanged behavior among multiple human
+   results, and exactly where the stale-supersession mechanism above
+   does its own work among multiple synthesis results). This is the one
+   deliberate, narrow change to `decision.js` this phase makes — not a
+   redesign, a single added precedence rule inside the one function
+   already responsible for exactly this choice.
+
+Full suite after these fixes, run serially: **135 files, 134 passing**,
+the same single pre-existing `tests/phase3c-batch5-intake-ui.test.js`
+failure.
+
 ## Explicitly NOT built this phase
 
 No new finding/opportunity types (`pageless-city-evaluation`,
@@ -4208,8 +4267,10 @@ semantic/LLM-driven local-source interpretation — `localSource` stays
 the existing way. No mechanical contradiction path wired to any real
 evidence family (the category is implemented and tested; nothing today
 produces one from real evidence — see above). No numeric/weighted
-scoring anywhere. No change to `risk.js`, `decision.js`'s own logic, or
-`proposals-sync.js`. The existing Denver LeafDrop research result/
-proposal was not touched, approved, or executed by this phase, and
-nothing in this phase special-cases it — the same rules apply to any
-equivalent finding.
+scoring anywhere. No change to `risk.js` or `proposals-sync.js`;
+`decision.js`'s own category-C decision logic is unchanged — the one
+narrow addition from the pre-push review above is entirely inside
+`pickLatestResearch()`'s tiebreak rule, not a new decision branch. The
+existing Denver LeafDrop research result/proposal was not touched,
+approved, or executed by this phase, and nothing in this phase
+special-cases it — the same rules apply to any equivalent finding.

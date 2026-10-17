@@ -46,11 +46,13 @@
 // (e.g. "this page's FAQ has 3 questions vs. a 6-question sibling
 // average") — it does NOT, by itself, answer that question (e.g.
 // "are there specific unanswered questions worth adding"). Counting it
-// as independent corroboration would be circular: every category-C
-// finding would trivially reach "partially-corroborated" with zero real
-// external evidence, silently deleting RESEARCH_MORE as a practical
+// as independent corroboration would be circular: it would effectively
+// hand every category-C opportunity an automatic first corroborator the
+// instant it's created, so every single category-C finding would
+// trivially reach "partially-corroborated" with zero real external
+// evidence — silently weakening/deleting RESEARCH_MORE as a practical
 // outcome for the very findings this phase is supposed to be more
-// careful about. So `site` is always classified "not-applicable" for
+// careful about, not less. So `site` is always classified "not-applicable" for
 // the sufficiency vote (agent/lib/cross-source-synthesis.js's
 // classifySufficiency() never counts it), while still being shown in
 // `familyBreakdown` for a human's full context — see
@@ -70,20 +72,71 @@
 // handles it, and this finding is no longer a synthesis candidate at
 // all — see run-synthesis.js's candidate filter).
 //
-// GA4 is always "different-question" when evidence exists and
-// "unavailable" otherwise — a deliberate, documented Phase 13a
-// restriction, not an oversight: GA4 evidence gathered by this codebase
-// today measures traffic/conversion outcomes (sessions, lead-event
-// counts), which is a materially different question from any of the five
-// in-scope opportunity types' own premises (content depth, cross-service
-// coverage, structural completeness, description distinctness, intent
-// overlap). Treating a session/conversion movement as support OR
-// contradiction for any of those premises would be exactly the kind of
-// guess the brief rules out (see the "GA4 sessions up / lead events
-// down" worked example in agent/README.md's Phase 13a section). A later
-// phase that builds a genuine comparable-cohort GA4 mechanism (see
-// agent/lib/firstparty-signals.js's own header on why that doesn't exist
-// yet) could revisit this.
+// GA4 RELEVANCE — evaluated per finding type's own premise, never
+// assumed from the family's name alone (a pre-push review of this phase
+// specifically asked: is GA4 genuinely a different question for EVERY
+// one of the five in-scope types, or only asserted to be?). Walking
+// through all five IN_SCOPE_FINDING_TYPES against what GA4 evidence
+// this codebase actually gathers today
+// (agent/lib/lead-event-candidates.js's landing-page session total +
+// confirmed lead-event counts, Phase 12):
+//
+//   - content-gap / structural-inconsistency: the ONLY two types GA4
+//     evidence is EVER automatically gathered for —
+//     lead-event-candidates.js's isLeadEventEvidenceCandidate() narrows
+//     finding-evidence.js's own QUERY_PAGE_CANDIDATE_TYPES (already
+//     scoped to just these two) further to non-blog/non-utility pages.
+//     Their actual premise (decision.js's questionTextFor(), verified
+//     directly, not assumed): "...is there enough evidence that this
+//     page's actual topic has specific, genuinely useful practical
+//     questions not yet answered there..." (content-gap) / "...does
+//     this specific difference reflect a real content gap worth
+//     closing..." (structural-inconsistency) — both are questions about
+//     CONTENT DEPTH/COMPLETENESS. GA4's lead-event-landing-page-delta
+//     signal measures whether this page's visitor volume/conversion-
+//     event counts moved between two periods — a question about
+//     TRAFFIC/CONVERSION OUTCOMES. Neither direction of movement
+//     establishes whether specific questions are unanswered or whether
+//     a structural difference is a real content gap (the "sessions up /
+//     lead events down" worked example in agent/README.md's Phase 13a
+//     section is exactly this: real evidence, genuinely a DIFFERENT
+//     question than the one this finding raises) — confirmed against
+//     the real premise text, not merely asserted by family name.
+//   - coverage-gap-candidate / duplicate-meta-description /
+//     overlapping-intent: GA4 evidence is NEVER gathered for these
+//     three under any existing mechanism — finding-evidence.js's own
+//     header explicitly excludes all three from its candidate set in
+//     the first place (coverage-gap-candidate: "the natural query term
+//     would be the missing service's name, not this page's own
+//     identity"; overlapping-intent/duplicate-meta-description: "need a
+//     genuinely different, GROUP-scoped request shape this module's
+//     single-target design doesn't attempt"), and
+//     lead-event-candidates.js only ever builds on that same candidate
+//     set. So for these three, `ga4` is "unavailable" as a simple,
+//     honest consequence of no evidence EVER existing for them — not a
+//     relevance judgment call at all, since there is nothing to judge.
+//
+// CONCLUSION: for every one of the five in-scope types, GA4 is never a
+// vote in Phase 13a — either because real GA4 evidence exists but
+// answers a different question (content-gap/structural-inconsistency),
+// or because no GA4 evidence is ever gathered for the type at all (the
+// other three). Treating a session/conversion movement as support OR
+// contradiction for either case would be exactly the kind of guess the
+// brief rules out. A later phase that builds a genuine comparable-
+// cohort GA4 mechanism (see agent/lib/firstparty-signals.js's own
+// header on why that doesn't exist yet) could revisit the first half of
+// this — the second half (the other three types) would need new
+// evidence-gathering scope first, which stays explicitly out of Phase
+// 13a/13b's reach per the brief ("do NOT invent a new conversion/UX
+// finding type").
+const GA4_CANDIDATE_TYPES = new Set(["content-gap", "structural-inconsistency"]);
+const PREMISE_LABEL_BY_TYPE = {
+  "content-gap": "content depth/completeness",
+  "structural-inconsistency": "structural completeness",
+  "coverage-gap-candidate": "cross-service coverage",
+  "duplicate-meta-description": "description distinctness",
+  "overlapping-intent": "search-intent overlap",
+};
 
 const { isCityPage, CITY_SLUGS } = require("./page-groups");
 const { getCitiesWithPages, getServicePages } = require("./business-profile");
@@ -250,14 +303,25 @@ function buildGscFamily(finding, now) {
 
 function buildGa4Family(finding) {
   const all = (finding.firstPartyEvidence || []).filter((e) => e.source === "ga4");
+  const premiseLabel = PREMISE_LABEL_BY_TYPE[finding.type] || "this finding's own premise";
+
   if (all.length === 0) {
-    return { family: "ga4", status: "unavailable", detail: "No GA4 evidence has been gathered yet for this finding.", evidenceRefs: [] };
+    const reason = GA4_CANDIDATE_TYPES.has(finding.type)
+      ? "No GA4 evidence has been gathered yet for this finding."
+      : `No GA4 evidence has ever been gathered for "${finding.type}" findings — no existing mechanism targets this finding type (see evidence-dossier.js's GA4-relevance header).`;
+    return { family: "ga4", status: "unavailable", detail: reason, evidenceRefs: [] };
   }
+
+  // GA4 evidence existing at all here means finding.type is one of
+  // GA4_CANDIDATE_TYPES (the only types any mechanism ever gathers it
+  // for) — still read defensively rather than assumed, in case a human
+  // ever hand-writes GA4 evidence for a different type.
   return {
     family: "ga4",
     status: "different-question",
-    detail:
-      "GA4 evidence exists for this finding (session/lead-event volume), but it measures traffic/conversion outcomes — a materially different question than this finding's own premise. Phase 13a deliberately never treats a session or lead-event movement as support or contradiction here (see evidence-dossier.js's header) — never guessed, never counted either way.",
+    detail: `GA4 evidence exists for this finding (session/lead-event volume over ${all
+      .map((e) => e.window.label)
+      .join(", ")}), but it measures traffic/conversion outcomes — a materially different question than this finding's own premise (${premiseLabel}). Phase 13a deliberately never treats a session or lead-event movement as support or contradiction here (verified against this finding type's actual premise, not assumed by family name — see evidence-dossier.js's GA4-relevance header) — never guessed, never counted either way.`,
     evidenceRefs: all.map((e) => `${e.dimension || e.metric}: ${e.window.label}`),
   };
 }

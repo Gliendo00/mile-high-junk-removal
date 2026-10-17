@@ -28,13 +28,44 @@
 // result already exists for this findingKey with the IDENTICAL
 // fingerprint, nothing is written (the existing conclusion is still
 // current — no redundant file, no git noise). If the fingerprint
-// differs (or none exists yet), and sufficiency now meets this finding
-// type's threshold, a NEW file is written (never overwriting the old
-// one — matches research.js's own "evidence files are never overwritten"
-// convention) with a fresh `accessedAt`; decision.js's EXISTING
-// pickLatestResearch() already prefers the most recent `accessedAt`, so
-// the newer conclusion naturally supersedes the older one with zero
-// changes to decision.js.
+// differs (or none exists yet):
+//
+//   - if sufficiency now meets this finding type's threshold (or a
+//     premise-level contradiction exists), a NEW supports/contradicts
+//     file is written;
+//   - otherwise, if a PRIOR cross-source-synthesis result for this
+//     finding was itself authoritative (supports-opportunity or
+//     contradicts-opportunity — see cross-source-synthesis.js's
+//     AUTHORITATIVE_VERDICTS), a NEW `inconclusive` file is written
+//     explicitly SUPERSEDING it — see "STALE-SUPPORT SUPERSESSION"
+//     below, the single most important correctness property this
+//     module provides;
+//   - otherwise (nothing was ever concluded for this finding), nothing
+//     is written, preserving decision.js's RESEARCH_MORE path exactly.
+//
+// A written file NEVER overwrites the old one (matches research.js's
+// own "evidence files are never overwritten" convention) and its
+// `accessedAt` is guaranteed STRICTLY LATER than any prior
+// cross-source-synthesis result for the same finding (see
+// nextAccessedAt() below) — decision.js's EXISTING pickLatestResearch()
+// already prefers the most recent `accessedAt`, so the newer conclusion
+// naturally supersedes the older one with zero changes to decision.js's
+// own logic (pickLatestResearch() itself gained one small, narrow
+// addition — preferring any human/Claude-authored result over a
+// cross-source-synthesis one regardless of timestamp — see that
+// function's own header in decision.js).
+//
+// STALE-SUPPORT SUPERSESSION: without the `inconclusive`-supersession
+// behavior above, an old synthesis result that once reached
+// supports-opportunity/contradicts-opportunity would remain the ONLY
+// (and therefore "latest") cross-source-synthesis result for that
+// finding FOREVER, even after the evidence that produced it goes
+// stale, disappears, or is recomputed as insufficient — silently
+// leaving a since-invalidated PROPOSE_CHANGE/REJECT_OPPORTUNITY
+// authoritative. This module closes that gap by writing an explicit,
+// append-only superseding result (never a deletion/overwrite) the very
+// first time a re-run's fingerprint changes AND the new dossier no
+// longer reaches the old conclusion.
 //
 // FAIL-SAFE: one candidate's malformed dossier/evidence/validation error
 // is caught and reported in `errors`, never thrown — it must never block
@@ -92,12 +123,31 @@ function writeSynthesisResult(resultArgs, resultsDir) {
 }
 
 /**
+ * The `accessedAt` a NEW synthesis result must use: `now`, unless a
+ * prior cross-source-synthesis result for this exact finding has an
+ * `accessedAt` at or after `now` (two writes landing in the same
+ * millisecond is astronomically unlikely in a real single-threaded
+ * run, but this is the correctness-critical ordering
+ * pickLatestResearch() relies on, so it is guaranteed rather than left
+ * to chance or array-iteration order). Always strictly later than
+ * `priorSynthesis.accessedAt` when one exists.
+ * @param {Date} now
+ * @param {object|null} priorSynthesis
+ */
+function nextAccessedAt(now, priorSynthesis) {
+  if (!priorSynthesis) return now.toISOString();
+  const priorMs = new Date(priorSynthesis.accessedAt).getTime();
+  const nowMs = now.getTime();
+  return new Date(Math.max(nowMs, priorMs + 1)).toISOString();
+}
+
+/**
  * @param {object} [options]
  * @param {string} [options.logPath] - defaults to config.HISTORY_LOG_PATH
  * @param {string} [options.resultsDir] - defaults to research-intake.js's RESULTS_DIR
  * @param {string} [options.completedJobsDir]
  * @param {Date} [options.now]
- * @returns {{candidates:number, written:object[], unchanged:string[], belowThreshold:string[], errors:object[], warnings:string[]}}
+ * @returns {{candidates:number, written:object[], superseded:object[], unchanged:string[], belowThreshold:string[], errors:object[], warnings:string[]}}
  */
 function runSynthesis(options = {}) {
   const logPath = options.logPath || config.HISTORY_LOG_PATH;
@@ -105,6 +155,7 @@ function runSynthesis(options = {}) {
   const now = options.now || new Date();
 
   const written = [];
+  const superseded = [];
   const unchanged = [];
   const belowThreshold = [];
   const errors = [];
@@ -112,14 +163,14 @@ function runSynthesis(options = {}) {
 
   const runs = latestByRunId(readAllRuns(logPath));
   if (runs.length === 0) {
-    return { candidates: 0, written, unchanged, belowThreshold, errors, warnings: ["no run history found — nothing to synthesize"] };
+    return { candidates: 0, written, superseded, unchanged, belowThreshold, errors, warnings: ["no run history found — nothing to synthesize"] };
   }
   const latestRun = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
   const findings = Array.isArray(latestRun.findings) ? latestRun.findings : [];
 
   const candidates = findings.filter(isSynthesisCandidate);
   if (candidates.length === 0) {
-    return { candidates: 0, written, unchanged, belowThreshold, errors, warnings };
+    return { candidates: 0, written, superseded, unchanged, belowThreshold, errors, warnings };
   }
 
   const { evidence: completedJobEvidence, warnings: completedJobWarnings } = loadCompletedJobEvidence(options.completedJobsDir);
@@ -138,20 +189,35 @@ function runSynthesis(options = {}) {
         continue;
       }
 
-      const resultArgs = buildSynthesisResultArgs(finding, dossier, { fingerprint });
+      const resultArgs = buildSynthesisResultArgs(finding, dossier, {
+        fingerprint,
+        priorVerdict: priorSynthesis ? priorSynthesis.verdict : null,
+      });
       if (!resultArgs) {
         belowThreshold.push(finding.key);
         continue;
       }
 
+      resultArgs.accessedAt = nextAccessedAt(now, priorSynthesis);
       const { filePath, result } = writeSynthesisResult(resultArgs, resultsDir);
-      written.push({ findingKey: finding.key, type: finding.type, verdict: result.verdict, sufficiency: result.sufficiency, filePath });
+      const entry = { findingKey: finding.key, type: finding.type, verdict: result.verdict, sufficiency: result.sufficiency, filePath };
+
+      // A write is a SUPERSESSION (not a fresh conclusion) exactly when
+      // a prior authoritative result existed and this new one is the
+      // `inconclusive` result that retracts it — see
+      // cross-source-synthesis.js's AUTHORITATIVE_VERDICTS/priorVerdict
+      // handling, the single source of truth for when this happens.
+      if (priorSynthesis && result.verdict === "inconclusive" && priorSynthesis.verdict !== "inconclusive") {
+        superseded.push({ ...entry, priorVerdict: priorSynthesis.verdict });
+      } else {
+        written.push(entry);
+      }
     } catch (e) {
       errors.push({ findingKey: finding.key, message: e && e.message ? e.message : String(e) });
     }
   }
 
-  return { candidates: candidates.length, written, unchanged, belowThreshold, errors, warnings };
+  return { candidates: candidates.length, written, superseded, unchanged, belowThreshold, errors, warnings };
 }
 
 module.exports = { runSynthesis, isSynthesisCandidate, slugForFindingKey, existingSynthesisForKey };

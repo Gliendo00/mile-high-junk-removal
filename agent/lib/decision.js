@@ -81,8 +81,32 @@ function buildResearchQuestion(finding) {
 // finding (e.g. re-researched later with better evidence), prefer the
 // most recently accessed one rather than silently averaging confidence
 // levels across results that may disagree.
+//
+// Phase 13a addition — PRECEDENCE, not just recency: a
+// "cross-source-synthesis" result (agent/lib/cross-source-synthesis.js)
+// is a mechanical COMBINATION of already-gathered evidence; it can
+// never read prose, never establish a semantic relationship, and never
+// override a human/Claude session's own reading-comprehension judgment
+// (research.js's every other sourceType). "newest file wins" is NOT
+// automatically the epistemically correct rule once two different
+// AUTHORITY LEVELS can coexist for the same finding — a human/Claude
+// result dated BEFORE a later-running synthesis pass must still win,
+// or an unattended `--run-synthesis` could silently bury a genuine
+// semantic contradiction a person already established, merely because
+// it happened to run afterward. So: any human/Claude-authored result
+// (sourceType other than "cross-source-synthesis") is preferred over
+// EVERY cross-source-synthesis result, regardless of `accessedAt`;
+// "most recent" is only the tiebreaker WITHIN one authority tier (the
+// human-authored set among themselves, or — only when there is no
+// human-authored result at all — the synthesis set among themselves,
+// which is exactly where agent/lib/run-synthesis.js's own stale-support
+// supersession mechanism does its work). This is deliberately the
+// smallest possible rule: two tiers, recency breaks ties within a
+// tier, nothing more elaborate.
 function pickLatestResearch(researchList) {
-  return [...researchList].sort((a, b) => new Date(b.accessedAt) - new Date(a.accessedAt))[0];
+  const sorted = [...researchList].sort((a, b) => new Date(b.accessedAt) - new Date(a.accessedAt));
+  const humanAuthored = sorted.filter((r) => r.sourceType !== "cross-source-synthesis");
+  return humanAuthored.length > 0 ? humanAuthored[0] : sorted[0];
 }
 
 /**

@@ -246,10 +246,13 @@ const { runSynthesis } = require("./lib/run-synthesis");
 function runRunSynthesis() {
   const result = runSynthesis();
   console.log(
-    `Cross-source synthesis: ${result.candidates} candidate finding(s), ${result.written.length} new result(s) written, ${result.unchanged.length} unchanged, ${result.belowThreshold.length} still below this finding type's threshold.`
+    `Cross-source synthesis: ${result.candidates} candidate finding(s), ${result.written.length} new result(s) written, ${result.superseded.length} prior conclusion(s) superseded (evidence no longer supports them), ${result.unchanged.length} unchanged, ${result.belowThreshold.length} still below this finding type's threshold.`
   );
   for (const w of result.written) {
     console.log(`  "${w.findingKey}" (${w.type}): ${w.verdict} (sufficiency: ${w.sufficiency}) -> ${w.filePath}`);
+  }
+  for (const s of result.superseded) {
+    console.log(`  "${s.findingKey}" (${s.type}): SUPERSEDES prior "${s.priorVerdict}" -> now ${s.verdict} (sufficiency: ${s.sufficiency}) -> ${s.filePath}`);
   }
   if (result.errors.length) {
     console.log(`  ${result.errors.length} error(s):`);

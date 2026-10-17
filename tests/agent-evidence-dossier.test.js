@@ -196,6 +196,41 @@ test("ga4 family: sessions up / lead events down (or any GA4 movement) -> differ
   assert.strictEqual(dossier.families.ga4.status, "different-question");
 });
 
+// --- GA4 relevance re-evaluated per finding type (pre-push review) -----
+//
+// The review asked: is GA4 genuinely a different question for EVERY one
+// of the 5 in-scope types, or was that asserted globally without
+// checking? These tests inspect each type individually rather than
+// trusting one blanket rule.
+
+test("ga4 family: structural-inconsistency with real GA4 evidence -> different-question too (same content-completeness-vs-conversion distinction as content-gap)", () => {
+  const finding = contentGapFinding({ type: "structural-inconsistency", firstPartyEvidence: [ga4Evidence({ findingKey: "structural-inconsistency::blog-seasonal-cleanout-guide.html" })] });
+  const dossier = assembleDossier(finding);
+  assert.strictEqual(dossier.families.ga4.status, "different-question");
+  assert.ok(dossier.families.ga4.detail.includes("structural completeness"));
+});
+
+test("ga4 family: content-gap's different-question detail names its OWN premise label ('content depth/completeness'), not a generic phrase", () => {
+  const finding = contentGapFinding({ firstPartyEvidence: [ga4Evidence()] });
+  const dossier = assembleDossier(finding);
+  assert.ok(dossier.families.ga4.detail.includes("content depth/completeness"));
+});
+
+test("ga4 family: coverage-gap-candidate/duplicate-meta-description/overlapping-intent are 'unavailable' for a DIFFERENT reason than content-gap's — no mechanism ever gathers GA4 for them, not a relevance judgment", () => {
+  for (const type of ["coverage-gap-candidate", "duplicate-meta-description", "overlapping-intent"]) {
+    const finding = coverageGapFinding({ type, firstPartyEvidence: [] });
+    const dossier = assembleDossier(finding);
+    assert.strictEqual(dossier.families.ga4.status, "unavailable", type);
+    assert.ok(dossier.families.ga4.detail.includes("no existing mechanism targets this finding type"), `${type}: ${dossier.families.ga4.detail}`);
+  }
+});
+
+test("ga4 family: content-gap/structural-inconsistency with NO evidence yet get the ordinary 'not gathered yet' unavailable message (not the 'no mechanism exists' one — a mechanism DOES exist for these two)", () => {
+  const dossier = assembleDossier(contentGapFinding());
+  assert.strictEqual(dossier.families.ga4.status, "unavailable");
+  assert.ok(!dossier.families.ga4.detail.includes("no existing mechanism targets"));
+});
+
 // --- completedJobs family ------------------------------------------------
 
 test("completedJobs family: not-applicable for structural-inconsistency/duplicate-meta-description/overlapping-intent", () => {
