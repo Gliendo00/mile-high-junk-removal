@@ -21,17 +21,24 @@ const { makeResearchResult } = require("./research");
 
 const RESULTS_DIR = path.join(config.SITE_ROOT, "agent", "research", "results");
 
-function loadResearchResults() {
+/**
+ * @param {string} [dir] - defaults to RESULTS_DIR; injectable so tests
+ *   (and Phase 13a's agent/lib/run-synthesis.js) can point this at a
+ *   throwaway directory instead of the real, git-tracked results dir —
+ *   same optional-path pattern as completed-job-intake.js's
+ *   loadCompletedJobEvidence(dir).
+ */
+function loadResearchResults(dir = RESULTS_DIR) {
   const results = [];
   const warnings = [];
 
-  if (!fs.existsSync(RESULTS_DIR)) {
+  if (!fs.existsSync(dir)) {
     return { results, warnings };
   }
 
-  const files = fs.readdirSync(RESULTS_DIR).filter((f) => f.endsWith(".json"));
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
   for (const file of files) {
-    const fullPath = path.join(RESULTS_DIR, file);
+    const fullPath = path.join(dir, file);
     try {
       const raw = fs.readFileSync(fullPath, "utf8");
       const parsed = JSON.parse(raw);

@@ -4019,3 +4019,197 @@ is on by default), `tests/github-actions-workflow.test.js` (the new
 step's gating/placement/credential scope). Full suite, run serially:
 **873 passing**, the same single pre-existing, unrelated
 `tests/phase3c-batch5-intake-ui.test.js` failure as every prior phase.
+
+---
+
+# Phase 13a — Cross-Source Evidence Synthesis
+
+Phase 12 explicitly deferred "cross-source synthesis" (see its own
+"Explicitly NOT built" section above). This phase builds the smallest
+rigorous version of it: a deterministic layer that lets the five
+existing category-C ("content opportunity") finding types reuse evidence
+this agent has ALREADY gathered — site audits, Search Console, GA4,
+publication-safe completed-job evidence, curated local-source evidence —
+to decide whether an opportunity is corroborated enough to become a
+human-review proposal, instead of only ever doing so through genuine
+human/Claude-performed external research.
+
+**No second decision framework.** The existing pipeline is unchanged:
+`finding -> research-intake.js -> finding.research[] -> decision.js ->
+proposals-sync.js`. A synthesis result is an ordinary
+`agent/lib/research.js` result (new `sourceType: "cross-source-
+synthesis"`) written to the same `agent/research/results/` directory a
+human-authored result already lives in — `decision.js` needed zero
+changes.
+
+## Evidence dossier (`agent/lib/evidence-dossier.js`)
+
+For one already-decided finding, assembles five categorical family
+reads — never a 0-100 score:
+
+- **site** — the finding's OWN generating evidence. Always
+  `not-applicable` for voting purposes: it's the premise being tested,
+  not independent corroboration of it. Counting it as a vote would make
+  every category-C finding trivially "partially-corroborated" the
+  moment it's created, silently deleting `RESEARCH_MORE` as a practical
+  outcome — see the module's own header for the full reasoning.
+- **gsc** — Search Console evidence already attached
+  (`firstparty-intake.js`). Zero rows is `insufficient-data`, never
+  contradiction. Real query traffic landing on this page is `supports`;
+  landing on a DIFFERENT page is `different-question` (a routing
+  question, not this premise). Stale evidence is demoted to
+  `insufficient-data`.
+- **ga4** — GA4 evidence already attached. Deliberately always
+  `different-question` when present (never support/contradiction): GA4
+  measures traffic/conversion outcomes, a materially different question
+  than any of the five in-scope premises (content depth, cross-service
+  coverage, structural completeness, description distinctness, intent
+  overlap). A later phase building a genuine comparable-cohort GA4
+  mechanism (see `firstparty-signals.js`'s own deferred-signals list)
+  could revisit this.
+- **completedJobs** — publication-safe completed-job evidence
+  (`completed-job-intake.js`), matched by city (and, for
+  `coverage-gap-candidate`, by service) ONLY for `content-gap`/
+  `coverage-gap-candidate` — the two types whose premise is genuinely
+  about city/service-scoped operational demand. `not-applicable` for the
+  other three. No completed jobs in the window is `insufficient-data`,
+  never contradiction.
+- **localSource** — curated official-source evidence
+  (`local-source-intake.js`). ALWAYS `unavailable` in Phase 13a:
+  determining whether a snippet actually supports/contradicts a specific
+  claim requires reading prose, a judgment this deterministic module
+  cannot honestly make (same boundary Phase 10/11 already drew for that
+  evidence shape itself). A human/Claude session can still turn it into
+  a real verdict the ordinary way — by writing a research.js result
+  directly — at which point the finding is no longer a synthesis
+  candidate at all.
+
+Pure and network-free; never re-runs the audits (it reads the most
+recent already-persisted run's findings — see `run-synthesis.js` below —
+plus already-written evidence files).
+
+## Sufficiency + opportunity-class thresholds (`agent/lib/cross-source-synthesis.js`)
+
+Counts only `supports`/`contradicts` votes (never
+`insufficient-data`/`not-applicable`/`unavailable`/`different-question`):
+0 votes -> `unsupported`, 1 -> `partially-corroborated`, 2+ -> `corroborated`,
+any contradiction -> `contradicted` (dominates regardless of support
+count, but only after the premise-aware rule below — never a mechanical
+"any unfavorable signal = contradiction").
+
+Verified per-type rather than applied uniformly: `content-gap` and
+`coverage-gap-candidate` accept `partially-corroborated` as sufficient
+for `supports-opportunity` (both are produced by audit modules already
+tuned conservatively against this real site — see Phase 3's content-
+gap-audit.js/coverage-audit.js tuning history above); `structural-
+inconsistency`/`duplicate-meta-description`/`overlapping-intent` require
+full `corroborated` (2+ independent families). `unsupported` or
+below-threshold `partially-corroborated` writes NOTHING —
+`decision.js`'s existing `RESEARCH_MORE` path is the correct, unchanged
+outcome, never a manufactured weak artifact.
+
+**Premise-aware contradiction**: no real evidence family in Phase 13a
+mechanically produces `contradicts` today (by design — see each
+family's own notes above); the category exists, is fully implemented,
+and is directly tested with synthetic fixtures, but only a human/Claude
+research.js result can currently establish a genuine premise-level
+contradiction. This is intentional, not an oversight — it's exactly the
+"never guess" boundary the brief required, and may be revisited once a
+concrete mechanical contradiction path is found that's actually honest.
+
+## Writing a result (`agent/lib/run-synthesis.js`, `--run-synthesis`)
+
+Reads the most recent run already in `agent/history/log.ndjson` (never
+re-scans), considers a finding a candidate when its type is one of the
+five in-scope types AND it has no research yet OR every attached
+research result is itself a prior synthesis output (genuine human/Claude
+research is never second-guessed or duplicated alongside). For each
+candidate: builds a dossier, computes a SHA-256 fingerprint of the exact
+evidence inputs (never of the derived wording — two runs reaching the
+same conclusion from the same inputs fingerprint identically), and:
+
+- if an existing synthesis result for this finding already has the SAME
+  fingerprint, writes nothing (no redundant file, no git noise);
+- if sufficiency meets this finding type's threshold, writes a NEW
+  `agent/research/results/*.json` file (never overwrites the old one —
+  same "evidence files are never overwritten" convention every other
+  evidence shape in this codebase already follows); `decision.js`'s
+  existing `pickLatestResearch()` then naturally prefers the newer
+  conclusion, with zero changes to `decision.js` itself;
+- otherwise writes nothing (preserves `RESEARCH_MORE`).
+
+One candidate's crash/malformed dossier is caught and reported, never
+thrown — it can't block any other candidate, and can't produce a
+half-written file (only ever written after `research.js`'s own
+`makeResearchResult()` has validated the full shape). Deterministic,
+network-free, never runs the audits or calls Supabase/Google — safe to
+run at any time, recommended as part of the weekly cadence, after
+`--refresh-finding-evidence`/`--refresh-lead-event-evidence`/
+`--refresh-local-source-evidence`, before `--weekly`.
+
+## CRM rendering
+
+`admin/agent-proposals.js` already rendered every attached research
+result generically (confidence/verdict/source); a cross-source-
+synthesis result additionally renders one concise line per family
+(`family: status — detail`) plus its `limitations` line, so an owner
+can see what supports a proposal, what argues against it, and what the
+Agent still doesn't know — never a raw JSON dump. The existing "Approve
+records a decision only — it does not change the website" statement,
+already shown next to every still-`proposed` card, is unchanged and
+applies identically to a synthesis-backed proposal.
+
+## Auto-apply safety (verified, not assumed)
+
+`cross-source-synthesis.js`/`run-synthesis.js`/`evidence-dossier.js`
+never import `risk.js`, never read or write a finding's
+`category`/`riskLevel`/`tier`/`autoFix`/`autoApplyEligible`, and never
+call `proposals-sync.js` or `decision.js` directly — they only ever
+write a `research.js`-shaped file, which reaches `decision.js` through
+the SAME unchanged `research-intake.js` channel a human-authored result
+already uses. `decide()` only ever returns `APPLY_SAFE_FIX` via
+`finding.autoApplyEligible`, which is computed by `risk.js` alone, from
+`finding.type`/`finding.autoFix` — nothing synthesis produces can set
+or influence either. There is no code path, in this phase, from
+cross-source synthesis to strategic auto-apply — proven directly in
+`tests/agent-run-synthesis.test.js`'s auto-apply-safety tests, not just
+asserted in prose.
+
+## Tests
+
+New: `tests/agent-evidence-dossier.test.js` (dossier assembly, every
+family's status rules, independence, fingerprint determinism/
+sensitivity), `tests/agent-cross-source-synthesis.test.js` (sufficiency
+classification, opportunity-class thresholds, verdict/confidence
+mapping, premise-aware contradiction, the `research.js` schema
+additions), `tests/agent-run-synthesis.test.js` (candidate selection,
+end-to-end integration through the UNCHANGED `decision.js`, fingerprint-
+based freshness/supersession, coexisting old/new synthesis files,
+malformed-artifact and mid-run-crash fail-safety, and the auto-apply-
+safety proof). Extended: `agent/lib/research.js` (new `sourceType:
+"cross-source-synthesis"`, `FAMILY_STATUSES`/`SUFFICIENCY_LEVELS`,
+optional `familyBreakdown`/`sufficiency`/`synthesisFingerprint` fields —
+fully backward compatible, every pre-existing research result still
+validates unchanged), `agent/lib/research-intake.js`'s
+`loadResearchResults()` (now takes an optional directory, same
+injectable-path pattern `completed-job-intake.js` already uses, for
+testability — default behavior unchanged). Full suite, run serially:
+**134 files, 133 passing**, the same single pre-existing, unrelated
+`tests/phase3c-batch5-intake-ui.test.js` failure as every prior phase.
+
+## Explicitly NOT built this phase
+
+No new finding/opportunity types (`pageless-city-evaluation`,
+visibility-decline findings, GA4-performance-only findings, new-page
+opportunities, new risk categories all stay out of scope — Phase 13b or
+later). No scheduling enabled, no dispatch of this (or any) run. No
+semantic/LLM-driven local-source interpretation — `localSource` stays
+`unavailable` until a human/Claude session establishes a real verdict
+the existing way. No mechanical contradiction path wired to any real
+evidence family (the category is implemented and tested; nothing today
+produces one from real evidence — see above). No numeric/weighted
+scoring anywhere. No change to `risk.js`, `decision.js`'s own logic, or
+`proposals-sync.js`. The existing Denver LeafDrop research result/
+proposal was not touched, approved, or executed by this phase, and
+nothing in this phase special-cases it — the same rules apply to any
+equivalent finding.

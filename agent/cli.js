@@ -197,6 +197,23 @@
 //     proposal, never changes the site — see agent/README.md's Phase 10
 //     section.
 //
+//   node agent/cli.js --run-synthesis
+//     Phase 13a — deterministic cross-source evidence synthesis (see
+//     agent/lib/run-synthesis.js's header for the full architecture).
+//     Combines evidence already gathered by the steps above (first-party
+//     evidence, completed-job evidence, curated local-source evidence)
+//     for category-C findings that have no research yet, and writes an
+//     ordinary agent/research/results/*.json file (sourceType
+//     "cross-source-synthesis") when — and only when — that combination
+//     is sufficient for this finding type's own threshold. Never
+//     touches the network, never runs the audits, never changes a
+//     finding's risk/tier/autoFix/autoApplyEligible, and never writes
+//     anything when evidence is insufficient (decision.js's existing
+//     RESEARCH_MORE path is the correct, unchanged outcome in that
+//     case). Recommended AFTER --refresh-finding-evidence/
+//     --refresh-lead-event-evidence/--refresh-local-source-evidence,
+//     BEFORE --weekly, same precedent as those steps.
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
@@ -216,6 +233,32 @@ const { fetchLocalSourceEvidence, writeLocalSourceEvidence } = require("./lib/lo
 const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
 const { selectWeeklyLocalSourceCandidates, picksWithNoRelevantSource, needsFetchThisRun } = require("./lib/local-source-candidates");
 const { writeLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
+const { runSynthesis } = require("./lib/run-synthesis");
+
+// Phase 13a — see agent/lib/run-synthesis.js's header for the full
+// architecture. Deterministic/network-free: never runs the audits,
+// never touches Supabase/Google, just combines evidence already on disk
+// (the most recent history run + completed-jobs/local-source evidence
+// files) into, at most, one new agent/research/results/*.json file per
+// eligible finding. Recommended as part of the weekly cadence, run
+// AFTER --refresh-finding-evidence/--refresh-lead-event-evidence/
+// --refresh-local-source-evidence so the evidence it reads is current.
+function runRunSynthesis() {
+  const result = runSynthesis();
+  console.log(
+    `Cross-source synthesis: ${result.candidates} candidate finding(s), ${result.written.length} new result(s) written, ${result.unchanged.length} unchanged, ${result.belowThreshold.length} still below this finding type's threshold.`
+  );
+  for (const w of result.written) {
+    console.log(`  "${w.findingKey}" (${w.type}): ${w.verdict} (sufficiency: ${w.sufficiency}) -> ${w.filePath}`);
+  }
+  if (result.errors.length) {
+    console.log(`  ${result.errors.length} error(s):`);
+    for (const e of result.errors) console.log(`    "${e.findingKey}": ${e.message}`);
+  }
+  if (result.warnings.length) {
+    for (const w of result.warnings) console.log(`  warning: ${w}`);
+  }
+}
 
 function parseResumeArg(args) {
   const prefixed = args.find((a) => a.startsWith("--resume="));
@@ -705,6 +748,11 @@ async function main() {
     return;
   }
 
+  if (args.includes("--run-synthesis")) {
+    runRunSynthesis();
+    return;
+  }
+
   const fetchFirstPartyStrictPath = parseFetchFirstPartyStrictArg(args);
   if (fetchFirstPartyStrictPath) {
     await runFetchFirstParty(fetchFirstPartyStrictPath, { strict: true });
@@ -767,6 +815,7 @@ module.exports = {
   parseFetchLocalSourceStrictArg,
   runRefreshLocalSourceEvidence,
   runRefreshLeadEventEvidence,
+  runRunSynthesis,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

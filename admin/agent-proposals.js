@@ -104,6 +104,25 @@ document.addEventListener('DOMContentLoaded', function () {
       proposal.research.forEach(function (r) {
         var line = el('p', 'admin-proposal-card-meta', 'Researched (' + (r.confidence || '?') + ' confidence, ' + (r.verdict || '?') + '): ' + (r.source || ''));
         card.appendChild(line);
+
+        // Phase 13a — a cross-source-synthesis result carries a
+        // per-family breakdown (what supports this, what argues against
+        // it, what's still insufficient/unavailable) instead of one
+        // human-written source — render ONE concise line per family
+        // rather than the generic single line above being the only
+        // detail shown. Still never a raw JSON dump.
+        if (r.sourceType === 'cross-source-synthesis' && Array.isArray(r.familyBreakdown) && r.familyBreakdown.length) {
+          var breakdownList = el('ul', 'admin-proposal-card-meta');
+          breakdownList.style.margin = '0 0 8px';
+          breakdownList.style.paddingLeft = '18px';
+          r.familyBreakdown.forEach(function (fam) {
+            breakdownList.appendChild(el('li', null, fam.family + ': ' + fam.status + ' — ' + fam.detail));
+          });
+          card.appendChild(breakdownList);
+          if (r.limitations) {
+            card.appendChild(el('p', 'admin-proposal-card-meta', 'What the Agent still doesn\'t know: ' + r.limitations));
+          }
+        }
       });
     }
 
