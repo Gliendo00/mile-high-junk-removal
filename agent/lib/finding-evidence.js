@@ -150,9 +150,16 @@ function deriveQueryFilterTerm(page) {
  * @param {object} finding - a finding that passed isQueryPageEvidenceCandidate()
  * @param {object} [options]
  * @param {number} [options.days] - default 28, matches firstparty-fetch.js's own default
+ * @param {boolean} [options.compareToPreviousPeriod] - Phase 12: default true. Threaded
+ *   straight through to firstparty-fetch.js's fetchSearchAnalyticsEvidence(), so this
+ *   weekly request also populates comparisonWindow/observed.previousPeriod — the evidence
+ *   agent/lib/firstparty-signals.js's search-visibility-change/query-visibility-shift
+ *   detectors need. Exposed as an option (not hardcoded true) purely so existing/future
+ *   tests can exercise the uncompared shape without a second code path.
  */
 function buildQueryPageEvidenceRequest(finding, options = {}) {
   const days = options.days || 28;
+  const compareToPreviousPeriod = options.compareToPreviousPeriod !== false;
   const page = finding.pages[0];
   const term = deriveQueryFilterTerm(page);
   return {
@@ -162,6 +169,7 @@ function buildQueryPageEvidenceRequest(finding, options = {}) {
     days,
     dimensions: ["query", "page"],
     dimensionFilterGroups: [{ filters: [{ dimension: "query", operator: "contains", expression: term }] }],
+    compareToPreviousPeriod,
     // Recorded onto the written evidence (firstparty-fetch.js threads
     // this straight through to makeFirstPartyEvidence()) so
     // needsFindingEvidenceRefresh() below can tell "this evidence was

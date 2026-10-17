@@ -146,7 +146,32 @@
 //     successful API call ever produces a file with
 //     `observed.totalRowsReturned: 0`.
 //
-//   node agent/cli.js --fetch-local-source-strict=<registry-entry-id>
+//   node agent/cli.js --refresh-local-source-evidence
+//     Phase 11B — for this week's rotation picks, fetches curated
+//     official-source evidence (agent/context/local-source-
+//     registry.json) ONLY for sources geographically relevant to a pick
+//     (never every registry entry every week), deduplicated across
+//     picks sharing the same source, skipping anything already fresh.
+//     See agent/lib/local-source-candidates.js's header for the full
+//     architecture. Run BEFORE --weekly.
+//
+//   node agent/cli.js --refresh-lead-event-evidence
+//     Phase 12 — for this week's content-gap/structural-inconsistency
+//     candidate findings on real conversion-intent pages (never blog/
+//     utility pages — see agent/lib/lead-event-candidates.js's header),
+//     fetches TWO correlated GA4 requests per candidate: this landing
+//     page's own session total, and raw eventName+eventCount for this
+//     codebase's confirmed lead-event vocabulary (phone_click,
+//     sms_click, the contact-form events, the booking funnel — never
+//     the conversions/keyEvents metric, which depends on GA4
+//     Admin-console configuration this agent cannot see). Both requests
+//     ask for a comparison to the immediately-preceding period
+//     (compareToPreviousPeriod — see agent/lib/firstparty-fetch.js),
+//     feeding agent/lib/firstparty-signals.js's
+//     deriveLeadEventLandingPageDeltaSignal(). Each candidate's two
+//     fetches are attempted independently — one half failing never
+//     blocks the other. Run BEFORE --weekly, same precedent as every
+//     other weekly-only refresh step above.
 //     Phase 10 — Curated Official Source Evidence: a narrow, manual
 //     verification fetch against EXACTLY ONE entry already declared in
 //     the human-curated, human-VERIFIED agent/context/local-source-
@@ -184,6 +209,7 @@ const { loadCompletedJobEvidence, summarizeByCity } = require("./lib/completed-j
 const { loadRotationState, computePriorities } = require("./lib/research-rotation");
 const { isRotationEvidenceCandidate, buildRotationEvidenceRequest, freshlyEvidencedRotationSlugs } = require("./lib/rotation-evidence");
 const { isQueryPageEvidenceCandidate, buildQueryPageEvidenceRequest, needsFindingEvidenceRefresh } = require("./lib/finding-evidence");
+const { isLeadEventEvidenceCandidate, buildLeadEventEvidenceRequests, needsLeadEventEvidenceRefresh } = require("./lib/lead-event-candidates");
 const { loadFirstPartyEvidence } = require("./lib/firstparty-intake");
 const { getEntryById, loadRegistry, getEntries } = require("./lib/local-source-registry");
 const { fetchLocalSourceEvidence, writeLocalSourceEvidence } = require("./lib/local-source-fetch");
@@ -432,6 +458,48 @@ async function runRefreshFindingEvidence() {
   return outcomes;
 }
 
+// Phase 12 — see this file's own top-of-file comment on
+// --refresh-lead-event-evidence, and agent/lib/lead-event-candidates.js's
+// header for the full architecture. Mirrors runRefreshFindingEvidence()
+// above almost exactly, with ONE structural difference: each candidate
+// needs TWO correlated GA4 fetches (session-context + event-detail —
+// see firstparty-signals.js's deriveLeadEventLandingPageDeltaSignal()
+// header on why), attempted INDEPENDENTLY of each other — a failure of
+// one half must never block the other half's fetch, same "one
+// candidate's problem must never block another's" posture this
+// codebase already applies at the candidate level, generalized here to
+// the two halves of one candidate. Never throws; every outcome is
+// logged and returned for tests to assert on directly.
+async function runRefreshLeadEventEvidence() {
+  const { findings } = gatherFindings();
+  const entries = loadFirstPartyEvidence().entries;
+  const candidates = findings.filter((f) => isLeadEventEvidenceCandidate(f) && needsLeadEventEvidenceRefresh(f, entries));
+
+  console.log(`Lead-event evidence refresh: ${candidates.length} candidate finding(s) needing GA4 lead-event landing-page evidence.`);
+  const outcomes = [];
+  if (candidates.length === 0) return outcomes;
+
+  for (const finding of candidates) {
+    const [sessionRequest, eventRequest] = buildLeadEventEvidenceRequests(finding);
+
+    for (const { request, part } of [
+      { request: sessionRequest, part: "session-context" },
+      { request: eventRequest, part: "event-detail" },
+    ]) {
+      const result = await fetchFirstPartyEvidence(request);
+      if (result.skipped) {
+        console.log(`  "${finding.key}" (${part}): skipped — ${result.reason}`);
+        outcomes.push({ findingKey: finding.key, part, outcome: "skipped", reason: result.reason });
+        continue;
+      }
+      const written = writeFirstPartyEvidence(result.evidence);
+      console.log(`  "${finding.key}" (${part}): fetched, written to ${written}.`);
+      outcomes.push({ findingKey: finding.key, part, outcome: "fetched", writtenTo: written });
+    }
+  }
+  return outcomes;
+}
+
 function parseFetchFirstPartyArg(args) {
   const prefixed = args.find((a) => a.startsWith("--fetch-firstparty="));
   return prefixed ? prefixed.slice("--fetch-firstparty=".length) : null;
@@ -627,6 +695,11 @@ async function main() {
     return;
   }
 
+  if (args.includes("--refresh-lead-event-evidence")) {
+    await runRefreshLeadEventEvidence();
+    return;
+  }
+
   if (args.includes("--refresh-local-source-evidence")) {
     await runRefreshLocalSourceEvidence();
     return;
@@ -693,6 +766,7 @@ module.exports = {
   runFetchLocalSource,
   parseFetchLocalSourceStrictArg,
   runRefreshLocalSourceEvidence,
+  runRefreshLeadEventEvidence,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

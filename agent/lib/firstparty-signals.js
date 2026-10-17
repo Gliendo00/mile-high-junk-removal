@@ -92,8 +92,40 @@
 // scope, not something this module should backfill by inventing data.
 
 const { normalizePageIdentifierForComparison } = require("./page-identity");
+const { classifySufficiency } = require("./firstparty-sufficiency");
+const { LEAD_EVENT_NAMES, INSTRUMENTED_SINCE, isEventFullyInstrumentedForWindow } = require("./lead-event-instrumentation");
 
-const SIGNAL_TYPES = ["query-page-mismatch"];
+// Phase 12 — three additions, all following query-page-mismatch's own
+// contract exactly (no verdict/confidence/recommendation field; a
+// required `limitations`; an explicit `posture: "investigation-only"`)
+// and all closing gaps THIS module's own header already documented as
+// the reason the three originally-proposed signals were deferred:
+//   - search-visibility-change / query-visibility-shift: now possible
+//     because agent/lib/firstparty-fetch.js's fetchSearchAnalyticsEvidence()
+//     can finally populate the schema's own comparisonWindow field (see
+//     that file's `compareToPreviousPeriod` option) — this was the
+//     EXACT, named blocker for "declined-vs-prior-period" above.
+//   - lead-event-landing-page-delta: a narrower, more honest substitute
+//     for "landing-page-weak-conversion-vs-comparable" — compares a
+//     page against ITS OWN prior period (never an invented/unverifiable
+//     comparable-group average), and uses raw GA4 `eventName`+
+//     `eventCount` rather than `conversions`/`keyEvents` (which depend
+//     on GA4 Admin-console key-event configuration this agent's
+//     `analytics.readonly` scope cannot see or verify).
+//   - `weak-ctr-despite-impressions` and the comparable-group version of
+//     `landing-page-weak-conversion` remain NOT implemented — both still
+//     need the comparable-*group*-fetch mechanism this module's header
+//     already said doesn't exist; nothing in Phase 12 builds it.
+//   - `batch-relative-rank` (comparing several of this week's rotation
+//     picks against each other) was explicitly considered and
+//     explicitly REJECTED for this phase: the weekly batch is
+//     rotation-selected, not a designed comparable cohort, and ranking
+//     within an incidental batch would manufacture a number Phase 13
+//     could later overweight. Deferred indefinitely, not just to "a
+//     later phase" — revisit only if a genuine comparable-cohort
+//     mechanism is deliberately built first.
+
+const SIGNAL_TYPES = ["query-page-mismatch", "search-visibility-change", "query-visibility-shift", "lead-event-landing-page-delta"];
 
 const QUERY_PAGE_MISMATCH_LIMITATIONS =
   "Search Console's query/page attribution reflects which URL Google currently associates with a search query in results — it does not establish searcher intent, content quality, or that any specific action (redirect, consolidation, rewrite) would improve outcomes. This is an investigation lead only, derived from a single evidence window, and is never sufficient on its own to justify a change.";
@@ -180,15 +212,275 @@ function deriveQueryPageMismatchSignal(finding, evidence) {
   };
 }
 
-const SIGNAL_DETECTORS = [deriveQueryPageMismatchSignal];
+// --- Phase 12: shared, pure helpers (no network, no imports beyond
+// firstparty-sufficiency.js/lead-event-instrumentation.js above) -------
+
+/**
+ * Sums a bounded set of Search Console rows (search-analytics
+ * evidence's own `topRows`/`previousPeriod.topRows` shape) into ONE
+ * scope-level total. `ctr`/`position` are never naively averaged across
+ * rows — `ctr` is recomputed from the summed clicks/impressions
+ * (mathematically correct), and `position` is an impressions-weighted
+ * average (the standard, correct way to combine GSC's own per-row
+ * average-position values) — both are `null`, never a fabricated 0,
+ * when `impressions` is 0 (a true zero-denominator case).
+ * @param {object[]} topRows
+ */
+function aggregateSearchAnalyticsTotals(topRows) {
+  const rows = Array.isArray(topRows) ? topRows : [];
+  let impressions = 0;
+  let clicks = 0;
+  let weightedPositionSum = 0;
+  for (const r of rows) {
+    const imp = typeof r.impressions === "number" ? r.impressions : 0;
+    const clk = typeof r.clicks === "number" ? r.clicks : 0;
+    impressions += imp;
+    clicks += clk;
+    if (typeof r.position === "number") weightedPositionSum += r.position * imp;
+  }
+  return {
+    impressions,
+    clicks,
+    ctr: impressions > 0 ? clicks / impressions : null,
+    position: impressions > 0 ? weightedPositionSum / impressions : null,
+    rowCount: rows.length,
+  };
+}
+
+/**
+ * Absolute + relative delta between two periods' value for ONE metric —
+ * ALWAYS computed and reported together, never one without the other
+ * (brief: "a 2% CTR at position 9 may mean something entirely different
+ * from 2% at position 1" — absolute movement alone, or relative alone,
+ * can each mislead on its own). `relativeDelta` is the literal string
+ * `"not-computable"` (never a fabricated Infinity/NaN/0%) whenever the
+ * previous value is 0 or either value isn't a real number — a
+ * zero-denominator percentage is never invented.
+ * @param {number|null} currentValue
+ * @param {number|null} previousValue
+ */
+function computeMetricDelta(currentValue, previousValue) {
+  if (typeof currentValue !== "number" || typeof previousValue !== "number") {
+    return { current: currentValue, previous: previousValue, absoluteDelta: null, relativeDelta: "not-computable" };
+  }
+  const absoluteDelta = currentValue - previousValue;
+  const relativeDelta = previousValue === 0 ? "not-computable" : absoluteDelta / previousValue;
+  return { current: currentValue, previous: previousValue, absoluteDelta, relativeDelta };
+}
+
+const SEARCH_VISIBILITY_CHANGE_LIMITATIONS =
+  "This compares the SAME scope's own observable Search Console performance across two comparable, non-overlapping windows — it means only that impressions/clicks/CTR/position changed between them. It does NOT explain WHY (seasonality, a SERP feature, a competitor, an algorithm update, and genuine demand change are all indistinguishable from this data alone), and it does NOT by itself recommend or justify any action. A relativeDelta of \"not-computable\" means the prior period had zero for that metric — never treat that as a fabricated 0%/∞% change.";
+
+/**
+ * @param {object} finding - must carry `.key` and `.pages`
+ * @param {object} evidence - one normalized firstparty-evidence.js entry
+ */
+function deriveSearchVisibilityChangeSignal(finding, evidence) {
+  if (!evidence || evidence.source !== "search-console-search-analytics") return null;
+  if (!evidence.comparisonWindow || !evidence.observed || !evidence.observed.previousPeriod) return null;
+  if (!Array.isArray(finding.pages) || finding.pages.length === 0) return null;
+
+  const current = aggregateSearchAnalyticsTotals(evidence.observed.topRows);
+  const previous = aggregateSearchAnalyticsTotals(evidence.observed.previousPeriod.topRows);
+  const sufficiency = classifySufficiency(current.impressions + previous.impressions, "gsc-impressions");
+  if (sufficiency === "insufficient") return null;
+
+  return {
+    type: "search-visibility-change",
+    findingKey: finding.key,
+    pages: finding.pages,
+    scope: evidence.scope,
+    window: evidence.window,
+    comparisonWindow: evidence.comparisonWindow,
+    source: evidence.source,
+    evidenceFetchedAt: evidence.fetchedAt,
+    sufficiency,
+    impressions: computeMetricDelta(current.impressions, previous.impressions),
+    clicks: computeMetricDelta(current.clicks, previous.clicks),
+    ctr: computeMetricDelta(current.ctr, previous.ctr),
+    position: computeMetricDelta(current.position, previous.position),
+    reason: `Search Console's observable performance for this scope changed between ${evidence.comparisonWindow.label} and ${evidence.window.label}${
+      sufficiency === "limited" ? " — based on a thin, limited data volume; treat with extra caution" : ""
+    }.`,
+    limitations: SEARCH_VISIBILITY_CHANGE_LIMITATIONS,
+    posture: "investigation-only — never a decision, proposal, approval, or rejection; agent/lib/decision.js does not read this signal and cannot be influenced by it.",
+  };
+}
+
+const QUERY_VISIBILITY_SHIFT_LIMITATIONS =
+  "This compares two BOUNDED (not exhaustive) sets of top queries Search Console returned for this scope. A query absent from one period's set means only that it was not present in the bounded result set this evidence captured — NEVER that \"the site stopped ranking for this query\" or that true search volume reached zero. A query can fall out of a bounded top-N list, or below Search Console's own low-volume anonymization/thresholding, without that representing any real change in underlying performance. This is an investigation lead only, never evidence that a query's true ranking changed.";
+
+/**
+ * @param {object} finding
+ * @param {object} evidence
+ */
+function deriveQueryVisibilityShiftSignal(finding, evidence) {
+  const indices = resolveQueryPageIndices(evidence);
+  if (!indices) return null;
+  if (!evidence.comparisonWindow || !evidence.observed || !evidence.observed.previousPeriod) return null;
+  if (!Array.isArray(finding.pages) || finding.pages.length === 0) return null;
+
+  const currentRows = Array.isArray(evidence.observed.topRows) ? evidence.observed.topRows : [];
+  const previousRows = Array.isArray(evidence.observed.previousPeriod.topRows) ? evidence.observed.previousPeriod.topRows : [];
+  if (currentRows.length === 0 && previousRows.length === 0) return null; // both-zero -- no signal, never fabricated
+
+  const normalizedQuery = (row) => {
+    const keys = Array.isArray(row.keys) ? row.keys : [];
+    const q = keys[indices.queryIndex];
+    return typeof q === "string" && q.trim() ? q.toLowerCase().trim() : null;
+  };
+  const byQuery = (rows) => {
+    const map = new Map();
+    for (const row of rows) {
+      const key = normalizedQuery(row);
+      if (key && !map.has(key)) map.set(key, row);
+    }
+    return map;
+  };
+  const currentByQuery = byQuery(currentRows);
+  const previousByQuery = byQuery(previousRows);
+
+  const toSummary = (row) => {
+    const keys = Array.isArray(row.keys) ? row.keys : [];
+    return {
+      query: keys[indices.queryIndex] !== undefined ? keys[indices.queryIndex] : null,
+      clicks: typeof row.clicks === "number" ? row.clicks : null,
+      impressions: typeof row.impressions === "number" ? row.impressions : null,
+      position: typeof row.position === "number" ? row.position : null,
+    };
+  };
+
+  const gainedQueries = [];
+  for (const [key, row] of currentByQuery) {
+    if (!previousByQuery.has(key)) gainedQueries.push(toSummary(row));
+  }
+  const lostQueries = [];
+  for (const [key, row] of previousByQuery) {
+    if (!currentByQuery.has(key)) lostQueries.push(toSummary(row));
+  }
+  if (gainedQueries.length === 0 && lostQueries.length === 0) return null; // identical bounded sets -- nothing to report
+
+  return {
+    type: "query-visibility-shift",
+    findingKey: finding.key,
+    pages: finding.pages,
+    scope: evidence.scope,
+    window: evidence.window,
+    comparisonWindow: evidence.comparisonWindow,
+    source: evidence.source,
+    evidenceFetchedAt: evidence.fetchedAt,
+    gainedQueries,
+    lostQueries,
+    reason: `Between ${evidence.comparisonWindow.label} and ${evidence.window.label}, ${gainedQueries.length} quer${gainedQueries.length === 1 ? "y" : "ies"} newly appear and ${lostQueries.length} quer${
+      lostQueries.length === 1 ? "y" : "ies"
+    } no longer appear in this evidence's bounded top-query result set for this scope.`,
+    limitations: QUERY_VISIBILITY_SHIFT_LIMITATIONS,
+    posture: "investigation-only — never a decision, proposal, approval, or rejection; agent/lib/decision.js does not read this signal and cannot be influenced by it.",
+  };
+}
+
+const LEAD_EVENT_LANDING_PAGE_DELTA_LIMITATIONS =
+  "Raw GA4 eventName+eventCount counts for this landing page, never the `conversions`/`keyEvents` metric (those depend on GA4 Admin-console key-event configuration this agent cannot see or verify). Session movement is always reported alongside event-count movement — an event-count change that merely tracks a traffic change is a traffic story, not a page-conversion story. This does NOT establish causation (this page's content did not necessarily cause the change), and does NOT estimate revenue or closed-job value, which this agent never touches. Any event whose comparisonAvailable is false has no trustworthy prior-period comparison because it was not yet instrumented for the full comparison window — its `previous`/`delta` are null, and this is NEVER evidence of zero prior engagement, only evidence that measurement did not exist yet.";
+
+function numberFromGa4MetricRow(row, metricIndex) {
+  const raw = row && Array.isArray(row.metrics) ? row.metrics[metricIndex] : undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapGa4RowsByDimension(rows) {
+  const map = {};
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const dims = Array.isArray(row.dimensions) ? row.dimensions : [];
+    const key = dims[0];
+    if (typeof key !== "string" || !key) continue;
+    map[key] = numberFromGa4MetricRow(row, 0);
+  }
+  return map;
+}
+
+/**
+ * UNLIKE the other detectors above, this one needs TWO correlated GA4
+ * evidence entries for the SAME finding at once (a landing-page session
+ * total, and an eventName-broken-down event-count report — see
+ * agent/lib/lead-event-candidates.js's header for why this is two
+ * separate GA4 requests rather than one: GA4's own `sessions` metric,
+ * when broken down by eventName, counts sessions that included THAT
+ * event, not the landing page's total session volume) — so it receives
+ * the finding's WHOLE evidence list, not one entry at a time (see this
+ * module's deriveFirstPartySignals() for the one place that calls it
+ * differently from the single-evidence detectors above).
+ * @param {object} finding
+ * @param {object[]} evidenceList - finding.firstPartyEvidence
+ */
+function deriveLeadEventLandingPageDeltaSignal(finding, evidenceList) {
+  if (!Array.isArray(finding.pages) || finding.pages.length === 0) return null;
+  const list = Array.isArray(evidenceList) ? evidenceList : [];
+  const sessionEntry = list.find((e) => e.source === "ga4" && e.dimension === "landingPage");
+  const eventEntry = list.find((e) => e.source === "ga4" && e.dimension === "eventName");
+  if (!sessionEntry || !eventEntry) return null;
+  if (!sessionEntry.comparisonWindow || !sessionEntry.observed || !sessionEntry.observed.previousPeriod) return null;
+  if (!eventEntry.comparisonWindow || !eventEntry.observed || !eventEntry.observed.previousPeriod) return null;
+
+  const currentSessions = numberFromGa4MetricRow(sessionEntry.observed.topRows[0], 0);
+  const previousSessions = numberFromGa4MetricRow(sessionEntry.observed.previousPeriod.topRows[0], 0);
+  const sufficiency = classifySufficiency(currentSessions + previousSessions, "ga4-sessions");
+  if (sufficiency === "insufficient") return null;
+
+  const currentByEvent = mapGa4RowsByDimension(eventEntry.observed.topRows);
+  const previousByEvent = mapGa4RowsByDimension(eventEntry.observed.previousPeriod.topRows);
+  const eventNames = new Set([...Object.keys(currentByEvent), ...Object.keys(previousByEvent)]);
+
+  const events = [];
+  for (const name of eventNames) {
+    if (!LEAD_EVENT_NAMES.includes(name)) continue; // defensive — the request itself already filters to this list server-side
+    const current = currentByEvent[name] || 0;
+    const comparisonAvailable = isEventFullyInstrumentedForWindow(name, eventEntry.comparisonWindow.start);
+    const previous = comparisonAvailable ? previousByEvent[name] || 0 : null;
+    events.push({
+      eventName: name,
+      current,
+      previous,
+      delta: comparisonAvailable ? computeMetricDelta(current, previous) : null,
+      comparisonAvailable,
+      note: comparisonAvailable
+        ? null
+        : `No trustworthy prior-period comparison — "${name}" has only been instrumented since ${INSTRUMENTED_SINCE[name]}, which is after this comparison window began. This is NOT evidence of zero prior engagement.`,
+    });
+  }
+  if (events.length === 0) return null;
+
+  return {
+    type: "lead-event-landing-page-delta",
+    findingKey: finding.key,
+    pages: finding.pages,
+    scope: eventEntry.scope,
+    window: eventEntry.window,
+    comparisonWindow: eventEntry.comparisonWindow,
+    source: "ga4",
+    evidenceFetchedAt: eventEntry.fetchedAt,
+    sufficiency,
+    sessions: computeMetricDelta(currentSessions, previousSessions),
+    events,
+    reason: `Raw GA4 lead-event counts for this landing page between ${eventEntry.comparisonWindow.label} and ${eventEntry.window.label}, alongside this landing page's own session volume over the same two periods${
+      sufficiency === "limited" ? " — based on a thin, limited session volume; treat with extra caution" : ""
+    }.`,
+    limitations: LEAD_EVENT_LANDING_PAGE_DELTA_LIMITATIONS,
+    posture: "investigation-only — never a decision, proposal, approval, or rejection; agent/lib/decision.js does not read this signal and cannot be influenced by it.",
+  };
+}
+
+// Single-evidence detectors: called once PER attached evidence entry
+// (unchanged dispatch shape query-page-mismatch has always used).
+const SIGNAL_DETECTORS = [deriveQueryPageMismatchSignal, deriveSearchVisibilityChangeSignal, deriveQueryVisibilityShiftSignal];
 
 /**
  * Derives every signal this module currently knows how to compute from
  * one finding's already-attached `.firstPartyEvidence` array. Always
  * returns an array, possibly empty — "zero signals" is the expected,
  * successful result whenever evidence is absent, ineligible, or simply
- * shows no mismatch, never an error and never itself meaningful (an
- * empty array must never be read as "confirmed no issue" — see this
+ * shows no mismatch/change, never an error and never itself meaningful
+ * (an empty array must never be read as "confirmed no issue" — see this
  * module's `limitations` text on every signal it DOES produce for the
  * same discipline applied to the positive case).
  * @param {object} finding - a decided finding with `.firstPartyEvidence` already attached
@@ -202,6 +494,12 @@ function deriveFirstPartySignals(finding) {
       if (signal) signals.push(signal);
     }
   }
+  // lead-event-landing-page-delta is the one EXCEPTION to the
+  // single-evidence-at-a-time loop above — see its own header on why it
+  // structurally needs the whole list at once. Called exactly once per
+  // finding, additively, never replacing the loop above.
+  const leadEventSignal = deriveLeadEventLandingPageDeltaSignal(finding, evidenceList);
+  if (leadEventSignal) signals.push(leadEventSignal);
   return signals;
 }
 
@@ -226,7 +524,12 @@ function attachFirstPartySignals(findings) {
 module.exports = {
   SIGNAL_TYPES,
   deriveQueryPageMismatchSignal,
+  deriveSearchVisibilityChangeSignal,
+  deriveQueryVisibilityShiftSignal,
+  deriveLeadEventLandingPageDeltaSignal,
   deriveFirstPartySignals,
   attachFirstPartySignals,
   resolveQueryPageIndices,
+  aggregateSearchAnalyticsTotals,
+  computeMetricDelta,
 };

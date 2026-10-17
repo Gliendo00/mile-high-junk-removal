@@ -383,17 +383,25 @@ async function main() {
       // row was recognized, independent of how many evidence entries
       // exist in total.
       assert.ok(Array.isArray(persisted.firstPartyEvidence) && persisted.firstPartyEvidence.length >= 1);
-      assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length === 1, "expected query-page-mismatch to have fired exactly once, from THIS fetch's mismatch row — any older, already-committed evidence for this key is a legitimate zero-row/non-mismatch result that correctly produces no additional signal");
-      assert.strictEqual(persisted.firstPartySignals[0].type, "query-page-mismatch");
-      assert.strictEqual(persisted.firstPartySignals[0].mismatchedQueries.length, 1);
-      assert.strictEqual(persisted.firstPartySignals[0].mismatchedQueries[0].observedPage, `${config.SITE_ORIGIN}/contact.html`);
+      // Phase 12: buildQueryPageEvidenceRequest() now defaults
+      // compareToPreviousPeriod:true, so this same mocked fetch ALSO
+      // legitimately produces a search-visibility-change signal
+      // (the mock returns the same realistic row for both the current
+      // and comparison period, well above the sufficiency floor) —
+      // query-page-mismatch firing is still what this test is actually
+      // about, so assert on it specifically rather than the total count.
+      assert.ok(Array.isArray(persisted.firstPartySignals) && persisted.firstPartySignals.length >= 1, "expected at least query-page-mismatch to have fired from THIS fetch's mismatch row");
+      const mismatchSignal = persisted.firstPartySignals.find((s) => s.type === "query-page-mismatch");
+      assert.ok(mismatchSignal, "expected a query-page-mismatch signal among this finding's firstPartySignals");
+      assert.strictEqual(mismatchSignal.mismatchedQueries.length, 1);
+      assert.strictEqual(mismatchSignal.mismatchedQueries[0].observedPage, `${config.SITE_ORIGIN}/contact.html`);
 
       // And decision.js's own output for this finding is completely
       // unaffected by any of this.
       assert.strictEqual(persisted.decision, target.decision);
 
-      assert.strictEqual(record.report.firstPartySignals.count, 1);
-      assert.strictEqual(record.report.firstPartySignals.items[0].type, "query-page-mismatch");
+      assert.ok(record.report.firstPartySignals.count >= 1);
+      assert.ok(record.report.firstPartySignals.items.some((s) => s.type === "query-page-mismatch"));
     } finally {
       global.fetch = originalFetch;
       restoreGoogleEnv(saved);

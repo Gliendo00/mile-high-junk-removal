@@ -151,6 +151,16 @@ test("buildQueryPageEvidenceRequest() respects an explicit days override", () =>
   assert.strictEqual(request.days, 14);
 });
 
+test("Phase 12: buildQueryPageEvidenceRequest() sets compareToPreviousPeriod:true by default — this weekly request now also populates comparisonWindow/observed.previousPeriod via firstparty-fetch.js", () => {
+  const request = buildQueryPageEvidenceRequest(contentGapFinding());
+  assert.strictEqual(request.compareToPreviousPeriod, true);
+});
+
+test("Phase 12: buildQueryPageEvidenceRequest() respects an explicit compareToPreviousPeriod:false override", () => {
+  const request = buildQueryPageEvidenceRequest(contentGapFinding(), { compareToPreviousPeriod: false });
+  assert.strictEqual(request.compareToPreviousPeriod, false);
+});
+
 // -----------------------------------------------------------------------
 // Freshness — stale is treated as absent, fresh/aging blocks a re-fetch
 // -----------------------------------------------------------------------

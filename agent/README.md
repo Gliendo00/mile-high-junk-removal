@@ -3824,3 +3824,198 @@ path from local-source evidence (Phase 10) or candidate
 selection/reporting (Phase 11B) to a decision, a proposal, or an
 auto-applied edit — exactly Phase 10's original guarantee, now
 re-verified against the larger surface area this phase added.
+
+# Phase 12 — Deeper First-Party Intelligence
+
+The objective was never "add more GA4/GSC metrics" — both clients
+(`search-console-client.js`/`ga4-client.js`) were already raw,
+unrestricted pass-throughs; the real bottleneck was the evidence/fetch
+layer sitting on top of them, which never used the comparison/
+freshness infrastructure already built for it. This phase closes that
+gap with THREE new comparison/delta signals, a corrected GA4 approach
+(raw `eventName`+`eventCount`, never `conversions`/`keyEvents`), and —
+the single most important finding — the discovery that phone/SMS GA4
+click tracking **already existed** in production.
+
+## Investigation correction: phone/SMS tracking already existed
+
+The Phase 12 investigation report incorrectly stated phone/SMS clicks
+were untracked (a grep of `*.html`/`book/*.html` missed `nav.js`
+entirely). Re-verification via `git log --follow -- nav.js` found:
+`phone_click` + the full booking funnel (`booking_started`/
+`booking_service_selected`/`booking_date_selected`/
+`booking_form_completed`) shipped in commit `cc85cfa`
+(2026-08-11); `sms_click` + the contact-form events
+(`contact_form_start`/`generate_lead`) shipped in commit `926258c`
+(2026-09-14). Both are a single, centrally delegated `document`-level
+click listener in `nav.js` (`a[href^="tel:"]`/`a[href^="sms:"]`) —
+zero per-page inline handlers, zero parameters on either event (no
+PII of any kind), a `typeof window.gtag === 'function'` guard (safe
+no-op without gtag), and delegation (so dynamically-inserted tel:/sms:
+links are covered automatically, with no duplicate-firing risk since
+there is exactly one listener). Verified every page carrying a
+`tel:`/`sms:` link also loads `nav.js` exactly once. **No new site
+tracking code was written or deployed for this phase** — the
+authorization to implement it was exercised as "verify first,"
+exactly as the brief required.
+
+## Instrumentation-history boundary (`agent/lib/lead-event-instrumentation.js`)
+
+Because these events have real, recent ship dates, a 28-day-vs-28-day
+comparison run TODAY can genuinely straddle the later boundary (a
+comparison window starting ~2026-08-20 predates `sms_click`'s
+2026-09-14 start). A small, centralized `event name -> ISO ship date`
+map (derived from the actual instrumenting commits, never guessed) is
+the single place this boundary is recorded. Its own
+`isEventFullyInstrumentedForWindow()` check is consulted by the one
+signal that needs it (`lead-event-landing-page-delta`, below) — an
+event whose comparison window predates its own boundary gets
+`comparisonAvailable: false`, `previous: null`, `delta: null`, and an
+explicit note; it is NEVER presented as zero prior engagement.
+
+## Two-window comparison (`agent/lib/firstparty-fetch.js`)
+
+`firstparty-evidence.js`'s `comparisonWindow` field has existed since
+Phase 6 and was never populated by any caller — `firstparty-
+signals.js`'s own header named this as the exact blocker for a
+"declined-vs-prior-period" signal. `fetchSearchAnalyticsEvidence()`/
+`fetchGa4Evidence()` now accept `compareToPreviousPeriod: true`: when
+set, a SECOND query is issued for the immediately-preceding,
+equal-length, non-overlapping period (`computeComparisonWindow()`,
+the one shared helper both functions use) with IDENTICAL dimensions/
+filters — only the date range differs. The comparison half is
+best-effort: if it specifically fails, the current period's evidence
+is still returned successfully, just with `comparisonWindow: null` —
+a transient problem fetching the past never takes down evidence for
+the present. GSC's existing ~2-3 day reporting lag is inherited
+automatically (the comparison window is derived FROM the already
+lag-adjusted current window, never re-lagged separately).
+`buildQueryPageEvidenceRequest()` (the existing weekly finding-
+evidence path) now sets this `true` by default.
+
+## Data sufficiency (`agent/lib/firstparty-sufficiency.js`)
+
+No numeric confidence score — three discrete, named buckets
+(`insufficient`/`limited`/`sufficient`), centralized thresholds (per
+documented "metric family," e.g. `gsc-impressions`/`ga4-sessions`),
+explicitly labeled as conservative engineering defaults, not business
+facts (same framing `firstparty-evidence.js`'s own
+`FRESHNESS_WINDOWS_DAYS` already uses). `insufficient` means a
+detector returns `null` (no signal) — never a fabricated conclusion
+from noise. This never gates evidence/report VISIBILITY — only signal
+EMISSION — so "insufficient data" is never confused with "nothing was
+checked."
+
+## Three new signals (`agent/lib/firstparty-signals.js`)
+
+- **`search-visibility-change`** — impressions/clicks/CTR/position,
+  current vs comparison period, for the SAME scope against its own
+  history (never an invented comparable-page baseline). CTR is
+  recomputed from summed clicks/impressions (never averaged per-row);
+  position is impressions-weighted. Every delta carries BOTH an
+  absolute and relative change together; a zero-denominator relative
+  change is the literal string `"not-computable"`, never a fabricated
+  0%/∞%. Means only that observable performance changed — never
+  causation, never a recommendation.
+- **`query-visibility-shift`** — gained/lost queries between two
+  BOUNDED (MAX_ROWS-capped) top-query sets for the same scope. Its
+  `limitations` text explicitly rules out the one dangerous
+  misreading: absence from the bounded set is never "the site stopped
+  ranking for this query."
+- **`lead-event-landing-page-delta`** — raw GA4 `eventName`+
+  `eventCount` for a landing page's own confirmed lead events, ALWAYS
+  reported alongside session-count movement (an event-count change
+  that merely tracks a traffic change is a traffic story, not a
+  conversion story). Needs TWO correlated GA4 evidence entries at once
+  (a `landingPage`-dimensioned session total + an `eventName`-
+  dimensioned event-count report) — the one exception to this file's
+  otherwise per-evidence-entry detector loop, handled by a single
+  additional call in `deriveFirstPartySignals()`. Never claims
+  causation or infers revenue/closed-job value.
+
+**Explicitly NOT built**: `batch-relative-rank` (comparing this week's
+rotation picks against each other) — the weekly batch is
+rotation-selected, not a designed comparable cohort; ranking within an
+incidental batch would manufacture a number Phase 13 could later
+overweight. `weak-ctr-despite-impressions` and the comparable-GROUP
+version of landing-page-conversion remain deferred — both still need
+a comparable-*group*-fetch mechanism nothing in this phase builds.
+
+## GA4 lead-event candidates (`agent/lib/lead-event-candidates.js`)
+
+Deliberately narrow: candidates are the EXACT SAME single-page
+findings `finding-evidence.js`'s `isQueryPageEvidenceCandidate()`
+already identifies (content-gap/structural-inconsistency — "already
+under Weekly investigation," never an independent sweep), further
+narrowed to pages with real conversion intent (`!isBlogPage() &&
+!isUtilityPage()`). Builds TWO GA4 requests per candidate
+(session-context: `dimensions:["landingPage"]`; event-detail:
+`dimensions:["eventName"]`, filtered to `landingPage` EXACT + the
+confirmed lead-event list via `inListFilter` — GA4's `dimensionFilter`
+can filter by a dimension that isn't also a breakdown dimension, the
+same filter-vs-breakdown separation `finding-evidence.js` already
+relies on for GSC). Freshness-gated like every other refresh step —
+stale is treated as absent, never permanently suppressed. Against the
+real site today this produces **zero** candidates (the one real
+`finding-evidence.js` candidate is a blog page, correctly excluded) —
+documented and tested as the actual current baseline, not assumed.
+
+## Workflow (`--refresh-lead-event-evidence`, weekly only)
+
+New `cli.js` command, mirrors `--refresh-finding-evidence` with one
+structural difference: each candidate's two fetches are attempted
+INDEPENDENTLY — one half's genuine failure is logged and returned as
+`skipped`, and never blocks or crashes the other half's fetch/write.
+New weekly-only workflow step, placed after "Refresh finding-level
+query evidence" and before "Refresh local-source evidence," using
+ONLY `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT`/`GA4_PROPERTY_ID` (never
+`GSC_SITE_URL` — this step never calls Search Console). `runner.js`
+remains network-free; no new persisted path was needed for
+`safe-commit.js`'s allowlist (evidence still writes to the existing
+`agent/research/firstparty/` directory).
+
+## Safety proof
+
+`firstparty-sufficiency.js`/`lead-event-instrumentation.js`/
+`lead-event-candidates.js` are required only by `firstparty-
+signals.js`/`cli.js` — never by `decision.js`, `risk.js`,
+`proposals-sync.js`, or any `*-audit.js` (confirmed by repo-wide grep,
+not just unit tests). `decide()` is proven byte-identical with and
+without all three new signal types attached, using real fixtures for
+each. Every new signal object carries the same required provenance
+fields and `posture: "investigation-only"` as `query-page-mismatch`
+always has, and none carries a verdict/confidence/recommendation
+field. `lead-event-landing-page-delta`'s own serialized output is
+proven to contain no phone number, `tel:`/`sms:` href, or visitor/
+client-identifier field — only event names, counts, and deltas.
+
+## What this phase deliberately does NOT do
+
+No historical/time-series database — two-window comparison, computed
+live, is sufficient; both APIs already support arbitrary historical
+date ranges, and every evidence fetch already writes its own
+never-overwritten, git-tracked file (a forward-compatible audit trail
+for a future Phase 13 trend reader, should one ever be needed). No
+query-theme clustering (this property's query volume is too thin to
+trust it). No numeric confidence score. No change to `decision.js`,
+proposal authority, or auto-apply authority. No scheduling enabled.
+No Phase 13 cross-source synthesis.
+
+## Tests
+
+New: `tests/agent-firstparty-fetch-comparison.test.js`,
+`tests/agent-firstparty-sufficiency.test.js`,
+`tests/agent-lead-event-instrumentation.test.js`,
+`tests/agent-firstparty-signals-comparison.test.js`,
+`tests/agent-lead-event-candidates.test.js`,
+`tests/agent-cli-refresh-lead-event-evidence.test.js`. Extended:
+`tests/agent-firstparty-signals.test.js`/`agent-firstparty-signals-
+safety.test.js` (the three new signal types, decide()
+byte-identical-with-all-three proof), `tests/agent-finding-
+evidence.test.js` (the new `compareToPreviousPeriod` default),
+`tests/agent-cli-refresh-finding-evidence.test.js` (updated to allow —
+not require — additional legitimate signal types now that comparison
+is on by default), `tests/github-actions-workflow.test.js` (the new
+step's gating/placement/credential scope). Full suite, run serially:
+**873 passing**, the same single pre-existing, unrelated
+`tests/phase3c-batch5-intake-ui.test.js` failure as every prior phase.

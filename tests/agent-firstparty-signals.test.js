@@ -39,8 +39,8 @@ function evidenceWithRows(rows, overrides) {
 
 const FINDING = { key: "furniture-removal::furniture-removal.html", pages: ["furniture-removal.html"] };
 
-test("SIGNAL_TYPES currently exposes exactly one implemented signal: query-page-mismatch", () => {
-  assert.deepStrictEqual(SIGNAL_TYPES, ["query-page-mismatch"]);
+test("SIGNAL_TYPES — Phase 12 adds three comparison/delta signals alongside the original query-page-mismatch; batch-relative-rank/weak-ctr-vs-comparable remain deliberately unimplemented", () => {
+  assert.deepStrictEqual(SIGNAL_TYPES, ["query-page-mismatch", "search-visibility-change", "query-visibility-shift", "lead-event-landing-page-delta"]);
 });
 
 test("resolveQueryPageIndices() finds query/page positions regardless of declared order", () => {
@@ -118,7 +118,7 @@ test("deriveFirstPartySignals() aggregates signals across multiple attached evid
   assert.deepStrictEqual(signals.map((s) => s.mismatchedQueries[0].query), ["q1", "q2"]);
 });
 
-test("deriveFirstPartySignals() skips non-search-console-search-analytics evidence entirely (e.g. GA4, URL Inspection) — no signal type currently derives from them", () => {
+test("deriveFirstPartySignals() produces no signal from a LONE GA4/URL-Inspection evidence entry — the single-evidence detectors (query-page-mismatch/search-visibility-change/query-visibility-shift) only ever derive from search-console-search-analytics evidence, and the lead-event-landing-page-delta detector needs a CORRELATED PAIR of GA4 entries (see its own dedicated tests), never just one", () => {
   const ga4Evidence = makeFirstPartyEvidence({
     findingKey: FINDING.key,
     source: "ga4",

@@ -344,6 +344,45 @@ await test("Daily dispatches remain behaviorally unchanged by the finding-level 
   assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
+await test("Phase 12: the lead-event evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the finding-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
+  const block = extractStepBlock(code, /Refresh lead-event evidence/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/--refresh-lead-event-evidence/.test(block));
+  assert.strictEqual(/apply-safe/.test(block), false);
+  assert.strictEqual(/continue-on-error/.test(block), false);
+
+  const lines = code.split("\n");
+  const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const leadEventIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh lead-event evidence/.test(l));
+  const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+  assert.ok(findingIdx > -1 && leadEventIdx > -1 && mainRunIdx > -1);
+  assert.ok(leadEventIdx > findingIdx, "lead-event evidence refresh must run AFTER finding evidence refresh");
+  assert.ok(mainRunIdx > leadEventIdx, "lead-event evidence refresh must run BEFORE the main --daily/--weekly Agent pass");
+});
+
+await test("Phase 12: the lead-event evidence refresh step uses GA4 credentials only (GOOGLE_IMPERSONATE_SERVICE_ACCOUNT + GA4_PROPERTY_ID) and never references GSC_SITE_URL — it never calls Search Console", () => {
+  const block = extractStepBlock(code, /Refresh lead-event evidence/);
+  assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block));
+  assert.ok(/GA4_PROPERTY_ID:\s*\$\{\{\s*vars\.GA4_PROPERTY_ID\s*\}\}/.test(block));
+  assert.strictEqual(/GSC_SITE_URL/.test(block), false);
+});
+
+await test("Phase 12: Daily dispatches remain behaviorally unchanged by the lead-event evidence refresh — it is gated to exactly 'weekly', same exclusivity as the other weekly-only refresh steps", () => {
+  const block = extractStepBlock(code, /Refresh lead-event evidence/);
+  const ifLineMatch = block.match(/if:\s*(.+)/);
+  assert.ok(ifLineMatch, "lead-event evidence refresh must have an explicit if: condition");
+  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+});
+
+await test("Phase 12: the lead-event evidence refresh step's addition does not disturb any diagnostic's isolation — no diagnostic step invokes --refresh-lead-event-evidence, and the main Agent pass stays gated to daily/weekly only", () => {
+  for (const diagName of [/Run Golden Search Console diagnostic/, /Run Golden GA4 diagnostic/, /Run Denver LeafDrop local-source diagnostic/]) {
+    const block = extractStepBlock(code, diagName);
+    assert.strictEqual(/--refresh-lead-event-evidence/.test(block), false);
+  }
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
+  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
+});
+
 await test("Phase 11B: the local-source-evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the finding-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
   const block = extractStepBlock(code, /Refresh local-source evidence/);
   assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
@@ -394,10 +433,11 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
 
   const rotationIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
   const findingIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh finding-level query evidence/.test(l));
+  const leadEventIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh lead-event evidence/.test(l));
   const localSourceIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh local-source evidence/.test(l));
   const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
   assert.ok(
-    workflowStartIdx < rotationIdx && workflowStartIdx < findingIdx && workflowStartIdx < localSourceIdx && workflowStartIdx < mainRunIdx,
+    workflowStartIdx < rotationIdx && workflowStartIdx < findingIdx && workflowStartIdx < leadEventIdx && workflowStartIdx < localSourceIdx && workflowStartIdx < mainRunIdx,
     "the workflow-start-time step must precede every step whose report-building needs to read WORKFLOW_STARTED_AT"
   );
 });

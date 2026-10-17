@@ -244,6 +244,30 @@ jobs:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
 
+      - name: Refresh lead-event evidence (weekly only)
+        # Phase 12 — for this week's content-gap/structural-inconsistency
+        # candidate findings on real conversion-intent pages (never
+        # blog/utility pages — see agent/lib/lead-event-candidates.js's
+        # header), fetches TWO correlated GA4 requests per candidate:
+        # this landing page's own session total, and raw
+        # eventName+eventCount for this codebase's confirmed lead-event
+        # vocabulary (phone_click, sms_click, the contact-form events,
+        # the booking funnel) — deliberately NEVER the
+        # conversions/keyEvents metric, which depends on GA4
+        # Admin-console configuration this agent cannot see. Both
+        # requests ask for a comparison to the immediately-preceding
+        # period, feeding agent/lib/firstparty-signals.js's
+        # deriveLeadEventLandingPageDeltaSignal(). Run AFTER the other
+        # weekly-only refresh steps above and BEFORE the main Agent
+        # pass below, same placement precedent. Needs ONLY GA4 (never
+        # GSC_SITE_URL) — the same GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/
+        # GA4_PROPERTY_ID variables production GA4 calls already use.
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --refresh-lead-event-evidence
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+
       - name: Refresh local-source evidence (weekly only)
         # Phase 11B — closes the gap Phase 10 deliberately left open: a
         # curated registry entry (agent/context/local-source-

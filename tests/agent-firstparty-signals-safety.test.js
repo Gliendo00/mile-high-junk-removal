@@ -16,6 +16,9 @@ const { decide } = require("../agent/lib/decision");
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 const {
   deriveQueryPageMismatchSignal,
+  deriveSearchVisibilityChangeSignal,
+  deriveQueryVisibilityShiftSignal,
+  deriveLeadEventLandingPageDeltaSignal,
   deriveFirstPartySignals,
   attachFirstPartySignals,
   resolveQueryPageIndices,
@@ -227,6 +230,120 @@ test("agent/lib/firstparty-signals.js never references a visitor/client-identifi
   for (const forbidden of [/clientId/i, /userId/i, /userPseudoId/i, /ipOverride/i, /appInstanceId/i]) {
     assert.strictEqual(forbidden.test(source), false, `firstparty-signals.js must never reference ${forbidden}`);
   }
+});
+
+// -----------------------------------------------------------------------
+// 6. Phase 12 — the three new comparison/delta signals carry the SAME
+//    structural guarantees as query-page-mismatch: no decision
+//    authority, no PII, decide() unaffected.
+// -----------------------------------------------------------------------
+
+function gscCompareEvidence(findingKey, overrides) {
+  return makeFirstPartyEvidence({
+    findingKey,
+    source: "search-console-search-analytics",
+    metric: "clicks-impressions-ctr-position",
+    dimension: "query+page",
+    scope: { type: "page", value: "golden-junk-removal.html" },
+    window: { start: "2026-09-18", end: "2026-10-15", label: "28 days ending 2026-10-15" },
+    comparisonWindow: { start: "2026-08-21", end: "2026-09-17", label: "28 days ending 2026-09-17 (comparison period)" },
+    observed: {
+      totalRowsReturned: 1,
+      topRows: [{ keys: ["golden junk removal", "golden-junk-removal.html"], clicks: 6, impressions: 120, ctr: 0.05, position: 6 }],
+      previousPeriod: { totalRowsReturned: 1, topRows: [{ keys: ["golden trash pickup", "golden-junk-removal.html"], clicks: 3, impressions: 100, ctr: 0.03, position: 9 }] },
+    },
+    context: "c",
+    limitations: "l",
+    ...overrides,
+  });
+}
+
+function ga4CompareEvidencePair(findingKey) {
+  const session = makeFirstPartyEvidence({
+    findingKey,
+    source: "ga4",
+    metric: "sessions",
+    dimension: "landingPage",
+    scope: { type: "page", value: "golden-junk-removal.html" },
+    window: { start: "2026-09-18", end: "2026-10-15", label: "l" },
+    comparisonWindow: { start: "2026-08-21", end: "2026-09-17", label: "l" },
+    observed: { totalRowsReturned: 1, topRows: [{ dimensions: ["/golden-junk-removal.html"], metrics: ["50"] }], previousPeriod: { totalRowsReturned: 1, topRows: [{ dimensions: ["/golden-junk-removal.html"], metrics: ["40"] }] } },
+    context: "c",
+    limitations: "l",
+  });
+  const events = makeFirstPartyEvidence({
+    findingKey,
+    source: "ga4",
+    metric: "eventCount",
+    dimension: "eventName",
+    scope: { type: "page", value: "golden-junk-removal.html" },
+    window: { start: "2026-09-18", end: "2026-10-15", label: "l" },
+    comparisonWindow: { start: "2026-08-21", end: "2026-09-17", label: "l" },
+    observed: {
+      totalRowsReturned: 1,
+      topRows: [{ dimensions: ["generate_lead"], metrics: ["4"] }],
+      previousPeriod: { totalRowsReturned: 1, topRows: [{ dimensions: ["generate_lead"], metrics: ["2"] }] },
+    },
+    context: "c",
+    limitations: "l",
+  });
+  return [session, events];
+}
+
+test("decision.js's decide() produces byte-identical output whether or not a finding carries the Phase 12 comparison/delta signals", () => {
+  const base = classify(
+    makeFinding({
+      type: "content-gap",
+      summary: "golden-junk-removal.html answers fewer FAQ questions than its comparable siblings",
+      pages: ["golden-junk-removal.html"],
+      evidence: [{ field: "faqQuestionCount", value: 1 }],
+    })
+  );
+
+  const gscEvidence = gscCompareEvidence(base.key);
+  const [sessionEvidence, eventEvidence] = ga4CompareEvidencePair(base.key);
+  const visSignal = deriveSearchVisibilityChangeSignal({ key: base.key, pages: base.pages }, gscEvidence);
+  const shiftSignal = deriveQueryVisibilityShiftSignal({ key: base.key, pages: base.pages }, gscEvidence);
+  const leadSignal = deriveLeadEventLandingPageDeltaSignal({ key: base.key, pages: base.pages }, [sessionEvidence, eventEvidence]);
+  assert.ok(visSignal && shiftSignal && leadSignal, "test setup: expected all three Phase 12 signals to be derivable from these fixtures");
+
+  const allEvidence = [gscEvidence, sessionEvidence, eventEvidence];
+  const withoutSignals = { ...base, research: [], firstPartyEvidence: allEvidence, firstPartySignals: [] };
+  const withSignals = { ...base, research: [], firstPartyEvidence: allEvidence, firstPartySignals: [visSignal, shiftSignal, leadSignal] };
+
+  assert.deepStrictEqual(decide(withSignals), decide(withoutSignals), "attaching the Phase 12 signals must never change decide()'s output");
+});
+
+test("each Phase 12 signal object contains none of decision.js's vocabulary as a key, and carries every required provenance field", () => {
+  const base = { key: "k", pages: ["golden-junk-removal.html"] };
+  const gscEvidence = gscCompareEvidence("k");
+  const [sessionEvidence, eventEvidence] = ga4CompareEvidencePair("k");
+  const signals = [
+    deriveSearchVisibilityChangeSignal(base, gscEvidence),
+    deriveQueryVisibilityShiftSignal(base, gscEvidence),
+    deriveLeadEventLandingPageDeltaSignal(base, [sessionEvidence, eventEvidence]),
+  ];
+  for (const signal of signals) {
+    assert.ok(signal);
+    for (const field of DECISION_SHAPED_FIELD_NAMES) {
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(signal, field), false, `${signal.type} must not carry a "${field}" field`);
+    }
+    for (const required of ["type", "findingKey", "pages", "scope", "window", "source", "reason", "limitations", "posture"]) {
+      assert.ok(Object.prototype.hasOwnProperty.call(signal, required), `${signal.type} is missing required provenance field "${required}"`);
+    }
+    assert.ok(/investigation-only/.test(signal.posture));
+    assert.ok(SIGNAL_TYPES.includes(signal.type));
+  }
+});
+
+test("lead-event-landing-page-delta's serialized JSON never contains a phone-number-shaped string, a raw href, or any visitor/client-identifier field — only event names/counts/deltas", () => {
+  const base = { key: "k", pages: ["golden-junk-removal.html"] };
+  const [sessionEvidence, eventEvidence] = ga4CompareEvidencePair("k");
+  const signal = deriveLeadEventLandingPageDeltaSignal(base, [sessionEvidence, eventEvidence]);
+  assert.ok(signal);
+  const serialized = JSON.stringify(signal);
+  assert.strictEqual(/\btel:|sms:|3039901812|\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(serialized), false, "must never contain a phone number or tel:/sms: href");
+  assert.strictEqual(/clientId|userId|userPseudoId|appInstanceId|ipOverride/i.test(serialized), false);
 });
 
 test("a derived signal's own serialized JSON never contains a visitor/client-identifier field name, even when fed an evidence entry with extra/unexpected observed fields", () => {

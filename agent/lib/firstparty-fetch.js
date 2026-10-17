@@ -74,6 +74,27 @@ function computeWindow(days, lagDays) {
   return { start: iso(start), end: iso(end), label: `${days} days ending ${iso(end)}` };
 }
 
+// Phase 12 — the immediately-preceding, EQUAL-length, NON-OVERLAPPING
+// comparison period for `currentWindow` (itself already lag-adjusted by
+// computeWindow() above): ends the day before `currentWindow.start`,
+// spans the same number of days. Never reapplies a reporting lag of its
+// own — it is already further in the past than any lag could reach,
+// since it ends strictly before the (already lag-adjusted) current
+// window begins. This is the ONLY place either comparison window's
+// dates are derived, used identically by both
+// fetchSearchAnalyticsEvidence() and fetchGa4Evidence() below, so "equal
+// duration, non-overlapping, lag-respecting" is a single, shared
+// guarantee rather than something each caller could independently get
+// slightly wrong.
+function computeComparisonWindow(currentWindow, days) {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const end = new Date(`${currentWindow.start}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() - 1);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return { start: iso(start), end: iso(end), label: `${days} days ending ${iso(end)} (comparison period)` };
+}
+
 /**
  * Targeted Search Analytics query — e.g. "query/page evidence for the
  * Aurora opportunity this finding raised", not a full-site dump.
@@ -100,9 +121,31 @@ function computeWindow(days, lagDays) {
  *   or "diagnostic" (set explicitly by a diagnostic request file, e.g.
  *   agent/diagnostics/golden-search-console-request.json — never inferred here from
  *   `strict`/anything else; see firstparty-evidence.js's EVIDENCE_PURPOSES header).
+ * @param {boolean} [args.compareToPreviousPeriod] - Phase 12: when true, also queries the
+ *   immediately-preceding, equal-length, non-overlapping period (computeComparisonWindow()
+ *   above) with the IDENTICAL dimensions/dimensionFilterGroups/rowLimit, and populates the
+ *   evidence's existing (previously always-null) `comparisonWindow` field plus a new
+ *   `observed.previousPeriod` (same bounded shape as `observed` itself). The comparison
+ *   fetch is best-effort: if IT specifically fails/skips, the current period's evidence is
+ *   still returned successfully, just with no comparison attached (comparisonWindow stays
+ *   null) — a transient problem fetching the PAST must never take down evidence for the
+ *   PRESENT. See agent/lib/firstparty-signals.js's search-visibility-change/
+ *   query-visibility-shift detectors, the only consumers of this field today.
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, days, dimensions, dimensionFilterGroups, context, requestFingerprint, purpose, fetchImpl } = {}) {
+async function fetchSearchAnalyticsEvidence({
+  findingKey,
+  rotationSlug,
+  scope,
+  days,
+  dimensions,
+  dimensionFilterGroups,
+  context,
+  requestFingerprint,
+  purpose,
+  compareToPreviousPeriod,
+  fetchImpl,
+} = {}) {
   if (!isSearchConsoleConfigured()) {
     return { skipped: true, reason: "Search Console not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GSC_SITE_URL missing)" };
   }
@@ -110,7 +153,8 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
     return { skipped: true, reason: "fetchSearchAnalyticsEvidence requires a scope {type, value}" };
   }
 
-  const window = computeWindow(days || 28, 3);
+  const windowDays = days || 28;
+  const window = computeWindow(windowDays, 3);
   const dims = dimensions && dimensions.length ? dimensions : ["query", "page"];
   const result = await querySearchAnalytics({
     startDate: window.start,
@@ -122,6 +166,40 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
   });
   if (result.skipped) return result;
 
+  const boundRows = (rows) =>
+    rows.slice(0, MAX_ROWS).map((r) => ({
+      keys: r.keys,
+      clicks: r.clicks,
+      impressions: r.impressions,
+      ctr: r.ctr,
+      position: r.position,
+    }));
+
+  let comparisonWindow = null;
+  let previousPeriod = null;
+  if (compareToPreviousPeriod) {
+    const prevWindow = computeComparisonWindow(window, windowDays);
+    // IDENTICAL dimensions/dimensionFilterGroups/rowLimit — only the
+    // date range differs, so a delta between the two periods is never
+    // confounded by a filter/shape mismatch.
+    const prevResult = await querySearchAnalytics({
+      startDate: prevWindow.start,
+      endDate: prevWindow.end,
+      dimensions: dims,
+      dimensionFilterGroups,
+      rowLimit: MAX_ROWS,
+      fetchImpl,
+    });
+    if (!prevResult.skipped) {
+      comparisonWindow = prevWindow;
+      previousPeriod = { totalRowsReturned: prevResult.rows.length, topRows: boundRows(prevResult.rows) };
+    }
+    // A skipped comparison fetch is NOT propagated as a failure of the
+    // whole request — see this function's own jsdoc above. The current
+    // period's evidence below is still written normally, just without
+    // a comparison attached.
+  }
+
   const evidence = makeFirstPartyEvidence({
     findingKey,
     rotationSlug,
@@ -132,15 +210,11 @@ async function fetchSearchAnalyticsEvidence({ findingKey, rotationSlug, scope, d
     dimension: dims.join("+"),
     scope,
     window,
+    comparisonWindow,
     observed: {
       totalRowsReturned: result.rows.length,
-      topRows: result.rows.slice(0, MAX_ROWS).map((r) => ({
-        keys: r.keys,
-        clicks: r.clicks,
-        impressions: r.impressions,
-        ctr: r.ctr,
-        position: r.position,
-      })),
+      topRows: boundRows(result.rows),
+      ...(previousPeriod ? { previousPeriod } : {}),
     },
     context: context || `Targeted Search Analytics query for ${scope.type} "${scope.value}" over ${window.label}.`,
     limitations:
@@ -212,9 +286,12 @@ async function fetchUrlInspectionEvidence({ findingKey, rotationSlug, urls, cont
  * @param {object} [args.dimensionFilter] - raw GA4 FilterExpression
  * @param {string} [args.context]
  * @param {string} [args.purpose] - see fetchSearchAnalyticsEvidence()'s jsdoc
+ * @param {boolean} [args.compareToPreviousPeriod] - Phase 12: see fetchSearchAnalyticsEvidence()'s
+ *   jsdoc — identical contract (same dimensions/metrics/dimensionFilter reused for the
+ *   comparison period, best-effort, populates comparisonWindow/observed.previousPeriod).
  * @param {function} [args.fetchImpl]
  */
-async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensions, metrics, dimensionFilter, context, purpose, fetchImpl } = {}) {
+async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensions, metrics, dimensionFilter, context, purpose, compareToPreviousPeriod, fetchImpl } = {}) {
   if (!isGa4Configured()) {
     return { skipped: true, reason: "GA4 not configured (GOOGLE_SERVICE_ACCOUNT_JSON / GA4_PROPERTY_ID missing)" };
   }
@@ -232,7 +309,8 @@ async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensi
     }
   }
 
-  const window = computeWindow(days || 28, 1);
+  const windowDays = days || 28;
+  const window = computeWindow(windowDays, 1);
   const mets = metrics && metrics.length ? metrics : ["sessions", "engagementRate", "conversions"];
   const result = await runReport({
     startDate: window.start,
@@ -245,6 +323,35 @@ async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensi
   });
   if (result.skipped) return result;
 
+  const boundRows = (rows) =>
+    rows.slice(0, MAX_ROWS).map((r) => ({
+      dimensions: (r.dimensionValues || []).map((d) => d.value),
+      metrics: (r.metricValues || []).map((m) => m.value),
+    }));
+
+  let comparisonWindow = null;
+  let previousPeriod = null;
+  if (compareToPreviousPeriod) {
+    const prevWindow = computeComparisonWindow(window, windowDays);
+    // IDENTICAL dimensions/metrics/dimensionFilter — only the date
+    // range differs.
+    const prevResult = await runReport({
+      startDate: prevWindow.start,
+      endDate: prevWindow.end,
+      dimensions: dims,
+      metrics: mets,
+      dimensionFilter,
+      limit: MAX_ROWS,
+      fetchImpl,
+    });
+    if (!prevResult.skipped) {
+      comparisonWindow = prevWindow;
+      previousPeriod = { totalRowsReturned: prevResult.rows.length, topRows: boundRows(prevResult.rows) };
+    }
+    // Best-effort, same rule as fetchSearchAnalyticsEvidence() above — a
+    // skipped comparison fetch never fails the current period's result.
+  }
+
   const dimNames = result.dimensionHeaders.map((h) => h.name);
   const metricNames = result.metricHeaders.map((h) => h.name);
   const evidence = makeFirstPartyEvidence({
@@ -256,12 +363,11 @@ async function fetchGa4Evidence({ findingKey, rotationSlug, scope, days, dimensi
     dimension: (dimNames.length ? dimNames : dims).join("+"),
     scope,
     window,
+    comparisonWindow,
     observed: {
       totalRowsReturned: result.rows.length,
-      topRows: result.rows.slice(0, MAX_ROWS).map((r) => ({
-        dimensions: (r.dimensionValues || []).map((d) => d.value),
-        metrics: (r.metricValues || []).map((m) => m.value),
-      })),
+      topRows: boundRows(result.rows),
+      ...(previousPeriod ? { previousPeriod } : {}),
     },
     context: context || `Targeted GA4 report for ${scope.type} "${scope.value}" over ${window.label}.`,
     limitations:
@@ -314,6 +420,7 @@ module.exports = {
   fetchGa4Evidence,
   fetchFirstPartyEvidence,
   writeFirstPartyEvidence,
+  computeComparisonWindow,
   EVIDENCE_DIR,
   MAX_ROWS,
   FORBIDDEN_GA4_DIMENSION_PATTERNS,
