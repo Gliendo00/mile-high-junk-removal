@@ -111,7 +111,33 @@ process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
 
+// Pre-acceptance hardening (audit finding #4) — ?view=agent-proposals
+// now also reads agent/history/log.ndjson (read-only, via
+// currentOwnerReviewKeys() in bookings.js) to compute each row's derived
+// `stale` flag. Same "mutate the shared, cached config object before
+// first use" redirect tests/agent-reports-api.test.js already relies on,
+// so these tests never touch the real committed log file and can fully
+// control what the "latest run's owner-review set" looks like.
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
+const TEST_LOG_PATH = path.join(os.tmpdir(), `agent-proposals-api-test-${process.pid}.ndjson`);
+const config = require("../agent/config");
+config.HISTORY_LOG_PATH = TEST_LOG_PATH;
+
 const bookingsHandler = require("../api/admin/bookings.js");
+const history = require("../agent/lib/history");
+
+function installSeededLog(runs) {
+  if (fs.existsSync(TEST_LOG_PATH)) fs.unlinkSync(TEST_LOG_PATH);
+  for (const run of runs) {
+    history.appendRun(run, TEST_LOG_PATH);
+  }
+}
+
+function clearSeededLog() {
+  if (fs.existsSync(TEST_LOG_PATH)) fs.unlinkSync(TEST_LOG_PATH);
+}
 
 function makeReq(opts) {
   opts = opts || {};
@@ -220,6 +246,73 @@ async function main() {
     const res = await run(makeReq({ query: { view: "agent-proposals", status: "proposed" } }));
     assert.strictEqual(res.body.proposals.length, 1);
     assert.strictEqual(res.body.proposals[0].id, "p1");
+  });
+
+  // --- Pre-acceptance hardening (audit finding #4): the derived `stale` flag ---
+
+  await test("?view=agent-proposals: a row whose finding_key IS in the latest run's owner-review set is NOT stale", async () => {
+    installSeededLog([
+      {
+        runId: "run-9",
+        sequence: 1,
+        timestamp: "2026-10-15T00:00:00.000Z",
+        findings: [
+          { key: "missing-canonical::a.html", decision: "PROPOSE_CHANGE" },
+          { key: "content-gap::blog-x.html", decision: "PROPOSE_CHANGE" },
+        ],
+      },
+    ]);
+    try {
+      currentFakeService = makeFakeServiceClient(freshDb());
+      const res = await run(makeReq({ query: { view: "agent-proposals" } }));
+      assert.strictEqual(res.statusCode, 200);
+      const p1 = res.body.proposals.find((p) => p.id === "p1");
+      const p2 = res.body.proposals.find((p) => p.id === "p2");
+      assert.strictEqual(p1.stale, false);
+      assert.strictEqual(p2.stale, false);
+    } finally {
+      clearSeededLog();
+    }
+  });
+
+  await test("?view=agent-proposals: a row whose finding_key is ABSENT from the latest run's owner-review set (its decision moved to NO_CHANGE/RESEARCH_MORE, or it simply stopped appearing) IS stale", async () => {
+    installSeededLog([
+      {
+        runId: "run-10",
+        sequence: 1,
+        timestamp: "2026-10-16T00:00:00.000Z",
+        // p1's finding_key ("missing-canonical::a.html") is now
+        // NO_CHANGE — no longer in the owner-review set. p2's finding_key
+        // doesn't appear in this run's findings at all (the underlying
+        // issue was resolved/stopped being produced).
+        findings: [{ key: "missing-canonical::a.html", decision: "NO_CHANGE" }],
+      },
+    ]);
+    try {
+      currentFakeService = makeFakeServiceClient(freshDb());
+      const res = await run(makeReq({ query: { view: "agent-proposals" } }));
+      assert.strictEqual(res.statusCode, 200);
+      const p1 = res.body.proposals.find((p) => p.id === "p1");
+      const p2 = res.body.proposals.find((p) => p.id === "p2");
+      assert.strictEqual(p1.stale, true, "a proposal whose finding is now NO_CHANGE must be flagged stale — it must not read as apparently active indefinitely");
+      assert.strictEqual(p2.stale, true, "a proposal whose finding_key no longer appears in the latest run at all must also be flagged stale");
+      // The underlying `status` itself is never touched by this —
+      // staleness is a derived, read-time annotation, not a DB write.
+      assert.strictEqual(p1.status, "proposed");
+      assert.strictEqual(p2.status, "approved");
+    } finally {
+      clearSeededLog();
+    }
+  });
+
+  await test("?view=agent-proposals: when NO run history exists at all (unreadable/missing), every row's `stale` fails safe to false — never guessed true on missing information", async () => {
+    clearSeededLog(); // ensure no history file exists
+    currentFakeService = makeFakeServiceClient(freshDb());
+    const res = await run(makeReq({ query: { view: "agent-proposals" } }));
+    assert.strictEqual(res.statusCode, 200);
+    for (const p of res.body.proposals) {
+      assert.strictEqual(p.stale, false);
+    }
   });
 
   await test("resource=agent-proposal PATCH approve sets status/reviewedBy/reviewedAt/reviewNote", async () => {

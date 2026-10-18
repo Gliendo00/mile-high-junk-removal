@@ -33,16 +33,45 @@
 // later run can legitimately re-observe "the same" finding_key with a
 // materially different `summary` (e.g. a different word-count gap, a
 // different recommendation) — that is a DIFFERENT concrete proposal
-// wearing the same key, not the same one recurring. So: if the existing
-// row's `status` is already a reviewed, terminal one (`approved` or
-// `rejected`) and the new `summary` differs from what's stored, this
-// resets `status` back to `proposed` and clears `reviewed_by`/
-// `reviewed_at`/`review_note` — the owner's prior decision never
-// silently carries over onto different content. If the row is still
-// `proposed` (never reviewed), or the summary is unchanged, the owner's
-// existing state (or lack of one) is left alone exactly as before.
+// wearing the same key, not the same one recurring.
+//
+// Pre-acceptance hardening (audit finding #3, baseline 2bff317) — the
+// original Phase 4 rule compared ONLY `summary` text. That missed a real
+// case: a finding can stay the SAME summary while its `decision`
+// reverses (e.g. PROPOSE_CHANGE -> REJECT_OPPORTUNITY once research
+// comes back contradicting it) or its attached research's VERDICT
+// materially changes — summary text is derived from the audit module's
+// type+pages template, not from research, so it can legitimately stay
+// byte-identical while the thing an owner actually approved/rejected
+// (the DECISION, and the research behind it) flips underneath them.
+// computeReviewContentFingerprint() below now compares `decision`,
+// `summary`, the finding's own `.evidence`, and the single LATEST
+// EFFECTIVE research result (decision.js's own pickLatestResearch() —
+// the same authority-tier-aware pick decision.js itself already uses,
+// reduced to just {sourceType, verdict, confidence, sufficiency}) —
+// deliberately NOT the raw `.research` array, whose length/order can
+// grow across runs purely from provenance (a re-fetch that reconfirms
+// the SAME conclusion under a new file/timestamp — see research-
+// intake.js's attachResearch(), which never removes an old matching
+// file) without anything MATERIAL having changed. See that function's
+// own header for exactly what counts as material.
+//
+// If the existing row's `status` is already a reviewed, terminal one
+// (`approved` or `rejected`) and this fingerprint differs from what's
+// stored — OR the finding_key is REAPPEARING after being absent from
+// the owner-review set in the immediately preceding run (audit finding
+// #4 — see `previousOwnerReviewKeys` below: a reviewed decision must
+// never silently re-apply to a proposal that had stopped being proposed
+// for a while, even if its content happens to be byte-identical once it
+// comes back) — this resets `status` back to `proposed` and clears
+// `reviewed_by`/`reviewed_at`/`review_note`. The owner's prior decision
+// never silently carries over onto different (or reappeared) content.
+// If the row is still `proposed` (never reviewed), or neither condition
+// applies, the owner's existing state (or lack of one) is left alone
+// exactly as before.
 
 const { getServiceClient } = require("../../api/_lib/supabase-admin");
+const { pickLatestResearch } = require("./decision");
 
 // Only findings that actually need an owner's eyes get synced — this is
 // deliberately narrower than "every finding", matching the Home
@@ -91,10 +120,62 @@ function toRow(finding, runId) {
   };
 }
 
+// Pre-acceptance hardening (audit finding #3) — reduces a finding's
+// `.research[]` to the single result decision.js itself would actually
+// rely on (same pickLatestResearch() call decision.js uses), then keeps
+// only the fields an owner's review is actually ABOUT: which kind of
+// source it is, what it concluded, how confident, and (for a cross-
+// source-synthesis result) how sufficient the corroboration was.
+// Deliberately excludes accessedAt/source/evidence/limitations/
+// recommendation TEXT — provenance and prose, never the kind of thing
+// that should force a re-review on its own when the underlying
+// conclusion hasn't actually changed.
+function latestResearchSnapshot(research) {
+  const latest = pickLatestResearch(Array.isArray(research) ? research : []);
+  if (!latest) return null;
+  return {
+    sourceType: latest.sourceType || null,
+    verdict: latest.verdict || null,
+    confidence: latest.confidence || null,
+    sufficiency: latest.sufficiency || null,
+  };
+}
+
+// Pre-acceptance hardening (audit finding #3) — see this file's header
+// for the full rationale. A small, deterministic, ORDER-INSENSITIVE
+// (evidence is sorted) summary of exactly the material facts a reviewed
+// proposal was reviewed ON — used to decide whether a reviewed decision
+// may still carry forward, never persisted anywhere itself.
+function computeReviewContentFingerprint(finding) {
+  const evidence = (Array.isArray(finding.evidence) ? finding.evidence : [])
+    .map((e) => `${e && e.field}=${JSON.stringify(e && e.value)}`)
+    .sort();
+  return JSON.stringify({
+    decision: finding.decision,
+    summary: finding.summary,
+    evidence,
+    latestResearch: latestResearchSnapshot(finding.research),
+  });
+}
+
 /**
  * @param {object[]} findings - decided findings (decision.js's output)
  * @param {string} runId
  * @param {object} [options] - { client } to inject a fake Supabase client for tests
+ * @param {Set<string>} [options.previousOwnerReviewKeys] - pre-acceptance
+ *   hardening (audit finding #4) — the set of finding `key`s that needed
+ *   owner review (needsOwnerReview()) as of the immediately PRECEDING
+ *   run, read from history by the caller (runner.js — see its own
+ *   header). `undefined`/`null` means "unknown" (e.g. the very first
+ *   run ever, or a caller that hasn't been updated to pass it) and is
+ *   always treated as "not reappearing" — fail-safe: ABSENCE of this
+ *   information must never itself force a reset, only its PRESENCE
+ *   (a key genuinely missing from it) does. A finding_key currently in
+ *   `toSync` that is NOT in this set is reappearing after at least one
+ *   run where it didn't need owner review at all — see this file's
+ *   header and the reset logic below for why a reviewed decision must
+ *   not silently carry forward across that gap, even when the content
+ *   happens to be unchanged once it returns.
  */
 async function syncProposals(findings, runId, options = {}) {
   const supabase = options.client || getServiceClient();
@@ -103,6 +184,7 @@ async function syncProposals(findings, runId, options = {}) {
   }
 
   const toSync = findings.filter(needsOwnerReview);
+  const previousOwnerReviewKeys = options.previousOwnerReviewKeys || null;
   let synced = 0;
   const errors = [];
   // Phase 5 — the status each synced finding_key ends up at after this
@@ -114,16 +196,20 @@ async function syncProposals(findings, runId, options = {}) {
 
   for (const finding of toSync) {
     try {
-      const existingRes = await supabase.from("agent_proposals").select("id, status, summary").eq("finding_key", finding.key).maybeSingle();
+      const existingRes = await supabase.from("agent_proposals").select("id, status, summary, decision, evidence, research").eq("finding_key", finding.key).maybeSingle();
       if (existingRes.error) throw existingRes.error;
 
       if (existingRes.data) {
         const row = updatableFields(finding, runId);
         const wasReviewed = existingRes.data.status === "approved" || existingRes.data.status === "rejected";
-        const contentChanged = existingRes.data.summary !== row.summary;
-        if (wasReviewed && contentChanged) {
+        const contentChanged = computeReviewContentFingerprint(existingRes.data) !== computeReviewContentFingerprint(finding);
+        const reappearedAfterAbsence = Boolean(previousOwnerReviewKeys) && !previousOwnerReviewKeys.has(finding.key);
+        if (wasReviewed && (contentChanged || reappearedAfterAbsence)) {
           // See this file's header — a reviewed decision never silently
-          // carries over onto materially different content.
+          // carries over onto materially different content, NOR across
+          // a gap where this finding_key stopped needing owner review
+          // at all (audit finding #4), even if it happens to look the
+          // same once it reappears.
           row.status = "proposed";
           row.reviewed_by = null;
           row.reviewed_at = null;
@@ -150,4 +236,4 @@ async function syncProposals(findings, runId, options = {}) {
   return { skipped: false, synced, total: toSync.length, errors, statusByKey };
 }
 
-module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields };
+module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot };

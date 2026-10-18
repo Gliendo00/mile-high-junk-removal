@@ -15,9 +15,14 @@ name: Website Agent — unattended runner
 #
 # Mutation stays OFF: this workflow never passes --apply-safe, so it can
 # never write to the public site's own HTML/sitemap/robots/vercel.json —
-# only the two Agent-artifact files .github/scripts/safe-commit.js
-# allowlists (agent/history/log.ndjson, and, on weekly runs,
-# agent/history/research-rotation-state.json) are ever committed back.
+# only the small set of Agent-artifact paths .github/scripts/safe-
+# commit.js allowlists (agent/history/log.ndjson every run; on weekly
+# runs only, agent/history/research-rotation-state.json,
+# agent/research/firstparty/*.json, agent/research/local-sources/*.json,
+# agent/history/local-source-candidate-log.json,
+# agent/research/completed-jobs/*.json, and agent/research/results/*.json
+# — see that script's own header for exactly which command writes each
+# one) are ever committed back.
 #
 # If a run comes back `research_pending` (a finding needs external
 # research — see agent/README.md §5-8), this workflow does NOT attempt
@@ -128,6 +133,23 @@ jobs:
         # behavioral difference.
         run: echo "WORKFLOW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
+      - name: Verify running on refs/heads/main
+        # Pre-acceptance hardening (audit finding #8, baseline 2bff317) —
+        # workflow_dispatch can, in principle, be manually targeted at a
+        # non-main ref from the Actions UI. Without this guard, "Push to
+        # main" (further below) would still push THAT ref's checked-out
+        # state onto main — low likelihood, high consequence given
+        # CLAUDE.md treats main as maximally sensitive. Fails fast, before
+        # any Agent/Google Cloud work happens, with a loud, specific
+        # error — never a silent skip. The Persist/Push steps further
+        # below ALSO re-check this directly in their own `if:` conditions
+        # (defense in depth), since both are `if: always()` and would
+        # otherwise still attempt to run after this step fails.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::This workflow is running against '${{ github.ref }}', not 'refs/heads/main'. Refusing to continue — a dispatch against a non-main ref must never be allowed to persist or push its checkout onto main. Re-dispatch against main instead."
+          exit 1
+
       - name: Verify required Supabase configuration
         # The brief for this permanent runner: silently skipping proposal
         # sync is no longer acceptable (it was fine for earlier phases'
@@ -197,12 +219,52 @@ jobs:
           # mechanism already used for local/human ADC. Avoids the
           # redundant-impersonation setup the brief asked to avoid.
 
+      - name: Refresh completed-job evidence (weekly only)
+        # Pre-acceptance hardening (audit finding #1, baseline 2bff317) —
+        # this step previously existed only as agent/cli.js's
+        # --refresh-completed-jobs flag (see runRefreshCompletedJobs()'s
+        # own header) and was NEVER actually wired into this unattended
+        # Weekly dispatch, despite the step immediately below's own
+        # comment already describing itself as "mirroring
+        # --refresh-completed-jobs's existing precedent" — that precedent
+        # did not actually exist in THIS file until now. Without it, the
+        # Weekly research-rotation scorer and the Phase 13a cross-source
+        # synthesis step further below could only ever see whatever
+        # completed-job evidence a human/Claude session had manually
+        # fetched and committed beforehand — Phase 5's/Phase 13a's own
+        # completed-job signal was effectively inert in the fully
+        # unattended path.
+        #
+        # Deliberately FIRST among the weekly-only refresh steps — see
+        # agent/lib/research-rotation.js's computePriorities(): BOTH this
+        # step's own immediate successor (Refresh weekly rotation
+        # evidence, which itself calls computePriorities() to decide
+        # which picks need a first-party fetch) and the final --weekly
+        # pass's own rotation report read completedJobCitySummary (via
+        # agent/lib/completed-job-intake.js's summarizeByCity()) from
+        # whatever is already on disk — running this step any later would
+        # let those two computations see DIFFERENT completed-job evidence
+        # within the same dispatch (stale for the first, fresh for the
+        # second), producing inconsistent rotation picks between them.
+        # Pulls from Supabase (the same SUPABASE_URL/SUPABASE_SECRET_KEY
+        # already required and verified above for proposal sync — no new
+        # credential), redacts through the existing business-context.js
+        # privacy boundary, and writes only already-sanitized evidence —
+        # see agent/lib/completed-job-fetch.js's header. Never logs a
+        # field value, only a count.
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --refresh-completed-jobs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+
       - name: Refresh weekly rotation evidence (weekly only)
         # Phase 7B — closes the "rotation picks a deep-review target but
         # nothing performs the review" gap (see
         # agent/lib/rotation-evidence.js's header for the full root-
-        # cause writeup). Run BEFORE the main Agent pass below, mirroring
-        # --refresh-completed-jobs's existing precedent: a separate,
+        # cause writeup). Run BEFORE the main Agent pass below, AFTER the
+        # completed-job evidence refresh immediately above (see that
+        # step's own comment on why the ordering matters) — a separate,
         # explicit, network-touching step, never inside the deterministic
         # core. Fetches ONE targeted, already-bounded Search Console
         # query per claimed-but-pageless rotation pick — never a page
@@ -292,6 +354,26 @@ jobs:
         # Console/GA4 call.
         if: inputs.run_type == 'weekly'
         run: node agent/cli.js --refresh-local-source-evidence
+
+      - name: Run cross-source evidence synthesis (weekly only)
+        # Pre-acceptance hardening (audit finding #1, baseline 2bff317) —
+        # Phase 13a's deterministic cross-source synthesis
+        # (agent/lib/run-synthesis.js, `--run-synthesis`) previously
+        # existed only as a CLI command a human/Claude orchestrator was
+        # expected to run manually before a Weekly dispatch; it was never
+        # actually wired into this unattended workflow, so Phase 13a was
+        # inert in the fully unattended path. Run AFTER every other
+        # weekly-only refresh step above (it combines whatever first-
+        # party/completed-job/local-source evidence those steps just
+        # gathered — see run-synthesis.js's header) and BEFORE the main
+        # Agent pass below, so --weekly's own report/proposal sync sees
+        # any newly-written agent/research/results/*.json synthesis
+        # result in the SAME dispatch. Pure and network-free — never
+        # touches Supabase/Google Cloud, never re-runs the audits, never
+        # changes a finding's category/tier/autoFix/autoApplyEligible —
+        # so it needs no credentials and no `env:` block.
+        if: inputs.run_type == 'weekly'
+        run: node agent/cli.js --run-synthesis
 
       - name: Run Website Agent (${{ inputs.run_type }})
         # Only for daily/weekly — neither Golden diagnostic (run_type
@@ -419,8 +501,16 @@ jobs:
         # integration-tested — tests/github-actions-safe-commit.test.js).
         # `id: persist` so the Push step below can gate on ITS specific
         # outcome rather than just "did something earlier fail."
+        #
+        # Pre-acceptance hardening (audit finding #8) — `&& github.ref ==
+        # 'refs/heads/main'` is additive defense-in-depth alongside the
+        # dedicated "Verify running on refs/heads/main" step above: that
+        # earlier step fails the job fast and loudly for a wrong-ref
+        # dispatch, but since THIS step is `always()`, it would otherwise
+        # still attempt to run (and commit) after that failure. Belt and
+        # suspenders — a wrong-ref dispatch must never persist OR push.
         id: persist
-        if: always()
+        if: always() && github.ref == 'refs/heads/main'
         run: |
           node .github/scripts/safe-commit.js "chore(agent): ${{ inputs.run_type }} run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -448,5 +538,9 @@ jobs:
         # that stale checkout's push is correctly rejected as a non-
         # fast-forward ("fetch first"). The fix is to re-dispatch a NEW
         # run (which resolves main's current tip), never to force-push.
-        if: always() && steps.persist.outcome == 'success'
+        #
+        # Pre-acceptance hardening (audit finding #8) — `&& github.ref ==
+        # 'refs/heads/main'` is the same additive defense-in-depth as the
+        # Persist step above; see that step's own comment.
+        if: always() && steps.persist.outcome == 'success' && github.ref == 'refs/heads/main'
         run: git push origin HEAD:main

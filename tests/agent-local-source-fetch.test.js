@@ -272,6 +272,25 @@ async function main() {
     }
   });
 
+  await test("writeLocalSourceEvidence() produces distinct files even when Date.now() is frozen to the SAME millisecond for both calls (pre-acceptance hardening, audit finding #6 — the prior millisecond-only filename was a reproducible collision/silent-overwrite risk)", async () => {
+    const fetchImpl = mockFetch();
+    const result = await fetchLocalSourceEvidence(ENTRY, { fetchImpl });
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-source-fetch-collision-test-"));
+    const originalNow = Date.now;
+    const frozenMs = originalNow();
+    Date.now = () => frozenMs;
+    try {
+      const path1 = writeLocalSourceEvidence(result.evidence, undefined, tmpDir);
+      const path2 = writeLocalSourceEvidence(result.evidence, undefined, tmpDir);
+      assert.notStrictEqual(path1, path2, "two writes in the identical millisecond must still produce distinct paths");
+      assert.strictEqual(fs.readdirSync(tmpDir).length, 2, "both files must actually exist on disk — neither write may have silently overwritten the other");
+      assert.ok(/-[0-9a-f]{6}\.json$/.test(path1) && /-[0-9a-f]{6}\.json$/.test(path2), "filenames must carry the random suffix, not just the raw timestamp");
+    } finally {
+      Date.now = originalNow;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   await test("EVIDENCE_DIR points at agent/research/local-sources/", () => {
     assert.ok(EVIDENCE_DIR.replace(/\\/g, "/").endsWith("agent/research/local-sources"));
   });

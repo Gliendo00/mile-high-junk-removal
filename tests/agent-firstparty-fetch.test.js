@@ -220,6 +220,25 @@ async function main() {
     }
   });
 
+  await test("writeFirstPartyEvidence() produces distinct files even when Date.now() is frozen to the SAME millisecond for both calls, for the SAME source+findingKey (pre-acceptance hardening, audit finding #6 — the prior millisecond-only filename was a reproducible collision/silent-overwrite risk)", () => {
+    const { writeFirstPartyEvidence } = freshModule("../agent/lib/firstparty-fetch");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-firstparty-fetch-collision-test-"));
+    const entry = { source: "ga4", metric: "sessions", scope: { type: "page", value: "a.html" }, window: { start: "x", end: "y", label: "z" }, observed: {}, context: "c", limitations: "l", findingKey: "same-key", dimension: null, comparisonWindow: null, fetchedAt: new Date().toISOString() };
+    const originalNow = Date.now;
+    const frozenMs = originalNow();
+    Date.now = () => frozenMs;
+    try {
+      const path1 = writeFirstPartyEvidence(entry, undefined, tmpDir);
+      const path2 = writeFirstPartyEvidence(entry, undefined, tmpDir);
+      assert.notStrictEqual(path1, path2, "two writes in the identical millisecond, for the same source+findingKey, must still produce distinct paths");
+      assert.strictEqual(fs.readdirSync(tmpDir).length, 2, "both files must actually exist on disk — neither write may have silently overwritten the other");
+      assert.ok(/-[0-9a-f]{6}\.json$/.test(path1) && /-[0-9a-f]{6}\.json$/.test(path2), "filenames must carry the random suffix, not just the raw timestamp");
+    } finally {
+      Date.now = originalNow;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   await test("writeFirstPartyEvidence() output file never contains a raw API payload marker end-to-end (fetch -> write -> read back)", async () => {
     configureAllIntegrations();
     const { fetchSearchAnalyticsEvidence, writeFirstPartyEvidence } = freshModule("../agent/lib/firstparty-fetch");

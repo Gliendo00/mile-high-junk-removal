@@ -25,6 +25,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const config = require("../config");
 const { checkRobots, isAllowedByRobots } = require("./robots");
 const { makeLocalSourceEvidence, MAX_SNIPPET_CHARS } = require("./local-source-evidence");
@@ -216,7 +217,11 @@ async function fetchLocalSourceEvidence(entry, options = {}) {
  */
 function writeLocalSourceEvidence(evidence, outFile, dir = EVIDENCE_DIR) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const fileName = outFile || `${slugify(evidence.sourceDomain)}__${slugify(evidence.topic)}-${Date.now()}.json`;
+  // Pre-acceptance hardening (audit finding #6, baseline 2bff317) — see
+  // firstparty-fetch.js's writeFirstPartyEvidence() for the identical
+  // fix and the reproducible-flake rationale; this module had the same
+  // millisecond-only collision exposure.
+  const fileName = outFile || `${slugify(evidence.sourceDomain)}__${slugify(evidence.topic)}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`;
   const filePath = path.join(dir, fileName);
   fs.writeFileSync(filePath, JSON.stringify(evidence, null, 2) + "\n", "utf8");
   return filePath;

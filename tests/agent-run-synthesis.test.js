@@ -246,6 +246,67 @@ test("evidence changing after a synthesis result was written triggers a NEW file
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("Pre-acceptance hardening (audit finding #2) — a classification-RULES-VERSION bump, with IDENTICAL raw evidence, forces re-evaluation instead of silently matching the stale fingerprint; running again at the SAME bumped version is then stable again", () => {
+  const dir = mkTempDir("run-synthesis-rules-version-");
+  const logPath = path.join(dir, "log.ndjson");
+  const resultsDir = path.join(dir, "results");
+  const completedJobsDir = path.join(dir, "completed-jobs");
+  fs.mkdirSync(completedJobsDir, { recursive: true });
+
+  const findingKey = "coverage-gap-candidate::denver-junk-removal.html";
+  const coverageFinding = {
+    id: "coverage-1",
+    key: findingKey,
+    type: "coverage-gap-candidate",
+    category: "C",
+    riskLevel: "medium",
+    tier: "opportunity",
+    autoApplyEligible: false,
+    decision: "RESEARCH_MORE",
+    summary: "furniture-removal.html missing from denver-junk-removal.html.",
+    pages: ["denver-junk-removal.html"],
+    evidence: [{ field: "serviceFile", value: "furniture-removal.html" }],
+  };
+  writeHistory(logPath, baseRecord([coverageFinding]));
+  fs.writeFileSync(path.join(completedJobsDir, "batch-1.json"), JSON.stringify([{ city: "Denver", serviceType: "furniture removal" }]));
+
+  // First run at "rules version 1" — real evidence is sufficient
+  // (city+service matched) -> supports-opportunity, written.
+  const first = runSynthesis({ logPath, resultsDir, completedJobsDir, rulesVersion: 1 });
+  assert.strictEqual(first.written.length, 1);
+  assert.strictEqual(first.written[0].verdict, "supports-opportunity");
+
+  // Re-running at the SAME rules version, SAME evidence, is correctly
+  // a no-op (the existing, already-proven freshness guarantee).
+  const repeat = runSynthesis({ logPath, resultsDir, completedJobsDir, rulesVersion: 1 });
+  assert.deepStrictEqual(repeat.unchanged, [findingKey]);
+  assert.strictEqual(fs.readdirSync(resultsDir).length, 1);
+
+  // Now simulate "the classification rules changed" (e.g. a bug fix to
+  // deriveServiceLabelForFinding()/relevantCompletedJobMatches()) via a
+  // rulesVersion bump, with the RAW EVIDENCE completely unchanged on
+  // disk. Before this fix, computeDossierFingerprint() never included a
+  // rules-version term at all, so this would have matched the prior
+  // fingerprint exactly and silently landed in `unchanged` — exactly the
+  // "a corrected rule can never retroactively invalidate a conclusion it
+  // wrote under the old rule" bug the audit found. With the fix, this
+  // MUST be re-evaluated.
+  const afterRulesChange = runSynthesis({ logPath, resultsDir, completedJobsDir, rulesVersion: 2 });
+  assert.deepStrictEqual(afterRulesChange.unchanged, [], "a rules-version bump must NOT be silently absorbed into 'unchanged' — the stale fingerprint must not match");
+  assert.strictEqual(afterRulesChange.written.length, 1, "re-evaluating under the new rules version must produce a fresh write (the real classification logic is unchanged in this test, so it re-confirms the same conclusion — but it must ACTUALLY re-derive it, not skip re-deriving it)");
+  assert.strictEqual(afterRulesChange.written[0].verdict, "supports-opportunity");
+  assert.strictEqual(fs.readdirSync(resultsDir).length, 2, "the re-evaluation under the new rules version writes a NEW file — the old one is never deleted/overwritten, same append-only guarantee as an evidence-driven supersession");
+
+  // Running again at the NEW (now-current) rules version is stable
+  // again — confirms this isn't a permanent "never settles" loop, only
+  // a one-time re-check triggered by the version actually changing.
+  const stableAgain = runSynthesis({ logPath, resultsDir, completedJobsDir, rulesVersion: 2 });
+  assert.deepStrictEqual(stableAgain.unchanged, [findingKey]);
+  assert.strictEqual(fs.readdirSync(resultsDir).length, 2);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("an OLD synthesis file coexisting with a NEWER one is resolved correctly by decision.js's EXISTING pickLatestResearch() — the newer conclusion wins, the old file is never deleted or mutated", () => {
   const dir = mkTempDir("run-synthesis-coexist-");
   const logPath = path.join(dir, "log.ndjson");

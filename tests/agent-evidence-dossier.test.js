@@ -335,6 +335,55 @@ test("computeDossierFingerprint is unaffected by GA4/GSC evidence that doesn't e
   assert.doesNotThrow(() => computeDossierFingerprint(b, {}));
 });
 
+// --- Pre-acceptance hardening (audit finding #2) -----------------------
+
+test("computeDossierFingerprint: same evidence + same rules version => same fingerprint", () => {
+  const finding = coverageGapFinding();
+  const ctx = { completedJobEvidence: [{ city: "Denver", serviceType: "Furniture Removal" }], localSourceEvidence: [] };
+  assert.strictEqual(computeDossierFingerprint(finding, ctx), computeDossierFingerprint(finding, ctx));
+});
+
+test("computeDossierFingerprint: same evidence + same rules version (explicit) => same fingerprint; same evidence + a DIFFERENT rules version => a DIFFERENT fingerprint", () => {
+  const { SYNTHESIS_RULES_VERSION } = require("../agent/lib/evidence-dossier");
+  assert.strictEqual(typeof SYNTHESIS_RULES_VERSION, "number");
+  assert.ok(Number.isFinite(SYNTHESIS_RULES_VERSION));
+
+  const finding = coverageGapFinding();
+  const ctx = { completedJobEvidence: [{ city: "Denver", serviceType: "Furniture Removal" }], localSourceEvidence: [] };
+  const fpSameVersion = computeDossierFingerprint(finding, { ...ctx, rulesVersion: SYNTHESIS_RULES_VERSION });
+  assert.strictEqual(computeDossierFingerprint(finding, { ...ctx, rulesVersion: SYNTHESIS_RULES_VERSION }), fpSameVersion, "two computations at the SAME rules version, same evidence, must fingerprint identically");
+
+  const fpBumpedVersion = computeDossierFingerprint(finding, { ...ctx, rulesVersion: SYNTHESIS_RULES_VERSION + 1 });
+  assert.notStrictEqual(fpBumpedVersion, fpSameVersion, "the SAME raw evidence at a DIFFERENT rules version must fingerprint differently — this is the exact mechanism that lets a classification-rule fix re-trigger re-evaluation of a conclusion written under the OLD rules");
+});
+
+test("computeDossierFingerprint: a service-matching change (fewer/more completed-job rows matching the finding's service label) changes the fingerprint consistently with buildCompletedJobsFamily()'s own classification", () => {
+  const { relevantCompletedJobMatches } = require("../agent/lib/evidence-dossier");
+  const finding = coverageGapFinding(); // serviceFile: furniture-removal.html -> "Furniture Removal", city: Denver
+
+  const noServiceMatch = [{ city: "Denver", serviceType: "Mattress Disposal" }]; // city matches, service does not
+  const withServiceMatch = [{ city: "Denver", serviceType: "Furniture Removal" }]; // city AND service match
+
+  // The fingerprint's own completedJobsCount must reflect the SAME
+  // service-matching logic buildCompletedJobsFamily() actually uses —
+  // this is the exact drift the audit found: previously the fingerprint
+  // only city-matched, so these two evidence sets (same city-matched
+  // count: 1) fingerprinted IDENTICALLY even though one supports the
+  // opportunity and the other doesn't.
+  assert.strictEqual(relevantCompletedJobMatches(finding, noServiceMatch).length, 0);
+  assert.strictEqual(relevantCompletedJobMatches(finding, withServiceMatch).length, 1);
+
+  const fpNoMatch = computeDossierFingerprint(finding, { completedJobEvidence: noServiceMatch, localSourceEvidence: [] });
+  const fpWithMatch = computeDossierFingerprint(finding, { completedJobEvidence: withServiceMatch, localSourceEvidence: [] });
+  assert.notStrictEqual(fpNoMatch, fpWithMatch, "a service-matching change must change the fingerprint, even though the CITY-matched row count (1) is identical in both cases");
+
+  // And this is consistent with what the family actually concludes:
+  const dossierNoMatch = assembleDossier(finding, { completedJobEvidence: noServiceMatch });
+  const dossierWithMatch = assembleDossier(finding, { completedJobEvidence: withServiceMatch });
+  assert.strictEqual(dossierNoMatch.families.completedJobs.status, "insufficient-data");
+  assert.strictEqual(dossierWithMatch.families.completedJobs.status, "supports");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

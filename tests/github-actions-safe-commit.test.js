@@ -80,6 +80,14 @@ function initTempRepo() {
   // applied to Phase 10's directory.
   fs.mkdirSync(path.join(dir, "agent", "research", "local-sources"), { recursive: true });
   fs.writeFileSync(path.join(dir, "agent", "research", "local-sources", "README.md"), "placeholder\n", "utf8");
+  // Pre-acceptance hardening (audit finding #1) — same reasoning,
+  // applied to the two directories --refresh-completed-jobs/
+  // --run-synthesis now actually write to in this workflow. Both
+  // already exist with a README.md in the real repo.
+  fs.mkdirSync(path.join(dir, "agent", "research", "completed-jobs"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "research", "completed-jobs", "README.md"), "placeholder\n", "utf8");
+  fs.mkdirSync(path.join(dir, "agent", "research", "results"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "agent", "research", "results", "README.md"), "placeholder\n", "utf8");
   // Mirrors the REAL repo's state: agent/context/business-profile.json
   // already exists and is already tracked — so a test adding a NEW
   // file under agent/context/ (e.g. local-source-registry.json) reports
@@ -156,9 +164,17 @@ async function main() {
     assert.strictEqual(isPathAllowed("agent/research/local-sources/denvergov-org__leafdrop-pumpkin-composting-program-1234567890.json"), true);
   });
 
+  await test("Pre-acceptance hardening (audit finding #1): isPathAllowed() allows agent/research/completed-jobs/*.json and agent/research/results/*.json now that this workflow actually invokes --refresh-completed-jobs/--run-synthesis, one level deep, .json only — same narrowing as every other pattern", () => {
+    assert.strictEqual(isPathAllowed("agent/research/completed-jobs/latest-refresh.json"), true);
+    assert.strictEqual(isPathAllowed("agent/research/results/content-gap__some-page-html__cross-source-synthesis-1234567890-ab12cd.json"), true);
+    assert.strictEqual(isPathAllowed("agent/research/completed-jobs/nested/evidence.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/completed-jobs/not-json.txt"), false);
+    assert.strictEqual(isPathAllowed("agent/research/results/nested/evidence.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/results/not-json.txt"), false);
+  });
+
   await test("isPathAllowed() refuses any other Agent path, website source, or credential-like file — including sibling agent/research/ directories NOT in scope", () => {
-    assert.strictEqual(isPathAllowed("agent/research/results/some-question.json"), false);
-    assert.strictEqual(isPathAllowed("agent/research/completed-jobs/latest-refresh.json"), false);
+    assert.strictEqual(isPathAllowed("agent/research/other-stuff/some-question.json"), false);
     assert.strictEqual(isPathAllowed("agent/history/.run.lock"), false);
     assert.strictEqual(isPathAllowed("index.html"), false);
     assert.strictEqual(isPathAllowed("vercel.json"), false);
@@ -288,11 +304,50 @@ async function main() {
     try {
       const before = headSha(dir);
       fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r3" }) + "\n", "utf8");
-      fs.mkdirSync(path.join(dir, "agent", "research", "results"), { recursive: true });
-      fs.writeFileSync(path.join(dir, "agent", "research", "results", "q1.json"), "{}", "utf8");
+      // agent/research/other-stuff/ is NOT one of the allowlisted
+      // agent/research/** directories (see this file's header for the
+      // exact, current list) — a genuinely unexpected path, unlike
+      // agent/research/results/ and agent/research/completed-jobs/,
+      // which the pre-acceptance hardening pass (audit finding #1) made
+      // legitimately allowed once this workflow started invoking
+      // --run-synthesis/--refresh-completed-jobs.
+      fs.mkdirSync(path.join(dir, "agent", "research", "other-stuff"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "research", "other-stuff", "q1.json"), "{}", "utf8");
       const result = runSafeCommit(dir, "chore(agent): daily run r3");
       assert.notStrictEqual(result.status, 0);
       assert.strictEqual(headSha(dir), before);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("Pre-acceptance hardening (audit finding #1): safe-commit CLI commits a new agent/research/completed-jobs/*.json snapshot (--refresh-completed-jobs output) alongside history", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r4" }) + "\n", "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "research", "completed-jobs"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "research", "completed-jobs", "latest-refresh.json"), "[]", "utf8");
+      const result = runSafeCommit(dir, "chore(agent): weekly run r4");
+      assert.strictEqual(result.status, 0);
+      assert.notStrictEqual(headSha(dir), before);
+      assert.strictEqual(runGit(["status", "--porcelain"], dir).trim(), "");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test("Pre-acceptance hardening (audit finding #1): safe-commit CLI commits a new agent/research/results/*.json synthesis result (--run-synthesis output) alongside history", () => {
+    const dir = initTempRepo();
+    try {
+      const before = headSha(dir);
+      fs.appendFileSync(path.join(dir, "agent", "history", "log.ndjson"), JSON.stringify({ runId: "r5" }) + "\n", "utf8");
+      fs.mkdirSync(path.join(dir, "agent", "research", "results"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "agent", "research", "results", "content-gap__page-html__cross-source-synthesis-1234567890-ab12cd.json"), "{}", "utf8");
+      const result = runSafeCommit(dir, "chore(agent): weekly run r5");
+      assert.strictEqual(result.status, 0);
+      assert.notStrictEqual(headSha(dir), before);
+      assert.strictEqual(runGit(["status", "--porcelain"], dir).trim(), "");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -939,7 +939,7 @@ const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
 const AGENT_PROPOSAL_SELECT =
   "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at";
 
-function mapAgentProposal(row) {
+function mapAgentProposal(row, options = {}) {
   return {
     id: row.id,
     findingKey: row.finding_key,
@@ -959,7 +959,49 @@ function mapAgentProposal(row) {
     lastRunId: row.last_run_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // Pre-acceptance hardening (audit finding #4, baseline 2bff317) —
+    // see currentOwnerReviewKeys() below for exactly what this means and
+    // why it's computed fresh at READ time rather than stored on the row
+    // itself. `false` whenever staleness genuinely could not be
+    // determined (see that function's own fail-safe behavior) — a
+    // proposal is never labeled stale on insufficient information.
+    stale: Boolean(options.stale),
   };
+}
+
+// Pre-acceptance hardening (audit finding #4) — "an approved/proposed/
+// rejected proposal must not remain apparently active indefinitely once
+// its underlying finding no longer needs owner review" (NO_CHANGE,
+// RESEARCH_MORE, APPLY_SAFE_FIX, or the finding simply stopped being
+// produced at all). Rather than a new persisted `agent_proposals.status`
+// value — which would require a CHECK-constraint migration (see
+// sql/2026-10-12_phase3-agent-proposals.sql's `status` column) — this is
+// a PURE, DERIVED, read-time annotation: never written back to the DB,
+// never changes what `status` means, computed fresh on every list
+// request from whatever the most recent Agent run actually decided
+// (agent/history/log.ndjson — the same file agent-activity/agent-reports
+// above already read this way). A row the agent hasn't touched in a
+// while (because its finding genuinely still needs review) stays
+// correctly non-stale; only a finding_key that's absent from the LATEST
+// run's own owner-review set (proposals-sync.js's needsOwnerReview())
+// is flagged.
+//
+// Fails safe in every direction: if history can't be read at all, or
+// there's no run yet, returns `null` (not an empty Set) — the caller
+// must treat `null` as "unknown, nothing is stale" (see
+// handleListAgentProposals() below), never as "everything is stale."
+function currentOwnerReviewKeys() {
+  try {
+    const history = require("../../agent/lib/history");
+    const { needsOwnerReview } = require("../../agent/lib/proposals-sync");
+    const runs = history.latestByRunId(history.readAllRuns());
+    if (!runs.length) return null;
+    const latest = [...runs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+    const findings = Array.isArray(latest.findings) ? latest.findings : [];
+    return new Set(findings.filter(needsOwnerReview).map((f) => f.key));
+  } catch (e) {
+    return null;
+  }
 }
 
 async function handleListAgentProposals(req, res) {
@@ -983,7 +1025,17 @@ async function handleListAgentProposals(req, res) {
     const { data, error } = await query;
     if (error) throw error;
 
-    res.status(200).json({ ok: true, proposals: (data || []).map(mapAgentProposal) });
+    // Pre-acceptance hardening (audit finding #4) — `null` means
+    // "unknown" (history unreadable or no run yet): every row's `stale`
+    // stays false in that case, never guessed true.
+    const reviewKeys = currentOwnerReviewKeys();
+    const proposals = (data || []).map((row) => {
+      const stillActive = row.status === "proposed" || row.status === "approved" || row.status === "rejected";
+      const stale = stillActive && reviewKeys !== null && !reviewKeys.has(row.finding_key);
+      return mapAgentProposal(row, { stale });
+    });
+
+    res.status(200).json({ ok: true, proposals });
   } catch (err) {
     console.error("Admin agent-proposals list failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Admin data is not available right now." });

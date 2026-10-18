@@ -11,8 +11,9 @@
 //
 // With mutation disabled (this runner never passes --apply-safe — see
 // the workflow's own comments), these are the ONLY files
-// `node agent/cli.js --daily`/`--weekly`/`--refresh-rotation-evidence`
-// ever writes:
+// `node agent/cli.js --daily`/`--weekly`/`--refresh-rotation-evidence`/
+// `--refresh-completed-jobs`/`--run-synthesis` (and the other weekly-only
+// `--refresh-*` commands) ever write:
 //   - agent/history/log.ndjson                      (every run, appended)
 //   - agent/history/research-rotation-state.json    (weekly runs only)
 //   - agent/research/firstparty/*.json               (weekly runs only —
@@ -23,21 +24,32 @@
 //     firstparty-fetch.js's existing writeFirstPartyEvidence(), same as
 //     an orchestrator's --fetch-firstparty already produced before this
 //     phase; only WHEN it runs changed, not what it writes.)
-//   - agent/research/local-sources/*.json            (Phase 10's manual
-//     diagnostic dispatch only — node agent/cli.js
-//     --fetch-local-source-strict=<id>; see agent/lib/local-source-
-//     fetch.js's header. Each file is a normalized, bounded text
-//     snippet from ONE human-curated/verified official page — never raw
-//     HTML, never a credential, never a verdict.)
-// All four are already git-tracked, append-only/small-diff JSON —
-// exactly the "legitimate Agent artifacts" the brief describes. Nothing
-// else is in the allowlist: not agent/research/results/ or
-// agent/research/completed-jobs/ (written only by --refresh-completed-
-// jobs/--resume, neither of which this runner invokes), not
-// agent/context/local-source-registry.json or
-// agent/context/business-profile.json (human-curated — the runner only
-// ever READS either, never writes to them), and never any top-level
-// *.html/sitemap.xml/robots.txt/vercel.json (the actual public site).
+//   - agent/research/local-sources/*.json            (weekly runs only,
+//     via --refresh-local-source-evidence — see agent/lib/local-source-
+//     fetch.js's header. Each file is a normalized, bounded text snippet
+//     from ONE human-curated/verified official page — never raw HTML,
+//     never a credential, never a verdict.)
+//   - agent/history/local-source-candidate-log.json (weekly runs only,
+//     OVERWRITTEN each run — see agent/lib/local-source-candidate-
+//     log.js's header.)
+//   - agent/research/completed-jobs/*.json           (weekly runs only,
+//     via --refresh-completed-jobs, wired into this workflow by the
+//     pre-acceptance hardening pass, baseline 2bff317 audit finding #1
+//     — see agent/lib/completed-job-fetch.js's header. Already
+//     publication-safe/redacted through business-context.js's privacy
+//     boundary before it ever reaches disk — never a raw booking field.)
+//   - agent/research/results/*.json                  (weekly runs only,
+//     via --run-synthesis — see agent/lib/run-synthesis.js's header.
+//     Each file is a categorical, deterministic combination of evidence
+//     already gathered by the steps above — never a raw payload, never
+//     content/copy, never a new finding type.)
+// All of the above are already git-tracked, append-only/small-diff JSON
+// — exactly the "legitimate Agent artifacts" the brief describes.
+// Nothing else is in the allowlist: not agent/context/local-source-
+// registry.json or agent/context/business-profile.json (human-curated —
+// the runner only ever READS either, never writes to them), and never
+// any top-level *.html/sitemap.xml/robots.txt/vercel.json (the actual
+// public site).
 //
 // Usage:
 //   node .github/scripts/safe-commit.js "commit message"
@@ -86,8 +98,7 @@ const ALLOWED_PATH_PATTERNS = [
   /^agent\/history\/log\.ndjson$/,
   /^agent\/history\/research-rotation-state\.json$/,
   // Phase 7B — narrowly scoped to exactly that one directory, one level
-  // deep, .json only — never agent/research/** broadly (results/ and
-  // completed-jobs/ stay OUT of this allowlist; see this file's header).
+  // deep, .json only — never agent/research/** broadly.
   /^agent\/research\/firstparty\/[^/]+\.json$/,
   // Phase 10 — same narrow treatment, one directory deep, .json only.
   // Deliberately does NOT include agent/context/local-source-
@@ -104,6 +115,21 @@ const ALLOWED_PATH_PATTERNS = [
   // directory pattern, never agent/context/** (the registry itself
   // stays excluded, unchanged).
   /^agent\/history\/local-source-candidate-log\.json$/,
+  // Pre-acceptance hardening (audit finding #1, baseline 2bff317) — this
+  // workflow now actually invokes --refresh-completed-jobs (previously
+  // it never did, which is exactly why this pattern wasn't here before;
+  // see this file's header). Same one-directory-deep, .json-only
+  // narrowing as every other pattern above — already publication-safe/
+  // redacted before it reaches disk (agent/lib/completed-job-fetch.js),
+  // never a raw booking field.
+  /^agent\/research\/completed-jobs\/[^/]+\.json$/,
+  // Pre-acceptance hardening (audit finding #1) — this workflow now
+  // actually invokes --run-synthesis (previously it never did). Same
+  // one-directory-deep, .json-only narrowing — a deterministic
+  // combination of evidence already gathered by the steps above, never
+  // raw content/copy and never a new finding type (agent/lib/run-
+  // synthesis.js's header).
+  /^agent\/research\/results\/[^/]+\.json$/,
 ];
 
 // Deliberately pattern-based, not a secrets-scanning dependency — this
@@ -223,7 +249,9 @@ function main() {
   if (disallowed.length > 0) {
     console.error("safe-commit: REFUSING to commit — unexpected path(s) changed outside the Agent-artifact allowlist:");
     for (const e of disallowed) console.error(`  ${e.status} ${e.path}`);
-    console.error("Only agent/history/log.ndjson, agent/history/research-rotation-state.json, agent/research/firstparty/*.json, and agent/research/local-sources/*.json are ever expected to change from an unattended --daily/--weekly/diagnostic run. Investigate before re-running.");
+    console.error(
+      "Only agent/history/log.ndjson, agent/history/research-rotation-state.json, agent/research/firstparty/*.json, agent/research/local-sources/*.json, agent/history/local-source-candidate-log.json, agent/research/completed-jobs/*.json, and agent/research/results/*.json are ever expected to change from an unattended --daily/--weekly/diagnostic run. Investigate before re-running."
+    );
     process.exitCode = 1;
     return;
   }

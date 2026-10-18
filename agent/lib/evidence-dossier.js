@@ -144,6 +144,44 @@ const { computeFirstPartyFreshness } = require("./firstparty-evidence");
 
 const FAMILIES = ["site", "gsc", "ga4", "completedJobs", "localSource"];
 
+// Pre-acceptance hardening (audit finding #2, baseline 2bff317) — a
+// single explicit version for this file's + cross-source-synthesis.js's
+// DETERMINISTIC CLASSIFICATION RULES (which family statuses are
+// possible, which finding types are in scope, how completed-job/GA4/GSC
+// evidence is matched and interpreted, the OPPORTUNITY_CLASS_RULES
+// thresholds, etc) — folded into computeDossierFingerprint()'s basis
+// below. Bump this by 1 whenever a change to those rules could change a
+// family's derived `status` (or the overall sufficiency verdict) for
+// SOME finding, even when the raw evidence counts/timestamps those
+// rules operate on haven't changed at all.
+//
+// Why this exists: computeDossierFingerprint() previously hashed only
+// raw evidence identity (counts + timestamps) — it had no way to notice
+// that the RULES deriving a conclusion from that evidence had changed.
+// Concretely: fix a bug in deriveServiceLabelForFinding()'s matching
+// logic, re-run --run-synthesis against the SAME on-disk completed-job
+// evidence (same count, same timestamps) — the fingerprint would be
+// byte-identical to before the fix, so run-synthesis.js's existing
+// `priorSynthesis.synthesisFingerprint === fingerprint` short-circuit
+// (see that file's header) would skip re-evaluating this finding
+// forever, even though re-deriving with the FIXED code might now
+// legitimately reach a different conclusion. A prior
+// supports-opportunity/contradicts-opportunity result would then stay
+// authoritative indefinitely, never re-checked against the corrected
+// rules — exactly the "stale belief survives a code fix" failure this
+// phase's own stale-support-supersession design (see
+// cross-source-synthesis.js's header) was built to prevent for evidence
+// changes, but did not yet cover for RULE changes.
+//
+// Deliberately a single bare integer, not a generic
+// migration/versioning framework: whoever next changes a classification
+// rule in this file or cross-source-synthesis.js is expected to bump
+// this by hand, the same way a database migration file is hand-numbered
+// — see this file's own comment for why that's sufficient here (an
+// explicit, reviewable diff on every rule change, not automatic
+// detection of "did the rules change").
+const SYNTHESIS_RULES_VERSION = 1;
+
 // Only these five finding types are in scope for Phase 13a (verified
 // against agent/lib/risk.js's RULES — every category "C" type EXCEPT
 // "research-gap", which risk.js still lists but no audit module ever
@@ -335,6 +373,48 @@ function buildGa4Family(finding) {
 // duplication/intent-overlap, which completed-job counts don't bear on.
 const COMPLETED_JOBS_APPLICABLE_TYPES = new Set(["content-gap", "coverage-gap-candidate"]);
 
+/**
+ * The exact completed-job evidence entries buildCompletedJobsFamily()
+ * treats as relevant votes for this finding — city-matched always,
+ * additionally service-matched for coverage-gap-candidate once a
+ * service label is resolvable. Factored out as its OWN function (rather
+ * than inlined separately in buildCompletedJobsFamily() and
+ * computeDossierFingerprint(), as it originally was) specifically so the
+ * two can never drift apart again — see computeDossierFingerprint()'s
+ * own header for the real drift bug this closes (pre-acceptance
+ * hardening, audit finding #2, baseline 2bff317): the fingerprint used
+ * to count only city-matched rows, never applying
+ * coverage-gap-candidate's own service filter, so a change in which
+ * completed jobs service-match (without any change in the city-matched
+ * count) could silently change buildCompletedJobsFamily()'s status
+ * (insufficient-data <-> supports) while leaving the fingerprint
+ * unchanged — exactly the "evidence changed in a way that matters, but
+ * the fingerprint didn't notice" failure mode run-synthesis.js's
+ * freshness check exists to prevent.
+ * @param {object} finding
+ * @param {object[]} completedJobEvidence
+ * @returns {object[]}
+ */
+function relevantCompletedJobMatches(finding, completedJobEvidence) {
+  if (!COMPLETED_JOBS_APPLICABLE_TYPES.has(finding.type)) return [];
+  const cityName = deriveCityNameForFinding(finding);
+  if (!cityName) return [];
+
+  const cityMatches = (completedJobEvidence || []).filter((e) => e && typeof e.city === "string" && e.city.toLowerCase() === cityName.toLowerCase());
+  if (finding.type !== "coverage-gap-candidate") return cityMatches;
+
+  const serviceLabel = deriveServiceLabelForFinding(finding);
+  // No resolvable service label: buildCompletedJobsFamily() falls back
+  // to reporting the (unfiltered) city matches as its own
+  // "insufficient-data" detail in this exact case — mirror that here so
+  // the fingerprint still reacts to a changing city-matched set even
+  // when the service label can't be resolved (a condition that is
+  // itself already captured by `siteEvidence` in the fingerprint basis,
+  // since it's derived from the finding's own evidence fields).
+  if (!serviceLabel) return cityMatches;
+  return cityMatches.filter((e) => typeof e.serviceType === "string" && e.serviceType.toLowerCase().includes(serviceLabel.toLowerCase()));
+}
+
 function buildCompletedJobsFamily(finding, completedJobEvidence) {
   if (!COMPLETED_JOBS_APPLICABLE_TYPES.has(finding.type)) {
     return {
@@ -375,7 +455,7 @@ function buildCompletedJobsFamily(finding, completedJobEvidence) {
         evidenceRefs: cityMatches.slice(0, 3).map((e) => `${cityName}: ${e.serviceType || "(no serviceType)"}`),
       };
     }
-    const serviceMatches = cityMatches.filter((e) => typeof e.serviceType === "string" && e.serviceType.toLowerCase().includes(serviceLabel.toLowerCase()));
+    const serviceMatches = relevantCompletedJobMatches(finding, completedJobEvidence);
     if (serviceMatches.length === 0) {
       return {
         family: "completedJobs",
@@ -474,15 +554,30 @@ function assembleDossier(finding, context = {}) {
  */
 function computeDossierFingerprint(finding, context = {}) {
   const crypto = require("crypto");
+  // `context.rulesVersion` is an injectable override for tests ONLY
+  // (see tests/agent-evidence-dossier.test.js and
+  // tests/agent-run-synthesis.test.js's rules-version-bump scenarios) —
+  // production callers never pass it, so this always resolves to the
+  // real SYNTHESIS_RULES_VERSION constant above in actual runs. Lets a
+  // test simulate "the classification rules changed" deterministically,
+  // without needing a generic migration/versioning framework or
+  // mutating the module's own source at test time.
+  const rulesVersion = context.rulesVersion !== undefined ? context.rulesVersion : SYNTHESIS_RULES_VERSION;
   const gsc = (finding.firstPartyEvidence || []).filter((e) => e.source === "search-console-search-analytics");
   const ga4 = (finding.firstPartyEvidence || []).filter((e) => e.source === "ga4");
   const cityName = deriveCityNameForFinding(finding);
-  const completedJobs = (context.completedJobEvidence || []).filter((e) => e && cityName && typeof e.city === "string" && e.city.toLowerCase() === cityName.toLowerCase());
+  // Pre-acceptance hardening (audit finding #2) — reuses the SAME
+  // matching function buildCompletedJobsFamily() itself calls (via
+  // relevantCompletedJobMatches()), instead of a separately-maintained,
+  // weaker city-only filter that used to live here. See that function's
+  // own header for the exact drift bug this closes.
+  const completedJobs = relevantCompletedJobMatches(finding, context.completedJobEvidence || []);
   const localSource = (context.localSourceEvidence || []).filter((e) => e && cityName && typeof e.locality === "string" && e.locality.toLowerCase().includes(cityName.toLowerCase()));
 
   const latestTimestamp = (entries, field) => entries.map((e) => e[field]).sort().slice(-1)[0] || null;
 
   const basis = {
+    rulesVersion,
     findingType: finding.type,
     siteEvidence: (finding.evidence || []).map((e) => `${e.field}=${JSON.stringify(e.value)}`),
     gscCount: gsc.length,
@@ -500,8 +595,10 @@ module.exports = {
   FAMILIES,
   IN_SCOPE_FINDING_TYPES,
   COMPLETED_JOBS_APPLICABLE_TYPES,
+  SYNTHESIS_RULES_VERSION,
   deriveCityNameForFinding,
   deriveServiceLabelForFinding,
+  relevantCompletedJobMatches,
   assembleDossier,
   computeDossierFingerprint,
 };

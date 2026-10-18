@@ -442,6 +442,74 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
   );
 });
 
+  await test("Pre-acceptance hardening (audit finding #8): a hard guard step fails the job if the workflow is not running against refs/heads/main, declared early (before any Agent/Google Cloud work)", () => {
+    const lines = code.split("\n");
+    const guardIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Verify running on refs\/heads\/main/.test(l));
+    assert.ok(guardIdx > -1, "expected a dedicated step verifying the ref");
+    const block = extractStepBlock(code, /Verify running on refs\/heads\/main/);
+    assert.ok(/if:\s*github\.ref\s*!=\s*['"]refs\/heads\/main['"]/.test(block), "must fail specifically when NOT on refs/heads/main");
+    assert.ok(/::error::/.test(block), "must fail loudly with a clear error, never a silent skip");
+    assert.ok(/exit 1/.test(block));
+
+    const checkoutIdx = lines.findIndex((l) => /^\s*- name:\s*Checkout\b/.test(l));
+    const supabaseIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Verify required Supabase configuration/.test(l));
+    assert.ok(checkoutIdx > -1 && supabaseIdx > -1 && guardIdx > checkoutIdx && guardIdx < supabaseIdx, "the ref guard must run early — after checkout, before any credential verification or Agent/Google Cloud work");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #8): the Persist and Push steps ALSO gate on github.ref == refs/heads/main directly (defense in depth, since both are if: always() and would otherwise still run after the guard step fails)", () => {
+    const persistBlock = extractStepBlock(code, /Persist Agent artifacts/);
+    assert.ok(/if:\s*always\(\)\s*&&\s*github\.ref\s*==\s*['"]refs\/heads\/main['"]/.test(persistBlock), "the persist step's own if: must also require github.ref == refs/heads/main");
+
+    const pushBlock = extractStepBlock(code, /Push to main/);
+    assert.ok(/github\.ref\s*==\s*['"]refs\/heads\/main['"]/.test(pushBlock), "the push step's own if: must also require github.ref == refs/heads/main");
+    assert.ok(/steps\.persist\.outcome\s*==\s*['"]success['"]/.test(pushBlock), "the existing persist-outcome gate must still be present, unchanged");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #1): the completed-job evidence refresh step exists, runs ONLY for weekly dispatches, runs BEFORE the rotation-evidence refresh step (which also reads completed-job evidence via computePriorities()) and BEFORE the main Agent step", () => {
+    const block = extractStepBlock(code, /Refresh completed-job evidence/);
+    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
+    assert.ok(/--refresh-completed-jobs/.test(block));
+    assert.strictEqual(/apply-safe/.test(block), false);
+    assert.strictEqual(/continue-on-error/.test(block), false);
+    assert.ok(/secrets\.SUPABASE_URL/.test(block) && /secrets\.SUPABASE_SECRET_KEY/.test(block), "needs the same Supabase credentials proposal sync already uses — no separate credential path");
+
+    const lines = code.split("\n");
+    const completedJobsIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh completed-job evidence/.test(l));
+    const rotationIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
+    const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+    assert.ok(completedJobsIdx > -1 && rotationIdx > -1 && mainRunIdx > -1);
+    assert.ok(rotationIdx > completedJobsIdx, "completed-job evidence must be refreshed BEFORE rotation-evidence refresh, since research-rotation.js's computePriorities() (called by both the rotation-evidence refresh step and the final --weekly pass) scores using completedJobCitySummary — refreshing it any later would let the two computations see different completed-job evidence within the same dispatch");
+    assert.ok(mainRunIdx > completedJobsIdx, "completed-job evidence refresh must run BEFORE the main --daily/--weekly Agent pass");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #1): the cross-source synthesis step exists, runs ONLY for weekly dispatches, runs AFTER every other weekly-only refresh step and BEFORE the main Agent step, and needs no credentials", () => {
+    const block = extractStepBlock(code, /Run cross-source evidence synthesis/);
+    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
+    assert.ok(/--run-synthesis/.test(block));
+    assert.strictEqual(/apply-safe/.test(block), false);
+    assert.strictEqual(/continue-on-error/.test(block), false);
+    assert.strictEqual(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT|GSC_SITE_URL|GA4_PROPERTY_ID|SUPABASE_URL|SUPABASE_SECRET_KEY/.test(block), false, "run-synthesis is pure/network-free — it must declare no credentials at all");
+
+    const lines = code.split("\n");
+    const completedJobsIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh completed-job evidence/.test(l));
+    const localSourceIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh local-source evidence/.test(l));
+    const synthesisIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run cross-source evidence synthesis/.test(l));
+    const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+    assert.ok(completedJobsIdx > -1 && localSourceIdx > -1 && synthesisIdx > -1 && mainRunIdx > -1);
+    assert.ok(synthesisIdx > completedJobsIdx && synthesisIdx > localSourceIdx, "synthesis must run AFTER every weekly-only evidence-refresh step, since it combines whatever they just gathered");
+    assert.ok(mainRunIdx > synthesisIdx, "synthesis must run BEFORE the main --daily/--weekly Agent pass, so --weekly's own report/proposal sync sees any newly-written synthesis result in the same dispatch");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #1): neither the new completed-job-evidence refresh step nor the new synthesis step disturbs any diagnostic's isolation — no diagnostic invokes either new flag, and the main Agent pass stays gated to daily/weekly only", () => {
+    for (const diagName of [/Run Golden Search Console diagnostic/, /Run Golden GA4 diagnostic/, /Run Denver LeafDrop local-source diagnostic/]) {
+      const block = extractStepBlock(code, diagName);
+      assert.strictEqual(/--refresh-completed-jobs/.test(block), false);
+      assert.strictEqual(/--run-synthesis/.test(block), false);
+    }
+    const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
+    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
+  });
+
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {
     assert.ok(/uses:\s*actions\/checkout@v\d/.test(code));
     assert.ok(/npm ci\b/.test(code));

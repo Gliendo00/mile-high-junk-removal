@@ -33,6 +33,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const config = require("../config");
 const { querySearchAnalytics, inspectUrl, isSearchConsoleConfigured } = require("./search-console-client");
 const { runReport, isGa4Configured } = require("./ga4-client");
@@ -408,7 +409,15 @@ function writeFirstPartyEvidence(entryOrEntries, outFile, dir = EVIDENCE_DIR) {
   const entries = Array.isArray(entryOrEntries) ? entryOrEntries : [entryOrEntries];
   if (entries.length === 0) throw new Error("writeFirstPartyEvidence requires at least one evidence entry");
   const first = entries[0];
-  const fileName = outFile || `${slugify(first.source)}__${slugify(first.findingKey || first.scope.value)}-${Date.now()}.json`;
+  // Pre-acceptance hardening (audit finding #6, baseline 2bff317) —
+  // Date.now() alone is millisecond-resolution and collided in practice
+  // (a reproducible test flake: two writes for the same source/
+  // findingKey issued back-to-back can land in the same millisecond,
+  // producing the SAME filename and silently overwriting the first
+  // file's evidence, with no error). A short crypto-random suffix closes
+  // this — the same pattern agent/lib/run-synthesis.js's own
+  // writeSynthesisResult() already uses for exactly this reason.
+  const fileName = outFile || `${slugify(first.source)}__${slugify(first.findingKey || first.scope.value)}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`;
   const filePath = path.join(dir, fileName);
   fs.writeFileSync(filePath, JSON.stringify(entries, null, 2) + "\n", "utf8");
   return filePath;

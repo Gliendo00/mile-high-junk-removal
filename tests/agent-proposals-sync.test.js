@@ -177,6 +177,161 @@ async function main() {
     assert.strictEqual(table.rows[0].summary, "v2 different");
   });
 
+  // --- Pre-acceptance hardening (audit finding #3) -----------------------
+
+  await test("Pre-acceptance hardening (audit finding #3): a decision reversal (PROPOSE_CHANGE -> REJECT_OPPORTUNITY) resets a reviewed proposal back to 'proposed' even when the summary text is UNCHANGED", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "a.html has no canonical link tag.", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+    table.rows[0].reviewed_at = "2026-10-12T00:00:00.000Z";
+    table.rows[0].review_note = "Fine as proposed.";
+
+    // Same summary text, but the DECISION reverses (e.g. new research
+    // came back contradicting the opportunity) — decidedFinding() always
+    // runs real decide(), so force the reversal explicitly to isolate
+    // exactly the scenario under test.
+    const finding2 = { ...finding, decision: "REJECT_OPPORTUNITY", reason: "research contradicts this opportunity" };
+    assert.strictEqual(finding2.summary, finding.summary, "fixture sanity check: summary text is unchanged");
+
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows.length, 1);
+    assert.strictEqual(table.rows[0].decision, "REJECT_OPPORTUNITY");
+    assert.strictEqual(table.rows[0].status, "proposed", "a decision reversal must force fresh review even though the summary text never changed");
+    assert.strictEqual(table.rows[0].reviewed_by, null);
+    assert.strictEqual(table.rows[0].reviewed_at, null);
+    assert.strictEqual(table.rows[0].review_note, null);
+  });
+
+  await test("Pre-acceptance hardening (audit finding #3): a MATERIAL research reversal (verdict flips, same decision, same summary) resets a reviewed proposal back to 'proposed'", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "a.html has no canonical link tag.", pages: ["a.html"], evidence: [{ x: 1 }] });
+    finding.research = [{ sourceType: "cross-source-synthesis", verdict: "supports-opportunity", confidence: "medium", sufficiency: "partially-corroborated", accessedAt: "2026-10-01T00:00:00.000Z" }];
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    // Same decision, same summary, but the LATEST EFFECTIVE research
+    // verdict materially reverses (stale-support supersession writing a
+    // later, contradicting/inconclusive result — see
+    // agent/lib/cross-source-synthesis.js).
+    const finding2 = {
+      ...finding,
+      research: [...finding.research, { sourceType: "cross-source-synthesis", verdict: "inconclusive", confidence: "low", sufficiency: "unsupported", accessedAt: "2026-10-08T00:00:00.000Z" }],
+    };
+    assert.strictEqual(finding2.summary, finding.summary);
+    assert.strictEqual(finding2.decision, finding.decision);
+
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows[0].status, "proposed", "a material research-verdict reversal must force fresh review, even with an unchanged decision/summary");
+    assert.strictEqual(table.rows[0].reviewed_by, null);
+  });
+
+  await test("Pre-acceptance hardening (audit finding #3): a NON-MATERIAL re-sync (identical decision/summary/evidence/latest-effective-research-verdict, only the underlying research array's provenance/order/timestamp differs) does NOT reset a reviewed proposal", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "a.html has no canonical link tag.", pages: ["a.html"], evidence: [{ x: 1 }] });
+    finding.research = [{ sourceType: "cross-source-synthesis", verdict: "supports-opportunity", confidence: "medium", sufficiency: "partially-corroborated", accessedAt: "2026-10-01T00:00:00.000Z", evidence: ["gsc: supports — detail A"] }];
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+    table.rows[0].reviewed_at = "2026-10-12T00:00:00.000Z";
+    table.rows[0].review_note = "Looks fine.";
+
+    // A later run re-confirms the SAME conclusion under a NEWER file
+    // (research-intake.js never deletes the old one — both now match
+    // this findingKey) — same verdict/confidence/sufficiency, only the
+    // accessedAt/evidence-text provenance differs, and pickLatestResearch()
+    // naturally prefers the newer one. This must NOT read as a material
+    // change.
+    const finding2 = {
+      ...finding,
+      research: [...finding.research, { sourceType: "cross-source-synthesis", verdict: "supports-opportunity", confidence: "medium", sufficiency: "partially-corroborated", accessedAt: "2026-10-05T00:00:00.000Z", evidence: ["gsc: supports — detail A (re-confirmed)"] }],
+    };
+
+    await syncProposals([finding2], "run-2", { client: table });
+    assert.strictEqual(table.rows[0].status, "approved", "re-confirming the SAME conclusion under new provenance/timestamps must NOT reset an owner's prior review");
+    assert.strictEqual(table.rows[0].reviewed_by, "owner@milehighjunkremoval.net");
+    assert.strictEqual(table.rows[0].reviewed_at, "2026-10-12T00:00:00.000Z");
+    assert.strictEqual(table.rows[0].review_note, "Looks fine.");
+  });
+
+  // --- Pre-acceptance hardening (audit finding #4) -----------------------
+
+  await test("Pre-acceptance hardening (audit finding #4): a finding that drops out of the owner-review set (decision moves to NO_CHANGE) is simply left untouched in the DB — the approved row is never silently mutated by a sync that doesn't include it", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    // The finding is now NO_CHANGE (e.g. stale-support supersession) —
+    // needsOwnerReview() correctly excludes it from `toSync`.
+    const resolvedFinding = { ...finding, decision: "NO_CHANGE" };
+    const result = await syncProposals([resolvedFinding], "run-2", { client: table });
+    assert.strictEqual(result.total, 0, "a NO_CHANGE finding must never be in toSync");
+    assert.strictEqual(table.rows[0].status, "approved", "the existing row is left exactly as it was — this run simply never touches it");
+    assert.strictEqual(table.rows[0].reviewed_by, "owner@milehighjunkremoval.net");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #4): a finding that drops to RESEARCH_MORE is likewise left untouched (not synced), same as NO_CHANGE", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+
+    const researchMoreFinding = { ...finding, decision: "RESEARCH_MORE" };
+    const result = await syncProposals([researchMoreFinding], "run-2", { client: table });
+    assert.strictEqual(result.total, 0);
+    assert.strictEqual(table.rows[0].status, "approved");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #4): a proposal that REAPPEARS in the owner-review set after being absent from the immediately preceding run returns to 'proposed' — it must NOT silently inherit the old approval, even when content happens to be identical", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    // Run 2: this finding_key was NOT in the owner-review set (it had
+    // gone quiet — e.g. NO_CHANGE for a run or two). previousOwnerReviewKeys
+    // reflects that absence.
+    const previousOwnerReviewKeysWhenAbsent = new Set(); // this key was NOT present
+    // Run 2 doesn't even call syncProposals with this finding (it wasn't
+    // in toSync while absent) — jump straight to run 3, where it
+    // reappears with IDENTICAL content to what was approved.
+    const reappeared = { ...finding };
+    const result = await syncProposals([reappeared], "run-3", { client: table, previousOwnerReviewKeys: previousOwnerReviewKeysWhenAbsent });
+    assert.strictEqual(table.rows.length, 1, "must update the existing row, never insert a second one");
+    assert.strictEqual(table.rows[0].status, "proposed", "reappearing after an absence must require fresh review, even though the content is byte-identical to what was approved before");
+    assert.strictEqual(table.rows[0].reviewed_by, null, "the stale approval's attribution must be cleared");
+    assert.strictEqual(result.statusByKey[finding.key], "proposed");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #4): a proposal that was CONTINUOUSLY present in every run's owner-review set is NOT treated as 'reappearing' — previousOwnerReviewKeys containing its key must not force a reset on its own", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    const previousOwnerReviewKeysWhenPresent = new Set([finding.key]);
+    await syncProposals([finding], "run-2", { client: table, previousOwnerReviewKeys: previousOwnerReviewKeysWhenPresent });
+    assert.strictEqual(table.rows[0].status, "approved", "a continuously-present, content-unchanged proposal must not be reset merely because previousOwnerReviewKeys was supplied");
+    assert.strictEqual(table.rows[0].reviewed_by, "owner@milehighjunkremoval.net");
+  });
+
+  await test("Pre-acceptance hardening (audit finding #4): when previousOwnerReviewKeys is not supplied at all (e.g. an older caller, or genuinely unknown), reappearance detection fails safe and never forces a reset on its own", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    await syncProposals([finding], "run-2", { client: table }); // no previousOwnerReviewKeys option at all
+    assert.strictEqual(table.rows[0].status, "approved", "absence of previousOwnerReviewKeys information must never itself trigger a reset");
+  });
+
   await test("syncProposals never writes finding_key/finding_type/pages/evidence via the UPDATE path's payload keys that the DB grants don't allow (defense-in-depth check on this module's own payload shape)", async () => {
     const table = new FakeProposalsTable();
     const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });

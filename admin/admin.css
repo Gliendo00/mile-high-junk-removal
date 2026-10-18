@@ -3910,6 +3910,23 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-proposal-status-validated { background: #1d4ed8; color: #fff; }
 .admin-proposal-status-failed { background: #6b7280; color: #fff; }
 
+/* Pre-acceptance hardening (audit finding #4) — a deliberately NEUTRAL/
+   outline pill (never a solid fill like the status badges above): this
+   is a derived, read-time annotation about the underlying FINDING
+   having moved on (NO_CHANGE/RESEARCH_MORE/gone), not a new review
+   state — the status pill next to it still truthfully shows whatever
+   the owner (or the lack of one) actually decided. */
+.admin-proposal-stale-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #92400e;
+  color: #92400e;
+  background: #fff7ed;
+}
+
 .admin-proposal-card {
   background: #fff;
   border: 1px solid var(--color-neutral-200, #eee7db);

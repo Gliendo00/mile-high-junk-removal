@@ -76,7 +76,7 @@ const { isGa4Configured } = require("./lib/ga4-client");
 const { appendRun, readAllRuns } = require("./lib/history");
 const rewriteHref = require("./lib/apply/rewrite-href");
 const { validateAndRevertIfNeeded } = require("./lib/validate");
-const { syncProposals } = require("./lib/proposals-sync");
+const { syncProposals, needsOwnerReview } = require("./lib/proposals-sync");
 const { acquireLock } = require("./lib/run-lock");
 const { buildReport } = require("./lib/report");
 const { loadCompletedJobEvidence, summarizeByCity } = require("./lib/completed-job-intake");
@@ -316,6 +316,30 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
 
   const confirmedAppliedCount = appliedFindings.filter((f) => f.status === "applied").length;
 
+  // Pre-acceptance hardening (audit finding #4) — moved up from where
+  // this used to run only for change-detection further below, so
+  // proposals-sync.js can also use it (see `previousOwnerReviewKeys`
+  // immediately below). Reused verbatim at the change-detection call
+  // site further down this function — the underlying history file isn't
+  // written to again until this run's own appendRun() at the very end,
+  // so reading it again later would just repeat the same read.
+  const { previousRun, warning: historyWarning } = readPreviousRun(options.logPath, priorRecord ? runId : null);
+
+  // Pre-acceptance hardening (audit finding #4) — the set of finding
+  // `key`s that needed owner review (proposals-sync.js's own
+  // needsOwnerReview()) as of the immediately preceding run, so
+  // syncProposals() can tell "this finding_key has been continuously
+  // present" apart from "this finding_key just reappeared after being
+  // absent" — see proposals-sync.js's own header for why a reviewed
+  // decision must not silently carry forward across that gap. `null`
+  // (never an empty Set) when there is no previous run at all (the
+  // very first run ever) — proposals-sync.js treats `null` as "unknown,
+  // never force a reset on this alone," never as "everything was
+  // absent."
+  const previousOwnerReviewKeys = previousRun && Array.isArray(previousRun.findings)
+    ? new Set(previousRun.findings.filter(needsOwnerReview).map((f) => f.key))
+    : null;
+
   // Phase 5 — sync PROPOSE_CHANGE/REJECT_OPPORTUNITY findings into the
   // live, CRM-mutable agent_proposals table BEFORE building the per-
   // finding record entries below, so each finding's resulting
@@ -325,7 +349,7 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
   // configured — never thrown, never affects whether the run succeeds.
   const proposalsSync = options.syncProposals === false
     ? { skipped: true, reason: "sync disabled for this run", synced: 0, total: 0, errors: [], statusByKey: {} }
-    : await syncProposals(findings, runId, { client: options.proposalsSyncClient });
+    : await syncProposals(findings, runId, { client: options.proposalsSyncClient, previousOwnerReviewKeys });
   const statusByKey = proposalsSync.statusByKey || {};
   for (const f of findings) {
     f.proposalStatus = statusByKey[f.key] || null;
@@ -425,7 +449,11 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
   // Phase 5B: when RESUMING (priorRecord set), exclude this same runId
   // from "previous run" lookup (see readPreviousRun's header — a resumed
   // run must never diff itself against its own research_pending line).
-  const { previousRun, warning: historyWarning } = readPreviousRun(options.logPath, priorRecord ? runId : null);
+  //
+  // `previousRun`/`historyWarning` were already computed earlier in this
+  // function (pre-acceptance hardening, audit finding #4 — see that
+  // comment for why) — reused here verbatim rather than re-reading the
+  // same, unmodified-since-then history file a second time.
   if (historyWarning) {
     record.researchWarnings = [...(record.researchWarnings || []), historyWarning];
   }

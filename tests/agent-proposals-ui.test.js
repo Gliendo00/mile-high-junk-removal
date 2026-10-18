@@ -32,6 +32,17 @@ test("admin/agent-proposals.js never uses innerHTML/insertAdjacentHTML/document.
   assert.ok(!/document\.write\s*\(/.test(proposalsJs));
 });
 
+test("Pre-acceptance hardening (audit finding #4): admin/agent-proposals.js renders a 'Stale' indicator from proposal.stale using the same safe el()/textContent helper, never innerHTML, and never hides/overrides the real status badge", () => {
+  assert.ok(/proposal\.stale/.test(proposalsJs), "expected the card builder to read the derived `stale` flag");
+  assert.ok(/admin-proposal-stale-badge/.test(proposalsJs), "expected a dedicated, neutral badge class — distinct from the colored status pills");
+  // The stale badge must be appended ALONGSIDE the existing status
+  // badge (both pushed onto `top`), never replacing it.
+  const topBlockMatch = proposalsJs.match(/var top = el\('div', 'admin-proposal-card-top'\);([\s\S]*?)card\.appendChild\(top\);/);
+  assert.ok(topBlockMatch, "expected to find the card-top assembly block");
+  assert.ok(/top\.appendChild\(badge\)/.test(topBlockMatch[1]));
+  assert.ok(/if \(proposal\.stale\)/.test(topBlockMatch[1]) && /top\.appendChild\(el\('span', 'admin-proposal-stale-badge'/.test(topBlockMatch[1]));
+});
+
 test("admin/agent-proposals.js fetches the list view and PATCHes the review resource", () => {
   assert.ok(proposalsJs.includes("/api/admin/bookings?view=agent-proposals"));
   assert.ok(proposalsJs.includes("/api/admin/bookings?resource=agent-proposal"));

@@ -147,6 +147,12 @@ function nextAccessedAt(now, priorSynthesis) {
  * @param {string} [options.resultsDir] - defaults to research-intake.js's RESULTS_DIR
  * @param {string} [options.completedJobsDir]
  * @param {Date} [options.now]
+ * @param {number} [options.rulesVersion] - TEST-ONLY override passed straight
+ *   through to evidence-dossier.js's computeDossierFingerprint() (see that
+ *   function's own header) — lets a test simulate "the classification
+ *   rules changed" without touching the real SYNTHESIS_RULES_VERSION
+ *   constant. Production callers (agent/cli.js's --run-synthesis) never
+ *   pass this, so real runs always use the real constant.
  * @returns {{candidates:number, written:object[], superseded:object[], unchanged:string[], belowThreshold:string[], errors:object[], warnings:string[]}}
  */
 function runSynthesis(options = {}) {
@@ -181,7 +187,7 @@ function runSynthesis(options = {}) {
   for (const finding of candidates) {
     try {
       const dossier = assembleDossier(finding, { completedJobEvidence, localSourceEvidence, now });
-      const fingerprint = computeDossierFingerprint(finding, { completedJobEvidence, localSourceEvidence });
+      const fingerprint = computeDossierFingerprint(finding, { completedJobEvidence, localSourceEvidence, rulesVersion: options.rulesVersion });
 
       const priorSynthesis = existingSynthesisForKey(existingResults, finding.key);
       if (priorSynthesis && priorSynthesis.synthesisFingerprint === fingerprint) {

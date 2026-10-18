@@ -76,6 +76,17 @@ document.addEventListener('DOMContentLoaded', function () {
     var badge = el('span', 'admin-status-badge admin-proposal-status-' + proposal.status, STATUS_LABELS[proposal.status] || proposal.status);
     top.appendChild(el('span', null, proposal.findingType));
     top.appendChild(badge);
+    // Pre-acceptance hardening (audit finding #4) — `stale` is a
+    // derived, read-time flag (see api/admin/bookings.js's
+    // currentOwnerReviewKeys()): the underlying finding no longer needs
+    // owner review (it moved to NO_CHANGE/RESEARCH_MORE, or stopped
+    // appearing entirely) even though this row's own status is still
+    // showing whatever was last decided (or not decided) on it. Never
+    // hides/changes the real status badge above — only adds this
+    // explicit, truthful caveat next to it.
+    if (proposal.stale) {
+      top.appendChild(el('span', 'admin-proposal-stale-badge', 'Stale — finding no longer needs review'));
+    }
     card.appendChild(top);
 
     card.appendChild(el('p', 'admin-proposal-card-summary', proposal.summary));
