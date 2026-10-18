@@ -91,13 +91,21 @@ document.addEventListener('DOMContentLoaded', function () {
     timeWindowSelect.style.display = isExact ? 'none' : 'block';
   });
 
-  setupSegmented(quoteModeToggle, function (mode) {
+  // Named (not an inline setupSegmented callback) so applyLeadPrefill()
+  // below can also switch into range mode programmatically when a lead's
+  // quoted amount carries a preserved max, not just in response to a click.
+  function setQuoteMode(mode) {
     quoteMode = mode;
     var isRange = mode === 'range';
     quoteToLabel.style.display = isRange ? 'inline' : 'none';
     quoteMaxWrap.style.display = isRange ? 'flex' : 'none';
     if (!isRange) estimatedPriceMaxInput.value = '';
-  });
+    var buttons = quoteModeToggle.querySelectorAll('.admin-segmented-btn');
+    Array.prototype.forEach.call(buttons, function (b) {
+      b.classList.toggle('is-active', b.getAttribute('data-mode') === mode);
+    });
+  }
+  setupSegmented(quoteModeToggle, setQuoteMode);
 
   var selectedClient = null;
   var toastTimer = null;
@@ -241,7 +249,19 @@ document.addEventListener('DOMContentLoaded', function () {
     if (lead.state) serviceStateInput.value = lead.state;
     if (lead.zip) serviceZipInput.value = lead.zip;
     if (lead.serviceType) serviceTypeSelect.value = lead.serviceType;
-    if (lead.quotedAmount !== null && lead.quotedAmount !== undefined) estimatedPriceInput.value = lead.quotedAmount;
+    // Estimate range preservation: a lead confirmed from a range quote
+    // ("$200-$275") carries both ends (quotedAmount/quotedAmountMax — see
+    // api/admin/lead.js's parseQuotedAmountRange()). Switching into range
+    // mode here, rather than only ever filling the single exact-estimate
+    // input, is what actually prevents the conversion from silently
+    // collapsing that range into a fixed number.
+    if (lead.quotedAmount !== null && lead.quotedAmount !== undefined) {
+      estimatedPriceInput.value = lead.quotedAmount;
+      if (lead.quotedAmountMax !== null && lead.quotedAmountMax !== undefined) {
+        setQuoteMode('range');
+        estimatedPriceMaxInput.value = lead.quotedAmountMax;
+      }
+    }
     prefillDescriptionNotes(lead.serviceDetails, lead.notes);
     updateDumpsterVisibility();
 

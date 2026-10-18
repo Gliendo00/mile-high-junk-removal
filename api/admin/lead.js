@@ -99,19 +99,56 @@ function fieldValue(fields, key) {
   return raw ? sanitizeText(raw, MAX_TEXT) : null;
 }
 
-// leads.quoted_amount is numeric — the intake field it comes from is free
-// text an admin typed or the model read off a screenshot (e.g. "$350",
-// "around 300-350"). Strips everything but digits/decimal point and
-// parses; an unparseable or ambiguous string (a range, "TBD", empty)
-// becomes null rather than guessed at — the admin can fill it in from the
-// Leads workspace afterward. Never blocks lead creation either way.
-function parseQuotedAmount(raw) {
-  if (!raw) return null;
-  const cleaned = raw.replace(/[^0-9.]/g, "");
-  if (!cleaned) return null;
-  const n = Number(cleaned);
-  if (!Number.isFinite(n) || n < 0 || n > 999999) return null;
-  return Math.round(n * 100) / 100;
+// leads.quoted_amount / quoted_amount_max are numeric — the intake field
+// they come from is free text an admin typed or the model read off a
+// screenshot (e.g. "$350", "around $300-350"). Detects a two-ended range
+// ("$200-$275", "$200 to $275") and returns BOTH ends rather than the
+// previous behavior of stripping everything but digits/decimal point,
+// which silently concatenated a range into one garbled number (e.g.
+// "around $300-350" -> "300350" -> $300,350). A single value parses as
+// { min, max: null }; anything unparseable/ambiguous (no number, 3+
+// numbers, two numbers with no range-like separator between them, "TBD",
+// empty) is { min: null, max: null } — same "never guess, let the admin
+// fill it in" posture as before, just no longer able to merge digits
+// together. Never blocks lead creation either way.
+//
+// IMPORTANT: this is duplicated (not imported) in admin/intake-detail.js's
+// own parseQuotedAmountRange() — that file runs in the browser with no
+// module system, so a shared api/_lib import isn't reachable from it (same
+// reasoning as every other client/server pair of "identical small helper"
+// in this codebase, e.g. admin/booking-new.js's own TIME_WINDOWS copy).
+// Keep both copies in sync if this logic ever changes.
+function parseQuotedAmountRange(raw) {
+  function toNumber(s) {
+    const n = Number(String(s).replace(/,/g, ""));
+    return Number.isFinite(n) && n >= 0 && n <= 999999 ? Math.round(n * 100) / 100 : null;
+  }
+  if (!raw) return { min: null, max: null };
+  const matches = raw.match(/\d[\d,]*\.?\d*/g);
+  if (!matches) return { min: null, max: null };
+  if (matches.length === 1) return { min: toNumber(matches[0]), max: null };
+  if (matches.length === 2) {
+    const firstIdx = raw.indexOf(matches[0]);
+    const betweenStart = firstIdx + matches[0].length;
+    const secondIdx = raw.indexOf(matches[1], betweenStart);
+    const between = raw.slice(betweenStart, secondIdx);
+    if (/^\s*(-|–|—|to|~)\s*\$?\s*$/i.test(between)) {
+      const a = toNumber(matches[0]);
+      const b = toNumber(matches[1]);
+      // Ordered by VALUE, not by which one appears first in the text — a
+      // reversed/typo'd range ("$275-$200") must still become a real
+      // {min:200, max:275} range, never silently collapse to just the
+      // first-seen number (which, for a reversed range, would read as
+      // picking "the maximum" — exactly the forbidden silent collapse).
+      if (a !== null && b !== null) {
+        if (a === b) return { min: a, max: null };
+        return { min: Math.min(a, b), max: Math.max(a, b) };
+      }
+      if (a !== null) return { min: a, max: null };
+      if (b !== null) return { min: b, max: null };
+    }
+  }
+  return { min: null, max: null };
 }
 
 // Combines serviceDetails (the primary field) with itemDescription (what's
@@ -203,6 +240,8 @@ async function handleConfirm(req, res, session) {
       return;
     }
 
+    const quotedRange = parseQuotedAmountRange(fieldValue(fields, "quotedAmount"));
+
     const leadPayload = {
       created_by: session.email,
       source: "screenshot_intake",
@@ -220,7 +259,8 @@ async function handleConfirm(req, res, session) {
       service_type: fieldValue(fields, "serviceType"),
       service_details: buildServiceDetails(fields),
       estimated_load_size: fieldValue(fields, "estimatedLoadSize"),
-      quoted_amount: parseQuotedAmount(fieldValue(fields, "quotedAmount")),
+      quoted_amount: quotedRange.min,
+      quoted_amount_max: quotedRange.max,
       notes: buildNotes(fields),
       matched_customer_id: intake.matched_customer_id || null,
     };
@@ -265,7 +305,7 @@ async function handleConfirm(req, res, session) {
 }
 
 const LEAD_DETAIL_COLS =
-  "id, created_at, created_by, updated_at, updated_by, source, source_intake_id, status, first_name, last_name, phone, email, address, city, state, zip, service_type, service_details, estimated_load_size, quoted_amount, notes, next_follow_up_date, matched_customer_id";
+  "id, created_at, created_by, updated_at, updated_by, source, source_intake_id, status, first_name, last_name, phone, email, address, city, state, zip, service_type, service_details, estimated_load_size, quoted_amount, quoted_amount_max, notes, next_follow_up_date, matched_customer_id";
 
 // ---------------------------------------------------------------------
 // GET /api/admin/lead?id=<uuid> — UI batch (lead-detail navigation fix).
@@ -374,6 +414,7 @@ async function handleGet(req, res) {
         serviceDetails: lead.service_details,
         estimatedLoadSize: lead.estimated_load_size,
         quotedAmount: lead.quoted_amount,
+        quotedAmountMax: lead.quoted_amount_max,
         notes: lead.notes,
         nextFollowUpDate: lead.next_follow_up_date,
         createdAt: lead.created_at,

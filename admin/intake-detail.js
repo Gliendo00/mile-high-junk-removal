@@ -486,15 +486,54 @@ document.addEventListener('DOMContentLoaded', function () {
     return 'junk_removal';
   }
 
-  // Strips everything but digits/decimal point from a free-text quoted
-  // amount (e.g. "$350", "around $300") and parses it — an unparseable or
-  // ambiguous string (a range, "TBD") prefills blank rather than guessed.
-  function guessPrice(raw) {
-    if (!raw) return '';
-    var cleaned = raw.replace(/[^0-9.]/g, '');
-    if (!cleaned) return '';
-    var n = Number(cleaned);
-    return Number.isFinite(n) && n >= 0 ? String(n) : '';
+  // Detects a two-ended range ("$200-$275", "around $300 to 350") in a
+  // free-text quoted amount and returns BOTH ends, instead of the previous
+  // guessPrice() behavior of stripping everything but digits/decimal point
+  // and parsing the result — which silently concatenated a range into one
+  // garbled number (e.g. "around $300-350" -> "300350" -> $300,350,
+  // submitted as estimatedPrice with no estimatedPriceMax at all). A single
+  // value parses as { min, max: null }; anything unparseable/ambiguous (no
+  // number, 3+ numbers, two numbers with no range-like separator, "TBD",
+  // empty) is { min: null, max: null } — same "never guess" posture as
+  // before, just no longer able to merge digits together.
+  //
+  // IMPORTANT: duplicated (not imported) from api/admin/lead.js's own
+  // parseQuotedAmountRange() — that file is server-only (Node `require`),
+  // unreachable from this browser script with no module system, same
+  // reasoning as every other client/server pair of "identical small
+  // helper" in this codebase. Keep both copies in sync if this ever
+  // changes.
+  function parseQuotedAmountRange(raw) {
+    function toNumber(s) {
+      var n = Number(String(s).replace(/,/g, ''));
+      return Number.isFinite(n) && n >= 0 && n <= 999999 ? Math.round(n * 100) / 100 : null;
+    }
+    if (!raw) return { min: null, max: null };
+    var matches = raw.match(/\d[\d,]*\.?\d*/g);
+    if (!matches) return { min: null, max: null };
+    if (matches.length === 1) return { min: toNumber(matches[0]), max: null };
+    if (matches.length === 2) {
+      var firstIdx = raw.indexOf(matches[0]);
+      var betweenStart = firstIdx + matches[0].length;
+      var secondIdx = raw.indexOf(matches[1], betweenStart);
+      var between = raw.slice(betweenStart, secondIdx);
+      if (/^\s*(-|–|—|to|~)\s*\$?\s*$/i.test(between)) {
+        // Ordered by VALUE, not by which one appears first in the text —
+        // a reversed/typo'd range ("$275-$200") must still become a real
+        // {min:200, max:275} range, never silently collapse to just the
+        // first-seen number (which, for a reversed range, would read as
+        // picking "the maximum" — exactly the forbidden silent collapse).
+        var a = toNumber(matches[0]);
+        var b = toNumber(matches[1]);
+        if (a !== null && b !== null) {
+          if (a === b) return { min: a, max: null };
+          return { min: Math.min(a, b), max: Math.max(a, b) };
+        }
+        if (a !== null) return { min: a, max: null };
+        if (b !== null) return { min: b, max: null };
+      }
+    }
+    return { min: null, max: null };
   }
 
   function fieldRawValue(fields, key) {
@@ -894,8 +933,9 @@ document.addEventListener('DOMContentLoaded', function () {
         },
         internalNotes: [liveFieldValue('internalNotes'), liveFieldValue('clientConstraints')].filter(Boolean).join('\n\n'),
       };
-      var priceRaw = guessPrice(liveFieldValue('quotedAmount'));
-      if (priceRaw) bookingPayload.estimatedPrice = Number(priceRaw);
+      var quotedRange = parseQuotedAmountRange(liveFieldValue('quotedAmount'));
+      if (quotedRange.min !== null) bookingPayload.estimatedPrice = quotedRange.min;
+      if (quotedRange.max !== null) bookingPayload.estimatedPriceMax = quotedRange.max;
       if (confirmBookingServiceTypeSelect.value === 'dumpster_rental') {
         var pickupRaw = confirmBookingPickupDateInput.value.trim();
         if (pickupRaw) bookingPayload.pickupDate = pickupRaw;

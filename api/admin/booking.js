@@ -815,9 +815,9 @@ async function handleCreate(req, res, session) {
     // (estimate.converted_booking_id already set, checked first, no insert
     // even attempted) or this call lost a race with another retry/tab that
     // got there first (the partial unique index on bookings.source_estimate_id
-    // / bookings.source_intake_id fired, caught below). Never true for
-    // "+ New Job"/"+ Past Job" (they send neither id, so neither branch can
-    // ever be reached for them).
+    // / bookings.source_intake_id / bookings.source_lead_id_direct fired,
+    // caught below). Never true for "+ New Job"/"+ Past Job" (they send
+    // neither id, so none of these branches can ever be reached for them).
     let created;
     let isReplay = false;
 
@@ -877,6 +877,21 @@ async function handleCreate(req, res, session) {
           isReplay = true;
         } else if (sourceEstimateIdRaw && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
           const existingRes = await supabase.from("bookings").select(BOOKING_SELECT_COLS).eq("source_estimate_id", sourceEstimateIdRaw).maybeSingle();
+          if (existingRes.error || !existingRes.data) throw insertRes.error;
+          created = existingRes.data;
+          isReplay = true;
+        } else if (sourceLeadIdRaw && !sourceEstimateIdRaw && insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
+          // Direct Lead -> Job double-click/retry/revisit (no estimate
+          // involved — see bookings_source_lead_id_direct_uniq,
+          // sql/2026-10-17_...sql). Same "fetch and return the row that
+          // already exists" idempotency as the two branches above; the
+          // admin lands on the one real job either way, never a duplicate.
+          const existingRes = await supabase
+            .from("bookings")
+            .select(BOOKING_SELECT_COLS)
+            .eq("source_lead_id", sourceLeadIdRaw)
+            .is("source_estimate_id", null)
+            .maybeSingle();
           if (existingRes.error || !existingRes.data) throw insertRes.error;
           created = existingRes.data;
           isReplay = true;

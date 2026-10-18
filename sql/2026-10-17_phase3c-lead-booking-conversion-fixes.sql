@@ -1,0 +1,101 @@
+-- Phase 3C — Lead -> Booking conversion fixes: estimate-range preservation
+-- + duplicate-conversion guard. To be run manually in the Supabase SQL
+-- editor, same convention as every prior migration in this directory. NOT
+-- executed by this session — drafted for Rocky's review.
+--
+-- Two independent, additive changes. Neither touches existing data.
+--
+-- =======================================================================
+-- WHY THESE CHANGES ARE NEEDED (not workarounds for a frontend-only bug)
+-- =======================================================================
+--
+-- 1. leads.quoted_amount_max: leads.quoted_amount is a single `numeric`
+--    column (sql/2026-10-05_phase3c-batch6-leads.sql). It is structurally
+--    incapable of representing a range ("$200-$275") — there is no second
+--    column to hold the other end. This is the exact same limitation
+--    `bookings` already had and already solved correctly with its own
+--    estimated_price/estimated_price_max pair. This migration gives
+--    `leads` the identical, already-proven shape, so confirming a
+--    screenshot-intake lead with a range quote ("around $300-350") no
+--    longer has to either discard one side or garble both into "$300,350"
+--    (the actual historical bug — see api/admin/lead.js's now-fixed
+--    parseQuotedAmount()). Nullable and additive: every existing lead row
+--    keeps its current quoted_amount unchanged and gets quoted_amount_max
+--    = NULL (an unknown max, not a zero or a guess).
+--
+-- 2. bookings_source_lead_id_direct_uniq: api/admin/booking.js's
+--    handleCreate() already has idempotent double-click/retry protection
+--    for Confirm Booking (bookings_source_intake_id_uniq,
+--    sql/2026-10-07_...sql) and Convert to Job
+--    (bookings_source_estimate_id_uniq, sql/2026-10-12_...sql) — but NONE
+--    for the direct Lead -> Job path ("Book Job" on Lead Detail, which is
+--    deliberately always clickable even after a lead has already been
+--    converted — see admin/lead-detail.js's own comment on that choice).
+--    Today, a double-click, a slow-network retry, or revisiting an
+--    already-converted lead's Book Job link can create a second, genuinely
+--    duplicate `bookings` row. This index closes that gap using the exact
+--    same partial-unique-index pattern already proven correct for the
+--    other two conversion paths.
+--
+--    Scoped to source_estimate_id IS NULL so it can never collide with a
+--    legitimate Convert-to-Job booking, which also carries a (derived,
+--    inherited) source_lead_id of its own — see api/admin/booking.js's
+--    handleCreate(), where a Convert-to-Job booking's source_lead_id comes
+--    from the originating estimate, never the client. Multiple
+--    estimate-sourced bookings may legitimately share one source_lead_id
+--    (a lead can have more than one estimate over time); this index never
+--    restricts that — only "more than one direct Lead -> Job booking for
+--    the same lead" is prevented.
+
+-- =======================================================================
+-- 0. PREFLIGHT — run this FIRST, by itself. Read-only.
+-- =======================================================================
+-- select column_name from information_schema.columns
+--   where table_schema = 'public' and table_name = 'leads'
+--   and column_name = 'quoted_amount_max';
+-- -- expect: zero rows (doesn't exist yet)
+--
+-- select indexname from pg_indexes
+--   where schemaname = 'public' and tablename = 'bookings'
+--   and indexname = 'bookings_source_lead_id_direct_uniq';
+-- -- expect: zero rows (doesn't exist yet)
+--
+-- select source_lead_id, count(*) from public.bookings
+--   where source_lead_id is not null and source_estimate_id is null
+--   group by source_lead_id having count(*) > 1;
+-- -- expect: zero rows. If this returns any rows, a duplicate direct
+-- -- Lead -> Job booking already exists for that lead — resolve it (archive
+-- -- the duplicate booking, same as any other accidental duplicate job)
+-- -- BEFORE running section 2 below, or the CREATE UNIQUE INDEX will fail.
+
+-- =======================================================================
+-- 1. leads.quoted_amount_max
+-- =======================================================================
+ALTER TABLE public.leads
+  ADD COLUMN IF NOT EXISTS quoted_amount_max numeric NULL;
+
+-- =======================================================================
+-- 2. bookings_source_lead_id_direct_uniq
+-- =======================================================================
+CREATE UNIQUE INDEX IF NOT EXISTS bookings_source_lead_id_direct_uniq
+  ON public.bookings (source_lead_id)
+  WHERE source_lead_id IS NOT NULL AND source_estimate_id IS NULL;
+
+-- =======================================================================
+-- Verification (re-run any of these any time to re-confirm current state)
+-- =======================================================================
+-- select column_name, data_type, is_nullable, column_default from information_schema.columns
+--   where table_schema = 'public' and table_name = 'leads' and column_name = 'quoted_amount_max';
+--
+-- select indexname, indexdef from pg_indexes
+--   where schemaname = 'public' and tablename = 'bookings'
+--   and indexname = 'bookings_source_lead_id_direct_uniq';
+-- -- expect indexdef to show "WHERE ((source_lead_id IS NOT NULL) AND (source_estimate_id IS NULL))"
+--
+-- select has_column_privilege('service_role', 'public.leads', 'quoted_amount_max', 'INSERT'); -- expect true, no new grant needed (table-wide UPDATE/INSERT already granted)
+
+-- =======================================================================
+-- Rollback (reference only — not executed as part of this file)
+-- =======================================================================
+-- DROP INDEX CONCURRENTLY IF EXISTS bookings_source_lead_id_direct_uniq;
+-- ALTER TABLE public.leads DROP COLUMN IF EXISTS quoted_amount_max;
