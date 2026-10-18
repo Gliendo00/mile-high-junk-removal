@@ -1,0 +1,28 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "morrison",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Morrison"
+    },
+    "window": {
+      "start": "2026-09-18",
+      "end": "2026-10-15",
+      "label": "28 days ending 2026-10-15"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "Weekly rotation deep-review — does this property's real Search Console query data contain any organic search query mentioning \"Morrison\" (a claimed service area with no dedicated page yet)?",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-10-18T02:05:48.344Z",
+    "requestFingerprint": null,
+    "purpose": "operational"
+  }
+]

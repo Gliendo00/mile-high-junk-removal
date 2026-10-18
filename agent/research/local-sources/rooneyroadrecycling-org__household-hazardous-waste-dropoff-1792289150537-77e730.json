@@ -1,0 +1,16 @@
+{
+  "sourceUrl": "https://www.rooneyroadrecycling.org/household-hazardous-waste/",
+  "sourceDomain": "rooneyroadrecycling.org",
+  "authorityClass": "other-authoritative",
+  "locality": "Jefferson County, CO (Rooney Road Recycling Center)",
+  "topic": "household-hazardous-waste-dropoff",
+  "discoveryMethod": "known-url",
+  "retrievedAt": "2026-10-18T02:05:49.758Z",
+  "extractedSnippet": "What is hhw? Household hazardous waste can be any common household item Some of those half-used containers under your kitchen sink or tucked away in your garage could contain toxic chemicals that are harmful, or even deadly in certain circumstances. Some paints, cleaners, oils, batteries, and pesticides contain hazardous ingredients. Household hazardous waste, or HHW, is any chemical or product that can cause serious illness or pose an environmental or health threat if not properly stored, transported, or disposed of. Items can be purchased at home improvement stores, auto parts stores, supermarkets, yard and landscaping nurseries, and other similar places. This includes products that are corrosive or have the potential to react or combust. Hydrochloric acid, sulphuric acid, mineral spirits, and furniture polish, are examples of substances that contain corrosive or potentially combustible ingredients. Household hazardous waste is dangerous because Items kept in the house can spill or leak, and children or pets could get into them. Containers thrown in the trash could end up in a landfill and get into the ground or ground water. Materials poured down the drain could damage public storm water drainage systems or make their way into wastewater treatment facilities. Some ingredients when not properly stored can turn corrosive or reactive. What we accept This is a sampling of some of the most common items customers bring to the center. If you want to be sure that we can accept your items, search it on our Accepted Items page . Here are some of the main items that we do not accept . Paint PRODUCTS Most used paint products can be recycled for free at our facility through the PaintCare program. These items include oil and latex house paint, primers, stains, sealers and clear coatings such as shellac and varnish. (up to 5 gallon containers, 200 gallons per visit. Spray paint is not included.) Click here to book an appointment . Cleaners and Pesticides Batteries (Alkaline, re",
+  "expectedTemporality": "evergreen",
+  "limitations": "A single, bounded text snippet mechanically extracted from one retrieval of this page — not a structured fact, not a verdict, and not confirmation that this remains the program's current/correct information. A human (or Claude session) must read this snippet and the live page itself before treating anything in it as a confirmed fact for site copy. Dates/locations for a temporary program are never safe to hardcode as evergreen text from this alone.",
+  "robots": {
+    "checkedAt": "2026-10-18T02:05:49.758Z",
+    "allowed": true
+  }
+}

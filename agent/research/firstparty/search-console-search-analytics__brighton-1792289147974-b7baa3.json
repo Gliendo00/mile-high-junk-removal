@@ -1,0 +1,92 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "brighton",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Brighton"
+    },
+    "window": {
+      "start": "2026-09-18",
+      "end": "2026-10-15",
+      "label": "28 days ending 2026-10-15"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 7,
+      "topRows": [
+        {
+          "keys": [
+            "brighton junk removal"
+          ],
+          "clicks": 0,
+          "impressions": 7,
+          "ctr": 0,
+          "position": 68.14285714285714
+        },
+        {
+          "keys": [
+            "furniture removal brighton"
+          ],
+          "clicks": 0,
+          "impressions": 1,
+          "ctr": 0,
+          "position": 88
+        },
+        {
+          "keys": [
+            "hauling services brighton co"
+          ],
+          "clicks": 0,
+          "impressions": 9,
+          "ctr": 0,
+          "position": 65.11111111111111
+        },
+        {
+          "keys": [
+            "junk removal brighton"
+          ],
+          "clicks": 0,
+          "impressions": 5,
+          "ctr": 0,
+          "position": 55.8
+        },
+        {
+          "keys": [
+            "junk removal brighton co"
+          ],
+          "clicks": 0,
+          "impressions": 1,
+          "ctr": 0,
+          "position": 57
+        },
+        {
+          "keys": [
+            "rubbish clearance brighton"
+          ],
+          "clicks": 0,
+          "impressions": 1,
+          "ctr": 0,
+          "position": 99
+        },
+        {
+          "keys": [
+            "rubbish removal brighton"
+          ],
+          "clicks": 0,
+          "impressions": 2,
+          "ctr": 0,
+          "position": 92
+        }
+      ]
+    },
+    "context": "Weekly rotation deep-review — does this property's real Search Console query data contain any organic search query mentioning \"Brighton\" (a claimed service area with no dedicated page yet)?",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-10-18T02:05:47.974Z",
+    "requestFingerprint": null,
+    "purpose": "operational"
+  }
+]
