@@ -52,9 +52,11 @@ async function main() {
     assert.ok(/default:\s*daily/.test(code));
   });
 
-  await test("does NOT define a schedule/cron trigger yet (manual-dispatch only, this phase)", () => {
-    assert.strictEqual(/^\s*schedule:/m.test(code), false, "a top-level `schedule:` trigger key must not exist yet");
-    assert.strictEqual(/\bcron:/.test(code), false, "no cron expression should exist anywhere in the workflow");
+  await test("Recurring scheduling: defines exactly the two accepted Daily/Weekly cron triggers, alongside (not instead of) workflow_dispatch", () => {
+    assert.ok(/^\s*schedule:/m.test(code), "expected a top-level `schedule:` trigger key");
+    assert.ok(/\bworkflow_dispatch:/.test(code), "workflow_dispatch must still be present — manual dispatch is preserved, not replaced");
+    const crons = [...code.matchAll(/-\s*cron:\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    assert.deepStrictEqual(crons, ["7 9 * * *", "12 10 * * 0"], "expected exactly the two approved MST-baseline crons, in this order");
   });
 
   await test("requests id-token: write and contents: write permissions, and nothing broader", () => {
@@ -162,7 +164,7 @@ await test("Phase 7B: the rotation-evidence refresh step exists, runs ONLY for w
   const stepIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Refresh weekly rotation evidence/.test(l));
   assert.ok(stepIdx > -1, "expected a step that refreshes weekly rotation evidence");
   const block = extractStepBlock(code, /Refresh weekly rotation evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
   assert.ok(/--refresh-rotation-evidence/.test(block));
   assert.strictEqual(/apply-safe/.test(block), false);
 
@@ -178,7 +180,7 @@ await test("Phase 7D: the diagnostic-golden-search-console run_type option exist
 
 await test("Phase 7D: the Golden diagnostic step (1) reuses the EXISTING --fetch-firstparty path (the strict variant) against the committed request file — no new Google client/path", () => {
   const block = extractStepBlock(code, /Run Golden Search Console diagnostic/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(block), "must be gated to the diagnostic run_type only");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]diagnostic-golden-search-console['"]/.test(block), "must be gated to the diagnostic run_type only");
   assert.ok(/--fetch-firstparty-strict=agent\/diagnostics\/golden-search-console-request\.json/.test(block), "must invoke the existing --fetch-firstparty-strict path against the committed, reviewable request file");
   assert.strictEqual(/--fetch-firstparty=/.test(block.replace("--fetch-firstparty-strict=", "")), false, "must use the STRICT variant, not the plain orchestrator-facing one (a config/auth/API failure must fail this job)");
   assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block), "must use the SAME GOOGLE_IMPERSONATE_SERVICE_ACCOUNT variable production runs use — no separate/local credential path");
@@ -199,12 +201,12 @@ await test("Phase 7D: the diagnostic (2) can never reach rotation state — --re
   // test above, because this is exactly the invariant that keeps the
   // diagnostic from ever mutating research-rotation-state.json).
   const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock));
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(rotationBlock));
 });
 
 await test("Phase 7D: the diagnostic (3) can never run the ordinary Agent pipeline, so it can never create/apply a proposal or make a website change — the main Agent step is gated to daily/weekly only", () => {
-  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for the diagnostic run_type");
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for the diagnostic run_type");
   const diagnosticBlock = extractStepBlock(code, /Run Golden Search Console diagnostic/);
   assert.strictEqual(/--daily/.test(diagnosticBlock), false);
   assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
@@ -212,8 +214,8 @@ await test("Phase 7D: the diagnostic (3) can never run the ordinary Agent pipeli
 
 await test("Phase 7D: the diagnostic's own Supabase-config check is skipped (irrelevant — no Agent pipeline, no proposal sync ever runs for it)", () => {
   const block = extractStepBlock(code, /Verify required Supabase configuration/);
-  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]/.test(block));
-  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-ga4['"]/.test(block), "the Supabase check must also be skipped for the GA4 diagnostic — same reasoning as the Search Console one");
+  assert.ok(/if:\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-golden-search-console['"]/.test(block));
+  assert.ok(/if:\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-golden-ga4['"]/.test(block), "the Supabase check must also be skipped for the GA4 diagnostic — same reasoning as the Search Console one");
 });
 
 await test("Phase 7E: the diagnostic-golden-ga4 run_type option exists alongside daily/weekly/diagnostic-golden-search-console, which stay unchanged", () => {
@@ -225,7 +227,7 @@ await test("Phase 7E: the diagnostic-golden-ga4 run_type option exists alongside
 
 await test("Phase 7E: the Golden GA4 diagnostic step (1) reuses the EXISTING --fetch-firstparty path (the strict variant) against its own committed request file — no new Google client/path, no second GA4 networking implementation", () => {
   const block = extractStepBlock(code, /Run Golden GA4 diagnostic/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-ga4['"]/.test(block), "must be gated to the GA4 diagnostic run_type only");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]diagnostic-golden-ga4['"]/.test(block), "must be gated to the GA4 diagnostic run_type only");
   assert.ok(/--fetch-firstparty-strict=agent\/diagnostics\/golden-ga4-request\.json/.test(block), "must invoke the existing --fetch-firstparty-strict path against the committed, reviewable GA4 request file");
   assert.strictEqual(/--fetch-firstparty=/.test(block.replace("--fetch-firstparty-strict=", "")), false, "must use the STRICT variant, not the plain orchestrator-facing one (a config/auth/API failure must fail this job)");
   assert.ok(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT:\s*\$\{\{\s*vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT\s*\}\}/.test(block), "must use the SAME GOOGLE_IMPERSONATE_SERVICE_ACCOUNT variable production runs use — no separate/local credential path");
@@ -243,12 +245,12 @@ await test("Phase 7E: the GA4 diagnostic can never reach rotation state — --re
   assert.strictEqual(/--refresh-rotation-evidence/.test(diagnosticBlock), false);
   assert.strictEqual(/--weekly/.test(diagnosticBlock), false);
   const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock));
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(rotationBlock));
 });
 
 await test("Phase 7E: the GA4 diagnostic can never run the ordinary Agent pipeline, so it can never create/apply a proposal or make a website change — the main Agent step stays gated to daily/weekly only", () => {
-  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for every diagnostic run_type, including the new GA4 one");
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must be gated OUT for every diagnostic run_type, including the new GA4 one");
   const diagnosticBlock = extractStepBlock(code, /Run Golden GA4 diagnostic/);
   assert.strictEqual(/--daily/.test(diagnosticBlock), false);
   assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
@@ -261,7 +263,7 @@ await test("Phase 7E: the GA4 diagnostic step runs AFTER the Search Console diag
   assert.ok(gscIdx > -1 && ga4Idx > -1);
   assert.ok(ga4Idx > gscIdx, "expected the GA4 diagnostic step to be declared after the Search Console diagnostic step");
   const gscBlock = extractStepBlock(code, /Run Golden Search Console diagnostic/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-golden-search-console['"]/.test(gscBlock), "the Search Console diagnostic's own gating must be unaffected by adding the GA4 diagnostic");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]diagnostic-golden-search-console['"]/.test(gscBlock), "the Search Console diagnostic's own gating must be unaffected by adding the GA4 diagnostic");
 });
 
 await test("Phase 10: the diagnostic-denver-leafdrop run_type option exists alongside daily/weekly/the two Golden diagnostics, which stay unchanged", () => {
@@ -273,7 +275,7 @@ await test("Phase 10: the diagnostic-denver-leafdrop run_type option exists alon
 
 await test("Phase 10: the Denver LeafDrop diagnostic step reuses the EXISTING --fetch-local-source-strict= path against the registry's own 'denver-leafdrop' entry id — no raw URL, no new fetch path", () => {
   const block = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "must be gated to the local-source diagnostic run_type only");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "must be gated to the local-source diagnostic run_type only");
   assert.ok(/--fetch-local-source-strict=denver-leafdrop/.test(block), "must invoke the strict path against the registry entry id, never a literal URL");
 });
 
@@ -284,10 +286,10 @@ await test("Phase 10: the Denver LeafDrop diagnostic step is not marked continue
 
 await test("Phase 10: the Denver LeafDrop diagnostic needs NO Google Cloud/WIF credentials — the config-check and auth steps both skip for it, and the diagnostic step itself declares no Google env vars", () => {
   const gcpCheckBlock = extractStepBlock(code, /Verify required Google Cloud configuration/);
-  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(gcpCheckBlock), "the Google Cloud config check must skip for this diagnostic");
+  assert.ok(/if:\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(gcpCheckBlock), "the Google Cloud config check must skip for this diagnostic");
 
   const authBlock = extractStepBlock(code, /Authenticate to Google Cloud/);
-  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(authBlock), "the Google Cloud auth step must skip for this diagnostic");
+  assert.ok(/if:\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(authBlock), "the Google Cloud auth step must skip for this diagnostic");
 
   const diagnosticBlock = extractStepBlock(code, /Run Denver LeafDrop local-source diagnostic/);
   assert.strictEqual(/GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/.test(diagnosticBlock), false, "this diagnostic has no Google Cloud dependency at all — it must never reference this variable");
@@ -296,7 +298,7 @@ await test("Phase 10: the Denver LeafDrop diagnostic needs NO Google Cloud/WIF c
 
 await test("Phase 10: the diagnostic's own Supabase-config check is skipped (irrelevant — no Agent pipeline, no proposal sync ever runs for it), alongside the two Golden diagnostics", () => {
   const block = extractStepBlock(code, /Verify required Supabase configuration/);
-  assert.ok(/if:\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-golden-ga4['"]\s*&&\s*inputs\.run_type\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "the Supabase check must also skip for the Denver LeafDrop diagnostic, alongside the existing two");
+  assert.ok(/if:\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-golden-search-console['"]\s*&&\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-golden-ga4['"]\s*&&\s*env.RUN_TYPE\s*!=\s*['"]diagnostic-denver-leafdrop['"]/.test(block), "the Supabase check must also skip for the Denver LeafDrop diagnostic, alongside the existing two");
 });
 
 await test("Phase 10: the Denver LeafDrop diagnostic can never reach rotation state or the ordinary Agent pipeline — --refresh-rotation-evidence/--refresh-finding-evidence/--daily/--weekly are never invoked for it, and those steps stay gated to their own run_types only", () => {
@@ -306,18 +308,18 @@ await test("Phase 10: the Denver LeafDrop diagnostic can never reach rotation st
   assert.strictEqual(/--daily|--weekly/.test(diagnosticBlock), false);
   assert.strictEqual(/apply-safe/.test(diagnosticBlock), false);
 
-  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must stay gated OUT for every diagnostic run_type, including the new one");
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(mainAgentBlock), "the --daily/--weekly Agent pass must stay gated OUT for every diagnostic run_type, including the new one");
 
   const rotationBlock = extractStepBlock(code, /Refresh weekly rotation evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(rotationBlock), "the rotation-evidence refresh step's own gating must be unaffected by adding this diagnostic");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(rotationBlock), "the rotation-evidence refresh step's own gating must be unaffected by adding this diagnostic");
   const findingBlock = extractStepBlock(code, /Refresh finding-level query evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(findingBlock), "the finding-evidence refresh step's own gating must be unaffected by adding this diagnostic");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(findingBlock), "the finding-evidence refresh step's own gating must be unaffected by adding this diagnostic");
 });
 
 await test("Finding-level query evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the rotation-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
   const block = extractStepBlock(code, /Refresh finding-level query evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
   assert.ok(/--refresh-finding-evidence/.test(block));
   assert.strictEqual(/apply-safe/.test(block), false);
   assert.strictEqual(/continue-on-error/.test(block), false);
@@ -341,12 +343,12 @@ await test("Daily dispatches remain behaviorally unchanged by the finding-level 
   const findingBlock = extractStepBlock(code, /Refresh finding-level query evidence/);
   const ifLineMatch = findingBlock.match(/if:\s*(.+)/);
   assert.ok(ifLineMatch, "Finding-level query evidence refresh must have an explicit if: condition");
-  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+  assert.strictEqual(ifLineMatch[1].trim(), "env.RUN_TYPE == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
 await test("Phase 12: the lead-event evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the finding-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
   const block = extractStepBlock(code, /Refresh lead-event evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
   assert.ok(/--refresh-lead-event-evidence/.test(block));
   assert.strictEqual(/apply-safe/.test(block), false);
   assert.strictEqual(/continue-on-error/.test(block), false);
@@ -371,7 +373,7 @@ await test("Phase 12: Daily dispatches remain behaviorally unchanged by the lead
   const block = extractStepBlock(code, /Refresh lead-event evidence/);
   const ifLineMatch = block.match(/if:\s*(.+)/);
   assert.ok(ifLineMatch, "lead-event evidence refresh must have an explicit if: condition");
-  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+  assert.strictEqual(ifLineMatch[1].trim(), "env.RUN_TYPE == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
 await test("Phase 12: the lead-event evidence refresh step's addition does not disturb any diagnostic's isolation — no diagnostic step invokes --refresh-lead-event-evidence, and the main Agent pass stays gated to daily/weekly only", () => {
@@ -379,13 +381,13 @@ await test("Phase 12: the lead-event evidence refresh step's addition does not d
     const block = extractStepBlock(code, diagName);
     assert.strictEqual(/--refresh-lead-event-evidence/.test(block), false);
   }
-  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
+  const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
 });
 
 await test("Phase 11B: the local-source-evidence refresh step exists, runs ONLY for weekly dispatches, runs AFTER the finding-evidence refresh step and BEFORE the main Agent step, and is not itself apply-safe/mutating", () => {
   const block = extractStepBlock(code, /Refresh local-source evidence/);
-  assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
+  assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only — a daily run must never attempt this");
   assert.ok(/--refresh-local-source-evidence/.test(block));
   assert.strictEqual(/apply-safe/.test(block), false);
   assert.strictEqual(/continue-on-error/.test(block), false);
@@ -408,7 +410,7 @@ await test("Phase 11B: Daily dispatches remain behaviorally unchanged by the loc
   const block = extractStepBlock(code, /Refresh local-source evidence/);
   const ifLineMatch = block.match(/if:\s*(.+)/);
   assert.ok(ifLineMatch, "local-source-evidence refresh must have an explicit if: condition");
-  assert.strictEqual(ifLineMatch[1].trim(), "inputs.run_type == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
+  assert.strictEqual(ifLineMatch[1].trim(), "env.RUN_TYPE == 'weekly'", "must be gated to exactly weekly — never daily, never a diagnostic run_type, never unconditional");
 });
 
 await test("Phase 11B: the local-source-evidence refresh step's addition does not disturb the Denver LeafDrop diagnostic's own isolation — that diagnostic still never invokes --refresh-local-source-evidence, --refresh-rotation-evidence, --refresh-finding-evidence, or --daily/--weekly", () => {
@@ -467,7 +469,7 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
 
   await test("Pre-acceptance hardening (audit finding #1): the completed-job evidence refresh step exists, runs ONLY for weekly dispatches, runs BEFORE the rotation-evidence refresh step (which also reads completed-job evidence via computePriorities()) and BEFORE the main Agent step", () => {
     const block = extractStepBlock(code, /Refresh completed-job evidence/);
-    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
+    assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
     assert.ok(/--refresh-completed-jobs/.test(block));
     assert.strictEqual(/apply-safe/.test(block), false);
     assert.strictEqual(/continue-on-error/.test(block), false);
@@ -484,7 +486,7 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
 
   await test("Pre-acceptance hardening (audit finding #1): the cross-source synthesis step exists, runs ONLY for weekly dispatches, runs AFTER every other weekly-only refresh step and BEFORE the main Agent step, and needs no credentials", () => {
     const block = extractStepBlock(code, /Run cross-source evidence synthesis/);
-    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
+    assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");
     assert.ok(/--run-synthesis/.test(block));
     assert.strictEqual(/apply-safe/.test(block), false);
     assert.strictEqual(/continue-on-error/.test(block), false);
@@ -506,8 +508,152 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
       assert.strictEqual(/--refresh-completed-jobs/.test(block), false);
       assert.strictEqual(/--run-synthesis/.test(block), false);
     }
-    const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ inputs\.run_type \}\}\)/);
-    assert.ok(/if:\s*inputs\.run_type\s*==\s*['"]daily['"]\s*\|\|\s*inputs\.run_type\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
+    const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+    assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(mainAgentBlock));
+  });
+
+  // --- Recurring scheduling: effective RUN_TYPE resolution -------------
+
+  await test("Recurring scheduling: the 'Resolve effective run type' step exists, runs right after 'Record workflow start time', and sets RUN_TYPE via $GITHUB_ENV (same mechanism as WORKFLOW_STARTED_AT)", () => {
+    const lines = code.split("\n");
+    const workflowStartIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Record workflow start time/.test(l));
+    const resolveIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Resolve effective run type/.test(l));
+    assert.ok(workflowStartIdx > -1 && resolveIdx > -1);
+    const nextNamedStepAfterWorkflowStart = lines.findIndex((l, i) => i > workflowStartIdx && /^\s*- name:/.test(l));
+    assert.strictEqual(resolveIdx, nextNamedStepAfterWorkflowStart, "Resolve effective run type must be the step immediately after Record workflow start time");
+
+    const block = extractStepBlock(code, /Resolve effective run type/);
+    assert.ok(/id:\s*resolve_run_type\b/.test(block), "needs a stable id so later steps (including Validate) can gate on its outcome");
+    assert.ok(/echo\s+"RUN_TYPE=\$RESOLVED"\s*>>\s*"\$GITHUB_ENV"/.test(block), "must export RUN_TYPE via $GITHUB_ENV, same mechanism as WORKFLOW_STARTED_AT");
+  });
+
+  await test("Recurring scheduling: manual workflow_dispatch resolution passes inputs.run_type straight through, unchanged — manual daily/weekly/diagnostic-* all still resolve to themselves", () => {
+    const block = extractStepBlock(code, /Resolve effective run type/);
+    assert.ok(/workflow_dispatch/.test(block) && /RESOLVED="\$\{\{\s*inputs\.run_type\s*\}\}"/.test(block), "workflow_dispatch must resolve RUN_TYPE from inputs.run_type verbatim, preserving daily/weekly/every diagnostic value exactly as dispatched");
+  });
+
+  await test("Recurring scheduling: scheduled Daily cron resolves to RUN_TYPE=daily, scheduled Weekly cron resolves to RUN_TYPE=weekly", () => {
+    const block = extractStepBlock(code, /Resolve effective run type/);
+    assert.ok(/"7 9 \* \* \*"\)[\s\S]*?RESOLVED="daily"/.test(block), "the Daily cron's case branch must resolve to RUN_TYPE=daily");
+    assert.ok(/"12 10 \* \* 0"\)[\s\S]*?RESOLVED="weekly"/.test(block), "the Weekly cron's case branch must resolve to RUN_TYPE=weekly");
+  });
+
+  await test("Recurring scheduling: scheduled events can NEVER resolve to a diagnostic RUN_TYPE — the schedule branch's case statement only ever produces daily/weekly, never a diagnostic-* value, and a mismatched cron fails closed rather than falling through to one", () => {
+    const block = extractStepBlock(code, /Resolve effective run type/);
+    const scheduleBranchMatch = block.match(/elif \[ "\$\{\{ github\.event_name \}\}" = "schedule" \][\s\S]*?\bfi\b/);
+    assert.ok(scheduleBranchMatch, "expected an explicit `schedule` branch in the resolver");
+    assert.strictEqual(/diagnostic-/.test(scheduleBranchMatch[0]), false, "the schedule branch's case statement must never produce a diagnostic-* value");
+  });
+
+  await test("Recurring scheduling: an unrecognized scheduled cron fails closed — loud error, nonzero exit, never a silent default to daily/weekly/manual", () => {
+    const block = extractStepBlock(code, /Resolve effective run type/);
+    const defaultCaseMatch = block.match(/\*\)\s*\n\s*echo "::error::Unrecognized schedule cron[\s\S]*?exit 1/);
+    assert.ok(defaultCaseMatch, "expected the case statement's `*)` default branch to emit ::error:: and exit 1 for an unmatched schedule cron");
+    // Also: any trigger event other than workflow_dispatch/schedule must fail closed too, never silently fall through.
+    assert.ok(/echo "::error::Unexpected trigger event[\s\S]*?exit 1/.test(block), "an unexpected event_name must also fail closed, never guess a run type");
+  });
+
+  await test("Recurring scheduling: the 'Validate effective run type' step exists immediately after Resolve, independently re-checks RUN_TYPE is one of the five known values, and explicitly fails closed if a scheduled trigger ever resolved to a diagnostic value", () => {
+    const lines = code.split("\n");
+    const resolveIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Resolve effective run type/.test(l));
+    const validateIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Validate effective run type/.test(l));
+    const guardIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Verify running on refs\/heads\/main/.test(l));
+    assert.ok(resolveIdx > -1 && validateIdx > -1 && guardIdx > -1);
+    const nextNamedStepAfterResolve = lines.findIndex((l, i) => i > resolveIdx && /^\s*- name:/.test(l));
+    assert.strictEqual(validateIdx, nextNamedStepAfterResolve, "Validate effective run type must be the step immediately after Resolve effective run type");
+    assert.ok(validateIdx < guardIdx, "RUN_TYPE must be resolved AND validated before the branch guard, before any Supabase/Google Cloud work, and before any evidence refresh or Agent execution");
+
+    const block = extractStepBlock(code, /Validate effective run type/);
+    assert.ok(/daily\|weekly\|diagnostic-golden-search-console\|diagnostic-golden-ga4\|diagnostic-denver-leafdrop/.test(block), "must enumerate and check against exactly the five known RUN_TYPE values");
+    assert.ok(/exit 1/.test(block), "an unrecognized RUN_TYPE must fail closed");
+    assert.ok(/github\.event_name.*=.*"schedule"/.test(block) && /diagnostic-\*/.test(block), "must independently re-assert that a scheduled trigger can never carry a diagnostic-* RUN_TYPE");
+  });
+
+  await test("Recurring scheduling: the main Agent step's env no longer re-reads inputs.run_type — $RUN_TYPE is inherited from $GITHUB_ENV set by the resolver, avoiding duplicated run-type logic", () => {
+    const mainAgentBlock = extractStepBlock(code, /Run Website Agent \(\$\{\{ env.RUN_TYPE \}\}\)/);
+    assert.strictEqual(/RUN_TYPE:\s*\$\{\{\s*inputs\.run_type\s*\}\}/.test(mainAgentBlock), false, "no per-step RUN_TYPE env override should remain — it must come from the job-wide $GITHUB_ENV value only");
+    assert.ok(/run:\s*node agent\/cli\.js "--\$\{RUN_TYPE\}" --json/.test(mainAgentBlock));
+  });
+
+  await test("Recurring scheduling: Daily skips every one of the six Weekly-only evidence/research/synthesis steps — each is gated to exactly env.RUN_TYPE == 'weekly', never daily", () => {
+    for (const stepName of [
+      /Refresh completed-job evidence/,
+      /Refresh weekly rotation evidence/,
+      /Refresh finding-level query evidence/,
+      /Refresh lead-event evidence/,
+      /Refresh local-source evidence/,
+      /Run cross-source evidence synthesis/,
+    ]) {
+      const block = extractStepBlock(code, stepName);
+      const ifLineMatch = block.match(/if:\s*(.+)/);
+      assert.ok(ifLineMatch, `expected an explicit if: condition on the step matching ${stepName}`);
+      assert.strictEqual(ifLineMatch[1].trim(), "env.RUN_TYPE == 'weekly'", `step matching ${stepName} must be gated to exactly weekly`);
+    }
+  });
+
+  await test("Recurring scheduling: Weekly executes all six accepted pre-run stages in the exact accepted order — completed-jobs -> rotation -> finding -> lead-event -> local-source -> synthesis -> the main Weekly Agent pass", () => {
+    const lines = code.split("\n");
+    const idx = (nameRe) => lines.findIndex((l) => /^\s*- name:/.test(l) && nameRe.test(l));
+    const completedJobsIdx = idx(/Refresh completed-job evidence/);
+    const rotationIdx = idx(/Refresh weekly rotation evidence/);
+    const findingIdx = idx(/Refresh finding-level query evidence/);
+    const leadEventIdx = idx(/Refresh lead-event evidence/);
+    const localSourceIdx = idx(/Refresh local-source evidence/);
+    const synthesisIdx = idx(/Run cross-source evidence synthesis/);
+    const mainRunIdx = idx(/Run Website Agent \(\$\{\{ env\.RUN_TYPE \}\}\)/);
+    const order = { completedJobsIdx, rotationIdx, findingIdx, leadEventIdx, localSourceIdx, synthesisIdx, mainRunIdx };
+    for (const [k, v] of Object.entries(order)) assert.ok(v > -1, `expected to find a step for ${k}`);
+    assert.ok(
+      completedJobsIdx < rotationIdx &&
+        rotationIdx < findingIdx &&
+        findingIdx < leadEventIdx &&
+        leadEventIdx < localSourceIdx &&
+        localSourceIdx < synthesisIdx &&
+        synthesisIdx < mainRunIdx,
+      `expected strict ordering completed-jobs < rotation < finding < lead-event < local-source < synthesis < main-run, got ${JSON.stringify(order)}`
+    );
+  });
+
+  await test("Recurring scheduling: manual diagnostic modes remain reachable only via workflow_dispatch — all three diagnostic run_type choice options still exist and still gate their own dedicated steps", () => {
+    assert.ok(/-\s*diagnostic-golden-search-console/.test(code));
+    assert.ok(/-\s*diagnostic-golden-ga4/.test(code));
+    assert.ok(/-\s*diagnostic-denver-leafdrop/.test(code));
+    for (const [stepName, runType] of [
+      [/Run Golden Search Console diagnostic/, "diagnostic-golden-search-console"],
+      [/Run Golden GA4 diagnostic/, "diagnostic-golden-ga4"],
+      [/Run Denver LeafDrop local-source diagnostic/, "diagnostic-denver-leafdrop"],
+    ]) {
+      const block = extractStepBlock(code, stepName);
+      const ifLineMatch = block.match(/if:\s*(.+)/);
+      assert.strictEqual(ifLineMatch[1].trim(), `env.RUN_TYPE == '${runType}'`);
+    }
+  });
+
+  await test("Recurring scheduling: RUN_TYPE resolution and validation happen before the refs/heads/main branch guard, before the Supabase/Google Cloud checks, and before any evidence refresh or Agent execution step", () => {
+    const lines = code.split("\n");
+    const idx = (nameRe) => lines.findIndex((l) => /^\s*- name:/.test(l) && nameRe.test(l));
+    const resolveIdx = idx(/Resolve effective run type/);
+    const validateIdx = idx(/Validate effective run type/);
+    const guardIdx = idx(/Verify running on refs\/heads\/main/);
+    const supabaseIdx = idx(/Verify required Supabase configuration/);
+    const gcpIdx = idx(/Verify required Google Cloud configuration/);
+    const completedJobsIdx = idx(/Refresh completed-job evidence/);
+    const mainRunIdx = idx(/Run Website Agent \(\$\{\{ env\.RUN_TYPE \}\}\)/);
+    assert.ok(
+      resolveIdx < validateIdx &&
+        validateIdx < guardIdx &&
+        guardIdx < supabaseIdx &&
+        supabaseIdx < gcpIdx &&
+        gcpIdx < completedJobsIdx &&
+        completedJobsIdx < mainRunIdx
+    );
+  });
+
+  await test("Recurring scheduling: the concurrency group and cancel-in-progress setting are untouched by the schedule addition", () => {
+    const concurrencyBlockMatch = code.match(/concurrency:\n([\s\S]*?)\n\S/);
+    assert.ok(concurrencyBlockMatch, "expected a concurrency: block");
+    assert.ok(/group:\s*website-agent-runner/.test(concurrencyBlockMatch[1]));
+    assert.ok(/cancel-in-progress:\s*false/.test(concurrencyBlockMatch[1]));
   });
 
   await test("checks out the repo and installs dependencies via npm ci (lockfile-respecting)", () => {

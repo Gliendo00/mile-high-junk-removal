@@ -6,12 +6,19 @@ name: Website Agent — unattended runner
 # it only gives the existing `node agent/cli.js --daily`/`--weekly`
 # deterministic pass a secure, scheduled-capable place to run.
 #
-# DELIBERATELY manual-dispatch-only for now (see "on:" below) — no
-# `schedule:` trigger exists in this file yet. Enabling a recurring
-# cadence is a separate, later, explicitly-authorized change; see
-# agent/README.md §13 for the originally-recommended cadence (daily
-# 04:00 America/Denver, weekly Sunday 04:00 America/Denver) once that
-# step is taken.
+# Recurring dry-run scheduling (explicitly authorized — see the
+# Controlled Production Weekly Acceptance run, #14 @ 61684ef, accepted
+# PASS WITH FOLLOW-UP, and the scheduling-architecture review that
+# preceded this change): two `schedule:` triggers below run Daily and
+# Weekly automatically, in addition to the existing `workflow_dispatch:`
+# manual/diagnostic path. Both schedules stay dry-run — this change adds
+# no new write authority of any kind; see "Mutation stays OFF" below,
+# unchanged. See the "on:" block's own comments for the exact cron
+# values, their UTC/DST behavior, and the "Resolve effective run type"
+# step for how a schedule-triggered run determines Daily vs. Weekly
+# (workflow_dispatch.inputs is NOT populated for `schedule` events, so
+# this could not simply reuse `inputs.run_type` — see that step's own
+# header for the full explanation).
 #
 # Mutation stays OFF: this workflow never passes --apply-safe, so it can
 # never write to the public site's own HTML/sitemap/robots/vercel.json —
@@ -84,6 +91,34 @@ on:
           # assertions.
           - diagnostic-denver-leafdrop
         default: daily
+  schedule:
+    # GitHub Actions `schedule:` cron is ALWAYS UTC — it has no
+    # timezone/DST concept at all. Both crons below are intentionally
+    # MST-BASELINE (America/Denver Standard Time, UTC-7): they land
+    # exactly at the target Denver local time during MST (~early Nov -
+    # mid Mar), and approximately ONE HOUR LATE in Denver local time
+    # during MDT (~mid Mar - early Nov, UTC-6) — e.g. the Daily cron
+    # below runs at 2:07 AM Denver during MST, ~3:07 AM Denver during
+    # MDT. This ~1-hour seasonal drift is explicitly accepted (see the
+    # scheduling-architecture review) — deliberately NOT automated away
+    # with a second DST-aware cron/month-gating pair; this is a
+    # non-time-critical overnight maintenance job, and the added
+    # trigger-matching complexity wasn't judged worth a cosmetic
+    # precision gain. If exact local-time precision is ever wanted, the
+    # fix is a manual 2-line cron edit (not more than twice a year).
+    #
+    # IMPORTANT — SINGLE SOURCE OF TRUTH WARNING: these two literal cron
+    # strings are ALSO hardcoded, byte-for-byte, in the "Resolve
+    # effective run type" step below (GitHub Actions expressions have no
+    # way to reference an `on.schedule` entry's own cron string, so
+    # there is no way to avoid this duplication). If either cron value
+    # here is ever changed, the matching `case` branch in that step MUST
+    # be updated in the SAME commit — an unmatched schedule cron fails
+    # the run closed (see that step's own header), so a drifted-out-of-
+    # sync pair doesn't silently misclassify a run, but it DOES make
+    # that schedule stop running anything at all until fixed.
+    - cron: "7 9 * * *"    # Daily  — ~2:00 AM America/Denver (MST baseline)
+    - cron: "12 10 * * 0"  # Weekly (Sunday) — ~3:00 AM America/Denver (MST baseline)
 
 permissions:
   contents: write
@@ -104,6 +139,16 @@ concurrency:
 
 jobs:
   run-agent:
+    # NOTE: this job-level `name:` is evaluated at job-queue time, BEFORE
+    # any step (including "Resolve effective run type" below) has run —
+    # it therefore cannot reference that step's computed `env.RUN_TYPE`
+    # (job-level `name:` has no access to a step-set $GITHUB_ENV value).
+    # Left as `inputs.run_type` deliberately: correct/unchanged for
+    # workflow_dispatch (which populates it at the same job-queue time),
+    # and simply blank for the two schedule-triggered events — a cosmetic
+    # difference only, not a behavioral one (every `if:` condition that
+    # actually gates behavior uses the real, step-computed
+    # `env.RUN_TYPE` — see that step's own header).
     name: Run Website Agent (${{ inputs.run_type }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -132,6 +177,96 @@ jobs:
         # so gating it per run_type would add YAML complexity for zero
         # behavioral difference.
         run: echo "WORKFLOW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Resolve effective run type
+        # Recurring scheduling — the SINGLE canonical place that decides
+        # what this job is actually doing, consumed by every other
+        # step's `if:`/`run:` below via `env.RUN_TYPE` (via $GITHUB_ENV,
+        # same mechanism as WORKFLOW_STARTED_AT above — no step-output
+        # plumbing needed). Nothing else in this file reads
+        # `inputs.run_type` directly anymore, specifically BECAUSE that
+        # context is only populated for `workflow_dispatch` events —
+        # `schedule`-triggered events never populate `inputs` at all, so
+        # every `if: env.RUN_TYPE == ...` condition in this workflow
+        # would silently evaluate against an empty string for a
+        # scheduled run. Concretely, before this step existed, enabling
+        # `schedule:` below with no other change would have skipped the
+        # ENTIRE weekly-only block AND skipped the main Agent step
+        # itself (its gate was `inputs.run_type == 'daily' ||
+        # inputs.run_type == 'weekly'`, never true for ''), then still
+        # reached Persist/Push (both `always()`) with nothing to commit
+        # — a silently-green no-op run, forever, every single scheduled
+        # firing. This step exists specifically to close that gap.
+        #
+        # workflow_dispatch -> pass `inputs.run_type` straight through,
+        # unchanged (still constrained to the five `type: choice` values
+        # by GitHub itself).
+        # schedule -> match `github.event.schedule` (the exact cron
+        # string GitHub populates for the schedule that actually fired
+        # this run) against the two crons declared in `on.schedule`
+        # above — SEE THAT BLOCK'S OWN "SINGLE SOURCE OF TRUTH WARNING"
+        # comment; these two literals must stay in sync with it.
+        # Anything else (an unrecognized cron, or any other event type)
+        # FAILS CLOSED — never silently defaults to "daily", "weekly",
+        # or cli.js's own "manual" default. A fail-closed refusal here
+        # means no Agent/Google Cloud work happens at all this run
+        # (Persist still runs via `always()`, but has nothing to commit,
+        # so it correctly becomes a true no-op, not a disguised one).
+        id: resolve_run_type
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RESOLVED="${{ inputs.run_type }}"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            case "${{ github.event.schedule }}" in
+              "7 9 * * *")
+                RESOLVED="daily"
+                ;;
+              "12 10 * * 0")
+                RESOLVED="weekly"
+                ;;
+              *)
+                echo "::error::Unrecognized schedule cron '${{ github.event.schedule }}' — no known Daily/Weekly mapping exists for it in this step's case statement. Refusing to guess a run type (never silently defaulting to daily/weekly/manual). If this cron was intentionally added to on.schedule above, add a matching case branch here in the SAME change."
+                exit 1
+                ;;
+            esac
+          else
+            echo "::error::Unexpected trigger event '${{ github.event_name }}' — this workflow only supports workflow_dispatch and schedule. Refusing to guess a run type."
+            exit 1
+          fi
+          echo "RUN_TYPE=$RESOLVED" >> "$GITHUB_ENV"
+          echo "Effective RUN_TYPE resolved to '$RESOLVED' for event '${{ github.event_name }}'."
+
+      - name: Validate effective run type
+        # Recurring scheduling — an explicit, independent second check
+        # (defense in depth alongside the resolver's own case statement
+        # immediately above), run BEFORE any Supabase/Google Cloud
+        # verification, evidence refresh, or Agent execution. Proves
+        # `env.RUN_TYPE` is one of the five known values for ANY trigger
+        # type, and additionally proves a scheduled run specifically can
+        # never resolve to a diagnostic value — diagnostics must remain
+        # reachable only via manual workflow_dispatch. Both checks fail
+        # closed (loud error, nonzero exit) rather than letting an
+        # unrecognized or structurally-impossible value fall through to
+        # whatever the later `if:` conditions happen to do with it.
+        if: steps.resolve_run_type.outcome == 'success'
+        run: |
+          case "${{ env.RUN_TYPE }}" in
+            daily|weekly|diagnostic-golden-search-console|diagnostic-golden-ga4|diagnostic-denver-leafdrop)
+              ;;
+            *)
+              echo "::error::Resolved RUN_TYPE '${{ env.RUN_TYPE }}' is not one of the known values (daily, weekly, diagnostic-golden-search-console, diagnostic-golden-ga4, diagnostic-denver-leafdrop). Refusing to proceed."
+              exit 1
+              ;;
+          esac
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            case "${{ env.RUN_TYPE }}" in
+              diagnostic-*)
+                echo "::error::A scheduled trigger resolved to a diagnostic RUN_TYPE ('${{ env.RUN_TYPE }}') — diagnostics must remain manual-only (workflow_dispatch). This should be structurally impossible given the resolver above; refusing to proceed."
+                exit 1
+                ;;
+            esac
+          fi
+          echo "RUN_TYPE '${{ env.RUN_TYPE }}' is valid for event '${{ github.event_name }}'."
 
       - name: Verify running on refs/heads/main
         # Pre-acceptance hardening (audit finding #8, baseline 2bff317) —
@@ -163,7 +298,7 @@ jobs:
         # Supabase configuration is simply irrelevant to them; requiring
         # it anyway would make a pure Google-auth/local-source diagnostic
         # depend on an unrelated credential.
-        if: inputs.run_type != 'diagnostic-golden-search-console' && inputs.run_type != 'diagnostic-golden-ga4' && inputs.run_type != 'diagnostic-denver-leafdrop'
+        if: env.RUN_TYPE != 'diagnostic-golden-search-console' && env.RUN_TYPE != 'diagnostic-golden-ga4' && env.RUN_TYPE != 'diagnostic-denver-leafdrop'
         run: |
           if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
             echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured. This permanent runner requires both so CRM proposal sync is never silently skipped. See the setup documentation in the workflow run summary / PR description."
@@ -179,7 +314,7 @@ jobs:
         # depend on it regardless. Still required for both Golden
         # diagnostics (run_type above) — those DO exercise the real WIF
         # -> impersonation -> Search Console/GA4 path.
-        if: inputs.run_type != 'diagnostic-denver-leafdrop'
+        if: env.RUN_TYPE != 'diagnostic-denver-leafdrop'
         run: |
           if [ -z "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
             echo "::error::GCP_WORKLOAD_IDENTITY_PROVIDER repository/environment variable is not configured (the Workload Identity Federation provider resource name)."
@@ -203,7 +338,7 @@ jobs:
         # Skipped for the Denver LeafDrop local-source diagnostic (Phase
         # 9) — see the Google Cloud config check immediately above for
         # why that diagnostic has no Google Cloud dependency at all.
-        if: inputs.run_type != 'diagnostic-denver-leafdrop'
+        if: env.RUN_TYPE != 'diagnostic-denver-leafdrop'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -252,7 +387,7 @@ jobs:
         # privacy boundary, and writes only already-sanitized evidence —
         # see agent/lib/completed-job-fetch.js's header. Never logs a
         # field value, only a count.
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --refresh-completed-jobs
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -271,7 +406,7 @@ jobs:
         # decision, never external/municipal research (this unattended
         # runner has no research-provider capability for that — see the
         # main run step below and agent/README.md's Phase 7B section).
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --refresh-rotation-evidence
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
@@ -300,7 +435,7 @@ jobs:
         # skipped or fails writes NO evidence file at all (see
         # finding-evidence.js's header) — never silently mistaken for a
         # genuine zero-row result.
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --refresh-finding-evidence
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
@@ -324,7 +459,7 @@ jobs:
         # pass below, same placement precedent. Needs ONLY GA4 (never
         # GSC_SITE_URL) — the same GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/
         # GA4_PROPERTY_ID variables production GA4 calls already use.
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --refresh-lead-event-evidence
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
@@ -352,7 +487,7 @@ jobs:
         # source-fetch.js is a plain, anonymous public HTTP fetch, same
         # as the Denver LeafDrop diagnostic above, not a Search
         # Console/GA4 call.
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --refresh-local-source-evidence
 
       - name: Run cross-source evidence synthesis (weekly only)
@@ -372,10 +507,10 @@ jobs:
         # touches Supabase/Google Cloud, never re-runs the audits, never
         # changes a finding's category/tier/autoFix/autoApplyEligible —
         # so it needs no credentials and no `env:` block.
-        if: inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'weekly'
         run: node agent/cli.js --run-synthesis
 
-      - name: Run Website Agent (${{ inputs.run_type }})
+      - name: Run Website Agent (${{ env.RUN_TYPE }})
         # Only for daily/weekly — neither Golden diagnostic (run_type
         # above) must EVER run the ordinary Agent pipeline: no scan, no
         # findings, no proposal sync, no rotation, no history/rotation-
@@ -383,10 +518,15 @@ jobs:
         # would fall through to cli.js's default ("manual" dry-run),
         # which is exactly the full pipeline these diagnostics must not
         # trigger.
-        if: inputs.run_type == 'daily' || inputs.run_type == 'weekly'
+        if: env.RUN_TYPE == 'daily' || env.RUN_TYPE == 'weekly'
+        # $RUN_TYPE is already present in every step's shell environment
+        # via $GITHUB_ENV (set by "Resolve effective run type" above) —
+        # no per-step `env: RUN_TYPE:` override needed here anymore (the
+        # old one re-read `inputs.run_type`, which this step's own `if:`
+        # above no longer does either, for the same schedule-event
+        # reason explained in that earlier step's header).
         run: node agent/cli.js "--${RUN_TYPE}" --json
         env:
-          RUN_TYPE: ${{ inputs.run_type }}
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
           GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
@@ -420,7 +560,7 @@ jobs:
         # research-rotation-state.json is structurally unreachable from
         # this step — nothing to "not mutate" because nothing in this
         # code path ever touches it in the first place.
-        if: inputs.run_type == 'diagnostic-golden-search-console'
+        if: env.RUN_TYPE == 'diagnostic-golden-search-console'
         run: node agent/cli.js --fetch-firstparty-strict=agent/diagnostics/golden-search-console-request.json
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
@@ -461,7 +601,7 @@ jobs:
         # research-rotation-state.json is structurally unreachable from
         # this step — nothing to "not mutate" because nothing in this
         # code path ever touches it in the first place.
-        if: inputs.run_type == 'diagnostic-golden-ga4'
+        if: env.RUN_TYPE == 'diagnostic-golden-ga4'
         run: node agent/cli.js --fetch-firstparty-strict=agent/diagnostics/golden-ga4-request.json
         env:
           GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
@@ -488,7 +628,7 @@ jobs:
         # research-rotation-state.json is structurally unreachable from
         # this step. Never attaches to, or is interpreted as, a research
         # verdict — see agent/lib/local-source-evidence.js's header.
-        if: inputs.run_type == 'diagnostic-denver-leafdrop'
+        if: env.RUN_TYPE == 'diagnostic-denver-leafdrop'
         run: node agent/cli.js --fetch-local-source-strict=denver-leafdrop
 
       - name: Persist Agent artifacts (safe-commit)
@@ -512,7 +652,7 @@ jobs:
         id: persist
         if: always() && github.ref == 'refs/heads/main'
         run: |
-          node .github/scripts/safe-commit.js "chore(agent): ${{ inputs.run_type }} run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node .github/scripts/safe-commit.js "chore(agent): ${{ env.RUN_TYPE }} run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Push to main
         # Gated on `steps.persist.outcome == 'success'` — NOT a bare
