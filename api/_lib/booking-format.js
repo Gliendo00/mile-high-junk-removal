@@ -33,9 +33,13 @@ const TIME_WINDOW_LABELS = Object.keys(TIME_WINDOW_DEFS).reduce(function (acc, i
   return acc;
 }, {});
 
-// The six proposed statuses from docs/phase-1/crm-status-plan.md. Nothing
-// in this phase writes any of these back to the database — this is a
-// display-only lookup.
+// The 7 real bookings.status values (bookings_status_check), originally
+// proposed in docs/phase-1/crm-status-plan.md and confirmed live against
+// production in the 2026-10-18 schema audit. Used for display here, but
+// these are genuinely stored values, not a display-only convention —
+// "new" in particular is the column's own NOT NULL DEFAULT, and every one
+// of these (including "new") can also be written explicitly via
+// api/admin/booking.js's handleStatusAction().
 const STATUS_LABELS = {
   new: "New",
   contacted: "Contacted",
@@ -71,11 +75,13 @@ function effectiveTimeLabel(timeWindowRaw, exactTimeRaw) {
   return exactLabel || timeWindowLabel(timeWindowRaw);
 }
 
-// NULL/empty status normalizes to "new" for DISPLAY purposes only — per
-// docs/phase-1/crm-status-plan.md, this is never written back to the
-// database. An unrecognized non-empty value (shouldn't happen given
-// api/book.js never writes status today, but defensive regardless) falls
-// through to a title-cased version of itself rather than crashing.
+// bookings.status is confirmed NOT NULL DEFAULT 'new' in production
+// (2026-10-18 schema audit) — a real booking's status is never actually
+// NULL/empty, so the `key || "new"` fallback below is purely defensive
+// (a malformed/legacy value, or a caller other than a real bookings row)
+// rather than an expected, regularly-hit path. An unrecognized non-empty
+// value falls through to a title-cased version of itself rather than
+// crashing.
 function normalizedStatus(raw) {
   const key = String(raw || "").trim().toLowerCase();
   return key || "new";

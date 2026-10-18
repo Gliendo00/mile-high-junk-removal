@@ -352,13 +352,15 @@ module.exports = async (req, res) => {
     const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes, extraCountRes] = await Promise.all([
       ...COUNT_QUERIES,
       (function () {
-        // "new" isn't a stored value (see docs/phase-1/crm-status-plan.md) —
-        // every booking created so far has left status NULL, and nothing in
-        // this codebase has ever written the literal string "new". Filtering
-        // by NULL therefore matches every row the rest of this endpoint
-        // already counts as "new". The other statuses are stored verbatim
-        // by api/admin/booking-status.js, so a plain .eq() is sufficient
-        // for them.
+        // "new" IS a stored value — confirmed against production
+        // (2026-10-18 schema audit): bookings.status is `NOT NULL DEFAULT
+        // 'new'`, enforced by bookings_status_check alongside the other 6
+        // known literals. api/book.js's junk_removal/light_demo insert
+        // simply omits the column and lets that default apply; it has
+        // never left the row NULL (NULL isn't even possible here — the
+        // NOT NULL constraint would reject it). So a plain .eq() is
+        // correct and sufficient for every one of the 7 statuses,
+        // including "new" — no special-case NULL filter is needed.
         let q = supabase
           .from("bookings")
           .select(
@@ -375,8 +377,7 @@ module.exports = async (req, res) => {
           // view/filter — "All" included — matching Schedule's own
           // exclusion in fetchScheduleJobs() above.
           q = q.is("archived_at", null);
-          if (statusFilter === "new") q = q.is("status", null);
-          else if (statusFilter) q = q.eq("status", statusFilter);
+          if (statusFilter) q = q.eq("status", statusFilter);
         }
         return q;
       })(),
@@ -2533,7 +2534,11 @@ const LEADS_QUERY_LABELS = {
 async function handleLeadsView(req, res, supabase) {
   try {
     const [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes] = await Promise.all([
-      supabase.from("bookings").select(LEADS_BOOKING_COLS).is("status", null).is("archived_at", null).order("created_at", { ascending: false }),
+      // "new" IS a stored value, not NULL — confirmed against production
+      // (2026-10-18 schema audit): bookings.status is `NOT NULL DEFAULT
+      // 'new'`. See the identical note above handleList()'s own status
+      // filter for the full explanation.
+      supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "new").is("archived_at", null).order("created_at", { ascending: false }),
       supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "contacted").is("archived_at", null).order("created_at", { ascending: false }),
       supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "quoted").is("archived_at", null).order("created_at", { ascending: false }),
       supabase.from("bookings").select(LEADS_BOOKING_COLS).eq("status", "booked").is("archived_at", null).order("created_at", { ascending: false }),

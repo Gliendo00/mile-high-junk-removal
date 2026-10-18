@@ -1,9 +1,25 @@
 # CRM Status Plan (Proposed — Not Implemented)
 
-Status: **planning document only.** No column was added, no default was
-changed, and no existing row was modified as part of this phase. This is
-the design for a future admin UI to build against, written down now so
-Phase 2 has an agreed-on contract instead of inventing one on the fly.
+Status: **planning document only, and its central open question has since
+been answered — see the correction below.** No column was added, no
+default was changed, and no existing row was modified as part of this
+phase. This is the design for a future admin UI to build against, written
+down now so Phase 2 has an agreed-on contract instead of inventing one on
+the fly.
+
+> **Correction (2026-10-18 production schema audit)**: `bookings.status`
+> was confirmed to be `NOT NULL DEFAULT 'new'` in production — it has
+> **always** stored the literal string `"new"`, never NULL, contradicting
+> the "How existing data should be interpreted" section below (which
+> assumed NULL and explicitly left the default as NEEDS VERIFICATION).
+> Two admin readers (`handleLeadsView()`'s website-requests bucket and the
+> dashboard's "New" filter, both in `api/admin/bookings.js`) had been
+> built against the NULL assumption below and were silently hiding every
+> booking that hit this default — fixed to filter on `status = 'new'`
+> instead. No schema change, no historical data rewrite, and no change to
+> `api/book.js` or the admin status picker were needed; see the fix
+> commit for the full writeup. The section below is kept for history but
+> should not be relied on for how `status` actually behaves today.
 
 ## Proposed status values
 
