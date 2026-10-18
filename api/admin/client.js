@@ -203,17 +203,35 @@ async function handleList(req, res) {
 
     if (search) {
       const pattern = "%" + search + "%";
-      const [byFirst, byLast, byPhone, byEmail] = await Promise.all([
+      // Digits-only copy of the search term, e.g. "(303) 555-1812" and
+      // "3035551812" both become "3035551812" — matched below against
+      // phone_normalized (digits-only on every row, backfilled for every
+      // existing row and kept current by every write path; see
+      // api/_lib/customer-identity.js) instead of the raw `phone` column,
+      // so a search is immune to however that row's phone happens to be
+      // formatted, and a bare last-4-digits search ("1812") matches via
+      // plain substring containment, same as every other field here.
+      const searchDigits = search.replace(/\D/g, "");
+      const queries = [
         scoped(supabase.from("customers").select(cols).ilike("first_name", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
         scoped(supabase.from("customers").select(cols).ilike("last_name", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
         scoped(supabase.from("customers").select(cols).ilike("phone", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
         scoped(supabase.from("customers").select(cols).ilike("email", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
-      ]);
-      for (const r of [byFirst, byLast, byPhone, byEmail]) {
+        scoped(supabase.from("customers").select(cols).ilike("address", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+      ];
+      // Skipped (rather than run with an all-matching "%%" pattern) when
+      // the search has no digits at all, e.g. a plain name search.
+      if (searchDigits) {
+        queries.push(
+          scoped(supabase.from("customers").select(cols).ilike("phone_normalized", "%" + searchDigits + "%")).limit(LIST_SEARCH_FIELD_LIMIT)
+        );
+      }
+      const results = await Promise.all(queries);
+      for (const r of results) {
         if (r.error) throw r.error;
       }
       const merged = new Map();
-      [byFirst, byLast, byPhone, byEmail].forEach((r) => {
+      results.forEach((r) => {
         (r.data || []).forEach((c) => merged.set(c.id, c));
       });
       const all = Array.from(merged.values()).sort(listByCreatedAtDesc);

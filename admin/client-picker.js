@@ -284,9 +284,9 @@ window.AdminClientPicker = (function () {
     var input = document.createElement("input");
     input.type = "search";
     input.className = "admin-search-input";
-    input.placeholder = "Start typing a client name…";
+    input.placeholder = "Start typing a name, phone, or address…";
     input.setAttribute("autocomplete", "off");
-    input.setAttribute("aria-label", "Search clients by name, phone, or email");
+    input.setAttribute("aria-label", "Search clients by name, phone, email, or address");
     input.setAttribute("aria-expanded", "false");
     typeahead.appendChild(input);
 
