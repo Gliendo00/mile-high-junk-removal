@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', function () {
     lost: 'admin-lead-bucket-lost',
   };
   var SOURCE_LABELS = {
+    website: 'Website',
     screenshot_intake: 'Screenshot Intake',
     phone: 'Phone',
     manual: 'Manual',

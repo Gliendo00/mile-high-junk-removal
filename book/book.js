@@ -814,6 +814,17 @@ document.addEventListener('DOMContentLoaded', function () {
   // common to both request shapes; the payment-specific `payment` object is
   // added by the caller (handlePayAndBook) only for dumpster_rental.
   function buildBookingPayload() {
+    // Goal 3 idempotency: lazily generated the first time any submit is
+    // built for this page load, then reused across any retry of that same
+    // attempt — identical lifecycle to how this same state.idempotencyKey
+    // already works for dumpster_rental's payment flow (see
+    // showPaymentPanel() below), just generated here instead since
+    // junk_removal/light_demo have no payment panel of their own to
+    // generate it in. Sent for every service type (harmless/ignored by
+    // api/book.js for dumpster_rental, which reads its own key from
+    // payment.idempotencyKey instead — see validateBooking() there).
+    if (!state.idempotencyKey) state.idempotencyKey = newIdempotencyKey();
+
     var jobDetails = { additionalDetails: null };
     if (state.serviceType === 'junk_removal') {
       jobDetails = {
@@ -846,6 +857,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // Elapsed milliseconds since this script loaded, not a timestamp —
       // see the nowMs() comment above.
       elapsedMs: Math.round(nowMs() - formLoadedAt),
+      idempotencyKey: state.idempotencyKey,
       jobDetails: jobDetails,
       schedule: { date: val('pref-date'), timeWindow: timeWindow },
       customer: {

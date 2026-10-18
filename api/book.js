@@ -90,6 +90,7 @@ const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
 const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
+const { getCorrelationId, logEvent } = require("./_lib/correlation-id");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -246,6 +247,9 @@ module.exports = async (req, res) => {
       return;
     }
 
+    const correlationId = getCorrelationId(req);
+    logEvent(correlationId, "book.received", { serviceType: typeof body.serviceType === "string" ? body.serviceType : null });
+
     const clientIp = getClientIp(req);
     if (isRateLimited("book:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
       res.status(429).json({ error: "Too many requests. Please wait a bit and try again, or call or text 303-990-1812." });
@@ -253,12 +257,18 @@ module.exports = async (req, res) => {
     }
 
     // Bot signals: a filled honeypot field or an implausibly fast submission.
-    // Both are handled identically — respond as if the booking succeeded
-    // (without ever touching Supabase or sending a notification email) so an
-    // automated sender gets no feedback that would help it adapt.
+    // Both are handled identically — rejected with the same generic,
+    // honest failure response every other validation error on this
+    // endpoint already uses (never a faked 200 success — see Goal 4 of the
+    // commit this comment is part of). Nothing is saved and no email is
+    // sent either way; the only change from before is that the client is
+    // told the truth (the request needs a retry) instead of being shown a
+    // success screen for a request that was silently discarded. The
+    // response text never mentions spam/honeypot/fill-time, so a script
+    // scraping responses can't distinguish this from any other 400.
     if (isHoneypotTripped(body.hp) || isSubmittedTooFast(body.elapsedMs, MIN_FILL_TIME_MS)) {
-      console.error("Booking submission rejected as likely spam (ip=" + clientIp + ")");
-      res.status(200).json({ ok: true });
+      console.error("[" + correlationId + "] book.spam_rejected (ip=" + clientIp + ")");
+      res.status(400).json({ error: "Could not submit your booking. Please try again or call us at 303-990-1812." });
       return;
     }
 
@@ -279,6 +289,35 @@ module.exports = async (req, res) => {
     // through to the existing flow, byte-for-byte unchanged.
     if (data.serviceType === "dumpster_rental") {
       return handleDumpsterRentalBooking(res, supabase, data);
+    }
+
+    // Goal 3 idempotency (junk_removal/light_demo) — a client-generated key,
+    // reused by book/book.js across a double-click/retry of the same
+    // attempt (see newIdempotencyKey()/state.idempotencyKey there), checked
+    // BEFORE any customer/booking row is touched, same ordering as
+    // dumpster_rental's own idempotency check above. A replay returns the
+    // SAME response the original attempt got rather than creating a second
+    // booking. Entirely optional/backward-compatible: a request with no
+    // idempotencyKey (an older cached client bundle, or any other caller)
+    // proceeds exactly as this endpoint always has, with no idempotency
+    // protection — this is additive, not a behavior change for that case.
+    if (data.idempotencyKey) {
+      try {
+        const { data: existing, error } = await supabase
+          .from("bookings")
+          .select("id")
+          .eq("idempotency_key", data.idempotencyKey)
+          .maybeSingle();
+        if (!error && existing) {
+          logEvent(correlationId, "book.idempotent_replay", { bookingId: existing.id });
+          res.status(200).json(respondWithUploadToken(existing.id, correlationId));
+          return;
+        }
+      } catch (err) {
+        // Falls open — same "a safety-net lookup can never itself block or
+        // 500 a booking" posture as the repeat-client lookup just below.
+        console.error("[" + correlationId + "] book.idempotency_lookup_failed (proceeding normally):", err);
+      }
     }
 
     const phoneNorm = normalizePhone(data.customer.phone);
@@ -304,7 +343,7 @@ module.exports = async (req, res) => {
           customerId = matches[0].id;
         }
       } catch (err) {
-        console.error("Repeat-client lookup failed, creating a new customer instead:", err);
+        console.error("[" + correlationId + "] book.customer_lookup_failed (falling open to new customer):", err);
       }
     }
 
@@ -341,17 +380,20 @@ module.exports = async (req, res) => {
           .single();
 
         if (error || !customerRow) {
-          console.error("Booking submission failed creating customer:", error);
+          console.error("[" + correlationId + "] book.customer_create_failed:", error);
           res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
           return;
         }
         customerId = customerRow.id;
         customerWasCreated = true;
+        logEvent(correlationId, "book.customer_created", { customerId: customerId });
       } catch (err) {
-        console.error("Booking submission failed creating customer:", err);
+        console.error("[" + correlationId + "] book.customer_create_failed:", err);
         res.status(500).json({ error: "Could not submit your booking. Please try again or call us." });
         return;
       }
+    } else {
+      logEvent(correlationId, "book.customer_reused", { customerId: customerId });
     }
     // On reuse (customerId set above, customerWasCreated left false): the
     // matched customer's own row (name/phone/email/address/normalized
@@ -378,12 +420,39 @@ module.exports = async (req, res) => {
           service_city: data.customer.city,
           service_state: data.customer.state,
           service_zip: data.customer.zip,
+          // Goal 3 idempotency — see sql/2026-10-18_phase3-public-reliability.sql
+          // (bookings.idempotency_key + its partial unique index) and the
+          // pre-check above. NULL (not written at all, effectively) for any
+          // request that didn't send one — the unique index is itself
+          // scoped to non-NULL values, so any number of these can coexist.
+          idempotency_key: data.idempotencyKey || null,
         })
         .select("id")
         .single();
 
       if (error || !bookingRow) {
-        console.error("Booking submission failed creating booking:", error);
+        // A unique-violation on idempotency_key specifically means this
+        // exact request raced another instance of itself between the
+        // pre-check above and this insert — not a real failure. Fetch and
+        // return the row the winner just created, same "insert; on
+        // unique_violation, fetch-and-return-existing" idempotency pattern
+        // already established for admin bookings (source_intake_id/
+        // source_estimate_id/source_lead_id) and for dumpster_rental's own
+        // idempotency key above. No other unique constraint exists on this
+        // insert, so a 23505 here can only be this one.
+        if (data.idempotencyKey && isUniqueViolation(error)) {
+          const { data: existing, error: fetchErr } = await supabase
+            .from("bookings")
+            .select("id")
+            .eq("idempotency_key", data.idempotencyKey)
+            .maybeSingle();
+          if (!fetchErr && existing) {
+            logEvent(correlationId, "book.idempotent_replay_race", { bookingId: existing.id });
+            res.status(200).json(respondWithUploadToken(existing.id, correlationId));
+            return;
+          }
+        }
+        console.error("[" + correlationId + "] book.booking_create_failed:", error);
         // Only delete a customer THIS request created — see the
         // customerWasCreated comment above. A reused customer's id must
         // never reach safeDelete().
@@ -394,8 +463,9 @@ module.exports = async (req, res) => {
         return;
       }
       bookingId = bookingRow.id;
+      logEvent(correlationId, "book.booking_created", { bookingId: bookingId, serviceType: data.serviceType });
     } catch (err) {
-      console.error("Booking submission failed creating booking:", err);
+      console.error("[" + correlationId + "] book.booking_create_failed:", err);
       if (customerWasCreated) {
         await safeDelete(supabase, "customers", customerId);
       }
@@ -414,19 +484,8 @@ module.exports = async (req, res) => {
     // nothing it does can change the response below.
     await sendBookingNotificationEmail(data);
 
-    // Intentionally never returns the raw booking UUID. If photo upload is
-    // configured, mint a short-lived token scoped to exactly this booking so
-    // the browser can attach photos via POST /api/upload-photo without ever
-    // holding a general-purpose booking identifier.
-    const uploadTokenSecret = process.env.UPLOAD_TOKEN_SECRET;
-    let uploadToken;
-    if (uploadTokenSecret) {
-      uploadToken = signUploadToken(bookingId, uploadTokenSecret);
-    } else {
-      console.error("Booking submission succeeded but UPLOAD_TOKEN_SECRET is not configured — photo upload will be unavailable for this booking.");
-    }
-
-    res.status(200).json(uploadToken ? { ok: true, uploadToken } : { ok: true });
+    logEvent(correlationId, "book.success", { bookingId: bookingId });
+    res.status(200).json(respondWithUploadToken(bookingId, correlationId));
   } catch (err) {
     console.error("Booking submission failed with an unexpected error:", err);
     if (!res.headersSent) {
@@ -434,6 +493,24 @@ module.exports = async (req, res) => {
     }
   }
 };
+
+// Intentionally never returns the raw booking UUID. If photo upload is
+// configured, mints a short-lived token scoped to exactly this booking so
+// the browser can attach photos via POST /api/upload-photo without ever
+// holding a general-purpose booking identifier. Shared by the normal
+// success path and both idempotent-replay paths above, so a retried
+// request gets a usable (re-signed, still valid) upload token too, not an
+// error.
+function respondWithUploadToken(bookingId, correlationId) {
+  const uploadTokenSecret = process.env.UPLOAD_TOKEN_SECRET;
+  let uploadToken;
+  if (uploadTokenSecret) {
+    uploadToken = signUploadToken(bookingId, uploadTokenSecret);
+  } else {
+    console.error("[" + correlationId + "] book.upload_token_unavailable: UPLOAD_TOKEN_SECRET is not configured — photo upload will be unavailable for this booking.");
+  }
+  return uploadToken ? { ok: true, uploadToken } : { ok: true };
+}
 
 async function safeDelete(supabase, table, id) {
   try {
@@ -1777,6 +1854,23 @@ function validateBooking(body, options) {
     jobDetails = { ...jobDetails, demoDescription, approximateSize, debrisRemovalNeeded };
   }
 
+  // Goal 3 idempotency (junk_removal/light_demo only — dumpster_rental has
+  // its own separate, required payment.idempotencyKey above and never
+  // reads this top-level field). Optional: an absent or malformed value is
+  // silently treated as "no idempotency key" rather than rejected — unlike
+  // payment.idempotencyKey (a hard requirement for dumpster_rental, since
+  // it's also a Stripe idempotency key), this field is purely a safety
+  // net, not something a legitimate submission should ever be blocked by
+  // over a formatting quirk. Backward-compatible with any caller that
+  // doesn't send it at all.
+  let idempotencyKey = null;
+  if (serviceType !== "dumpster_rental" && typeof body.idempotencyKey === "string") {
+    const rawKey = sanitizeText(body.idempotencyKey, MAX.idempotencyKey);
+    if (rawKey && /^[A-Za-z0-9-]{8,100}$/.test(rawKey)) {
+      idempotencyKey = rawKey;
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -1786,6 +1880,7 @@ function validateBooking(body, options) {
       appointmentDate,
       schedule: { date, timeWindow },
       payment,
+      idempotencyKey,
       customer: {
         firstName,
         lastName,

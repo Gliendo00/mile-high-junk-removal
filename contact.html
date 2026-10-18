@@ -432,15 +432,26 @@
           }),
         });
       }).then(function (res) {
-        if (!res.ok) throw new Error('Request failed');
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) {
+            var err = new Error(body && body.error ? body.error : 'Request failed');
+            err.isServerMessage = !!(body && body.error);
+            throw err;
+          }
+        });
+      }).then(function () {
         trackLead();
         form.style.display = 'none';
         successBox.style.display = 'flex';
         successBox.style.flexDirection = 'column';
         successBox.style.gap = '10px';
-      }).catch(function () {
+      }).catch(function (err) {
         trackError('submission_failed');
-        showError('Something went wrong sending that — please call or text 303-990-1812, or email contact@milehighjunkremoval.net directly.');
+        // Shows the server's own message when it sent one (e.g. "Please
+        // enter a valid phone number.") — this now matters more than it
+        // used to, since a spam-rejected submission gets a real, generic
+        // (never spam-revealing) error here too instead of a fake success.
+        showError(err && err.isServerMessage && err.message ? err.message : 'Something went wrong sending that — please call or text 303-990-1812, or email contact@milehighjunkremoval.net directly.');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Get My Free Quote';
       });

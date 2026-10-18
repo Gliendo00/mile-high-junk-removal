@@ -1128,6 +1128,15 @@
       <p style="opacity:0.8;margin-bottom:32px">Fill this out and we'll get back to you — or text a photo of your junk to <a href="sms:3039901812">303-990-1812</a> for a fast quote, or email us directly at <a href="mailto:contact@milehighjunkremoval.net">contact@milehighjunkremoval.net</a>.</p>
       <div id="cf-card" style="background:#fff;border:1px solid color-mix(in srgb, var(--color-text) 8%, transparent);border-radius:16px;box-shadow:var(--shadow-md);padding:28px 28px 24px">
         <form id="contact-form" style="display:flex;flex-direction:column;gap:18px">
+          <!-- Spam honeypot: invisible to real visitors, left for automated form
+               fillers. Positioned off-screen rather than display:none so it still
+               "exists" to a bot that skips display:none/visibility:hidden fields.
+               Matches contact.html's own identical field exactly — this form
+               previously had no honeypot/fill-time signal wired up at all. -->
+          <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+            <label for="cf-referral-source">Leave this field blank</label>
+            <input type="text" id="cf-referral-source" name="referral-source" tabindex="-1" autocomplete="off">
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
             <div class="field">
               <label for="cf-name">Name</label>
@@ -1175,6 +1184,16 @@
     var submitBtn = document.getElementById('cf-submit');
     var successBox = document.getElementById('cf-success');
     var MAX_BYTES = 4 * 1024 * 1024;
+    // performance.now() is a monotonic clock local to this page load, immune
+    // to the system clock being changed — unlike Date.now(), it can't be
+    // thrown off by client clock drift, which matters here because we send
+    // the browser's own measured duration (not a timestamp) to the server;
+    // see isSubmittedTooFast in api/_lib/spam-protection.js. Matches
+    // contact.html's identical pattern.
+    function nowMs() {
+      return window.performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+    }
+    var formLoadedAt = nowMs();
 
     function fileToBase64(file) {
       return new Promise(function (resolve, reject) {
@@ -1224,16 +1243,31 @@
             email: document.getElementById('cf-email').value,
             message: document.getElementById('cf-message').value,
             photos: photos,
+            hp: document.getElementById('cf-referral-source').value,
+            // Elapsed milliseconds since this script loaded, not a
+            // timestamp — see the nowMs() comment above.
+            elapsedMs: Math.round(nowMs() - formLoadedAt),
           }),
         });
       }).then(function (res) {
-        if (!res.ok) throw new Error('Request failed');
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) {
+            var err = new Error(body && body.error ? body.error : 'Request failed');
+            err.isServerMessage = !!(body && body.error);
+            throw err;
+          }
+        });
+      }).then(function () {
         document.getElementById('cf-card').style.display = 'none';
         successBox.style.display = 'flex';
         successBox.style.flexDirection = 'column';
         successBox.style.gap = '10px';
-      }).catch(function () {
-        showError('Something went wrong sending that — please call or text 303-990-1812, or email contact@milehighjunkremoval.net directly.');
+      }).catch(function (err) {
+        // Shows the server's own message when it sent one (e.g. "Please
+        // enter a valid phone number.") — this now matters more than it
+        // used to, since a spam-rejected submission gets a real, generic
+        // (never spam-revealing) error here too instead of a fake success.
+        showError(err && err.isServerMessage && err.message ? err.message : 'Something went wrong sending that — please call or text 303-990-1812, or email contact@milehighjunkremoval.net directly.');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Get My Free Quote';
       });
