@@ -152,11 +152,20 @@ window.AdminJobCloseout = (function () {
     });
   }
 
-  // opts: { bookingId, onComplete(result), onCancel(), onStatusError(err) }
+  // opts: { bookingId, serviceType, onComplete(result), onCancel(),
+  // onStatusError(err) }
   // result = { status, paymentSaved, paymentError, tipSaved, tipError }
+  //
+  // Phase 4 Stage 1: a dumpster_pickup booking carries no price/revenue/tip
+  // fields, by requirement — opts.serviceType === 'dumpster_pickup' skips
+  // the Payment/Tip sections entirely (note-only completion) rather than
+  // showing fields that would just fail server-side (see
+  // api/admin/booking.js's handleCreateJobPayment()/handleUpdateTip() for
+  // that same rule enforced independently, server-side).
   function open(opts) {
     opts = opts || {};
     var bookingId = opts.bookingId;
+    var isPickup = opts.serviceType === 'dumpster_pickup';
     ensureDom();
     clearSheet();
 
@@ -164,7 +173,9 @@ window.AdminJobCloseout = (function () {
     sheet.appendChild(el(
       'p',
       'admin-row-value',
-      'Optionally record a payment, a tip, and a quick internal note — all of this can also be added or edited later from the job’s detail page.'
+      isPickup
+        ? 'Optionally add a quick internal note — this is an operational pickup visit, which carries no payment or tip of its own.'
+        : 'Optionally record a payment, a tip, and a quick internal note — all of this can also be added or edited later from the job’s detail page.'
     ));
 
     var errorBox = el('div', 'admin-alert admin-alert-error');
@@ -174,59 +185,67 @@ window.AdminJobCloseout = (function () {
       errorBox.classList.add('is-visible');
     }
 
-    // --- Payment (optional) ---
-    sheet.appendChild(el('div', 'admin-sheet-section-label', 'Payment (optional)'));
+    var methodSelect = null;
+    var amountInput = null;
+    var dateInput = null;
+    var paymentNotesInput = null;
+    var tipInput = null;
 
-    var methodSelect = document.createElement('select');
-    JOB_PAYMENT_METHODS.forEach(function (m) {
-      var opt = document.createElement('option');
-      opt.value = m.value;
-      opt.textContent = m.label;
-      methodSelect.appendChild(opt);
-    });
-    var methodField = el('div', 'admin-field');
-    methodField.appendChild(el('label', null, 'Method'));
-    methodField.appendChild(methodSelect);
-    sheet.appendChild(methodField);
+    if (!isPickup) {
+      // --- Payment (optional) ---
+      sheet.appendChild(el('div', 'admin-sheet-section-label', 'Payment (optional)'));
 
-    var amountInput = document.createElement('input');
-    amountInput.type = 'number';
-    amountInput.inputMode = 'decimal';
-    amountInput.min = '0.01';
-    amountInput.step = '0.01';
-    amountInput.placeholder = 'e.g. 250.00';
-    var amountField = el('div', 'admin-field');
-    amountField.appendChild(el('label', null, 'Amount'));
-    amountField.appendChild(amountInput);
-    sheet.appendChild(amountField);
+      methodSelect = document.createElement('select');
+      JOB_PAYMENT_METHODS.forEach(function (m) {
+        var opt = document.createElement('option');
+        opt.value = m.value;
+        opt.textContent = m.label;
+        methodSelect.appendChild(opt);
+      });
+      var methodField = el('div', 'admin-field');
+      methodField.appendChild(el('label', null, 'Method'));
+      methodField.appendChild(methodSelect);
+      sheet.appendChild(methodField);
 
-    var dateInput = document.createElement('input');
-    dateInput.type = 'date';
-    var dateField = el('div', 'admin-field');
-    dateField.appendChild(el('label', null, 'Date'));
-    dateField.appendChild(dateInput);
-    sheet.appendChild(dateField);
+      amountInput = document.createElement('input');
+      amountInput.type = 'number';
+      amountInput.inputMode = 'decimal';
+      amountInput.min = '0.01';
+      amountInput.step = '0.01';
+      amountInput.placeholder = 'e.g. 250.00';
+      var amountField = el('div', 'admin-field');
+      amountField.appendChild(el('label', null, 'Amount'));
+      amountField.appendChild(amountInput);
+      sheet.appendChild(amountField);
 
-    var paymentNotesInput = document.createElement('input');
-    paymentNotesInput.type = 'text';
-    paymentNotesInput.maxLength = 500;
-    paymentNotesInput.placeholder = 'e.g. deposit, balance, partial payment';
-    var paymentNotesField = el('div', 'admin-field');
-    paymentNotesField.appendChild(el('label', null, 'Notes (required for "Other")'));
-    paymentNotesField.appendChild(paymentNotesInput);
-    sheet.appendChild(paymentNotesField);
+      dateInput = document.createElement('input');
+      dateInput.type = 'date';
+      var dateField = el('div', 'admin-field');
+      dateField.appendChild(el('label', null, 'Date'));
+      dateField.appendChild(dateInput);
+      sheet.appendChild(dateField);
 
-    // --- Tip (optional) ---
-    var tipInput = document.createElement('input');
-    tipInput.type = 'number';
-    tipInput.inputMode = 'decimal';
-    tipInput.min = '0';
-    tipInput.step = '0.01';
-    tipInput.placeholder = 'e.g. 20.00';
-    var tipField = el('div', 'admin-field');
-    tipField.appendChild(el('label', null, 'Tip (optional)'));
-    tipField.appendChild(tipInput);
-    sheet.appendChild(tipField);
+      paymentNotesInput = document.createElement('input');
+      paymentNotesInput.type = 'text';
+      paymentNotesInput.maxLength = 500;
+      paymentNotesInput.placeholder = 'e.g. deposit, balance, partial payment';
+      var paymentNotesField = el('div', 'admin-field');
+      paymentNotesField.appendChild(el('label', null, 'Notes (required for "Other")'));
+      paymentNotesField.appendChild(paymentNotesInput);
+      sheet.appendChild(paymentNotesField);
+
+      // --- Tip (optional) ---
+      tipInput = document.createElement('input');
+      tipInput.type = 'number';
+      tipInput.inputMode = 'decimal';
+      tipInput.min = '0';
+      tipInput.step = '0.01';
+      tipInput.placeholder = 'e.g. 20.00';
+      var tipField = el('div', 'admin-field');
+      tipField.appendChild(el('label', null, 'Tip (optional)'));
+      tipField.appendChild(tipInput);
+      sheet.appendChild(tipField);
+    }
 
     // --- How'd it go? (optional, internal only) ---
     var noteInput = document.createElement('textarea');
@@ -262,33 +281,39 @@ window.AdminJobCloseout = (function () {
       // Payment is optional as a WHOLE — only validated once an amount is
       // actually entered, mirroring the standalone Record Payment
       // control's own rule exactly (api/admin/booking.js's
-      // handleCreateJobPayment()).
-      var amountRaw = amountInput.value.trim();
+      // handleCreateJobPayment()). Neither field exists at all for a
+      // pickup job (isPickup) — payment/tipAmount stay null, and nothing
+      // below ever reads the (nonexistent) inputs.
       var payment = null;
-      if (amountRaw !== '') {
-        var amountNum = Number(amountRaw);
-        if (!Number.isFinite(amountNum) || amountNum <= 0) {
-          showFormError('Please enter a valid payment amount, or leave it blank.');
-          return;
+      if (!isPickup) {
+        var amountRaw = amountInput.value.trim();
+        if (amountRaw !== '') {
+          var amountNum = Number(amountRaw);
+          if (!Number.isFinite(amountNum) || amountNum <= 0) {
+            showFormError('Please enter a valid payment amount, or leave it blank.');
+            return;
+          }
+          var method = methodSelect.value;
+          var paymentNotes = paymentNotesInput.value.trim();
+          if (method === 'other' && !paymentNotes) {
+            showFormError('Please enter a description for an "Other" payment.');
+            return;
+          }
+          payment = { amount: amountNum, method: method, date: dateInput.value || null, notes: paymentNotes };
         }
-        var method = methodSelect.value;
-        var paymentNotes = paymentNotesInput.value.trim();
-        if (method === 'other' && !paymentNotes) {
-          showFormError('Please enter a description for an "Other" payment.');
-          return;
-        }
-        payment = { amount: amountNum, method: method, date: dateInput.value || null, notes: paymentNotes };
       }
 
-      var tipRaw = tipInput.value.trim();
       var tipAmount = null;
-      if (tipRaw !== '') {
-        var n = Number(tipRaw);
-        if (!Number.isFinite(n) || n < 0) {
-          showFormError('Please enter a valid tip amount, or leave it blank.');
-          return;
+      if (!isPickup) {
+        var tipRaw = tipInput.value.trim();
+        if (tipRaw !== '') {
+          var n = Number(tipRaw);
+          if (!Number.isFinite(n) || n < 0) {
+            showFormError('Please enter a valid tip amount, or leave it blank.');
+            return;
+          }
+          tipAmount = n;
         }
-        tipAmount = n;
       }
       var operationalNote = noteInput.value.trim();
 

@@ -175,7 +175,7 @@ module.exports = async (req, res) => {
     const bookingRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, operational_note, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by"
+        "id, service_type, appointment_date, time_window, exact_time, status, description, estimated_price, estimated_price_max, final_price, tip_amount, internal_notes, operational_note, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, created_at, updated_at, customer_id, service_address, service_city, service_state, service_zip, archived_at, archived_reason, archived_note, archived_by, review_request_sent_at, review_request_sent_by, source_rental_booking_id"
       )
       .eq("id", id)
       .maybeSingle();
@@ -199,7 +199,11 @@ module.exports = async (req, res) => {
         .select("first_name, last_name, phone, email, address, city, state, zip")
         .eq("id", booking.customer_id)
         .maybeSingle(),
-      supabase.from("dumpster_rentals").select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes, actual_weight_lbs").eq("booking_id", id).maybeSingle(),
+      supabase
+        .from("dumpster_rentals")
+        .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes, actual_weight_lbs, pickup_booking_id")
+        .eq("booking_id", id)
+        .maybeSingle(),
       supabase.from("booking_photos").select("id, storage_path, created_at").eq("booking_id", id).order("created_at", { ascending: true }),
       supabase
         .from("rental_payments")
@@ -304,6 +308,11 @@ module.exports = async (req, res) => {
         // decides whether to show this based on status, same as tip).
         reviewRequestSentAt: booking.review_request_sent_at,
         reviewRequestSentBy: booking.review_request_sent_by,
+        // Phase 4 Stage 1 — only ever non-null on an auto-generated pickup
+        // booking (service_type: "dumpster_pickup"); points back at the
+        // dumpster rental it belongs to, so its own detail page can link
+        // to it.
+        sourceRentalBookingId: booking.source_rental_booking_id,
       },
       // Client identity/contact only — never the address. Job location is
       // reported separately below as `serviceAddress`, sourced from the
@@ -338,6 +347,12 @@ module.exports = async (req, res) => {
             // handleProposeCharge() below). Independent of whether it ever
             // results in an overage charge.
             actualWeightLbs: dumpster.actual_weight_lbs,
+            // Phase 4 Stage 1 — this rental's auto-generated pickup
+            // booking, once created/linked (see ensurePickupBooking() in
+            // handleCreate()/handleUpdate() below). Null only for a
+            // dumpster rental created before this feature whose pickup
+            // hasn't been backfilled yet (self-heals on the next edit).
+            pickupBookingId: dumpster.pickup_booking_id,
           }
         : null,
       // Never card data — only what Stripe itself already returns as
@@ -939,6 +954,10 @@ async function handleCreate(req, res, session) {
     }
 
     let dumpsterResponse = null;
+    // Phase 4 Stage 1 — { pickup_date, pickup_booking_id } for whichever
+    // branch below actually ran, used just after to create/link this
+    // rental's pickup job. Stays null for any non-dumpster_rental booking.
+    let dumpsterRowForPickup = null;
     if (isReplay) {
       // A second dumpster_rentals INSERT against an already-existing
       // booking would either duplicate it or violate whatever constraint
@@ -950,7 +969,7 @@ async function handleCreate(req, res, session) {
       if (created.service_type === "dumpster_rental") {
         const existingDumpsterRes = await supabase
           .from("dumpster_rentals")
-          .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes")
+          .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes, pickup_booking_id")
           .eq("booking_id", created.id)
           .maybeSingle();
         if (existingDumpsterRes.error) throw existingDumpsterRes.error;
@@ -962,6 +981,7 @@ async function handleCreate(req, res, session) {
             materialType: existingDumpsterRes.data.material_type,
             placementNotes: existingDumpsterRes.data.placement_notes,
           };
+          dumpsterRowForPickup = { pickup_date: existingDumpsterRes.data.pickup_date, pickup_booking_id: existingDumpsterRes.data.pickup_booking_id };
         }
       }
     } else if (dumpsterFields) {
@@ -990,6 +1010,25 @@ async function handleCreate(req, res, session) {
         materialType: dumpsterCreated.material_type,
         placementNotes: dumpsterCreated.placement_notes,
       };
+      // A freshly-inserted dumpster_rentals row can never already have a
+      // pickup linked — explicit null rather than re-selecting the column.
+      dumpsterRowForPickup = { pickup_date: dumpsterCreated.pickup_date, pickup_booking_id: null };
+    }
+
+    // Phase 4 Stage 1 — Dumpster Pickup Auto-Job. The rental booking (the
+    // real sale) is already fully committed above by this point — a
+    // problem creating/linking its pickup job is reported back in the
+    // response, never allowed to undo or fail the rental. See
+    // ensurePickupBooking()'s own header for the idempotency this relies
+    // on (one pickup per rental, even across a retry/race).
+    let pickupError = null;
+    if (dumpsterRowForPickup) {
+      const pickupRes = await ensurePickupBooking(supabase, created, dumpsterRowForPickup);
+      if (pickupRes.ok) {
+        if (dumpsterResponse) dumpsterResponse.pickupBookingId = pickupRes.pickupBooking.id;
+      } else {
+        pickupError = "The job was created, but its linked pickup job could not be created.";
+      }
     }
 
     res.status(200).json({
@@ -1028,6 +1067,7 @@ async function handleCreate(req, res, session) {
       dumpster: dumpsterResponse,
       estimateUpdateError: estimateUpdateError,
       leadUpdateError: leadUpdateError,
+      pickupError: pickupError,
     });
   } catch (err) {
     console.error("Admin job create failed:", err && err.stack ? err.stack : err);
@@ -1454,16 +1494,22 @@ async function handleStatusAction(req, res, session) {
   }
 
   try {
-    // Only fetched for the one status that needs it — every other status
-    // write stays exactly the single-query round trip it always was.
-    if (requestedStatus === STATUS_RENTAL_ONLY_STATUS) {
+    // Only fetched for the statuses that need it — every other status write
+    // stays exactly the single-query round trip it always was. "lost" also
+    // needs the current service_type: a "lost" dumpster_rental (Phase 4
+    // Stage 1 treats this as the rental's cancellation — there is no
+    // separate "cancelled" status, per the existing 7-value enum) propagates
+    // to its still-open pickup job just below, after the write succeeds.
+    let currentServiceType = null;
+    if (requestedStatus === STATUS_RENTAL_ONLY_STATUS || requestedStatus === "lost") {
       const currentRes = await supabase.from("bookings").select("id, service_type").eq("id", id).maybeSingle();
       if (currentRes.error) throw currentRes.error;
       if (!currentRes.data) {
         res.status(404).json({ error: "Booking not found." });
         return;
       }
-      if (currentRes.data.service_type !== STATUS_RENTAL_SERVICE_TYPE) {
+      currentServiceType = currentRes.data.service_type;
+      if (requestedStatus === STATUS_RENTAL_ONLY_STATUS && currentServiceType !== STATUS_RENTAL_SERVICE_TYPE) {
         res.status(400).json({ error: "Rental Out can only be set on a dumpster rental job." });
         return;
       }
@@ -1485,6 +1531,14 @@ async function handleStatusAction(req, res, session) {
     if (!data) {
       res.status(404).json({ error: "Booking not found." });
       return;
+    }
+
+    // Phase 4 Stage 1 — a dumpster rental moved to "lost" cancels its still-
+    // open pickup job too (never an already-"completed" one). Best-effort,
+    // after the rental's own status write has already succeeded — never
+    // allowed to change this response or fail the rental's own cancellation.
+    if (requestedStatus === "lost" && currentServiceType === STATUS_RENTAL_SERVICE_TYPE) {
+      await propagatePickupCancellation(supabase, id, "Rental cancelled; pickup no longer needed.");
     }
 
     // Response stays exactly { ok, id, status } — the narrow contract this
@@ -1712,13 +1766,28 @@ async function handleUpdate(req, res) {
   try {
     const currentRes = await supabase
       .from("bookings")
-      .select("id, status, appointment_date")
+      .select("id, status, appointment_date, service_type")
       .eq("id", id)
       .maybeSingle();
     if (currentRes.error) throw currentRes.error;
     const current = currentRes.data;
     if (!current) {
       res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
+    // Phase 4 Stage 1 — a dumpster_pickup booking is auto-managed (its date
+    // mirrors the parent rental's dumpster_rentals.pickup_date; its status
+    // is managed through the normal status-change/closeout flow) and is
+    // never reachable through this full-form Edit Job endpoint. Checked
+    // against the booking's actual stored service_type, not whatever the
+    // request body claims — SERVICE_TYPES itself already excludes
+    // "dumpster_pickup" (see that constant's own comment), so a request
+    // claiming any valid serviceType against an actual pickup booking
+    // would otherwise fail confusingly on a field-level validation error
+    // instead of this clear one.
+    if (current.service_type === "dumpster_pickup") {
+      res.status(400).json({ error: "Pickup jobs are managed automatically from their dumpster rental and can't be edited directly here." });
       return;
     }
 
@@ -1915,6 +1984,7 @@ async function handleUpdate(req, res) {
     // completely untouched, never deleted, matching "never destroy
     // related records."
     let dumpsterResponse = null;
+    let pickupError = null;
     if (dumpsterFields) {
       const { data: dumpsterUpserted, error: dumpsterError } = await supabase
         .from("dumpster_rentals")
@@ -1929,7 +1999,7 @@ async function handleUpdate(req, res) {
           },
           { onConflict: "booking_id" }
         )
-        .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes")
+        .select("delivery_date, pickup_date, pickup_date_is_manual, material_type, placement_notes, pickup_booking_id")
         .single();
       if (dumpsterError || !dumpsterUpserted) throw dumpsterError || new Error("dumpster_rentals upsert returned no row.");
       dumpsterResponse = {
@@ -1939,6 +2009,27 @@ async function handleUpdate(req, res) {
         materialType: dumpsterUpserted.material_type,
         placementNotes: dumpsterUpserted.placement_notes,
       };
+
+      // Phase 4 Stage 1 — Dumpster Pickup Auto-Job. ensurePickupBooking()
+      // creates/links the pickup if this rental predates the feature or a
+      // prior attempt only partially succeeded; syncPickupBookingDate()
+      // then mirrors the (possibly just-changed) pickup_date onto the
+      // pickup booking's own appointment_date — a no-op if they already
+      // match, and a no-op if the pickup is already "completed" (a
+      // completed pickup is never retroactively altered). Both are
+      // best-effort: the rental's own update above has already succeeded
+      // and is never undone by a pickup-side problem.
+      const ensureRes = await ensurePickupBooking(supabase, updated, {
+        pickup_date: dumpsterUpserted.pickup_date,
+        pickup_booking_id: dumpsterUpserted.pickup_booking_id,
+      });
+      if (ensureRes.ok) {
+        dumpsterResponse.pickupBookingId = ensureRes.pickupBooking.id;
+        const syncRes = await syncPickupBookingDate(supabase, id, dumpsterUpserted.pickup_date);
+        if (!syncRes.ok) pickupError = "The job was updated, but its linked pickup job's date could not be updated.";
+      } else {
+        pickupError = "The job was updated, but its linked pickup job could not be created or linked.";
+      }
     }
 
     res.status(200).json({
@@ -1976,6 +2067,7 @@ async function handleUpdate(req, res) {
         zip: updated.service_zip,
       },
       dumpster: dumpsterResponse,
+      pickupError: pickupError,
     });
   } catch (err) {
     console.error("Admin job update failed:", err && err.stack ? err.stack : err);
@@ -2031,7 +2123,7 @@ async function handleUpdateTip(req, res, session) {
   }
 
   try {
-    const currentRes = await supabase.from("bookings").select("id, status").eq("id", id).maybeSingle();
+    const currentRes = await supabase.from("bookings").select("id, status, service_type").eq("id", id).maybeSingle();
     if (currentRes.error) throw currentRes.error;
     if (!currentRes.data) {
       res.status(404).json({ error: "Booking not found." });
@@ -2039,6 +2131,15 @@ async function handleUpdateTip(req, res, session) {
     }
     if (currentRes.data.status !== "completed") {
       res.status(400).json({ error: "Tip can only be recorded for a completed job." });
+      return;
+    }
+    // Phase 4 Stage 1 — a dumpster_pickup booking carries no price/revenue/
+    // tip fields, by requirement (it's an operational schedule entry, not
+    // a second sale). Defense in depth, not just a UI omission: enforced
+    // here even though no admin UI currently offers a tip control on a
+    // pickup job's own card/detail.
+    if (currentRes.data.service_type === "dumpster_pickup") {
+      res.status(400).json({ error: "A pickup job cannot carry a tip." });
       return;
     }
 
@@ -2256,6 +2357,22 @@ async function handleArchiveAction(req, res, session) {
 
       await writeBookingAuditLog(supabase, current, id, "archive", reason, note, session.email);
 
+      // Phase 4 Stage 1 — archiving is a visibility flag only (never
+      // alters job data), so this propagates to the rental's pickup job
+      // regardless of the pickup's own status, including an already-
+      // completed one. Best-effort, after the rental's own archive has
+      // already succeeded — never allowed to change this response or fail
+      // the rental's own archive action.
+      if (current.service_type === "dumpster_rental") {
+        await propagatePickupArchive(supabase, id, {
+          archived_at: nowIso,
+          archived_reason: reason,
+          archived_note: "Auto-archived with its dumpster rental.",
+          archived_by: session.email,
+          updated_at: nowIso,
+        });
+      }
+
       res.status(200).json({
         ok: true,
         archivedAt: updated.archived_at,
@@ -2286,6 +2403,12 @@ async function handleArchiveAction(req, res, session) {
     }
 
     await writeBookingAuditLog(supabase, current, id, "restore", null, null, session.email);
+
+    // Phase 4 Stage 1 — mirror a restore to the pickup job the same way
+    // archive is mirrored above.
+    if (current.service_type === "dumpster_rental") {
+      await propagatePickupArchive(supabase, id, { archived_at: null, archived_reason: null, archived_note: null, archived_by: null, updated_at: nowIso });
+    }
 
     res.status(200).json({ ok: true, archivedAt: null });
   } catch (err) {
@@ -2570,10 +2693,18 @@ async function handleCreateJobPayment(req, res, session) {
   }
 
   try {
-    const bookingRes = await supabase.from("bookings").select("id").eq("id", bookingId).maybeSingle();
+    const bookingRes = await supabase.from("bookings").select("id, service_type").eq("id", bookingId).maybeSingle();
     if (bookingRes.error) throw bookingRes.error;
     if (!bookingRes.data) {
       res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    // Phase 4 Stage 1 — a dumpster_pickup booking carries no price/revenue
+    // fields, by requirement: any overage/settlement money belongs to the
+    // rental booking, never the pickup. Defense in depth, not just a UI
+    // omission.
+    if (bookingRes.data.service_type === "dumpster_pickup") {
+      res.status(400).json({ error: "A pickup job cannot carry a payment. Record it against the dumpster rental instead." });
       return;
     }
 
@@ -3257,8 +3388,17 @@ async function markChargeRequiresCustomerAction(supabase, id, paymentIntentId, r
 // Derived from booking-format.js's SERVICE_LABELS keys rather than a third
 // hardcoded copy of the three service-type strings (api/book.js has the
 // live one; booking-format.js already has the admin-shared one this file
-// already imports from).
-const SERVICE_TYPES = Object.keys(SERVICE_LABELS);
+// already imports from). Phase 4 Stage 1: SERVICE_LABELS also carries the
+// internal-only "dumpster_pickup" display label, which must be excluded
+// here — this constant is what handleCreate()/handleUpdate() actually
+// validate a submitted serviceType against, so excluding it is what makes
+// "the public (and even the admin-facing) API must never accept
+// dumpster_pickup" a real guarantee rather than a UI convention. Only
+// ensurePickupBooking()'s own internal insert (never reachable from a
+// request body) ever writes that value.
+const SERVICE_TYPES = Object.keys(SERVICE_LABELS).filter(function (t) {
+  return t !== "dumpster_pickup";
+});
 // Derived from the shared api/_lib/time-windows.js module — same source
 // used to sort the Schedule chronologically — rather than a separate copy.
 const VALID_TIME_WINDOWS = Object.keys(TIME_WINDOW_DEFS);
@@ -3377,6 +3517,238 @@ async function safeDelete(supabase, table, id) {
     await supabase.from(table).delete().eq("id", id);
   } catch (err) {
     console.error("Rollback failed for " + table + " id " + id + ":", err);
+  }
+}
+
+// =======================================================================
+// Phase 4 Stage 1 — Dumpster Pickup Auto-Job.
+//
+// The pickup is a second `bookings` row (service_type: "dumpster_pickup")
+// that exists purely so the pickup visit can appear on Schedule, carry its
+// own appointment date, and be marked complete operationally. It is NEVER
+// a second sale: estimated_price/estimated_price_max/final_price/
+// tip_amount are always null (enforced here, not just by UI convention),
+// it starts directly at status "booked" (never "new", so it can never
+// surface as a lead), and it carries no source_lead_id/source_estimate_id/
+// source_intake_id of its own — only source_rental_booking_id, pointing
+// back at the rental it belongs to. See
+// sql/2026-10-18_phase4-stage1-dumpster-pickup-auto-job.sql for the two
+// columns (bookings.source_rental_booking_id, dumpster_rentals.
+// pickup_booking_id) this relies on, including the partial UNIQUE index
+// that is the actual "retries can't create duplicate pickups" guarantee.
+// =======================================================================
+const PICKUP_BOOKING_SELECT_COLS =
+  "id, service_type, appointment_date, status, archived_at, customer_id, service_address, service_city, service_state, service_zip, source_rental_booking_id";
+
+// Idempotent "find or create" for a rental's pickup booking. Safe to call
+// on a freshly-inserted rental, a replayed/retried create, or an existing
+// rental whose dumpster_rentals row predates this feature — every path
+// converges on exactly one pickup booking, never a duplicate:
+//   1. dumpsterRow.pickup_booking_id already set -> trust it, return that
+//      booking, no write at all.
+//   2. Else, look for an existing pickup by source_rental_booking_id (the
+//      case where a prior attempt created the pickup but crashed/raced
+//      before the link below ever got backfilled) and reuse it instead of
+//      inserting a second one.
+//   3. Else, insert a new pickup booking. If that insert loses a race with
+//      another concurrent call (unique_violation on
+//      bookings_source_rental_booking_id_uniq), re-fetch by
+//      source_rental_booking_id instead of erroring or duplicating — the
+//      same "insert; on unique_violation, fetch the row that already
+//      exists" idempotency this file already uses for source_intake_id/
+//      source_estimate_id/source_lead_id above.
+//   4. Backfill dumpster_rentals.pickup_booking_id with whichever booking
+//      step 2 or 3 landed on — re-reading the row fresh immediately before
+//      writing, so a concurrent caller that already backfilled it is
+//      respected rather than clobbered.
+//
+// Never throws for an ordinary failure — returns { ok: false, error } so a
+// pickup-job problem is reported back without ever rolling back or failing
+// the rental booking itself (the rental is the real sale; the pickup is a
+// best-effort operational convenience, same posture as job-closeout.js's
+// non-fatal payment/tip failures after a successful status change).
+async function ensurePickupBooking(supabase, rentalBooking, dumpsterRow) {
+  try {
+    if (dumpsterRow.pickup_booking_id) {
+      const existingRes = await supabase
+        .from("bookings")
+        .select(PICKUP_BOOKING_SELECT_COLS)
+        .eq("id", dumpsterRow.pickup_booking_id)
+        .maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+      if (existingRes.data) return { ok: true, pickupBooking: existingRes.data };
+      // The link pointed at a row that no longer exists — should never
+      // happen (bookings are archived, never hard-deleted) but stays
+      // defensive and falls through to re-create/re-link rather than
+      // returning a dangling reference.
+    }
+
+    const byLineageRes = await supabase
+      .from("bookings")
+      .select(PICKUP_BOOKING_SELECT_COLS)
+      .eq("source_rental_booking_id", rentalBooking.id)
+      .maybeSingle();
+    if (byLineageRes.error) throw byLineageRes.error;
+
+    let pickupBooking = byLineageRes.data || null;
+
+    if (!pickupBooking) {
+      const insertRes = await supabase
+        .from("bookings")
+        .insert({
+          customer_id: rentalBooking.customer_id,
+          service_type: "dumpster_pickup",
+          appointment_date: dumpsterRow.pickup_date,
+          time_window: null,
+          exact_time: null,
+          status: "booked",
+          description: "Dumpster pickup for the rental delivered " + rentalBooking.appointment_date + ".",
+          estimated_price: null,
+          estimated_price_max: null,
+          final_price: null,
+          tip_amount: null,
+          internal_notes: null,
+          service_address: rentalBooking.service_address,
+          service_city: rentalBooking.service_city,
+          service_state: rentalBooking.service_state,
+          service_zip: rentalBooking.service_zip,
+          source_rental_booking_id: rentalBooking.id,
+        })
+        .select(PICKUP_BOOKING_SELECT_COLS)
+        .single();
+
+      if (insertRes.error) {
+        if (insertRes.error.code === POSTGRES_UNIQUE_VIOLATION) {
+          const racedRes = await supabase
+            .from("bookings")
+            .select(PICKUP_BOOKING_SELECT_COLS)
+            .eq("source_rental_booking_id", rentalBooking.id)
+            .maybeSingle();
+          if (racedRes.error || !racedRes.data) throw insertRes.error;
+          pickupBooking = racedRes.data;
+        } else {
+          throw insertRes.error;
+        }
+      } else if (!insertRes.data) {
+        throw new Error("Pickup booking insert returned no row.");
+      } else {
+        pickupBooking = insertRes.data;
+      }
+    }
+
+    const freshDumpsterRes = await supabase
+      .from("dumpster_rentals")
+      .select("pickup_booking_id")
+      .eq("booking_id", rentalBooking.id)
+      .maybeSingle();
+    if (freshDumpsterRes.error) throw freshDumpsterRes.error;
+    if (!freshDumpsterRes.data || !freshDumpsterRes.data.pickup_booking_id) {
+      const linkRes = await supabase.from("dumpster_rentals").update({ pickup_booking_id: pickupBooking.id }).eq("booking_id", rentalBooking.id);
+      if (linkRes.error) throw linkRes.error;
+    }
+
+    return { ok: true, pickupBooking: pickupBooking };
+  } catch (err) {
+    console.error("ensurePickupBooking failed for rental " + rentalBooking.id + ":", err && err.stack ? err.stack : err);
+    return { ok: false, error: err };
+  }
+}
+
+// Mirrors a rental's pickup_date onto its pickup booking's appointment_date
+// whenever the rental's delivery date (or pickup date) changes and the
+// pickup is still auto-managed. Never touches an already-"completed"
+// pickup (completed pickups are never retroactively altered). Self-heals
+// a missing dumpster_rentals.pickup_booking_id link the same way
+// ensurePickupBooking() does, via the source_rental_booking_id fallback —
+// so this also works for a rental whose pickup predates a successful link
+// backfill. Best-effort/non-fatal: reported back, never allowed to fail
+// the rental's own already-successful update.
+async function syncPickupBookingDate(supabase, rentalBookingId, newPickupDate) {
+  try {
+    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
+    if (dumpsterRes.error) throw dumpsterRes.error;
+    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
+    if (!pickupBookingId) {
+      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
+      if (byLineageRes.error) throw byLineageRes.error;
+      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
+    }
+    if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
+
+    const pickupRes = await supabase.from("bookings").select("id, status, appointment_date").eq("id", pickupBookingId).maybeSingle();
+    if (pickupRes.error) throw pickupRes.error;
+    if (!pickupRes.data) return { ok: true, skipped: "pickup_not_found" };
+    if (pickupRes.data.status === "completed") return { ok: true, skipped: "pickup_already_completed" };
+    if (pickupRes.data.appointment_date === newPickupDate) return { ok: true, skipped: "unchanged" };
+
+    const updateRes = await supabase.from("bookings").update({ appointment_date: newPickupDate, updated_at: new Date().toISOString() }).eq("id", pickupBookingId);
+    if (updateRes.error) throw updateRes.error;
+    return { ok: true, pickupBookingId: pickupBookingId };
+  } catch (err) {
+    console.error("syncPickupBookingDate failed for rental " + rentalBookingId + ":", err && err.stack ? err.stack : err);
+    return { ok: false, error: err };
+  }
+}
+
+// Propagates a rental's cancellation to its still-open pickup — reuses the
+// existing "lost" status (no new status added) and only ever moves the
+// pickup there when it isn't already "completed" or "lost". Best-effort/
+// non-fatal, same posture as syncPickupBookingDate() above.
+async function propagatePickupCancellation(supabase, rentalBookingId, note) {
+  try {
+    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
+    if (dumpsterRes.error) throw dumpsterRes.error;
+    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
+    if (!pickupBookingId) {
+      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
+      if (byLineageRes.error) throw byLineageRes.error;
+      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
+    }
+    if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
+
+    const pickupRes = await supabase.from("bookings").select("id, status").eq("id", pickupBookingId).maybeSingle();
+    if (pickupRes.error) throw pickupRes.error;
+    if (!pickupRes.data) return { ok: true, skipped: "pickup_not_found" };
+    if (pickupRes.data.status === "completed" || pickupRes.data.status === "lost") {
+      return { ok: true, skipped: "pickup_already_" + pickupRes.data.status };
+    }
+
+    const updateRes = await supabase
+      .from("bookings")
+      .update({ status: "lost", operational_note: note, updated_at: new Date().toISOString() })
+      .eq("id", pickupBookingId);
+    if (updateRes.error) throw updateRes.error;
+    return { ok: true, pickupBookingId: pickupBookingId };
+  } catch (err) {
+    console.error("propagatePickupCancellation failed for rental " + rentalBookingId + ":", err && err.stack ? err.stack : err);
+    return { ok: false, error: err };
+  }
+}
+
+// Propagates an archive/restore action on a rental to its pickup booking.
+// Archiving is a visibility flag only and never alters job data (see
+// handleArchiveAction()'s own header), so — unlike status cancellation —
+// this is safe regardless of the pickup's own status, including an
+// already-completed one. Best-effort/non-fatal, same posture as the two
+// functions above.
+async function propagatePickupArchive(supabase, rentalBookingId, archiveFields) {
+  try {
+    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
+    if (dumpsterRes.error) throw dumpsterRes.error;
+    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
+    if (!pickupBookingId) {
+      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
+      if (byLineageRes.error) throw byLineageRes.error;
+      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
+    }
+    if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
+
+    const updateRes = await supabase.from("bookings").update(archiveFields).eq("id", pickupBookingId);
+    if (updateRes.error) throw updateRes.error;
+    return { ok: true, pickupBookingId: pickupBookingId };
+  } catch (err) {
+    console.error("propagatePickupArchive failed for rental " + rentalBookingId + ":", err && err.stack ? err.stack : err);
+    return { ok: false, error: err };
   }
 }
 

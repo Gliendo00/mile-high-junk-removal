@@ -665,6 +665,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function openScheduleCloseout(job) {
     window.AdminJobCloseout.open({
       bookingId: job.id,
+      serviceType: job.serviceType,
       onComplete: function (result) {
         var messages = ['Job marked Completed.'];
         if (result.paymentSaved) messages.push('Payment saved.');

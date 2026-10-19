@@ -23,6 +23,14 @@ const SERVICE_LABELS = {
   junk_removal: "Junk Removal",
   dumpster_rental: "15-Yard Dumpster Rental",
   light_demo: "Light Demo",
+  // Phase 4 Stage 1: the internal-only, auto-generated pickup leg of a
+  // dumpster rental. Display label only — this value is deliberately NOT
+  // in api/book.js's public SERVICE_TYPES array and NOT in
+  // api/admin/booking.js's CREATABLE_SERVICE_TYPES (the allowlist admin
+  // create/update actually validates against), so it can never be chosen
+  // or submitted by a human; only handleCreate()'s own internal pickup-job
+  // insert ever writes it.
+  dumpster_pickup: "Dumpster Pickup",
 };
 
 // Derived from TIME_WINDOW_DEFS (api/_lib/time-windows.js) rather than

@@ -251,11 +251,17 @@ async function handleList(req, res) {
     const customerIds = clients.map((c) => c.id);
     const bookingsByCustomer = {};
     if (customerIds.length) {
-      const bookingsRes = await supabase.from("bookings").select("customer_id, appointment_date, created_at").in("customer_id", customerIds);
+      const bookingsRes = await supabase.from("bookings").select("customer_id, appointment_date, created_at, service_type").in("customer_id", customerIds);
       if (bookingsRes.error) throw bookingsRes.error;
-      (bookingsRes.data || []).forEach((b) => {
-        (bookingsByCustomer[b.customer_id] || (bookingsByCustomer[b.customer_id] = [])).push(b);
-      });
+      // Phase 4 Stage 1: excludes service_type = "dumpster_pickup" — this
+      // array only ever feeds bookingCount/lastJobDate below, both meant
+      // to represent paid jobs, and a rental's auto-generated pickup is
+      // the same business job as the rental, never a second one.
+      (bookingsRes.data || [])
+        .filter((b) => b.service_type !== "dumpster_pickup")
+        .forEach((b) => {
+          (bookingsByCustomer[b.customer_id] || (bookingsByCustomer[b.customer_id] = [])).push(b);
+        });
     }
 
     const items = clients.map((c) => {

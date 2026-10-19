@@ -764,6 +764,13 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls â
       // reachable only via ?resource=estimate POST. See
       // tests/estimate-workflow.test.js.
       "api/admin/booking.js: .insert(",
+      // Phase 4 Stage 1 (Dumpster Pickup Auto-Job) added exactly one new
+      // insert â€” ensurePickupBooking()'s pickup-leg bookings row
+      // (service_type: "dumpster_pickup", no price/revenue fields, status
+      // "booked" directly), reached only from a dumpster_rental booking's
+      // own create/update, never from a request body. See
+      // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call â€”
       // PATCH's handleUpdate() â€” deliberately, not a side effect.
       "api/admin/booking.js: .update(",
@@ -824,6 +831,19 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls â
       // fields, and the estimate/lead updates are gated behind
       // sourceEstimateId/sourceLeadId, never reachable for "+ New Job"/
       // "+ Past Job". See tests/estimate-workflow.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      // Phase 4 Stage 1 (Dumpster Pickup Auto-Job) added exactly four new
+      // updates, one per helper: ensurePickupBooking()'s
+      // dumpster_rentals.pickup_booking_id backfill link,
+      // syncPickupBookingDate()'s mirror of the pickup_date onto the
+      // pickup booking's own appointment_date (never touching an already-
+      // "completed" pickup), propagatePickupCancellation()'s "lost"
+      // propagation from a cancelled rental, and propagatePickupArchive()'s
+      // archive/restore propagation (one shared call site for both
+      // directions). See tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",

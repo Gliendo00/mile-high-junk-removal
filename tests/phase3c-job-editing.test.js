@@ -1075,11 +1075,20 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // follow-up writes (marking the originating estimate "converted" and the
   // originating lead "booked") plus handlePatchEstimate()'s own status
   // update — same "independently reviewed elsewhere" reasoning; see
-  // tests/estimate-workflow.test.js.
+  // tests/estimate-workflow.test.js. Phase 4 Stage 1 (Dumpster Pickup
+  // Auto-Job) added exactly four more still, all part of the
+  // ensurePickupBooking()/syncPickupBookingDate()/
+  // propagatePickupCancellation()/propagatePickupArchive() helper quartet:
+  // the dumpster_rentals.pickup_booking_id backfill link, the pickup
+  // booking's appointment_date mirror, the pickup's "lost" cancellation
+  // propagation, and the pickup's archive/restore propagation (one shared
+  // call site for both directions) — same "independently reviewed
+  // elsewhere" reasoning; see
+  // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
   assert.strictEqual(
     updateCalls,
-    23,
-    "booking.js must have exactly 23 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups) — anything else needs deliberate review"
+    27,
+    "booking.js must have exactly 27 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups + 4 Phase 4 Stage 1 dumpster-pickup-auto-job helpers) — anything else needs deliberate review"
   );
 });
 

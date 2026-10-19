@@ -200,6 +200,14 @@ document.addEventListener('DOMContentLoaded', function () {
   function bookedJobAmount(job) {
     return Number(job.estimatedPrice) || 0;
   }
+  // Phase 4 Stage 1: every dashboard summary card below must count/sum real
+  // jobs only — a rental's auto-generated pickup is the same business job
+  // as the rental, never a second one. The actual Today schedule list
+  // (renderTodaySchedule()) is deliberately NOT filtered by this — the
+  // pickup still appears there as its own card.
+  function isCountableJob(job) {
+    return job.serviceType !== 'dumpster_pickup';
+  }
   function jobDisplayName(job) {
     return (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
   }
@@ -489,9 +497,12 @@ document.addEventListener('DOMContentLoaded', function () {
     var waitingOnPhotos = sections.waitingOnPhotos || [];
     var followUp = sections.followUp || [];
 
-    // Today's Jobs
-    set('stat-today-jobs', String(todayJobs.length));
-    set('stat-today-jobs-sub', todayJobs.length === 1 ? '1 job' : todayJobs.length + ' jobs');
+    // Today's Jobs — counts real jobs only (see isCountableJob()); the
+    // schedule list rendered further down (renderTodaySchedule) still shows
+    // a pickup job as its own card.
+    var countableTodayJobs = todayJobs.filter(isCountableJob);
+    set('stat-today-jobs', String(countableTodayJobs.length));
+    set('stat-today-jobs-sub', countableTodayJobs.length === 1 ? '1 job' : countableTodayJobs.length + ' jobs');
 
     // Leads Need Attention
     var needsAttentionCount = intakes.length + newMerged.length + waitingOnPhotos.length + followUp.length;
@@ -507,14 +518,14 @@ document.addEventListener('DOMContentLoaded', function () {
     // "Unavailable" rather than silently showing $0, which would read as
     // "genuinely nothing booked" instead of "unknown right now".
     var weekKnown = !!weekBody;
-    var bookedJobsWeek = weekJobs.filter(function (j) { return j.status === 'booked' || j.status === 'rental_out'; });
+    var bookedJobsWeek = weekJobs.filter(function (j) { return isCountableJob(j) && (j.status === 'booked' || j.status === 'rental_out'); });
     var bookedWeekAmount = bookedJobsWeek.reduce(function (sum, j) { return sum + bookedJobAmount(j); }, 0);
     set('stat-booked-week', weekKnown ? formatMoney(bookedWeekAmount) : '—');
     set('stat-booked-week-sub', weekKnown ? 'This week' : 'Unavailable');
 
     // Completed (Business Pulse) — a plain job count, not a dollar amount;
     // see this file's header for why.
-    var completedJobsWeek = weekJobs.filter(function (j) { return j.status === 'completed'; });
+    var completedJobsWeek = weekJobs.filter(function (j) { return isCountableJob(j) && j.status === 'completed'; });
     set('pulse-completed', completedJobsWeek.length === 1 ? '1 job' : completedJobsWeek.length + ' jobs');
 
     // Revenue This Week — completed-job revenue + Other Revenue, the exact

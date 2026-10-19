@@ -36,6 +36,16 @@ window.AdminCalendarViews = (function () {
   // requirement).
   var WEEK_ROW_MAX_JOB_LINES = 3;
 
+  // Phase 4 Stage 1: a rental's auto-generated pickup job is the same
+  // business job as the rental, never a second one — excluded from every
+  // plain "X jobs" count badge below (Week's per-day header, Month grid's
+  // per-day badge), while still rendering as its own card/line everywhere
+  // an actual job list is shown (Week's mini-card lines, Month/Day's
+  // selected-day panel) — those stay keyed off the unfiltered job array.
+  function isCountableJob(job) {
+    return job.serviceType !== 'dumpster_pickup';
+  }
+
   function denverTodayIso() {
     var fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' });
     var parts = {};
@@ -544,8 +554,9 @@ window.AdminCalendarViews = (function () {
       var head = el('div', 'admin-week-day-row-head');
       head.appendChild(el('span', 'admin-week-day-row-weekday', WEEKDAY_SHORT[i]));
       head.appendChild(el('span', 'admin-week-day-row-date', formatMonthDay(iso)));
-      if (jobs.length) {
-        head.appendChild(el('span', 'admin-week-day-row-count', jobs.length + (jobs.length === 1 ? ' job' : ' jobs')));
+      var countableJobs = jobs.filter(isCountableJob);
+      if (countableJobs.length) {
+        head.appendChild(el('span', 'admin-week-day-row-count', countableJobs.length + (countableJobs.length === 1 ? ' job' : ' jobs')));
       }
       if (estimates.length) {
         head.appendChild(el('span', 'admin-week-day-row-estimate-count', estimates.length + (estimates.length === 1 ? ' estimate' : ' estimates')));
@@ -725,9 +736,8 @@ window.AdminCalendarViews = (function () {
       cell.className = classes.join(' ');
       cell.dataset.date = iso;
       cell.appendChild(el('span', 'admin-month-grid-daynum', String(day)));
-      if (jobs.length) {
-        cell.appendChild(el('span', 'admin-month-grid-count', String(jobs.length)));
-      }
+      var jobCount = jobs.filter(isCountableJob).length;
+      if (jobCount) cell.appendChild(el('span', 'admin-month-grid-count', String(jobCount)));
       // Estimate workflow hardening pass — a second, visually distinct
       // (teal, matching admin/schedule.js's/admin-estimate-type-badge's
       // established estimate color) count badge, never merged into the

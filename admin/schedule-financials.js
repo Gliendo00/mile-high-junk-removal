@@ -130,10 +130,22 @@ window.AdminScheduleFinancials = (function () {
     return Number(job.estimatedPrice) || 0;
   }
 
+  // Phase 4 Stage 1: a rental's auto-generated pickup job is the same
+  // business job as the rental, never a second one — its price fields are
+  // always null server-side already (so its dollar contribution here is
+  // already $0), but this excludes it outright anyway so it can never
+  // appear as a stray row in the Revenue/Booked/Complimentary breakdown
+  // sheets below, and so this stays correct even if that price-is-null
+  // guarantee ever changed server-side.
+  function isCountableJob(job) {
+    return job.serviceType !== 'dumpster_pickup';
+  }
+
   function computeFromJobs(jobs) {
     var revenue = 0;
     var booked = 0;
     (jobs || []).forEach(function (job) {
+      if (!isCountableJob(job)) return;
       if (job.status === 'completed') {
         revenue += completedRevenueAmount(job);
       } else if (job.status === 'booked' || job.status === 'rental_out') {
@@ -152,7 +164,7 @@ window.AdminScheduleFinancials = (function () {
         // a stray "$0.00" row; it's shown instead, with its informational
         // value, in the separate Complimentary Service breakdown (see
         // buildComplimentaryRows()).
-        return job.status === 'completed' && !job.isComplimentary;
+        return isCountableJob(job) && job.status === 'completed' && !job.isComplimentary;
       })
       .map(function (job) {
         return { id: job.id, name: jobDisplayName(job), service: job.serviceLabel || job.serviceType || '—', date: job.appointmentDate, amount: completedRevenueAmount(job) };
@@ -169,7 +181,7 @@ window.AdminScheduleFinancials = (function () {
   function buildComplimentaryRows(jobs) {
     return (jobs || [])
       .filter(function (job) {
-        return job.status === 'completed' && job.isComplimentary;
+        return isCountableJob(job) && job.status === 'completed' && job.isComplimentary;
       })
       .map(function (job) {
         return {
@@ -187,7 +199,7 @@ window.AdminScheduleFinancials = (function () {
   function buildBookedRows(jobs) {
     return (jobs || [])
       .filter(function (job) {
-        return job.status === 'booked' || job.status === 'rental_out';
+        return isCountableJob(job) && (job.status === 'booked' || job.status === 'rental_out');
       })
       .map(function (job) {
         return {

@@ -288,14 +288,31 @@ module.exports = async (req, res) => {
   // "new" derivation below (total minus every known non-new status), so
   // an archived job must never inflate any of them, matching "archived
   // jobs do not count toward Booked or Revenue."
+  // Phase 4 Stage 1: every count here must also exclude service_type =
+  // "dumpster_pickup" — a rental's auto-generated pickup job is the same
+  // business job as the rental, never a second one, so it must never
+  // inflate any of these totals (see
+  // sql/2026-10-18_phase4-stage1-dumpster-pickup-auto-job.sql's header and
+  // ensurePickupBooking()'s own header in api/admin/booking.js). Each query
+  // now selects service_type too (never a bare head-count) and
+  // countableCount() filters+counts in JS — a plain `.neq()` at the query
+  // layer would have been simpler, but this file's own offline test
+  // fakes (tests/*.test.js, one independent FakeQueryBuilder per file,
+  // no shared fixture) only implement the filter methods this codebase's
+  // production code already used before this change; counting in JS needs
+  // no new fake method anywhere.
+  function countableCount(rows) {
+    return (rows || []).filter(function (r) { return r.service_type !== "dumpster_pickup"; }).length;
+  }
+
   const COUNT_QUERIES = [
-    supabase.from("bookings").select("id", { count: "exact", head: true }).is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "contacted").is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "quoted").is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "booked").is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "rental_out").is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed").is("archived_at", null),
-    supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "lost").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "contacted").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "quoted").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "booked").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "rental_out").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "completed").is("archived_at", null),
+    supabase.from("bookings").select("id, service_type").eq("status", "lost").is("archived_at", null),
   ];
 
   if (countsOnly) {
@@ -304,21 +321,26 @@ module.exports = async (req, res) => {
       for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes]) {
         if (r.error) throw r.error;
       }
-      const total = totalRes.count || 0;
-      const knownNonNew =
-        (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (rentalOutRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
+      const total = countableCount(totalRes.data);
+      const contactedCount = countableCount(contactedRes.data);
+      const quotedCount = countableCount(quotedRes.data);
+      const bookedCount = countableCount(bookedRes.data);
+      const rentalOutCount = countableCount(rentalOutRes.data);
+      const completedCount = countableCount(completedRes.data);
+      const lostCount = countableCount(lostRes.data);
+      const knownNonNew = contactedCount + quotedCount + bookedCount + rentalOutCount + completedCount + lostCount;
       const newCount = Math.max(0, total - knownNonNew);
       res.status(200).json({
         ok: true,
         summary: {
           total: total,
           new: newCount,
-          contacted: contactedRes.count || 0,
-          quoted: quotedRes.count || 0,
-          booked: bookedRes.count || 0,
-          rentalOut: rentalOutRes.count || 0,
-          completed: completedRes.count || 0,
-          lost: lostRes.count || 0,
+          contacted: contactedCount,
+          quoted: quotedCount,
+          booked: bookedCount,
+          rentalOut: rentalOutCount,
+          completed: completedCount,
+          lost: lostCount,
         },
       });
     } catch (err) {
@@ -344,9 +366,9 @@ module.exports = async (req, res) => {
     // run when one of those two is active; every other request keeps this
     // Promise.all at exactly the same 8 queries it always had.
     const extraCountQuery = isArchivedFilter
-      ? supabase.from("bookings").select("id", { count: "exact", head: true }).not("archived_at", "is", null)
+      ? supabase.from("bookings").select("id, service_type").not("archived_at", "is", null)
       : isReviewNotSentFilter
-      ? supabase.from("bookings").select("id", { count: "exact", head: true }).eq("status", "completed").is("review_request_sent_at", null).is("archived_at", null)
+      ? supabase.from("bookings").select("id, service_type").eq("status", "completed").is("review_request_sent_at", null).is("archived_at", null)
       : null;
 
     const [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes, extraCountRes] = await Promise.all([
@@ -381,14 +403,24 @@ module.exports = async (req, res) => {
         }
         return q;
       })(),
-      extraCountQuery || Promise.resolve({ count: null, error: null }),
+      extraCountQuery || Promise.resolve({ data: null, error: null }),
     ]);
 
     for (const r of [totalRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, pageRes, extraCountRes]) {
       if (r.error) throw r.error;
     }
 
-    const bookings = pageRes.data || [];
+    // Phase 4 Stage 1: this is the Requests/dashboard booking browser, not
+    // an operational Schedule view — a rental's auto-generated pickup job
+    // never belongs here as its own row (it would read as a second,
+    // price-less "job" in a sales-pipeline list). It still appears
+    // normally on Schedule, driven by the separate fetchScheduleJobs()/
+    // handleDay/Week/Month, deliberately untouched by this exclusion.
+    // Filtered after the range/pagination slice above (not in the query
+    // itself — see countableCount()'s comment for why), so a page that
+    // happens to include a pickup row can occasionally render fewer than
+    // `limit` jobs; an acceptable tradeoff given how rare that overlap is.
+    const bookings = (pageRes.data || []).filter((b) => b.service_type !== "dumpster_pickup");
     const customerIds = Array.from(new Set(bookings.map((b) => b.customer_id).filter(Boolean)));
     const bookingIds = bookings.map((b) => b.id);
 
@@ -444,9 +476,14 @@ module.exports = async (req, res) => {
       };
     });
 
-    const total = totalRes.count || 0;
-    const knownNonNew =
-      (contactedRes.count || 0) + (quotedRes.count || 0) + (bookedRes.count || 0) + (rentalOutRes.count || 0) + (completedRes.count || 0) + (lostRes.count || 0);
+    const total = countableCount(totalRes.data);
+    const contactedCount = countableCount(contactedRes.data);
+    const quotedCount = countableCount(quotedRes.data);
+    const bookedCount = countableCount(bookedRes.data);
+    const rentalOutCount = countableCount(rentalOutRes.data);
+    const completedCount = countableCount(completedRes.data);
+    const lostCount = countableCount(lostRes.data);
+    const knownNonNew = contactedCount + quotedCount + bookedCount + rentalOutCount + completedCount + lostCount;
     const newCount = Math.max(0, total - knownNonNew);
 
     // Pagination ("hasMore") must be judged against the count of whatever
@@ -459,26 +496,26 @@ module.exports = async (req, res) => {
     // camelCase field names.
     const countsByStatus = {
       new: newCount,
-      contacted: contactedRes.count || 0,
-      quoted: quotedRes.count || 0,
-      booked: bookedRes.count || 0,
-      rental_out: rentalOutRes.count || 0,
-      completed: completedRes.count || 0,
-      lost: lostRes.count || 0,
+      contacted: contactedCount,
+      quoted: quotedCount,
+      booked: bookedCount,
+      rental_out: rentalOutCount,
+      completed: completedCount,
+      lost: lostCount,
     };
-    const filteredTotal = isArchivedFilter || isReviewNotSentFilter ? extraCountRes.count || 0 : statusFilter ? countsByStatus[statusFilter] : total;
+    const filteredTotal = isArchivedFilter || isReviewNotSentFilter ? countableCount(extraCountRes.data) : statusFilter ? countsByStatus[statusFilter] : total;
 
     res.status(200).json({
       ok: true,
       summary: {
         total: total,
         new: newCount,
-        contacted: contactedRes.count || 0,
-        quoted: quotedRes.count || 0,
-        booked: bookedRes.count || 0,
-        rentalOut: rentalOutRes.count || 0,
-        completed: completedRes.count || 0,
-        lost: lostRes.count || 0,
+        contacted: contactedCount,
+        quoted: quotedCount,
+        booked: bookedCount,
+        rentalOut: rentalOutCount,
+        completed: completedCount,
+        lost: lostCount,
       },
       bookings: items,
       limit: limit,
@@ -1480,6 +1517,11 @@ async function handleMonth(req, res, supabase, todayIso) {
     const jobs = await fetchScheduleJobs(supabase, startDate, endDate);
     const jobCountsByDate = {};
     jobs.forEach(function (j) {
+      // Phase 4 Stage 1: the grid's per-day count badge is a business job
+      // total, not a visit total — a rental's pickup is excluded here even
+      // though it still renders as its own card in the day panel below
+      // (that panel reuses this same unfiltered `jobs` array).
+      if (j.serviceType === "dumpster_pickup") return;
       jobCountsByDate[j.appointmentDate] = (jobCountsByDate[j.appointmentDate] || 0) + 1;
     });
     // Estimate workflow hardening pass — Month now gets the same sibling
@@ -1559,7 +1601,7 @@ async function handleYear(req, res, supabase, todayIso) {
   try {
     const bookingsRes = await supabase
       .from("bookings")
-      .select("id, appointment_date")
+      .select("id, appointment_date, service_type")
       .in("status", SCHEDULABLE_STATUSES)
       .gte("appointment_date", startDate)
       .lte("appointment_date", endDate)
@@ -1568,6 +1610,10 @@ async function handleYear(req, res, supabase, todayIso) {
 
     const countsByMonth = new Array(12).fill(0);
     (bookingsRes.data || []).forEach(function (b) {
+      // Phase 4 Stage 1: Year never renders cards at all (see this
+      // function's own header) — these are pure business job totals, so a
+      // rental's pickup is excluded, same as every count in this file.
+      if (b.service_type === "dumpster_pickup") return;
       const m = Number(String(b.appointment_date).slice(5, 7));
       if (m >= 1 && m <= 12) countsByMonth[m - 1] += 1;
     });
@@ -2533,6 +2579,10 @@ const LEADS_QUERY_LABELS = {
 
 async function handleLeadsView(req, res, supabase) {
   try {
+    // Phase 4 Stage 1: every bookings query below also excludes
+    // service_type = "dumpster_pickup" — a lead-conversion/source bucket
+    // must count the rental booking that actually converted, never a
+    // second entry for its auto-generated pickup job.
     const [newRes, contactedRes, quotedRes, bookedRes, rentalOutRes, completedRes, lostRes, leadsRes] = await Promise.all([
       // "new" IS a stored value, not NULL — confirmed against production
       // (2026-10-18 schema audit): bookings.status is `NOT NULL DEFAULT
@@ -2564,6 +2614,12 @@ async function handleLeadsView(req, res, supabase) {
         console.error("Admin leads view: " + LEADS_QUERY_LABELS[key] + " query failed:", r.error);
         sectionErrors.push(LEADS_QUERY_LABELS[key]);
         r.data = [];
+      } else if (key !== "leadsRes") {
+        // Phase 4 Stage 1: every bookings result here feeds a lead-
+        // conversion/source bucket — a rental's auto-generated pickup job
+        // must never appear as a second converted entry. Filtered in place
+        // so both allBookingRows and `sections` below inherit it uniformly.
+        r.data = (r.data || []).filter((b) => b.service_type !== "dumpster_pickup");
       }
     });
 

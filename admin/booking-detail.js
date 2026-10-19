@@ -506,6 +506,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function openCompletionCloseout() {
     window.AdminJobCloseout.open({
       bookingId: bookingId,
+      serviceType: currentServiceType,
       onComplete: function (result) {
         applyStatusDisplay(result.status);
         var messages = ['Status updated to Completed.'];

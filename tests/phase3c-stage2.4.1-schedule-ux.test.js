@@ -167,11 +167,18 @@ test("a busy day's compact lines are capped (WEEK_ROW_MAX_JOB_LINES) with a '+N 
   assert.ok(/'\+' \+ \(jobs\.length - WEEK_ROW_MAX_JOB_LINES\) \+ ' more'/.test(src));
 });
 
-test("each week day row shows weekday + date, and a job count only when jobs exist", () => {
+test("each week day row shows weekday + date, and a job count only when countable jobs exist", () => {
   const body = functionBody("renderWeekOverview");
   assert.ok(/admin-week-day-row-weekday/.test(body));
   assert.ok(/admin-week-day-row-date/.test(body));
-  assert.ok(/if \(jobs\.length\) \{\s*head\.appendChild\(el\('span', 'admin-week-day-row-count'/.test(body));
+  // Phase 4 Stage 1: the header count excludes a rental's auto-generated
+  // pickup job (isCountableJob()) — it's a business job total, not a count
+  // of visible lines — while the compact lines below it still render from
+  // the full, unfiltered `jobs` array (see the capped-lines test above),
+  // so a pickup still appears there as its own line even though it's
+  // excluded from this header number.
+  assert.ok(/var countableJobs = jobs\.filter\(isCountableJob\);/.test(body));
+  assert.ok(/if \(countableJobs\.length\) \{\s*head\.appendChild\(el\('span', 'admin-week-day-row-count'/.test(body));
 });
 
 test("tapping a week day row calls selectWeekDate() with that row's own date, never a stale closed-over value", () => {

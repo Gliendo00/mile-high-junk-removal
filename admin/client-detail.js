@@ -21,6 +21,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var currentClientId = null;
   var currentClient = null;
+  // Phase 4 Stage 1: "jobs on file" must count real jobs, never a rental's
+  // auto-generated pickup leg (the same business job as the rental, not a
+  // second one) — set once in render() from the full `bookings` array (the
+  // only place that array is in scope) and reused by applyClientIdentity(),
+  // which only has the already-rendered DOM to work from. The job-history
+  // list itself is untouched — a pickup still renders there as its own
+  // card, exactly like every other job.
+  var currentCountableJobCount = 0;
 
   function showError(msg) {
     loadingEl.style.display = 'none';
@@ -150,7 +158,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var name = [client.firstName, client.lastName].filter(Boolean).join(' ');
     set('c-name', name || 'Unnamed client');
-    set('c-subtitle', client.city ? client.city : (bookings.length + (bookings.length === 1 ? ' job on file' : ' jobs on file')));
+    currentCountableJobCount = bookings.filter(function (b) { return b.serviceType !== 'dumpster_pickup'; }).length;
+    set('c-subtitle', client.city ? client.city : (currentCountableJobCount + (currentCountableJobCount === 1 ? ' job on file' : ' jobs on file')));
 
     var callBtn = document.getElementById('c-call-btn');
     var textBtn = document.getElementById('c-text-btn');
@@ -409,7 +418,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function applyClientIdentity(client) {
     var name = [client.firstName, client.lastName].filter(Boolean).join(' ');
     set('c-name', name || 'Unnamed client');
-    set('c-subtitle', client.city || document.getElementById('job-list').children.length + ' jobs on file');
+    set('c-subtitle', client.city || (currentCountableJobCount + (currentCountableJobCount === 1 ? ' job on file' : ' jobs on file')));
 
     var callBtn = document.getElementById('c-call-btn');
     var textBtn = document.getElementById('c-text-btn');
