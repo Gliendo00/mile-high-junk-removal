@@ -1766,7 +1766,7 @@ async function handleUpdate(req, res) {
   try {
     const currentRes = await supabase
       .from("bookings")
-      .select("id, status, appointment_date, service_type")
+      .select("id, status, appointment_date, service_type, archived_at")
       .eq("id", id)
       .maybeSingle();
     if (currentRes.error) throw currentRes.error;
@@ -1789,6 +1789,26 @@ async function handleUpdate(req, res) {
     if (current.service_type === "dumpster_pickup") {
       res.status(400).json({ error: "Pickup jobs are managed automatically from their dumpster rental and can't be edited directly here." });
       return;
+    }
+
+    // Phase 4 Stage 1 hardening — a dumpster_rental with an active linked
+    // pickup can't be freely switched to another service_type: the pickup
+    // booking would be left behind with no rental to belong to (not
+    // deleted, not re-attached — just silently stranded on Schedule). The
+    // one intentional way out is to cancel ("lost") or archive the rental
+    // FIRST — either is a real, deliberate signal the rental (and its
+    // pickup, already propagated to match by propagatePickupCancellation()/
+    // propagatePickupArchive()) is being retired, not just relabeled.
+    // Never touches the pickup itself here — this only blocks the rental's
+    // own edit; an already-completed pickup is never at risk either way.
+    if (current.service_type === "dumpster_rental" && serviceType !== "dumpster_rental" && current.status !== "lost" && !current.archived_at) {
+      const linkedPickupId = await findLinkedPickupId(supabase, id);
+      if (linkedPickupId) {
+        res.status(400).json({
+          error: "This rental has a linked pickup job and can't change service type. Cancel (mark Lost) or archive the rental first.",
+        });
+        return;
+      }
     }
 
     const isCompleted = current.status === "completed";
@@ -3663,16 +3683,29 @@ async function ensurePickupBooking(supabase, rentalBooking, dumpsterRow) {
 // so this also works for a rental whose pickup predates a successful link
 // backfill. Best-effort/non-fatal: reported back, never allowed to fail
 // the rental's own already-successful update.
+// Phase 4 Stage 1 hardening — the one shared "does this rental have a
+// linked pickup" lookup, used both by handleUpdate()'s service-type-
+// orphan guard and by the three propagation helpers below (each of which
+// used to duplicate this exact two-step lookup inline). Checks
+// dumpster_rentals.pickup_booking_id first; falls back to the reverse
+// source_rental_booking_id lineage lookup for a rental whose link was
+// never backfilled (same self-heal story as ensurePickupBooking() above).
+// Returns the pickup's id, or null if this rental has no pickup at all.
+async function findLinkedPickupId(supabase, rentalBookingId) {
+  const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
+  if (dumpsterRes.error) throw dumpsterRes.error;
+  let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
+  if (!pickupBookingId) {
+    const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
+    if (byLineageRes.error) throw byLineageRes.error;
+    pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
+  }
+  return pickupBookingId || null;
+}
+
 async function syncPickupBookingDate(supabase, rentalBookingId, newPickupDate) {
   try {
-    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
-    if (dumpsterRes.error) throw dumpsterRes.error;
-    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
-    if (!pickupBookingId) {
-      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
-      if (byLineageRes.error) throw byLineageRes.error;
-      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
-    }
+    const pickupBookingId = await findLinkedPickupId(supabase, rentalBookingId);
     if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
 
     const pickupRes = await supabase.from("bookings").select("id, status, appointment_date").eq("id", pickupBookingId).maybeSingle();
@@ -3696,14 +3729,7 @@ async function syncPickupBookingDate(supabase, rentalBookingId, newPickupDate) {
 // non-fatal, same posture as syncPickupBookingDate() above.
 async function propagatePickupCancellation(supabase, rentalBookingId, note) {
   try {
-    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
-    if (dumpsterRes.error) throw dumpsterRes.error;
-    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
-    if (!pickupBookingId) {
-      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
-      if (byLineageRes.error) throw byLineageRes.error;
-      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
-    }
+    const pickupBookingId = await findLinkedPickupId(supabase, rentalBookingId);
     if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
 
     const pickupRes = await supabase.from("bookings").select("id, status").eq("id", pickupBookingId).maybeSingle();
@@ -3733,14 +3759,7 @@ async function propagatePickupCancellation(supabase, rentalBookingId, note) {
 // functions above.
 async function propagatePickupArchive(supabase, rentalBookingId, archiveFields) {
   try {
-    const dumpsterRes = await supabase.from("dumpster_rentals").select("pickup_booking_id").eq("booking_id", rentalBookingId).maybeSingle();
-    if (dumpsterRes.error) throw dumpsterRes.error;
-    let pickupBookingId = dumpsterRes.data ? dumpsterRes.data.pickup_booking_id : null;
-    if (!pickupBookingId) {
-      const byLineageRes = await supabase.from("bookings").select("id").eq("source_rental_booking_id", rentalBookingId).maybeSingle();
-      if (byLineageRes.error) throw byLineageRes.error;
-      pickupBookingId = byLineageRes.data ? byLineageRes.data.id : null;
-    }
+    const pickupBookingId = await findLinkedPickupId(supabase, rentalBookingId);
     if (!pickupBookingId) return { ok: true, skipped: "no_pickup" };
 
     const updateRes = await supabase.from("bookings").update(archiveFields).eq("id", pickupBookingId);
