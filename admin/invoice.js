@@ -119,6 +119,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var voidInFlight = false;
 
   var finalizeBtn = document.getElementById('iv-finalize-btn');
+  var sendBtn = document.getElementById('iv-send-btn');
+  var sendInFlight = false;
   var voidBtn = document.getElementById('iv-void-btn');
   var lineItemsListEl = document.getElementById('iv-line-items-list');
   var lineItemFormSection = document.getElementById('iv-line-item-form-section');
@@ -354,10 +356,51 @@ document.addEventListener('DOMContentLoaded', function () {
     // handlePatchInvoice() transition rules exactly, so the UI never
     // offers a button the server would reject.
     finalizeBtn.style.display = isDraft ? 'inline-flex' : 'none';
+    sendBtn.style.display = invoice.status === 'finalized' ? 'inline-flex' : 'none';
     voidBtn.style.display = isVoid ? 'none' : 'inline-flex';
+
+    renderDeliveryHistory(data.deliveryAttempts || []);
 
     loadingEl.style.display = 'none';
     detailEl.style.display = 'block';
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 3 — Send history. "Accepted" means accepted BY THE EMAIL
+  // PROVIDER (Resend returned success) — never "delivered to an inbox" or
+  // "opened by the client," which this app has no way to know.
+  // ---------------------------------------------------------------------
+  var DELIVERY_STATUS_TEXT = {
+    pending: 'Pending',
+    accepted: 'Accepted by email provider',
+    rejected: 'Rejected',
+    superseded: 'Superseded by a later send',
+    unrecoverable: 'Unrecoverable — needs review',
+  };
+  function renderDeliveryHistory(attempts) {
+    var section = document.getElementById('iv-delivery-section');
+    var list = document.getElementById('iv-delivery-list');
+    list.innerHTML = '';
+    if (!attempts.length) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'block';
+    attempts.forEach(function (a) {
+      var row = document.createElement('div');
+      row.className = 'admin-charge-row';
+      var top = document.createElement('div');
+      top.textContent = 'Generation ' + a.generation + ' — ' + (DELIVERY_STATUS_TEXT[a.status] || a.status) + (a.recipientEmail ? ' — ' + a.recipientEmail : '');
+      row.appendChild(top);
+      var meta = document.createElement('div');
+      meta.className = 'admin-charge-row-meta';
+      var metaParts = [];
+      if (a.acceptedAt) metaParts.push('Accepted by provider: ' + formatDateTime(a.acceptedAt));
+      else if (a.startedAt) metaParts.push('Started: ' + formatDateTime(a.startedAt));
+      meta.textContent = metaParts.join(' · ');
+      row.appendChild(meta);
+      list.appendChild(row);
+    });
   }
 
   function load() {
@@ -392,7 +435,15 @@ document.addEventListener('DOMContentLoaded', function () {
         return null;
       }
       return res.json().catch(function () { return null; }).then(function (body) {
-        if (!res.ok) throw new Error((body && body.error) || 'That did not work.');
+        if (!res.ok) {
+          // Structured fields (requiresConfirmation, unresolvedSendExpired,
+          // unresolvedSendUnrecoverable, reasonCode, ...) ride along on the
+          // error object as `body` so callers can branch on stable codes
+          // instead of matching the human-readable `message` text.
+          var err = new Error((body && body.error) || 'That did not work.');
+          err.body = body || {};
+          throw err;
+        }
         return body;
       });
     });
@@ -527,12 +578,77 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // ---------------------------------------------------------------------
+  // Send — emails the client a secure, token-gated view/pay link. If the
+  // server reports an unresolved prior send (its own idempotency safety
+  // window expired, or it couldn't be automatically decrypted), this
+  // re-prompts to explicitly start a fresh attempt — the previously
+  // emailed link, if delivered, stays valid until a replacement is
+  // actually confirmed sent (see api/admin/booking.js's handleSendInvoice).
+  // ---------------------------------------------------------------------
+  function doSend(confirmNewAttempt) {
+    if (sendInFlight) return;
+    sendInFlight = true;
+    sendBtn.disabled = true;
+    patchInvoice({ action: 'send', confirmNewAttempt: !!confirmNewAttempt })
+      .then(function (body) {
+        sendInFlight = false;
+        sendBtn.disabled = false;
+        if (!body) return;
+        showToast('Invoice sent to ' + body.sentTo + '.', 'success');
+        return load();
+      })
+      .catch(function (err) {
+        sendInFlight = false;
+        sendBtn.disabled = false;
+        var msg = err && err.message ? err.message : 'Could not send this invoice.';
+        var body = err && err.body;
+        var unresolvedSend = !!(body && (body.unresolvedSendExpired || body.unresolvedSendUnrecoverable));
+        if (!confirmNewAttempt && unresolvedSend) {
+          if (window.confirm(msg + '\n\nStart a new send attempt now? The previously emailed link, if delivered, stays valid until a replacement is confirmed sent.')) {
+            doSend(true);
+            return;
+          }
+        }
+        showToast(msg, 'error');
+      });
+  }
+  sendBtn.addEventListener('click', function () { doSend(false); });
+
+  // ---------------------------------------------------------------------
   // Void — same "prompt for a required reason" pattern as
   // admin/booking-detail.js's voidJobPayment(), rather than a bottom
-  // sheet, since this is a single free-text field.
+  // sheet, since this is a single free-text field. If the invoice was
+  // just paid by card (reconciled as part of this same request), the
+  // server asks for explicit confirmation before actually voiding.
   // ---------------------------------------------------------------------
-  voidBtn.addEventListener('click', function () {
+  function doVoid(reason, confirmVoidPaidInvoice) {
     if (voidInFlight) return;
+    voidInFlight = true;
+    voidBtn.disabled = true;
+    patchInvoice({ action: 'void', reason: reason, confirmVoidPaidInvoice: !!confirmVoidPaidInvoice })
+      .then(function (body) {
+        voidInFlight = false;
+        voidBtn.disabled = false;
+        if (!body) return;
+        showToast('Invoice voided.', 'success');
+        return load();
+      })
+      .catch(function (err) {
+        voidInFlight = false;
+        voidBtn.disabled = false;
+        var msg = err && err.message ? err.message : 'Could not void this invoice.';
+        var body = err && err.body;
+        var requiresConfirmation = !!(body && body.requiresConfirmation);
+        if (!confirmVoidPaidInvoice && requiresConfirmation) {
+          if (window.confirm(msg + '\n\nVoid anyway?')) {
+            doVoid(reason, true);
+            return;
+          }
+        }
+        showToast(msg, 'error');
+      });
+  }
+  voidBtn.addEventListener('click', function () {
     var reason = window.prompt('Reason for voiding this invoice (required):');
     if (reason === null) return; // cancelled
     reason = reason.trim();
@@ -540,21 +656,7 @@ document.addEventListener('DOMContentLoaded', function () {
       showToast('A reason is required to void an invoice.', 'error');
       return;
     }
-    voidInFlight = true;
-    voidBtn.disabled = true;
-    patchInvoice({ action: 'void', reason: reason })
-      .then(function (body) {
-        if (!body) return;
-        showToast('Invoice voided.', 'success');
-        return load();
-      })
-      .catch(function (err) {
-        showToast(err && err.message ? err.message : 'Could not void this invoice.', 'error');
-      })
-      .finally(function () {
-        voidInFlight = false;
-        voidBtn.disabled = false;
-      });
+    doVoid(reason, false);
   });
 
   if (!invoiceId) {

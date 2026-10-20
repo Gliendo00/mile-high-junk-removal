@@ -70,7 +70,25 @@ class FakeQueryBuilder {
   }
   select() { return this; }
   eq(col, val) { this._filters.push((r) => r[col] === val); return this; }
+  neq(col, val) { this._filters.push((r) => r[col] !== val); return this; }
   is(col, val) { this._filters.push((r) => (r[col] === undefined ? null : r[col]) === val); return this; }
+  // Phase 3 — minimal PostgREST-style .or(): comma-separated
+  // "field.op.value" clauses, OR'd together as one predicate.
+  or(expr) {
+    const clauses = String(expr).split(",").map((c) => {
+      const parts = c.split(".");
+      return { col: parts[0], op: parts[1], val: parts.slice(2).join(".") };
+    });
+    this._filters.push((r) => clauses.some((c) => {
+      const rowVal = r[c.col] === undefined ? null : r[c.col];
+      if (c.op === "is") return c.val === "null" ? rowVal === null : rowVal === c.val;
+      if (c.op === "lt") return rowVal !== null && rowVal < c.val;
+      if (c.op === "eq") return rowVal === c.val;
+      return false;
+    }));
+    return this;
+  }
+  limit(n) { this._limit = n; return this; }
   not(col, op, val) {
     if (op === "is" && val === null) this._filters.push((r) => r[col] !== undefined && r[col] !== null);
     return this;
@@ -119,6 +137,7 @@ class FakeQueryBuilder {
     }
 
     let matched = rows.filter((r) => this._filters.every((f) => f(r)));
+    if (this._limit !== undefined && this._limit !== null) matched = matched.slice(0, this._limit);
 
     if (this._delete) {
       matched.forEach((r) => {

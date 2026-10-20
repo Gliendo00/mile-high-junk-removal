@@ -881,6 +881,23 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // Phase 3 (Invoice Delivery + Pay Now) added exactly six new updates,
+      // all inside the new handleSendInvoice() action: the Send-claim
+      // acquisition plus five distinct conditional claim-release sites
+      // (expired-pending-without-confirmation, already-unrecoverable-
+      // without-confirmation, ambiguous network/timeout outcome, a 2xx
+      // response with no usable provider email id, and the outer catch's
+      // best-effort release). The Pay-Now claim-acquire/claim-to-active-PI-
+      // commit/release cycle and the Category A/B payment-claim helpers
+      // live in api/_lib/invoice-helpers.js instead — a file this guard
+      // does not scan (it is not in adminLibFiles above) — see that
+      // module's own header and tests/phase3-invoice-delivery.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       // Batch 2C added exactly one new upsert — handleUpdate()'s
       // dumpster_rentals write, keyed onConflict: "booking_id" (a real
       // UNIQUE constraint, Phase 1). See
