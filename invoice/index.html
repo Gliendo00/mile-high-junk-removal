@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Invoice | Mile High Junk Removal</title>
+<!--
+  Phase 3 — public, token-gated invoice view/pay page.
+
+  Deliberately NO third-party scripts/analytics here besides js.stripe.com
+  (Stripe Elements) — see vercel.json's headers block for the enforcing
+  CSP. No Google tag, no chat widget, nothing that could see or exfiltrate
+  the access token this page handles.
+
+  The raw access token lives ONLY in the URL fragment (#token=...) and, for
+  the lifetime of this page load, a single in-memory JS variable — never in
+  localStorage/sessionStorage/a cookie, and never sent anywhere except as
+  the JSON body of the two POST calls this page makes. See invoice.js for
+  why the fragment is deliberately left in the visible URL rather than
+  stripped via history.replaceState (reload/back-forward/3DS-return
+  reliability).
+-->
+<link rel="icon" href="../images/favicon.png" type="image/png">
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 24px 16px; font-family: Arial, Helvetica, sans-serif; background: #f6f7f9; color: #1a1a1a; }
+  .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 28px 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #666; font-size: 14px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #eee; }
+  th:last-child, td:last-child { text-align: right; }
+  .totals-row td { font-weight: 700; border-top: 2px solid #ddd; border-bottom: none; }
+  .status-badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+  .status-paid { background: #e6f4ea; color: #1e7e34; }
+  .status-due, .status-overdue { background: #fdecea; color: #c62828; }
+  .status-void { background: #eceff1; color: #546e7a; }
+  .status-processing { background: #fff8e1; color: #8a6d00; }
+  #pay-section { margin-top: 20px; }
+  #pay-button { background: #1a73e8; color: #fff; border: none; border-radius: 6px; padding: 12px 20px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
+  #pay-button:disabled { opacity: 0.6; cursor: default; }
+  #payment-element { margin: 14px 0; }
+  #error-message, #pay-error { color: #c62828; font-size: 13px; margin-top: 8px; min-height: 1em; }
+  .bill-to { font-size: 13px; color: #444; margin-bottom: 16px; }
+  .notes { font-size: 13px; color: #444; margin: 16px 0; white-space: pre-wrap; }
+  [hidden] { display: none !important; }
+  .business-name { font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="loading-state">
+    <p class="sub">Loading invoice&hellip;</p>
+  </div>
+
+  <div id="unavailable-state" hidden>
+    <h1 class="business-name">Mile High Junk Removal</h1>
+    <p class="sub" id="unavailable-message">This invoice link is invalid or no longer available.</p>
+  </div>
+
+  <div id="invoice-state" hidden>
+    <h1 class="business-name">Mile High Junk Removal</h1>
+    <p class="sub">Invoice <strong id="invoice-number"></strong> &mdash; <span id="status-badge" class="status-badge"></span></p>
+
+    <div class="bill-to" id="bill-to"></div>
+
+    <table>
+      <thead>
+        <tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
+      </thead>
+      <tbody id="line-items-body"></tbody>
+      <tfoot>
+        <tr><td colspan="3">Total</td><td id="total-amount"></td></tr>
+        <tr><td colspan="3">Paid</td><td id="amount-paid"></td></tr>
+        <tr class="totals-row"><td colspan="3">Balance due</td><td id="balance-due"></td></tr>
+      </tfoot>
+    </table>
+
+    <p class="sub" id="due-date-line"></p>
+    <p class="notes" id="invoice-notes" hidden></p>
+
+    <div id="pay-section" hidden>
+      <button id="pay-button" type="button">Pay Now</button>
+      <div id="payment-element"></div>
+      <div id="pay-error"></div>
+    </div>
+
+    <p class="sub" id="paid-message" hidden>Paid in full. Thank you!</p>
+    <p class="sub" id="void-message" hidden>This invoice has been voided &mdash; no payment is due.</p>
+  </div>
+</div>
+<!-- Stripe.js MUST be loaded from js.stripe.com — Stripe does not permit
+     self-hosting or CDN-mirroring this file (PCI/fraud-detection
+     requirements), and this is also exactly what the CSP below allows. -->
+<script src="https://js.stripe.com/v3/"></script>
+<script src="invoice.js"></script>
+</body>
+</html>

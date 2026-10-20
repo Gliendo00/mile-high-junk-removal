@@ -86,6 +86,27 @@ class FakeQueryBuilder {
     this.notFilters.push({ col: col, op: op, val: val });
     return this;
   }
+  neq(col, val) {
+    this.filters.push({ col: col, neq: val });
+    return this;
+  }
+  is(col, val) {
+    this.filters.push({ col: col, isVal: val });
+    return this;
+  }
+  // Phase 3 — minimal PostgREST-style .or(): comma-separated
+  // "field.op.value" clauses, OR'd together as one filter group.
+  or(expr) {
+    const clauses = String(expr)
+      .split(",")
+      .map((c) => {
+        const parts = c.split(".");
+        return { col: parts[0], op: parts[1], val: parts.slice(2).join(".") };
+      });
+    this.orFilters = this.orFilters || [];
+    this.orFilters.push(clauses);
+    return this;
+  }
   gte(col, val) {
     this.rangeFilters.push({ col: col, val: val, op: "gte" });
     return this;
@@ -163,7 +184,21 @@ class FakeQueryBuilder {
 
     let matched = rows.filter(
       (r) =>
-        this.filters.every((f) => (f.in ? f.in.has(r[f.col]) : r[f.col] === f.val)) &&
+        this.filters.every((f) => {
+          if (f.in) return f.in.has(r[f.col]);
+          if ("neq" in f) return r[f.col] !== f.neq;
+          if ("isVal" in f) return (r[f.col] === undefined ? null : r[f.col]) === f.isVal;
+          return r[f.col] === f.val;
+        }) &&
+        (this.orFilters || []).every((clauses) =>
+          clauses.some((c) => {
+            const rowVal = r[c.col] === undefined ? null : r[c.col];
+            if (c.op === "is") return c.val === "null" ? rowVal === null : rowVal === c.val;
+            if (c.op === "lt") return rowVal !== null && rowVal < c.val;
+            if (c.op === "eq") return rowVal === c.val;
+            return false;
+          })
+        ) &&
         this.notFilters.every((f) => (f.op === "eq" ? r[f.col] !== f.val : true)) &&
         this.rangeFilters.every((f) => (f.op === "gte" ? r[f.col] >= f.val : r[f.col] <= f.val))
     );

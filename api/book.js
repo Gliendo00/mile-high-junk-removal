@@ -89,8 +89,20 @@ const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
-const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows } = require("./_lib/job-payments-ledger");
 const { getCorrelationId, logEvent } = require("./_lib/correlation-id");
+const { hashAccessToken } = require("./_lib/invoice-crypto");
+const {
+  INVOICE_SELECT_COLS,
+  LINE_ITEM_SELECT_COLS,
+  mapInvoice,
+  mapLineItem,
+  deriveInvoiceStatus,
+  PAYMENT_CLAIM_TTL_MS,
+  resolveInvoicePaymentIntentForMutation,
+  reconcileInvoicePaymentIntent,
+  computeInvoiceBalanceCents,
+} = require("./_lib/invoice-helpers");
 
 const UPLOAD_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -214,6 +226,28 @@ module.exports = async (req, res) => {
         return;
       }
       return handleCreatePaymentIntent(req, res);
+    }
+
+    // Phase 3 — Invoice Delivery + Pay Now. Both public, token-gated, and
+    // POST-only (never GET): the raw access token travels in the URL
+    // FRAGMENT on the client (/invoice/#token=...), which never reaches any
+    // server, and is then sent to these endpoints in the JSON body, never a
+    // query string — keeps it out of this function's own access logs and
+    // any proxy/CDN logs in between. Same "no new Vercel function" posture
+    // as ?resource=payment-intent above — both live on this one file.
+    if (req.query && req.query.resource === "invoice-public") {
+      if (req.method !== "POST") {
+        res.status(405).json({ error: "Method not allowed" });
+        return;
+      }
+      return handleInvoicePublic(req, res);
+    }
+    if (req.query && req.query.resource === "invoice-payment-intent") {
+      if (req.method !== "POST") {
+        res.status(405).json({ error: "Method not allowed" });
+        return;
+      }
+      return handleInvoicePaymentIntentCreate(req, res);
     }
 
     if (req.method !== "POST") {
@@ -2013,4 +2047,372 @@ function isTimeWindowExpired(date, timeWindowId) {
   const now = getDenverNow();
   const nowDecimalHour = now.hour + now.minute / 60;
   return def.startHour <= nowDecimalHour;
+}
+
+// =======================================================================
+// Phase 3 — Invoice Delivery + Pay Now: public, token-gated endpoints.
+// Both POST-only (the raw token lives in the URL fragment on the client,
+// never a query string, and is sent in the JSON body here). Generic,
+// identical "unavailable" response for every invalid-token reason — a
+// caller can never learn from the response alone whether a token is
+// malformed, unknown, or belongs to a draft invoice (which should never
+// have a token at all). See sql/2026-10-19_phase3-invoice-delivery-pay-now.sql
+// and api/_lib/invoice-helpers.js for the full design this implements.
+// =======================================================================
+
+const INVOICE_GENERIC_UNAVAILABLE = "This invoice link is invalid or no longer available.";
+
+// Hashes the presented token and resolves it to an invoice id via
+// invoice_delivery_attempts — the ONLY lookup path; there is no code path
+// anywhere that resolves an invoice from its own id/invoice_number for a
+// public caller. Returns null on any non-match (unknown hash, or a hash
+// that somehow matches a draft invoice's attempt — defensive; drafts
+// never get a token in the first place).
+async function resolveInvoiceIdFromToken(supabase, rawToken) {
+  if (!rawToken) return null;
+  const hash = hashAccessToken(rawToken);
+  const attemptRes = await supabase
+    .from("invoice_delivery_attempts")
+    .select("invoice_id")
+    .eq("access_token_hash", hash)
+    .in("status", ["pending", "accepted", "unrecoverable"])
+    .maybeSingle();
+  if (attemptRes.error) throw attemptRes.error;
+  return { invoiceId: attemptRes.data ? attemptRes.data.invoice_id : null, hash: hash };
+}
+
+// POST ?resource=invoice-public — body { token }. Client-safe invoice
+// view: line items, totals, derived balance/status, and the client's own
+// name/address (standard invoice content) — never job_payments.notes,
+// never admin/booking internals, never a client_secret (that only ever
+// comes from invoice-payment-intent below).
+async function handleInvoicePublic(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+  if (!supabaseUrl || !supabaseSecretKey) {
+    console.error("Invoice public view failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "This invoice is not available right now." });
+    return;
+  }
+
+  const clientIp = getClientIp(req);
+  if (isRateLimited("invoice-view:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+    res.status(429).json({ error: "Too many requests. Please wait a bit and try again." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : null;
+  const rawToken = body && typeof body.token === "string" ? body.token : "";
+  if (!rawToken) {
+    res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+    return;
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
+  const stripe = getStripeClient();
+
+  try {
+    const resolved = await resolveInvoiceIdFromToken(supabase, rawToken);
+    if (!resolved || !resolved.invoiceId) {
+      res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+      return;
+    }
+    // Second rate-limit dimension, keyed by the token's own hash — blunts
+    // a leaked/guessed token being hammered from rotating IPs.
+    if (isRateLimited("invoice-view-token:" + resolved.hash, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+      res.status(429).json({ error: "Too many requests. Please wait a bit and try again." });
+      return;
+    }
+
+    const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", resolved.invoiceId).maybeSingle();
+    if (invoiceRes.error) throw invoiceRes.error;
+    const invoiceRow = invoiceRes.data;
+    if (!invoiceRow || invoiceRow.status === "draft") {
+      res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+      return;
+    }
+    let invoice = mapInvoice(invoiceRow);
+
+    // Lazy reconciliation — if this invoice has an active PaymentIntent,
+    // check its live Stripe status and mirror it before computing the
+    // response. This is the main path that keeps the page from
+    // re-offering Pay Now after a successful confirmPayment() call: the
+    // client re-fetches this endpoint right after confirming, and the
+    // mirror (if the PI actually succeeded) has already happened by the
+    // time this response is built.
+    if (invoice.activeStripePaymentIntentId && stripe) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(invoice.activeStripePaymentIntentId);
+        if (pi.status === "succeeded") {
+          await reconcileInvoicePaymentIntent(supabase, stripe, pi);
+          const refreshedRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", resolved.invoiceId).maybeSingle();
+          if (!refreshedRes.error && refreshedRes.data) invoice = mapInvoice(refreshedRes.data);
+        }
+      } catch (err) {
+        console.error("Invoice public view: lazy reconciliation check failed for invoice " + resolved.invoiceId + " (non-fatal):", err && err.stack ? err.stack : err);
+      }
+    }
+
+    const [lineItemsRes, paymentsRes, customerRes] = await Promise.all([
+      supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", resolved.invoiceId).order("sort_order", { ascending: true }),
+      supabase.from("job_payments").select("amount, payment_type, voided_at").eq("booking_id", invoice.bookingId),
+      supabase.from("customers").select("first_name, last_name, address, city, state, zip").eq("id", invoice.customerId).maybeSingle(),
+    ]);
+    if (lineItemsRes.error) throw lineItemsRes.error;
+    if (paymentsRes.error) throw paymentsRes.error;
+    if (customerRes.error) throw customerRes.error;
+
+    const netCollected = netCollectedFromLedgerRows((paymentsRes.data || []).filter(function (p) { return !p.voided_at; }));
+    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso());
+    const customer = customerRes.data;
+
+    res.status(200).json({
+      ok: true,
+      stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY || null,
+      invoiceNumber: invoice.invoiceNumber,
+      finalizedAt: invoice.finalizedAt,
+      dueDate: invoice.dueDate,
+      notes: invoice.notes,
+      lineItems: (lineItemsRes.data || []).map(function (li) {
+        return { description: li.description, quantity: li.quantity, unitPrice: li.unit_price, amount: li.amount };
+      }),
+      totalAmount: invoice.totalAmount,
+      amountPaid: netCollected,
+      balanceDue: derived.balanceDue,
+      displayStatus: derived.displayStatus,
+      isOverdue: derived.isOverdue,
+      billTo: customer
+        ? {
+            name: ((customer.first_name || "") + " " + (customer.last_name || "")).trim(),
+            address: customer.address,
+            city: customer.city,
+            state: customer.state,
+            zip: customer.zip,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("Invoice public view failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "This invoice is not available right now." });
+  }
+}
+
+// POST ?resource=invoice-payment-intent — body { token }. Creates (or
+// reuses) an automatic-capture PaymentIntent for the CURRENT, server-
+// computed remaining balance. Exact ordering (see the approved Phase 3
+// architecture review for why): claim -> live balance -> Stripe create ->
+// conditional claim-to-active-PI commit -> live balance re-check -> only
+// then expose client_secret. Every write is CAS-conditional.
+async function handleInvoicePaymentIntentCreate(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+  if (!supabaseUrl || !supabaseSecretKey) {
+    console.error("Invoice payment-intent create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Payment is not available right now." });
+    return;
+  }
+
+  const clientIp = getClientIp(req);
+  if (isRateLimited("invoice-pay:" + clientIp, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+    res.status(429).json({ error: "Too many requests. Please wait a bit and try again." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : null;
+  const rawToken = body && typeof body.token === "string" ? body.token : "";
+  if (!rawToken) {
+    res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+    return;
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
+  const stripe = getStripeClient();
+  if (!stripe) {
+    console.error("Invoice payment-intent create failed: STRIPE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Payment is not available right now." });
+    return;
+  }
+
+  try {
+    const resolved = await resolveInvoiceIdFromToken(supabase, rawToken);
+    if (!resolved || !resolved.invoiceId) {
+      res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+      return;
+    }
+    if (isRateLimited("invoice-pay-token:" + resolved.hash, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX)) {
+      res.status(429).json({ error: "Too many requests. Please wait a bit and try again." });
+      return;
+    }
+
+    const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", resolved.invoiceId).maybeSingle();
+    if (invoiceRes.error) throw invoiceRes.error;
+    if (!invoiceRes.data) {
+      res.status(404).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+      return;
+    }
+    let invoice = mapInvoice(invoiceRes.data);
+
+    if (invoice.status === "void") {
+      res.status(409).json({ error: "This invoice has been voided — no payment is due." });
+      return;
+    }
+    if (invoice.status !== "finalized") {
+      // Defensive — a draft invoice should never have a usable token.
+      res.status(409).json({ error: INVOICE_GENERIC_UNAVAILABLE });
+      return;
+    }
+
+    // Resolve any existing claim/active-PI state first — pay_now mode may
+    // reuse a still-matching cancelable PI.
+    const resolution = await resolveInvoicePaymentIntentForMutation(supabase, stripe, invoice, "pay_now");
+    if (resolution.blocked) {
+      res.status(409).json({ error: resolution.reason });
+      return;
+    }
+    if (resolution.reuse) {
+      res.status(200).json({ ok: true, clientSecret: resolution.reuse.client_secret, amountCents: resolution.reuse.amount });
+      return;
+    }
+    if (resolution.reconciled) {
+      if (resolution.balanceCents <= 0) {
+        res.status(200).json({ ok: true, paid: true });
+        return;
+      }
+      const refreshedRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", resolved.invoiceId).maybeSingle();
+      if (!refreshedRes.error && refreshedRes.data) invoice = mapInvoice(refreshedRes.data);
+    }
+
+    // 1. Claim — conditional on the invoice still being exactly where we
+    // just read it (generation included, so this can never under/over-
+    // shoot the true sequence even from a stale read), no active PI, and
+    // no live (non-stale) claim held elsewhere.
+    const myToken = crypto.randomUUID();
+    const staleBeforeIso = new Date(Date.now() - PAYMENT_CLAIM_TTL_MS).toISOString();
+    const claimRes = await supabase
+      .from("invoices")
+      .update({ payment_claim_token: myToken, payment_claimed_at: new Date().toISOString(), payment_generation: invoice.paymentGeneration + 1 })
+      .eq("id", resolved.invoiceId)
+      .eq("payment_generation", invoice.paymentGeneration)
+      .is("active_stripe_payment_intent_id", null)
+      .or("payment_claim_token.is.null,payment_claimed_at.lt." + staleBeforeIso)
+      .select("payment_generation");
+    if (claimRes.error) throw claimRes.error;
+    if (!Array.isArray(claimRes.data) || claimRes.data.length === 0) {
+      res.status(409).json({ error: "Payment setup is already in progress for this invoice. Please try again in a moment." });
+      return;
+    }
+    const generation = claimRes.data[0].payment_generation;
+
+    // 2. Recompute live balance — post-claim, pre-create.
+    const balanceCents = await computeInvoiceBalanceCents(supabase, invoice);
+    if (balanceCents <= 0) {
+      await supabase.from("invoices").update({ payment_claim_token: null, payment_claimed_at: null }).eq("id", resolved.invoiceId).eq("payment_claim_token", myToken);
+      res.status(200).json({ ok: true, paid: true });
+      return;
+    }
+
+    // 3. Create the automatic-capture PaymentIntent.
+    let pi;
+    try {
+      pi = await stripe.paymentIntents.create(
+        {
+          amount: balanceCents,
+          currency: "usd",
+          capture_method: "automatic",
+          automatic_payment_methods: { enabled: true },
+          metadata: {
+            source: "invoice_pay_now",
+            invoiceId: resolved.invoiceId,
+            bookingId: invoice.bookingId,
+            invoiceNumber: invoice.invoiceNumber || "",
+            paymentGeneration: String(generation),
+            expectedAmountCents: String(balanceCents),
+          },
+        },
+        { idempotencyKey: "invoice-pay:" + resolved.invoiceId + ":" + generation + ":" + balanceCents }
+      );
+    } catch (err) {
+      console.error("Invoice payment-intent create: Stripe create failed for invoice " + resolved.invoiceId + ":", err && err.stack ? err.stack : err);
+      await supabase.from("invoices").update({ payment_claim_token: null, payment_claimed_at: null }).eq("id", resolved.invoiceId).eq("payment_claim_token", myToken);
+      res.status(500).json({ error: "Payment is not available right now. Please try again." });
+      return;
+    }
+
+    // 4. Conditional claim -> active-PI commit.
+    const commitRes = await supabase
+      .from("invoices")
+      .update({ active_stripe_payment_intent_id: pi.id, payment_claim_token: null, payment_claimed_at: null })
+      .eq("id", resolved.invoiceId)
+      .eq("payment_claim_token", myToken)
+      .select("id");
+    if (commitRes.error) throw commitRes.error;
+    if (!Array.isArray(commitRes.data) || commitRes.data.length === 0) {
+      // Lost ownership (our own claim went stale and was reclaimed while
+      // the Stripe call was in flight) — never expose this PI's secret.
+      console.error("Invoice payment-intent create: lost claim ownership for invoice " + resolved.invoiceId + " after creating PaymentIntent " + pi.id + " — attempting to cancel the orphan.");
+      try {
+        const canceled = await stripe.paymentIntents.cancel(pi.id);
+        if (canceled.status !== "canceled") {
+          console.error("Invoice payment-intent create: could not confirm cancellation of orphan PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + " — manual review needed.");
+        }
+      } catch (cancelErr) {
+        console.error("Invoice payment-intent create: failed to cancel orphan PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + ":", cancelErr && cancelErr.stack ? cancelErr.stack : cancelErr);
+      }
+      res.status(409).json({ error: "Payment setup is already in progress for this invoice. Please try again in a moment." });
+      return;
+    }
+
+    // 5. Only now recompute balance again — the active PI is already
+    // visible on the row, so any concurrent Category B cleanup could
+    // already be racing to resolve the exact same staleness this check
+    // is about to look for.
+    const balanceCents2 = await computeInvoiceBalanceCents(supabase, invoice);
+    if (balanceCents2 === balanceCents) {
+      res.status(200).json({ ok: true, clientSecret: pi.client_secret, amountCents: balanceCents });
+      return;
+    }
+
+    let livePi;
+    try {
+      livePi = await stripe.paymentIntents.retrieve(pi.id);
+    } catch (err) {
+      console.error("Invoice payment-intent create: failed to re-retrieve PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + ":", err && err.stack ? err.stack : err);
+      res.status(500).json({ error: "Could not confirm payment state. Please try again." });
+      return;
+    }
+
+    if (livePi.status === "succeeded") {
+      // Not staleness — a genuine fast race where the PI itself is why
+      // the balance changed.
+      await reconcileInvoicePaymentIntent(supabase, stripe, livePi);
+      res.status(200).json({ ok: true, paid: true });
+      return;
+    }
+
+    const cancelableStatuses = ["requires_payment_method", "requires_confirmation", "requires_action"];
+    if (cancelableStatuses.indexOf(livePi.status) !== -1) {
+      try {
+        const canceled = await stripe.paymentIntents.cancel(pi.id);
+        if (canceled.status === "canceled") {
+          await supabase.from("invoices").update({ active_stripe_payment_intent_id: null }).eq("id", resolved.invoiceId).eq("active_stripe_payment_intent_id", pi.id);
+        } else {
+          console.error("Invoice payment-intent create: could not confirm cancellation of stale PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + ".");
+        }
+      } catch (cancelErr) {
+        console.error("Invoice payment-intent create: failed to cancel stale PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + ":", cancelErr && cancelErr.stack ? cancelErr.stack : cancelErr);
+      }
+      res.status(409).json({ error: "The balance changed. Please try again." });
+      return;
+    }
+
+    console.error("Invoice payment-intent create: PaymentIntent " + pi.id + " for invoice " + resolved.invoiceId + " is in status '" + livePi.status + "' after a balance change — left untouched, manual review if this persists.");
+    res.status(409).json({ error: "Payment state is temporarily unclear. Please wait a moment and try again." });
+  } catch (err) {
+    console.error("Invoice payment-intent create failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Payment is not available right now. Please try again." });
+  }
 }

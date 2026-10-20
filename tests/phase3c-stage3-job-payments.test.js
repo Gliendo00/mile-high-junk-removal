@@ -28,6 +28,9 @@ class FakeQueryBuilder {
     this.db = db;
     this.eqFilters = [];
     this.isFilters = [];
+    this.neqFilters = [];
+    this.inFilters = [];
+    this.orFilters = [];
     this._orders = [];
     this._limit = null;
     this._insertPayload = null;
@@ -45,6 +48,27 @@ class FakeQueryBuilder {
   }
   is(col, val) {
     this.isFilters.push({ col, val });
+    return this;
+  }
+  neq(col, val) {
+    this.neqFilters.push({ col, val });
+    return this;
+  }
+  in(col, arr) {
+    const set = new Set(arr);
+    this.inFilters.push({ col, set });
+    return this;
+  }
+  // Phase 3 — minimal PostgREST-style .or(): comma-separated
+  // "field.op.value" clauses, OR'd together as one filter group.
+  or(expr) {
+    const clauses = String(expr)
+      .split(",")
+      .map((c) => {
+        const parts = c.split(".");
+        return { col: parts[0], op: parts[1], val: parts.slice(2).join(".") };
+      });
+    this.orFilters.push(clauses);
     return this;
   }
   order(col, opts) {
@@ -112,7 +136,22 @@ class FakeQueryBuilder {
       return { data: [row], error: null };
     }
 
-    let matched = rows.filter((r) => this.eqFilters.every((f) => r[f.col] === f.val) && this.isFilters.every((f) => (r[f.col] === undefined ? null : r[f.col]) === f.val));
+    let matched = rows.filter(
+      (r) =>
+        this.eqFilters.every((f) => r[f.col] === f.val) &&
+        this.isFilters.every((f) => (r[f.col] === undefined ? null : r[f.col]) === f.val) &&
+        this.neqFilters.every((f) => r[f.col] !== f.val) &&
+        this.inFilters.every((f) => f.set.has(r[f.col])) &&
+        this.orFilters.every((clauses) =>
+          clauses.some((c) => {
+            const rowVal = r[c.col] === undefined ? null : r[c.col];
+            if (c.op === "is") return c.val === "null" ? rowVal === null : rowVal === c.val;
+            if (c.op === "lt") return rowVal !== null && rowVal < c.val;
+            if (c.op === "eq") return rowVal === c.val;
+            return false;
+          })
+        )
+    );
 
     if (this._updatePayload) {
       matched.forEach((r) => Object.assign(r, this._updatePayload));

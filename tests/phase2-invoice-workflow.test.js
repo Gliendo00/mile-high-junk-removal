@@ -69,6 +69,33 @@ class FakeQueryBuilder {
     this._filters.push((row) => set.has(row[field]));
     return this;
   }
+  // Phase 3 — minimal PostgREST-style .or() support: comma-separated
+  // "field.op.value" clauses, OR'd together as ONE filter (so it combines
+  // with every other .eq()/.is()/.in() call via the existing AND-of-
+  // filters semantics below). Only the two operators the Phase 3 claim-
+  // acquisition queries actually use are implemented.
+  or(expr) {
+    const clauses = String(expr)
+      .split(",")
+      .map((c) => {
+        const parts = c.split(".");
+        return { field: parts[0], op: parts[1], value: parts.slice(2).join(".") };
+      });
+    this._filters.push((row) =>
+      clauses.some((c) => {
+        const rowVal = row[c.field] === undefined ? null : row[c.field];
+        if (c.op === "is") return c.value === "null" ? rowVal === null : rowVal === c.value;
+        if (c.op === "lt") return rowVal !== null && rowVal < c.value;
+        if (c.op === "eq") return rowVal === c.value;
+        return false;
+      })
+    );
+    return this;
+  }
+  limit(n) {
+    this._limit = n;
+    return this;
+  }
   order(field, opts) {
     this._order.push({ field: field, ascending: !opts || opts.ascending !== false });
     return this;
@@ -159,6 +186,10 @@ class FakeQueryBuilder {
         return 0;
       });
     });
+
+    if (this._limit !== undefined && this._limit !== null) {
+      filtered = filtered.slice(0, this._limit);
+    }
 
     if (this._count && this._count.head) {
       return { data: null, count: filtered.length, error: null };

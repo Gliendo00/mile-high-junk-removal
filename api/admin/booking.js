@@ -10,6 +10,7 @@
 // caller is an authenticated, allowlisted admin; changing `?id=` to another
 // booking's id changes which (authorized) record comes back, never whether
 // the request is authorized at all.
+const crypto = require("crypto");
 const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus, SERVICE_LABELS } = require("../_lib/booking-format");
@@ -20,7 +21,23 @@ const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
 const { mirrorStripePaymentToLedger, effectiveRevenue, netCollectedFromLedgerRows, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
 const { ALL_COMPLIMENTARY_REASON_KEYS, complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
-const { INVOICE_SELECT_COLS, LINE_ITEM_SELECT_COLS, mapInvoice, mapLineItem, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
+const {
+  INVOICE_SELECT_COLS,
+  LINE_ITEM_SELECT_COLS,
+  mapInvoice,
+  mapLineItem,
+  deriveInvoiceStatus,
+  SEND_CLAIM_TTL_MS,
+  isClaimStale,
+  withInvoicePaymentLock,
+  computeInvoiceBalanceCents,
+  cleanupStalePaymentIntentAfterMirror,
+} = require("../_lib/invoice-helpers");
+const { hashAccessToken, encryptAccessToken, decryptAccessToken, generateRawAccessToken, getLinkSecretKey } = require("../_lib/invoice-crypto");
+const { centsToDecimalString } = require("../_lib/money");
+
+const RESEND_REQUEST_TIMEOUT_MS = 10000; // >= half of PAYMENT_CLAIM_TTL_MS's own 2x-provider-timeout rule, matched to SEND_CLAIM_TTL_MS (20s) the same way
+const SEND_RECOVERY_WINDOW_MS = 23 * 60 * 60 * 1000; // conservative 1h margin under Resend's 24h idempotency-key retention
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -1530,7 +1547,7 @@ async function handleGetInvoice(req, res) {
     }
     const invoice = mapInvoice(invoiceRes.data);
 
-    const [lineItemsRes, paymentsRes, customerRes, bookingRes] = await Promise.all([
+    const [lineItemsRes, paymentsRes, customerRes, bookingRes, deliveryAttemptsRes] = await Promise.all([
       supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true }),
       supabase
         .from("job_payments")
@@ -1546,11 +1563,20 @@ async function handleGetInvoice(req, res) {
         .select("id, service_type, appointment_date, service_address, service_city, service_state, service_zip")
         .eq("id", invoice.bookingId)
         .maybeSingle(),
+      // Phase 3 — Send history for the admin UI. Never exposes the
+      // access_token_hash/ciphertext themselves, only the lifecycle
+      // metadata an admin actually needs to see.
+      supabase
+        .from("invoice_delivery_attempts")
+        .select("id, generation, status, recipient_email, started_at, accepted_at, resolved_at, provider_email_id")
+        .eq("invoice_id", id)
+        .order("generation", { ascending: false }),
     ]);
     if (lineItemsRes.error) throw lineItemsRes.error;
     if (paymentsRes.error) throw paymentsRes.error;
     if (customerRes.error) throw customerRes.error;
     if (bookingRes.error) throw bookingRes.error;
+    if (deliveryAttemptsRes.error) throw deliveryAttemptsRes.error;
 
     const paymentRows = paymentsRes.data || [];
     const netCollected = netCollectedFromLedgerRows(paymentRows.filter((p) => !p.voided_at));
@@ -1564,6 +1590,18 @@ async function handleGetInvoice(req, res) {
       invoice: Object.assign({}, invoice, derived, { netCollected: netCollected }),
       lineItems: (lineItemsRes.data || []).map(mapLineItem),
       jobPayments: paymentRows.map(serializeJobPayment),
+      deliveryAttempts: (deliveryAttemptsRes.data || []).map(function (a) {
+        return {
+          id: a.id,
+          generation: a.generation,
+          status: a.status,
+          recipientEmail: a.recipient_email,
+          startedAt: a.started_at,
+          acceptedAt: a.accepted_at,
+          resolvedAt: a.resolved_at,
+          providerEmailId: a.provider_email_id,
+        };
+      }),
       customer: customer
         ? {
             id: customer.id,
@@ -1713,9 +1751,17 @@ async function handlePatchInvoice(req, res, session) {
     return;
   }
   const action = typeof body.action === "string" ? body.action.trim() : "";
-  if (["updateDetails", "addLineItem", "updateLineItem", "removeLineItem", "finalize", "void"].indexOf(action) === -1) {
+  if (["updateDetails", "addLineItem", "updateLineItem", "removeLineItem", "finalize", "void", "send"].indexOf(action) === -1) {
     res.status(400).json({ error: "Invalid action." });
     return;
+  }
+
+  // "send" has its own, entirely separate control flow (claim/recover/
+  // Resend/RPCs) — dispatched before the shared current-invoice fetch
+  // below, which every other action relies on but "send" re-fetches for
+  // itself as part of claiming.
+  if (action === "send") {
+    return handleSendInvoice(req, res, session, id);
   }
 
   try {
@@ -1932,36 +1978,345 @@ async function handlePatchInvoice(req, res, session) {
     }
 
     // action === "void" — allowed from draft or finalized. Never touches
-    // invoice_line_items or job_payments: payments already recorded against
-    // the booking stay exactly as they are; voiding only means this bill no
-    // longer counts.
+    // invoice_line_items: existing payments on the booking stay exactly as
+    // they are; voiding only means this bill no longer counts.
+    //
+    // Phase 3: a finalized invoice may have a live Pay Now claim or a
+    // collectible PaymentIntent — voiding must never leave one behind. Routed
+    // through withInvoicePaymentLock(purpose:'invoice_void'), which resolves
+    // PI/claim state exactly once (reconciling a succeeded PI, canceling any
+    // cancelable one unconditionally, or blocking on processing/unresolved-
+    // charge states) and holds a temporary claim around the void write itself
+    // so a fresh Pay Now request cannot start mid-void. See
+    // api/_lib/invoice-helpers.js's own header for the full design.
     const reason = sanitizeText(body.reason, INVOICE_VOID_REASON_MAX);
     if (!reason) {
       res.status(400).json({ error: "A reason is required to void an invoice." });
       return;
     }
-
-    const voidRes = await supabase
-      .from("invoices")
-      .update({ status: "void", voided_at: new Date().toISOString(), voided_reason: reason, updated_by: session.email, updated_at: new Date().toISOString() })
-      .eq("id", id)
-      .neq("status", "void")
-      .select(INVOICE_SELECT_COLS)
-      .maybeSingle();
-    if (voidRes.error) throw voidRes.error;
-    if (!voidRes.data) {
+    if (current.status === "void") {
       res.status(409).json({ error: "This invoice has already been voided." });
       return;
     }
 
-    const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
-    if (lineItemsRes.error) throw lineItemsRes.error;
+    const stripe = getStripeClient();
+    const lockResult = await withInvoicePaymentLock(supabase, stripe, current.booking_id, { purpose: "invoice_void", confirmVoidPaidInvoice: !!body.confirmVoidPaidInvoice }, async () => {
+      const voidRes = await supabase
+        .from("invoices")
+        .update({ status: "void", voided_at: new Date().toISOString(), voided_reason: reason, updated_by: session.email, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .neq("status", "void")
+        .select(INVOICE_SELECT_COLS)
+        .maybeSingle();
+      if (voidRes.error) throw voidRes.error;
+      if (!voidRes.data) {
+        return { ok: false, error: "This invoice has already been voided." };
+      }
+      const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+      if (lineItemsRes.error) throw lineItemsRes.error;
+      return { ok: true, invoice: mapInvoice(voidRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) };
+    });
 
-    res.status(200).json({ ok: true, invoice: mapInvoice(voidRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) });
+    if (!lockResult.ok) {
+      if (lockResult.requiresConfirmation) {
+        res.status(409).json(Object.assign({ error: lockResult.message }, lockResult));
+        return;
+      }
+      res.status(409).json({ error: lockResult.error });
+      return;
+    }
+    res.status(200).json(lockResult);
   } catch (err) {
     console.error("Admin invoice update failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not update this invoice." });
   }
+}
+
+// ---------------------------------------------------------------------
+// handlePatchInvoice's action:"send" — emails the client a secure,
+// token-gated /invoice/ link. Only valid for a finalized, non-void
+// invoice. See sql/2026-10-19_phase3-invoice-delivery-pay-now.sql and
+// sql/2026-10-20_phase3-send-failure-resolution-rpc.sql for the schema/
+// RPCs this drives, and api/_lib/invoice-crypto.js for token hashing/
+// encryption. Full sequence:
+//   1. Claim invoices.send_claim_token (fresh-or-stale-takeover, one
+//      conditional UPDATE).
+//   2. Read the latest invoice_delivery_attempts row for this invoice:
+//        none / terminal (accepted|rejected|superseded) -> fresh generation
+//        pending, age < 23h       -> recover: decrypt, reuse verbatim
+//        pending, age >= 23h,
+//        or unrecoverable         -> refuse automatically; body.
+//                                     confirmNewAttempt=true overrides
+//   3. Call Resend with Idempotency-Key = invoice-send:{invoiceId}:{generation}.
+//   4. Definite success (2xx + a usable id)      -> accept_invoice_delivery_attempt
+//      Definite rejection (any other HTTP response) -> resolve_invoice_delivery_attempt_failure, 'rejected'
+//      Ambiguous (fetch itself throws — timeout/network) -> attempt row
+//        left completely untouched; only send_claim_token/send_claimed_at
+//        are CAS-released (plain conditional UPDATE, not an RPC) so the
+//        very next Send action can recover the same pending generation
+//        immediately.
+async function handleSendInvoice(req, res, session, invoiceId) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin invoice send failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error("Admin invoice send failed: RESEND_API_KEY not configured");
+    res.status(500).json({ error: "Email sending is not configured." });
+    return;
+  }
+  if (!getLinkSecretKey()) {
+    console.error("Admin invoice send failed: INVOICE_LINK_SECRET not configured correctly (must be base64 for exactly 32 bytes)");
+    res.status(500).json({ error: "Secure invoice links are not configured." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const confirmNewAttempt = !!body.confirmNewAttempt;
+
+  let myToken = null;
+
+  try {
+    const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", invoiceId).maybeSingle();
+    if (invoiceRes.error) throw invoiceRes.error;
+    const invoiceRow = invoiceRes.data;
+    if (!invoiceRow) {
+      res.status(404).json({ error: "Invoice not found." });
+      return;
+    }
+    if (invoiceRow.status !== "finalized") {
+      res.status(409).json({ error: "Only a finalized invoice can be sent." });
+      return;
+    }
+
+    const customerRes = await supabase.from("customers").select("email").eq("id", invoiceRow.customer_id).maybeSingle();
+    if (customerRes.error) throw customerRes.error;
+    const recipientEmail = customerRes.data && customerRes.data.email;
+    if (!recipientEmail) {
+      res.status(400).json({ error: "This client has no email on file." });
+      return;
+    }
+
+    // 1. Claim — fresh-or-stale-takeover, one conditional UPDATE.
+    myToken = crypto.randomUUID();
+    const staleBeforeIso = new Date(Date.now() - SEND_CLAIM_TTL_MS).toISOString();
+    const claimRes = await supabase
+      .from("invoices")
+      .update({ send_claim_token: myToken, send_claimed_at: new Date().toISOString() })
+      .eq("id", invoiceId)
+      .or("send_claim_token.is.null,send_claimed_at.lt." + staleBeforeIso)
+      .select("id");
+    if (claimRes.error) throw claimRes.error;
+    if (!Array.isArray(claimRes.data) || claimRes.data.length === 0) {
+      myToken = null;
+      res.status(409).json({ error: "A send is already in progress for this invoice. Please try again in a moment." });
+      return;
+    }
+
+    // 2. Latest delivery attempt — decide fresh vs. recover vs. refuse.
+    const latestRes = await supabase
+      .from("invoice_delivery_attempts")
+      .select("id, generation, status, access_token_ciphertext, started_at, recipient_email, balance_due_cents")
+      .eq("invoice_id", invoiceId)
+      .order("generation", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestRes.error) throw latestRes.error;
+    const latest = latestRes.data;
+
+    let attemptId, generation, rawToken, emailRecipient, emailBalanceCents;
+
+    const latestIsTerminal = !latest || latest.status === "accepted" || latest.status === "rejected" || latest.status === "superseded";
+
+    if (!latestIsTerminal && latest.status === "pending") {
+      const ageMs = Date.now() - new Date(latest.started_at).getTime();
+      if (ageMs >= SEND_RECOVERY_WINDOW_MS && !confirmNewAttempt) {
+        await supabase.from("invoices").update({ send_claim_token: null, send_claimed_at: null }).eq("id", invoiceId).eq("send_claim_token", myToken);
+        myToken = null;
+        res.status(409).json({
+          unresolvedSendExpired: true,
+          error: "The prior send's outcome is unresolved and its provider-idempotency safety window has expired. The existing link (if delivered) stays valid. Send again to start a fresh attempt.",
+        });
+        return;
+      }
+      if (ageMs < SEND_RECOVERY_WINDOW_MS) {
+        // Recover: decrypt and reuse the identical generation/token/snapshot.
+        rawToken = decryptAccessToken(latest.access_token_ciphertext, invoiceId, latest.id);
+        if (rawToken === null) {
+          const unrecoverableRes = await supabase.rpc("resolve_invoice_delivery_attempt_failure", {
+            p_invoice_id: invoiceId,
+            p_attempt_id: latest.id,
+            p_generation: latest.generation,
+            p_send_claim_token: myToken,
+            p_target_status: "unrecoverable",
+          });
+          myToken = null; // the RPC releases it (or raises, in which case it was never held under a valid token to begin with)
+          if (unrecoverableRes.error) throw unrecoverableRes.error;
+          res.status(409).json({
+            error: "This invoice's pending send could not be automatically recovered (its secure link could not be decrypted) and needs manual review. Send again with confirmNewAttempt to start a fresh attempt — the existing link, if delivered, stays valid.",
+          });
+          return;
+        }
+        attemptId = latest.id;
+        generation = latest.generation;
+        emailRecipient = latest.recipient_email;
+        emailBalanceCents = latest.balance_due_cents;
+      }
+      // else: ageMs >= window AND confirmNewAttempt — fall through to fresh below
+    } else if (!latestIsTerminal && latest.status === "unrecoverable") {
+      if (!confirmNewAttempt) {
+        await supabase.from("invoices").update({ send_claim_token: null, send_claimed_at: null }).eq("id", invoiceId).eq("send_claim_token", myToken);
+        myToken = null;
+        res.status(409).json({
+          unresolvedSendUnrecoverable: true,
+          error: "This invoice's pending send could not be automatically recovered and needs manual review. The existing link (if delivered) stays valid. Send again with confirmNewAttempt to start a fresh attempt.",
+        });
+        return;
+      }
+      // confirmNewAttempt === true — fall through to fresh below
+    }
+
+    if (!attemptId) {
+      // Fresh generation.
+      rawToken = generateRawAccessToken();
+      const freshAttemptId = crypto.randomUUID();
+      const hash = hashAccessToken(rawToken);
+      const ciphertext = encryptAccessToken(rawToken, invoiceId, freshAttemptId);
+      emailRecipient = recipientEmail;
+      emailBalanceCents = await computeInvoiceBalanceCents(supabase, mapInvoice(invoiceRow));
+
+      const createdRes = await supabase.rpc("create_invoice_delivery_attempt", {
+        p_invoice_id: invoiceId,
+        p_send_claim_token: myToken,
+        p_attempt_id: freshAttemptId,
+        p_access_token_hash: hash,
+        p_access_token_ciphertext: ciphertext,
+        p_recipient_email: emailRecipient,
+        p_balance_due_cents: emailBalanceCents,
+      });
+      if (createdRes.error) throw createdRes.error;
+      const createdRow = Array.isArray(createdRes.data) ? createdRes.data[0] : createdRes.data;
+      attemptId = createdRow.id;
+      generation = createdRow.generation;
+    }
+
+    const link = "https://www.milehighjunkremoval.net/invoice/#token=" + rawToken;
+
+    let httpResponse;
+    try {
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), RESEND_REQUEST_TIMEOUT_MS);
+      try {
+        httpResponse = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + apiKey,
+            "Content-Type": "application/json",
+            "Idempotency-Key": "invoice-send:" + invoiceId + ":" + generation,
+          },
+          body: JSON.stringify({
+            from: process.env.RESEND_FROM_EMAIL || "Mile High Junk Removal <billing@milehighjunkremoval.net>",
+            to: [emailRecipient],
+            subject: "Invoice " + (invoiceRow.invoice_number || "") + " from Mile High Junk Removal",
+            html: buildInvoiceSendEmailHtml(invoiceRow, emailBalanceCents, link),
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+    } catch (fetchErr) {
+      // Network/timeout — Resend may or may not have received/processed
+      // the request. AMBIGUOUS: the attempt row stays completely
+      // untouched; only the claim is released.
+      console.error(
+        "Admin invoice send: ambiguous Resend outcome (network/timeout) for invoice " + invoiceId + ", attempt " + attemptId + ":",
+        fetchErr && fetchErr.stack ? fetchErr.stack : fetchErr
+      );
+      await supabase.from("invoices").update({ send_claim_token: null, send_claimed_at: null }).eq("id", invoiceId).eq("send_claim_token", myToken);
+      myToken = null;
+      res.status(502).json({ error: "The send outcome could not be confirmed. It is safe to retry Send; the same delivery attempt will be recovered." });
+      return;
+    }
+
+    if (httpResponse.ok) {
+      const json = await httpResponse.json().catch(() => ({}));
+      const providerEmailId = json && json.id ? String(json.id) : null;
+      if (!providerEmailId) {
+        await supabase.from("invoices").update({ send_claim_token: null, send_claimed_at: null }).eq("id", invoiceId).eq("send_claim_token", myToken);
+        myToken = null;
+        res.status(502).json({ error: "The send outcome could not be confirmed. It is safe to retry Send; the same delivery attempt will be recovered." });
+        return;
+      }
+      const acceptRes = await supabase.rpc("accept_invoice_delivery_attempt", {
+        p_attempt_id: attemptId,
+        p_invoice_id: invoiceId,
+        p_generation: generation,
+        p_send_claim_token: myToken,
+        p_provider_email_id: providerEmailId,
+      });
+      myToken = null; // the RPC releases it atomically on success
+      if (acceptRes.error) throw acceptRes.error;
+      res.status(200).json({ ok: true, sentTo: emailRecipient, providerEmailId: providerEmailId });
+      return;
+    }
+
+    // Non-2xx: Resend DID respond — a definite rejection.
+    const errText = await httpResponse.text().catch(() => "");
+    console.error("Admin invoice send: Resend rejected the request for invoice " + invoiceId + " (status " + httpResponse.status + "): " + errText);
+    const rejectRes = await supabase.rpc("resolve_invoice_delivery_attempt_failure", {
+      p_invoice_id: invoiceId,
+      p_attempt_id: attemptId,
+      p_generation: generation,
+      p_send_claim_token: myToken,
+      p_target_status: "rejected",
+    });
+    myToken = null; // the RPC releases it atomically either way
+    if (rejectRes.error) throw rejectRes.error;
+    res.status(502).json({ error: "Could not send the invoice email. Please try again." });
+  } catch (err) {
+    console.error("Admin invoice send failed:", err && err.stack ? err.stack : err);
+    if (myToken) {
+      try {
+        await supabase.from("invoices").update({ send_claim_token: null, send_claimed_at: null }).eq("id", invoiceId).eq("send_claim_token", myToken);
+      } catch (releaseErr) {
+        console.error("Admin invoice send: best-effort claim release also failed:", releaseErr);
+      }
+    }
+    res.status(500).json({ error: "Could not send this invoice." });
+  }
+}
+
+function escapeHtmlForInvoiceEmail(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+// Presentation only. Every interpolated value goes through
+// escapeHtmlForInvoiceEmail(); the link is a server-built https URL with a
+// url-safe base64 token, never raw customer input. Deliberately no
+// per-customer greeting name (see the approved Phase 3 design — avoids
+// needing to snapshot yet another field for byte-identical recovery
+// retries); invoice number/due date/notes are already immutable once
+// finalized, so they're safe to read live rather than snapshotted.
+function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
+  const amountDue = escapeHtmlForInvoiceEmail(centsToDecimalString(balanceDueCents));
+  const invoiceNumber = escapeHtmlForInvoiceEmail(invoiceRow.invoice_number || "");
+  const dueDate = escapeHtmlForInvoiceEmail(invoiceRow.due_date || "Not set");
+  const safeLink = escapeHtmlForInvoiceEmail(link);
+  return (
+    '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;">' +
+    "<h2 style=\"margin:0 0 12px;\">Mile High Junk Removal</h2>" +
+    "<p>Invoice <strong>" + invoiceNumber + "</strong> is ready.</p>" +
+    "<p>Amount due: <strong>$" + amountDue + "</strong><br>Due date: " + dueDate + "</p>" +
+    '<p><a href="' + safeLink + '" style="display:inline-block;background:#1a73e8;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">View &amp; Pay Invoice</a></p>' +
+    '<p style="font-size:12px;color:#666;">If the button doesn\'t work, copy and paste this link: ' + safeLink + "</p>" +
+    "</div>"
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -3269,24 +3624,39 @@ async function handleCreateJobPayment(req, res, session) {
       return;
     }
 
-    const { data: created, error } = await supabase
-      .from("job_payments")
-      .insert({
-        booking_id: bookingId,
-        amount: amount,
-        payment_method: paymentMethod,
-        payment_type: paymentType,
-        payment_date: paymentDate,
-        notes: notes,
-        reverses_payment_id: reversesPaymentId,
-        recorded_by: (session && session.email) || null,
-      })
-      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
-      .single();
-    if (error) throw error;
-    if (!created) throw new Error("Insert returned no row.");
+    // Phase 3 Category A: a discretionary balance mutation must never
+    // proceed while an unresolved off-session charge, a live Pay Now
+    // claim, or a collectible Pay Now PaymentIntent exists for this
+    // booking's invoice. withInvoicePaymentLock resolves that state
+    // exactly once (canceling any cancelable PI unconditionally — see
+    // api/_lib/invoice-helpers.js) and holds a temporary claim around the
+    // insert itself so a fresh Pay Now request can't start mid-write.
+    const stripe = getStripeClient();
+    const lockResult = await withInvoicePaymentLock(supabase, stripe, bookingId, { purpose: "balance_mutation" }, async () => {
+      const { data: created, error } = await supabase
+        .from("job_payments")
+        .insert({
+          booking_id: bookingId,
+          amount: amount,
+          payment_method: paymentMethod,
+          payment_type: paymentType,
+          payment_date: paymentDate,
+          notes: notes,
+          reverses_payment_id: reversesPaymentId,
+          recorded_by: (session && session.email) || null,
+        })
+        .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .single();
+      if (error) throw error;
+      if (!created) throw new Error("Insert returned no row.");
+      return { ok: true, jobPayment: serializeJobPayment(created) };
+    });
 
-    res.status(200).json({ ok: true, jobPayment: serializeJobPayment(created) });
+    if (!lockResult.ok) {
+      res.status(409).json({ error: lockResult.error });
+      return;
+    }
+    res.status(200).json(lockResult);
   } catch (err) {
     console.error("Admin create job payment failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save this payment." });
@@ -3324,19 +3694,37 @@ async function handleVoidJobPayment(req, res, session) {
   }
 
   try {
-    const { data: voided, error } = await supabase
-      .from("job_payments")
-      .update({ voided_at: new Date().toISOString(), voided_reason: reason, updated_at: new Date().toISOString() })
-      .eq("id", id)
-      .is("voided_at", null)
-      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
-      .maybeSingle();
-    if (error) throw error;
-    if (!voided) {
+    const existingRes = await supabase.from("job_payments").select("id, booking_id").eq("id", id).maybeSingle();
+    if (existingRes.error) throw existingRes.error;
+    if (!existingRes.data) {
       res.status(409).json({ error: "This payment was not found, or has already been voided." });
       return;
     }
-    res.status(200).json({ ok: true, jobPayment: serializeJobPayment(voided) });
+
+    // Phase 3 Category A — same guard as handleCreateJobPayment above:
+    // voiding a payment changes the booking's collected balance, so it
+    // must not race a fresh Pay Now claim/PaymentIntent either.
+    const stripe = getStripeClient();
+    const lockResult = await withInvoicePaymentLock(supabase, stripe, existingRes.data.booking_id, { purpose: "balance_mutation" }, async () => {
+      const { data: voided, error } = await supabase
+        .from("job_payments")
+        .update({ voided_at: new Date().toISOString(), voided_reason: reason, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .is("voided_at", null)
+        .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .maybeSingle();
+      if (error) throw error;
+      if (!voided) {
+        return { ok: false, error: "This payment was not found, or has already been voided." };
+      }
+      return { ok: true, jobPayment: serializeJobPayment(voided) };
+    });
+
+    if (!lockResult.ok) {
+      res.status(409).json({ error: lockResult.error });
+      return;
+    }
+    res.status(200).json(lockResult);
   } catch (err) {
     console.error("Admin void job payment failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not void this payment." });
@@ -3645,166 +4033,215 @@ async function handleApprove(id, res, session) {
       return;
     }
 
-    await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
-
-    // The load-bearing distinction below mirrors api/book.js's own
-    // capture() call:
-    //   - err.type === "StripeCardError" with err.code ===
-    //     "authentication_required": Stripe's documented behavior for an
-    //     off-session confirmation the card issuer won't allow without
-    //     Strong Customer Authentication — the customer isn't present to
-    //     complete it. Modeled as its own explicit state
-    //     ("requires_customer_action"), never falsely marked paid and
-    //     never blindly retried (see handleApprove()'s own header comment).
-    //   - Any other StripeCardError is a DEFINITIVE decline — Stripe
-    //     confirms no money moved, so "failed" (safely retryable via
-    //     Approve again) is correct.
-    //   - Any other thrown error (network/timeout/API error) is AMBIGUOUS —
-    //     no definitive answer, the charge may have actually gone through
-    //     — marked "error_pending_review" for a human to check the Stripe
-    //     Dashboard, never auto-retried.
-    // metadata.bookingId/chargeId (standard, Dashboard-searchable Stripe
-    // fields) link this PaymentIntent back to both the charge and its
-    // booking, set as part of the SAME request that creates it — durable
-    // on Stripe's side regardless of whether any write below succeeds.
-    // Only internal ids, never customer data.
-    let intent;
-    try {
-      intent = await stripe.paymentIntents.create(
-        {
-          amount: Math.round(approvedRow.amount * 100),
-          currency: "usd",
-          customer: stripeCustomerId,
-          payment_method: paymentMethodId,
-          off_session: true,
-          confirm: true,
-          metadata: { bookingId: approvedRow.booking_id, chargeId: id },
-        },
-        { idempotencyKey: "charge:" + id }
-      );
-    } catch (err) {
-      if (err && err.type === "StripeCardError" && err.code === "authentication_required") {
-        const piId = err.raw && err.raw.payment_intent && err.raw.payment_intent.id;
-        const pending = await markChargeRequiresCustomerAction(
-          supabase,
-          id,
-          piId,
-          "This card's issuer requires the customer to authenticate this charge before it can be completed off-session. Use \"Check Status\" after the customer has authenticated, or contact them to run a fresh, on-session payment."
-        );
-        res.status(200).json({ ok: true, charge: serializeCharge(pending) });
-        return;
-      }
-      if (err && err.type === "StripeCardError") {
-        // A definitive decline — Stripe confirms no money moved, so
-        // "failed" (safely retryable via Approve again) is correct here.
-        const failed = await markChargeFailed(supabase, id, err.message || "Payment declined.");
-        res.status(200).json({ ok: true, charge: serializeCharge(failed) });
-        return;
-      }
-      console.error(
-        "AMBIGUOUS CHARGE OUTCOME — Stripe call threw, actual result unknown. Check the Stripe Dashboard for a PaymentIntent matching chargeId=" +
-          id +
-          " bookingId=" +
-          approvedRow.booking_id +
-          " amount=" +
-          approvedRow.amount.toFixed(2) +
-          " before any manual action:",
-        err && err.stack ? err.stack : err
-      );
-      const pending = await markChargeErrorPendingReview(
-        supabase,
-        id,
-        "Stripe request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for a matching PaymentIntent before taking any action."
-      );
-      res.status(200).json({ ok: true, charge: serializeCharge(pending) });
-      return;
-    }
-
-    if (!intent || intent.status !== "succeeded") {
-      // Defensive: confirm:true resolving without throwing but not
-      // reaching "succeeded" shouldn't normally happen for an off-session
-      // card confirmation, but is treated as requiring review rather than
-      // assumed safe.
-      const pending = await markChargeRequiresCustomerAction(supabase, id, intent && intent.id, "Stripe returned an unexpected status (" + (intent && intent.status) + ") for this off-session charge. Use \"Check Status\" to re-check, or contact the customer for a fresh payment.");
-      res.status(200).json({ ok: true, charge: serializeCharge(pending) });
-      return;
-    }
-
-    // The charge has already happened; everything below is best-effort
-    // persistence of that fact, never a condition for the response — same
-    // bounded retry-then-minimal-fallback saga step as api/book.js's own
-    // post-capture write.
-
-    // Phase 3C Stage 3: mirror this collected charge (overweight tonnage,
-    // extra rental days, or another approved additional charge) into
-    // job_payments — best-effort, unconditional once Stripe has actually
-    // confirmed "succeeded" above, independent of whether the
-    // rental_additional_charges row below can be fully persisted. See
-    // job-payments-ledger.js's header.
-    await mirrorStripePaymentToLedger(supabase, {
-      bookingId: approvedRow.booking_id,
-      stripePaymentIntentId: intent.id,
-      amount: approvedRow.amount,
-      paymentDate: denverTodayIso(),
-      notes: "Approved additional charge (auto-recorded from Stripe).",
+    // Phase 3 Category A: initiating an off-session charge is a
+    // discretionary, money-moving action — it must not race a fresh Pay
+    // Now claim/PaymentIntent on this booking's invoice (if any). The
+    // temporary lock is held only for the duration of this synchronous
+    // Stripe call + its immediate status write below; any LONGER
+    // unresolved window (SCA pending, ambiguous outcome needing a human)
+    // is covered independently by rental_additional_charges' own durable
+    // status column, which withInvoicePaymentLock's guard also checks —
+    // see api/_lib/invoice-helpers.js's header for the full design.
+    const lockResult = await withInvoicePaymentLock(supabase, stripe, approvedRow.booking_id, { purpose: "balance_mutation" }, async () => {
+      return handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, stripeCustomerId, paymentMethodId);
     });
 
-    const { data: paidRow, error: paidErr } = await supabase
-      .from("rental_additional_charges")
-      .update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() })
-      .eq("id", id)
-      .select("*")
-      .maybeSingle();
-    if (!paidErr && paidRow) {
-      res.status(200).json({ ok: true, charge: serializeCharge(paidRow) });
+    if (lockResult && lockResult.status) {
+      res.status(lockResult.status).json(lockResult.body);
       return;
     }
+    res.status(409).json({ error: (lockResult && lockResult.error) || "Could not process this charge right now." });
+  } catch (err) {
+    console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not process this charge." });
+  }
+}
 
-    // The single-attempt update above failed (or returned no row) —
-    // retry it a couple more times before falling back to a minimal write.
-    const fullConfirmed = await retryUpdate(
-      () => supabase.from("rental_additional_charges").update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
-      [400]
+// The actual off-session Stripe call + every outcome branch, extracted so
+// handleApprove() above can run it inside withInvoicePaymentLock's
+// temporary claim. Returns {status, body} for res.status(status).json(body)
+// — never calls res directly, so it composes cleanly with the lock
+// wrapper's own early-exit shapes (which never have a `status` field).
+async function handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, stripeCustomerId, paymentMethodId) {
+  await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
+
+  // The load-bearing distinction below mirrors api/book.js's own
+  // capture() call:
+  //   - err.type === "StripeCardError" with err.code ===
+  //     "authentication_required": Stripe's documented behavior for an
+  //     off-session confirmation the card issuer won't allow without
+  //     Strong Customer Authentication — the customer isn't present to
+  //     complete it. Modeled as its own explicit state
+  //     ("requires_customer_action"), never falsely marked paid and
+  //     never blindly retried (see handleApprove()'s own header comment).
+  //   - Any other StripeCardError is a DEFINITIVE decline — Stripe
+  //     confirms no money moved, so "failed" (safely retryable via
+  //     Approve again) is correct.
+  //   - Any other thrown error (network/timeout/API error) is AMBIGUOUS —
+  //     no definitive answer, the charge may have actually gone through
+  //     — marked "error_pending_review" for a human to check the Stripe
+  //     Dashboard, never auto-retried.
+  // metadata.bookingId/chargeId (standard, Dashboard-searchable Stripe
+  // fields) link this PaymentIntent back to both the charge and its
+  // booking, set as part of the SAME request that creates it — durable
+  // on Stripe's side regardless of whether any write below succeeds.
+  // Only internal ids, never customer data.
+  //
+  // The temporary invoice payment lock (held by the caller,
+  // withInvoicePaymentLock, around this whole function) is released the
+  // moment this function returns — whether that's success, a definite
+  // decline, SCA-required, or a network-ambiguous outcome. The LONGER
+  // unresolved window (SCA pending, or a human needing to check the
+  // dashboard) is covered independently by rental_additional_charges'
+  // own durable status written below (requires_customer_action /
+  // error_pending_review), which the guard also checks on every future
+  // call — not by holding this temporary lock any longer than this one
+  // synchronous call.
+  let intent;
+  try {
+    intent = await stripe.paymentIntents.create(
+      {
+        amount: Math.round(approvedRow.amount * 100),
+        currency: "usd",
+        customer: stripeCustomerId,
+        payment_method: paymentMethodId,
+        off_session: true,
+        confirm: true,
+        metadata: { bookingId: approvedRow.booking_id, chargeId: id },
+      },
+      { idempotencyKey: "charge:" + id }
     );
-    if (fullConfirmed) {
-      res.status(200).json({
-        ok: true,
-        charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", stripePaymentIntentId: intent.id }),
-      });
-      return;
+  } catch (err) {
+    if (err && err.type === "StripeCardError" && err.code === "authentication_required") {
+      const piId = err.raw && err.raw.payment_intent && err.raw.payment_intent.id;
+      const pending = await markChargeRequiresCustomerAction(
+        supabase,
+        id,
+        piId,
+        "This card's issuer requires the customer to authenticate this charge before it can be completed off-session. Use \"Check Status\" after the customer has authenticated, or contact them to run a fresh, on-session payment."
+      );
+      return { status: 200, body: { ok: true, charge: serializeCharge(pending) } };
     }
-
-    // Every attempt at the full update failed. Minimal fallback write —
-    // just status + PaymentIntent id — distinct from "failed" (which the
-    // Approve button would let an admin retry and risk a double charge):
-    // 'paid_reconciliation_required' means Stripe DEFINITELY
-    // succeeded, only the full record couldn't be persisted.
-    const minimalConfirmed = await retryUpdate(
-      () => supabase.from("rental_additional_charges").update({ status: "paid_reconciliation_required", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
-      [150]
-    );
+    if (err && err.type === "StripeCardError") {
+      // A definitive decline — Stripe confirms no money moved, so
+      // "failed" (safely retryable via Approve again) is correct here.
+      const failed = await markChargeFailed(supabase, id, err.message || "Payment declined.");
+      return { status: 200, body: { ok: true, charge: serializeCharge(failed) } };
+    }
     console.error(
-      "CRITICAL: Stripe charge succeeded but rental_additional_charges could not be fully confirmed after retries. " +
-        (minimalConfirmed ? "Minimal fallback write (status + PaymentIntent id only) DID succeed — see status='paid_reconciliation_required'. " : "Even the minimal fallback write failed — this charge's record does not reflect it at all. ") +
-        "Search the Stripe Dashboard for PaymentIntent '" +
-        intent.id +
-        "' or metadata.chargeId='" +
-        id +
-        "' to find this transaction. chargeId=" +
+      "AMBIGUOUS CHARGE OUTCOME — Stripe call threw, actual result unknown. Check the Stripe Dashboard for a PaymentIntent matching chargeId=" +
         id +
         " bookingId=" +
         approvedRow.booking_id +
-        " stripePaymentIntentId=" +
-        intent.id,
-      paidErr
+        " amount=" +
+        approvedRow.amount.toFixed(2) +
+        " before any manual action:",
+      err && err.stack ? err.stack : err
     );
-    // Reports 'paid_reconciliation_required' here regardless of whether
-    // even the minimal write itself succeeded — that's the true state the
-    // admin needs to act on either way (Stripe charged the customer; our
-    // own record of it is incomplete-to-nonexistent). Telling the admin
-    // "paid" outright here would risk them believing the database already
-    // reflects a state it may not.
-    res.status(200).json({
+    const pending = await markChargeErrorPendingReview(
+      supabase,
+      id,
+      "Stripe request failed/timed out before a definitive response was received. Outcome unknown — check the Stripe Dashboard for a matching PaymentIntent before taking any action."
+    );
+    return { status: 200, body: { ok: true, charge: serializeCharge(pending) } };
+  }
+
+  if (!intent || intent.status !== "succeeded") {
+    // Defensive: confirm:true resolving without throwing but not
+    // reaching "succeeded" shouldn't normally happen for an off-session
+    // card confirmation, but is treated as requiring review rather than
+    // assumed safe.
+    const pending = await markChargeRequiresCustomerAction(
+      supabase,
+      id,
+      intent && intent.id,
+      "Stripe returned an unexpected status (" + (intent && intent.status) + ") for this off-session charge. Use \"Check Status\" to re-check, or contact the customer for a fresh payment."
+    );
+    return { status: 200, body: { ok: true, charge: serializeCharge(pending) } };
+  }
+
+  // The charge has already happened; everything below is best-effort
+  // persistence of that fact, never a condition for the response — same
+  // bounded retry-then-minimal-fallback saga step as api/book.js's own
+  // post-capture write.
+
+  // Phase 3C Stage 3: mirror this collected charge (overweight tonnage,
+  // extra rental days, or another approved additional charge) into
+  // job_payments — best-effort, unconditional once Stripe has actually
+  // confirmed "succeeded" above, independent of whether the
+  // rental_additional_charges row below can be fully persisted. See
+  // job-payments-ledger.js's header.
+  await mirrorStripePaymentToLedger(supabase, {
+    bookingId: approvedRow.booking_id,
+    stripePaymentIntentId: intent.id,
+    amount: approvedRow.amount,
+    paymentDate: denverTodayIso(),
+    notes: "Approved additional charge (auto-recorded from Stripe).",
+  });
+
+  // Phase 3 Category B: the real money mirror above is unconditional and
+  // already committed — this is purely best-effort cleanup of this
+  // booking's invoice (if any) active Pay-Now PaymentIntent, now possibly
+  // stale relative to the balance this charge just changed. Never allowed
+  // to affect this function's own response either way.
+  await cleanupStalePaymentIntentAfterMirror(supabase, stripe, approvedRow.booking_id);
+
+  const { data: paidRow, error: paidErr } = await supabase
+    .from("rental_additional_charges")
+    .update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+  if (!paidErr && paidRow) {
+    return { status: 200, body: { ok: true, charge: serializeCharge(paidRow) } };
+  }
+
+  // The single-attempt update above failed (or returned no row) —
+  // retry it a couple more times before falling back to a minimal write.
+  const fullConfirmed = await retryUpdate(
+    () => supabase.from("rental_additional_charges").update({ status: "paid", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
+    [400]
+  );
+  if (fullConfirmed) {
+    return {
+      status: 200,
+      body: { ok: true, charge: Object.assign({}, serializeCharge(approvedRow), { status: "paid", stripePaymentIntentId: intent.id }) },
+    };
+  }
+
+  // Every attempt at the full update failed. Minimal fallback write —
+  // just status + PaymentIntent id — distinct from "failed" (which the
+  // Approve button would let an admin retry and risk a double charge):
+  // 'paid_reconciliation_required' means Stripe DEFINITELY
+  // succeeded, only the full record couldn't be persisted.
+  const minimalConfirmed = await retryUpdate(
+    () => supabase.from("rental_additional_charges").update({ status: "paid_reconciliation_required", stripe_payment_intent_id: intent.id, updated_at: new Date().toISOString() }).eq("id", id),
+    [150]
+  );
+  console.error(
+    "CRITICAL: Stripe charge succeeded but rental_additional_charges could not be fully confirmed after retries. " +
+      (minimalConfirmed ? "Minimal fallback write (status + PaymentIntent id only) DID succeed — see status='paid_reconciliation_required'. " : "Even the minimal fallback write failed — this charge's record does not reflect it at all. ") +
+      "Search the Stripe Dashboard for PaymentIntent '" +
+      intent.id +
+      "' or metadata.chargeId='" +
+      id +
+      "' to find this transaction. chargeId=" +
+      id +
+      " bookingId=" +
+      approvedRow.booking_id +
+      " stripePaymentIntentId=" +
+      intent.id,
+    paidErr
+  );
+  // Reports 'paid_reconciliation_required' here regardless of whether
+  // even the minimal write itself succeeded — that's the true state the
+  // admin needs to act on either way (Stripe charged the customer; our
+  // own record of it is incomplete-to-nonexistent). Telling the admin
+  // "paid" outright here would risk them believing the database already
+  // reflects a state it may not.
+  return {
+    status: 200,
+    body: {
       ok: true,
       charge: Object.assign({}, serializeCharge(approvedRow), {
         status: "paid_reconciliation_required",
@@ -3813,11 +4250,8 @@ async function handleApprove(id, res, session) {
       warning: minimalConfirmed
         ? "Charged successfully, but the full record couldn't be saved — marked for reconciliation. Refresh to verify."
         : "Charged successfully, but this charge's record could not be updated at all — search the Stripe Dashboard for this PaymentIntent to reconcile manually.",
-    });
-  } catch (err) {
-    console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
-    res.status(500).json({ error: "Could not process this charge." });
-  }
+    },
+  };
 }
 
 // A safe, non-charging reconciliation action: re-fetches the charge's
@@ -3882,6 +4316,10 @@ async function handleCheckStatus(id, res) {
       });
       const { data } = await supabase.from("rental_additional_charges").update({ status: "paid", failure_reason: null, updated_at: new Date().toISOString() }).eq("id", id).select("*").maybeSingle();
       updated = data || updated;
+
+      // Phase 3 Category B — same unconditional-mirror-then-best-effort-
+      // cleanup posture as handleApprove()'s own success path above.
+      await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
     } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
       // The customer's authentication attempt failed, expired, or was
       // never completed — no charge occurred, so this is safely retryable

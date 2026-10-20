@@ -1093,10 +1093,22 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // status/voided_at/voided_reason write — same "independently reviewed
   // elsewhere" reasoning; see tests/phase2-invoice-workflow.test.js and
   // tests/phase3c-schedule.test.js's own copy of this write-audit guard.
+  // Phase 3 (Invoice Delivery + Pay Now) added exactly six more, all
+  // inside the new handleSendInvoice() action: the Send-claim acquisition,
+  // plus five distinct conditional claim-release sites (expired-pending-
+  // without-confirmation, already-unrecoverable-without-confirmation,
+  // ambiguous network/timeout outcome, a 2xx response with no usable
+  // provider email id, and the outer catch's best-effort release). The
+  // claim-to-active-PaymentIntent commit, the Category A/B payment-claim
+  // acquire/release pair, and the void action's own write are all now
+  // routed through withInvoicePaymentLock()/resolveInvoicePaymentIntentForMutation()
+  // in api/_lib/invoice-helpers.js — a DIFFERENT file, so none of those
+  // add to THIS file's own .update( count; see that module and
+  // tests/phase3-invoice-delivery.test.js for their own coverage.
   assert.strictEqual(
     updateCalls,
-    32,
-    "booking.js must have exactly 32 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups + 4 Phase 4 Stage 1 dumpster-pickup-auto-job helpers + 5 Phase 2 Core Invoicing helpers) — anything else needs deliberate review"
+    38,
+    "booking.js must have exactly 38 .update( calls (32 as of Phase 2 Core Invoicing + 6 Phase 3 handleSendInvoice claim acquire/release sites) — anything else needs deliberate review"
   );
 });
 

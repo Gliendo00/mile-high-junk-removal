@@ -56,6 +56,7 @@
 const { getStripeClient } = require("./_lib/stripe-client");
 const { getServiceClient } = require("./_lib/supabase-admin");
 const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
+const { reconcileInvoicePaymentIntent, cleanupStalePaymentIntentAfterMirror } = require("./_lib/invoice-helpers");
 
 module.exports.config = { api: { bodyParser: false } };
 
@@ -112,7 +113,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    await applyEvent(supabase, event);
+    await applyEvent(supabase, stripe, event);
   } catch (err) {
     console.error("Stripe webhook: failed applying event (type=" + event.type + "):", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not process webhook." });
@@ -133,14 +134,14 @@ function readRawBody(req) {
   });
 }
 
-async function applyEvent(supabase, event) {
+async function applyEvent(supabase, stripe, event) {
   const type = event.type;
   const obj = event.data && event.data.object;
 
   if (type === "payment_intent.succeeded") {
     const intent = obj;
     if (!intent || !intent.id) return;
-    await reconcileSucceeded(supabase, intent);
+    await reconcileSucceeded(supabase, stripe, intent);
     return;
   }
 
@@ -181,7 +182,19 @@ async function applyEvent(supabase, event) {
 // "eq", "paid")` (and the charges-table equivalent) so a late/duplicate
 // delivery of an event this app already reconciled synchronously is a
 // harmless no-op.
-async function reconcileSucceeded(supabase, intent) {
+async function reconcileSucceeded(supabase, stripe, intent) {
+  // Phase 3 — invoice-originated PaymentIntents are a completely separate
+  // source from rental_payments/rental_additional_charges below (their own
+  // metadata.source discriminates unambiguously), with their own
+  // validation + mirroring + active-PI clearing — see
+  // reconcileInvoicePaymentIntent() in api/_lib/invoice-helpers.js. Checked
+  // and returned first so the two unrelated tables below are never queried
+  // for a PaymentIntent that could never match them anyway.
+  if (intent.metadata && intent.metadata.source === "invoice_pay_now") {
+    await reconcileInvoicePaymentIntent(supabase, stripe, intent);
+    return;
+  }
+
   const methodInfo = extractPaymentMethodSummary(intent.payment_method);
 
   const paymentUpdate = await supabase
@@ -215,6 +228,10 @@ async function reconcileSucceeded(supabase, intent) {
       amount: row.amount_charged,
       notes: "Initial dumpster rental payment, confirmed via webhook backstop (auto-recorded from Stripe).",
     });
+    // Phase 3 Category B — best-effort stale-PI cleanup for this booking's
+    // invoice (if any), never allowed to affect the mirror above, which
+    // has already committed. See api/_lib/invoice-helpers.js's header.
+    await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
     return;
   }
 
@@ -233,6 +250,9 @@ async function reconcileSucceeded(supabase, intent) {
       amount: row.amount,
       notes: "Approved additional charge, confirmed via webhook backstop (auto-recorded from Stripe).",
     });
+    // Phase 3 Category B — same best-effort cleanup as the rental-deposit
+    // backstop above.
+    await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
   }
 }
 
