@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Invoice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+</head>
+<body class="admin-body">
+
+<div id="admin-chrome" class="admin-print-hide"></div>
+
+<main class="admin-main">
+  <a href="/admin/invoices/" class="admin-back-link admin-print-hide">&larr; Invoices</a>
+
+  <div id="exit-print-bar" class="admin-detail-actions" style="display:none">
+    <button type="button" id="exit-print-btn" class="admin-btn admin-btn-outline">&larr; Back to Invoice</button>
+  </div>
+
+  <div id="error-banner" class="admin-error-banner admin-print-hide" style="display:none"></div>
+  <div id="loading" class="admin-loading admin-print-hide">Loading invoice…</div>
+
+  <div id="detail" style="display:none">
+
+    <!-- 1. Identity + status -->
+    <div class="admin-detail-hero">
+      <div class="admin-detail-top">
+        <h1 id="iv-number">Draft Invoice</h1>
+        <span id="iv-status-badge" class="admin-status-badge admin-invoice-status-draft">
+          <span id="iv-status-label">Draft</span>
+        </span>
+        <span id="iv-overdue-badge" class="admin-overdue-badge" style="display:none">Overdue</span>
+      </div>
+      <div class="admin-detail-sub" id="iv-subtitle">—</div>
+      <div class="admin-detail-hero-actions admin-print-hide">
+        <button type="button" id="iv-finalize-btn" class="admin-btn admin-btn-primary">Finalize Invoice</button>
+        <button type="button" id="iv-void-btn" class="admin-btn admin-btn-danger">Void Invoice</button>
+        <button type="button" id="iv-print-btn" class="admin-btn admin-btn-outline">Print / Save as PDF</button>
+      </div>
+    </div>
+
+    <!-- 2. Void banner -->
+    <section class="admin-section" id="iv-void-banner-section" style="display:none">
+      <div class="admin-row-value" style="color:#b91c1c;font-weight:700">
+        This invoice was voided<span id="iv-voided-at-text"></span>.
+      </div>
+      <div class="admin-row-value" id="iv-void-reason-text" style="color:#b91c1c;margin-top:4px"></div>
+    </section>
+
+    <!-- 3. Bill To -->
+    <section class="admin-section">
+      <h2>Bill To</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Client</div>
+        <div class="admin-row-value"><a id="iv-client-link" class="admin-tap-link" href="#">—</a></div>
+      </div>
+      <div class="admin-row" id="iv-phone-row">
+        <div class="admin-row-label">Phone</div>
+        <div class="admin-row-value" id="iv-phone">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Address</div>
+        <div class="admin-row-value" id="iv-address">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Job</div>
+        <div class="admin-row-value"><a id="iv-job-link" class="admin-tap-link" href="#">View job &rarr;</a></div>
+      </div>
+    </section>
+
+    <!-- 4. Line items -->
+    <section class="admin-section">
+      <h2>Line Items</h2>
+      <div id="iv-line-items-list" class="admin-line-items-list"></div>
+      <div class="admin-invoice-total-row">
+        <span>Total</span>
+        <span id="iv-total">$0.00</span>
+      </div>
+
+      <div class="admin-form-section admin-print-hide" id="iv-line-item-form-section" style="margin-top:16px">
+        <div class="admin-form-section-label" id="iv-line-item-form-label">Add Line Item</div>
+        <div class="admin-field">
+          <label for="iv-li-description">Description</label>
+          <input type="text" id="iv-li-description" maxlength="500" placeholder="e.g. Dumpster rental, 15-yard">
+        </div>
+        <div class="admin-field-row">
+          <div class="admin-field">
+            <label for="iv-li-quantity">Quantity</label>
+            <input type="number" id="iv-li-quantity" inputmode="decimal" min="0.01" step="0.01" value="1">
+          </div>
+          <div class="admin-field">
+            <label for="iv-li-unit-price">Unit Price</label>
+            <input type="number" id="iv-li-unit-price" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <button type="button" id="iv-li-save-btn" class="admin-btn admin-btn-outline">Add Line Item</button>
+        <button type="button" id="iv-li-cancel-btn" class="admin-btn admin-btn-ghost" style="display:none">Cancel</button>
+      </div>
+    </section>
+
+    <!-- 5. Due date & notes -->
+    <section class="admin-section">
+      <h2>Due Date &amp; Notes</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Due Date</div>
+        <div class="admin-row-value" id="iv-due-date">Not set</div>
+      </div>
+      <div class="admin-row" id="iv-notes-row">
+        <div class="admin-row-label">Notes</div>
+        <div class="admin-row-value" id="iv-notes">—</div>
+      </div>
+
+      <div class="admin-form-section admin-print-hide" id="iv-details-form-section" style="margin-top:16px">
+        <div class="admin-field">
+          <label for="iv-due-date-input">Due Date</label>
+          <input type="date" id="iv-due-date-input">
+        </div>
+        <div class="admin-field">
+          <label for="iv-notes-input">Notes</label>
+          <textarea id="iv-notes-input" maxlength="2000" placeholder="Optional notes shown on this invoice"></textarea>
+        </div>
+        <button type="button" id="iv-details-save-btn" class="admin-btn admin-btn-outline">Save Due Date &amp; Notes</button>
+      </div>
+    </section>
+
+    <!-- 6. Payment history (read-only) -->
+    <section class="admin-section">
+      <h2>Payment History</h2>
+      <div class="admin-row">
+        <div class="admin-row-label">Collected</div>
+        <div class="admin-row-value" id="iv-collected">—</div>
+      </div>
+      <div class="admin-row">
+        <div class="admin-row-label">Balance Due</div>
+        <div class="admin-row-value" id="iv-balance-due">—</div>
+      </div>
+      <div id="iv-payments-list" class="admin-charges-list"></div>
+      <div class="admin-detail-actions admin-print-hide" style="margin-top:14px">
+        <a id="iv-record-payment-link" class="admin-btn admin-btn-outline" href="#">Record Payment &rarr;</a>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<div id="admin-toast" class="admin-toast" role="status" aria-live="polite"></div>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../phone-format.js"></script>
+<script src="../invoice.js"></script>
+</body>
+</html>

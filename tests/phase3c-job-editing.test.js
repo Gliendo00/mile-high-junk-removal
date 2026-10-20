@@ -1084,11 +1084,19 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // propagation, and the pickup's archive/restore propagation (one shared
   // call site for both directions) — same "independently reviewed
   // elsewhere" reasoning; see
-  // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+  // tests/phase4-stage1-dumpster-pickup-auto-job.test.js. Phase 2 (Core
+  // Invoicing) added exactly five more: handlePatchInvoice()'s
+  // "updateDetails" action (draft-only due date/notes edit),
+  // recomputeInvoiceTotal()'s shared total_amount recompute, its
+  // "updateLineItem" action, its "finalize" action's one-time
+  // number/status/finalized_at write, and its "void" action's
+  // status/voided_at/voided_reason write — same "independently reviewed
+  // elsewhere" reasoning; see tests/phase2-invoice-workflow.test.js and
+  // tests/phase3c-schedule.test.js's own copy of this write-audit guard.
   assert.strictEqual(
     updateCalls,
-    27,
-    "booking.js must have exactly 27 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups + 4 Phase 4 Stage 1 dumpster-pickup-auto-job helpers) — anything else needs deliberate review"
+    32,
+    "booking.js must have exactly 32 .update( calls (1 Edit Job + 10 Stage 2.5-v2 Stripe charges + 1 2026-09-18-v2 actual-weight persist + 1 Stage 3 job-payment void + 1 tip-restore follow-up + 4 Batch 2 archive/restore/review-request + 1 Batch 5 relocated status write + 1 Phase 3 agent operational-note + 3 Estimate workflow follow-ups + 4 Phase 4 Stage 1 dumpster-pickup-auto-job helpers + 5 Phase 2 Core Invoicing helpers) — anything else needs deliberate review"
   );
 });
 

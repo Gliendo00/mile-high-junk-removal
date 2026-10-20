@@ -254,6 +254,16 @@
          Pricing section) is edited in place via the Edit button — never a
          job_payments row, and never added to Collected — Total received is
          simply Collected + Tip, computed for display only. -->
+    <!-- Phase 2 — Core Invoicing entry point. Hidden entirely for a
+         dumpster_pickup booking (its auto-generated pickup leg is never
+         billed — see api/admin/booking.js's handleCreateInvoice()). Label
+         reflects current state (Create Invoice / Open Draft Invoice / View
+         Invoice) — set by admin/booking-detail.js's updateInvoiceEntryPoint(),
+         never guessed here. -->
+    <div class="admin-detail-actions admin-print-hide" id="d-invoice-actions" style="display:none;margin-bottom:14px">
+      <a id="d-invoice-link" class="admin-btn admin-btn-outline" href="#">Create Invoice</a>
+    </div>
+
     <section class="admin-section" id="d-job-payments-section">
       <h2>Payments</h2>
       <div class="admin-row">

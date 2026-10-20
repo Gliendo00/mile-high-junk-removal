@@ -12,7 +12,8 @@ const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normaliz
 const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
 const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
-const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS } = require("../_lib/job-payments-ledger");
+const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows } = require("../_lib/job-payments-ledger");
+const { INVOICE_SELECT_COLS, mapInvoice, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 
@@ -275,6 +276,19 @@ module.exports = async (req, res) => {
   // tagging each row with where it actually lives so nothing is migrated.
   if (req.query.view === "leads") {
     return handleLeadsView(req, res, supabase);
+  }
+
+  // Phase 2 — ?view=invoices backs the new /admin/invoices/ list page.
+  // Same folding reasoning as every other view= mode in this file. Reads
+  // public.invoices (sql/2026-10-19_invoice-workflow.sql) and that same
+  // ledger ?resource=job-payments already uses (job_payments) side by side
+  // — never a second payment table — to compute each invoice's derived
+  // display status/balance via deriveInvoiceStatus()
+  // (api/_lib/invoice-helpers.js), the identical helper the invoice detail
+  // endpoint in api/admin/booking.js uses, so the two pages can never
+  // disagree about what status an invoice is in.
+  if (req.query.view === "invoices") {
+    return handleInvoicesView(req, res, supabase);
   }
 
   // Phase 3C Stage 4: "rental_out" is counted here too, and folded into
@@ -2713,6 +2727,87 @@ async function handleLeadsView(req, res, supabase) {
     // returns ok:true for the common case of "one query had a problem."
     console.error("Admin leads view failed unexpectedly:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load leads." });
+  }
+}
+
+// Phase 2 — ?view=invoices. Read-only list behind the /admin/invoices/
+// page: every invoice, newest first, each enriched with the client's name
+// and its derived display status/balance (via deriveInvoiceStatus(),
+// api/_lib/invoice-helpers.js — the exact same helper api/admin/booking.js's
+// invoice-detail endpoint uses, so the list and detail pages can never
+// disagree). No pagination yet — same lean posture as handleLeadsView just
+// above, which already loads full sets rather than paging.
+//
+// job_payments stays the one payment ledger: this bulk-fetches every
+// non-voided payment row for every booking any invoice here points at, in
+// one IN(...) query, groups them by booking_id in JS, and runs
+// netCollectedFromLedgerRows() per group — never a second per-invoice
+// round trip, and never a column on invoices itself that could drift from
+// this computed number.
+//
+// ?status= (optional) filters by the DERIVED status (draft/finalized/
+// partially_paid/paid/void) — applied in JS after deriveInvoiceStatus()
+// runs, since a computed value can't be pushed into the SQL WHERE clause.
+async function handleInvoicesView(req, res, supabase) {
+  try {
+    const invoicesRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).order("created_at", { ascending: false });
+    if (invoicesRes.error) throw invoicesRes.error;
+    const invoiceRows = invoicesRes.data || [];
+
+    const customerIds = Array.from(new Set(invoiceRows.map((r) => r.customer_id).filter(Boolean)));
+    const bookingIds = Array.from(new Set(invoiceRows.map((r) => r.booking_id).filter(Boolean)));
+
+    const [customersRes, paymentsRes] = await Promise.all([
+      customerIds.length
+        ? supabase.from("customers").select("id, first_name, last_name").in("id", customerIds)
+        : Promise.resolve({ data: [], error: null }),
+      bookingIds.length
+        ? supabase
+            .from("job_payments")
+            .select("booking_id, amount, payment_type, voided_at")
+            .in("booking_id", bookingIds)
+            .is("voided_at", null)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (customersRes.error) throw customersRes.error;
+    if (paymentsRes.error) throw paymentsRes.error;
+
+    const customerNameById = {};
+    (customersRes.data || []).forEach((c) => {
+      customerNameById[c.id] = [c.first_name, c.last_name].filter(Boolean).join(" ") || null;
+    });
+
+    const paymentsByBooking = {};
+    (paymentsRes.data || []).forEach((p) => {
+      (paymentsByBooking[p.booking_id] || (paymentsByBooking[p.booking_id] = [])).push(p);
+    });
+
+    const todayIso = denverTodayIso();
+    const requestedStatus = typeof req.query.status === "string" ? req.query.status.trim() : "";
+
+    let invoices = invoiceRows.map((row) => {
+      const invoice = mapInvoice(row);
+      const netCollected = netCollectedFromLedgerRows(paymentsByBooking[row.booking_id] || []);
+      const derived = deriveInvoiceStatus(invoice, netCollected, todayIso);
+      return Object.assign({ customerName: customerNameById[row.customer_id] || null }, invoice, derived);
+    });
+
+    // "overdue" is deliberately not a displayStatus value (it's the
+    // orthogonal isOverdue flag — see deriveInvoiceStatus()'s own header)
+    // but the Invoices list page's filter pills treat it as a sixth,
+    // equally-clickable filter alongside the five real buckets, so it gets
+    // one special case here rather than becoming a fake displayStatus the
+    // rest of this app would have to know about.
+    if (requestedStatus === "overdue") {
+      invoices = invoices.filter((inv) => inv.isOverdue);
+    } else if (requestedStatus) {
+      invoices = invoices.filter((inv) => inv.displayStatus === requestedStatus);
+    }
+
+    res.status(200).json({ ok: true, invoices: invoices });
+  } catch (err) {
+    console.error("Admin invoices view failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load invoices." });
   }
 }
 

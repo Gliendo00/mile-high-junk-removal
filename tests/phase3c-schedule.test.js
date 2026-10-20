@@ -711,6 +711,12 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // a just-created bookings row when its required dumpster_rentals
       // insert then fails. See tests/phase3c-dumpster-rental-admin.test.js.
       "api/admin/booking.js: .delete(",
+      // Phase 2 (Core Invoicing) added exactly one new delete —
+      // handlePatchInvoice()'s "removeLineItem" action, draft-only (a
+      // finalized invoice's line items are locked — see the "Only a
+      // draft invoice's line items can be edited" guard). See
+      // tests/phase2-invoice-workflow.test.js.
+      "api/admin/booking.js: .delete(",
       "api/admin/booking.js: .insert(",
       // Phase 3C Stage 2.5-v2's ?resource=charges workflow (originally
       // built on Braintree, switched to Stripe before any production
@@ -770,6 +776,15 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // "booked" directly), reached only from a dumpster_rental booking's
       // own create/update, never from a request body. See
       // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+      "api/admin/booking.js: .insert(",
+      // Phase 2 (Core Invoicing) added exactly two new inserts:
+      // handleCreateInvoice()'s draft invoices row (customer_id taken from
+      // the booking server-side, never the client body — same posture as
+      // every other create-from-X handler here) and
+      // handlePatchInvoice()'s "addLineItem" action's invoice_line_items
+      // row. See sql/2026-10-19_invoice-workflow.sql and
+      // tests/phase2-invoice-workflow.test.js.
+      "api/admin/booking.js: .insert(",
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
@@ -843,6 +858,25 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // propagation from a cancelled rental, and propagatePickupArchive()'s
       // archive/restore propagation (one shared call site for both
       // directions). See tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      // Phase 2 (Core Invoicing) added exactly five new updates:
+      // handlePatchInvoice()'s "updateDetails" action (draft-only due
+      // date/notes edit), recomputeInvoiceTotal()'s total_amount recompute
+      // (shared by addLineItem/updateLineItem/removeLineItem),
+      // handlePatchInvoice()'s "updateLineItem" action's own
+      // invoice_line_items row edit, its "finalize" action's one-time
+      // status/invoice_number/finalized_at write (gated
+      // .eq("status","draft") — a true race guard, since a number must
+      // never be assigned twice), and its "void" action's status/
+      // voided_at/voided_reason write (gated .neq("status","void")). None
+      // of these ever touches job_payments — that ledger stays reachable
+      // only through the existing ?resource=job-payments handlers above.
+      // See sql/2026-10-19_invoice-workflow.sql and
+      // tests/phase2-invoice-workflow.test.js.
+      "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",

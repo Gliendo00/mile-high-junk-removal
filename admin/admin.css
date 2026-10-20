@@ -1682,6 +1682,114 @@ button.admin-financial-card:focus-visible {
 .admin-sheet-dot.admin-status-dot-scheduled { background: #0e7490; }
 .admin-sheet-dot.admin-status-dot-cancelled { background: #6b7280; }
 
+/* Phase 2 — Core Invoicing status badges. Three of these are invoices'
+   actual STORED states (draft/finalized/void); partially_paid/paid are
+   DERIVED display buckets (see api/_lib/invoice-helpers.js's
+   deriveInvoiceStatus() — never stored columns), given their own distinct
+   colors so a glance never confuses "what was done to this invoice" with
+   "how much of it has been collected". */
+.admin-invoice-status-draft { background: #6b7280; color: #fff; }
+.admin-invoice-status-finalized { background: #0e7490; color: #fff; }
+.admin-invoice-status-partially_paid { background: #b45309; color: #fff; }
+.admin-invoice-status-paid { background: #2f6f13; color: #fff; }
+.admin-invoice-status-void { background: #b91c1c; color: #fff; }
+
+/* Overdue is a separate, orthogonal flag, never a sixth status bucket (an
+   unpaid, past-due invoice is simultaneously "Finalized" AND "Overdue") —
+   a visually distinct OUTLINED tag shown alongside the filled status pill
+   above, never replacing it. */
+.admin-overdue-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1.5px solid #b91c1c;
+  color: #b91c1c;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* Invoice line items (admin/invoice.js) — the first repeatable add/
+   remove row list of this shape in this codebase; deliberately its own
+   small set of rules rather than reusing .admin-charge-row (that class's
+   voided-row red-text styling and Void-button layout don't fit an
+   editable qty/price row). */
+.admin-line-items-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.admin-line-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-neutral-200, #eee7db);
+  border-radius: 10px;
+}
+.admin-line-item-main { min-width: 0; }
+.admin-line-item-desc { font-weight: 700; word-break: break-word; }
+.admin-line-item-meta { font-size: 12px; color: var(--color-neutral-600, #82796a); margin-top: 2px; }
+.admin-line-item-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.admin-line-item-amount { font-weight: 800; white-space: nowrap; }
+.admin-line-item-actions { display: flex; gap: 6px; }
+.admin-invoice-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 2px solid var(--color-neutral-200, #eee7db);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+/* Print mode (admin/invoice.js's ?print=1) — first printable view in this
+   codebase, no prior stylesheet to match. admin/invoice.js toggles
+   body.admin-print-mode so the layout can be previewed on screen before
+   printing; the @media print block is a second, independent guard so
+   admin chrome/controls can never end up on paper even if print mode
+   somehow wasn't toggled first (e.g. Ctrl/Cmd+P). No PDF library — "Save
+   as PDF" is the browser's own print dialog. */
+body.admin-print-mode .admin-print-hide { display: none !important; }
+body.admin-print-mode .admin-bottom-nav { display: none !important; }
+@media print {
+  #admin-chrome, .admin-bottom-nav, #admin-toast, .admin-print-hide { display: none !important; }
+  .admin-main { max-width: 100% !important; padding: 0 !important; }
+  body { background: #fff !important; }
+}
+
+/* Invoices list (/admin/invoices/) — same .admin-booking-card chrome as
+   every other list page, with its own flex row layout (mirroring
+   .admin-client-row's shape, minus the avatar — an invoice has no portrait
+   to show). */
+.admin-invoice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+}
+.admin-invoice-row-main { flex: 1 1 auto; min-width: 0; }
+.admin-invoice-row-number {
+  font-weight: 800;
+  font-size: 15.5px;
+  color: var(--color-text, #201e1d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+.admin-invoice-row-client {
+  font-size: 13px;
+  color: var(--color-neutral-600, #82796a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-invoice-row-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.admin-invoice-row-badges { display: flex; gap: 6px; align-items: center; }
+.admin-invoice-row-amount { font-weight: 800; font-size: 14px; color: var(--color-text, #201e1d); }
+
 /* Lead Detail / Estimate Detail action rows (Schedule Estimate / Book Job /
    Convert to Job / Mark Completed / etc.) — a simple wrapping flex row so
    2-4 buttons never overflow at phone width. */

@@ -18,8 +18,9 @@ const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
-const { mirrorStripePaymentToLedger, effectiveRevenue, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, effectiveRevenue, netCollectedFromLedgerRows, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
 const { ALL_COMPLIMENTARY_REASON_KEYS, complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
+const { INVOICE_SELECT_COLS, LINE_ITEM_SELECT_COLS, mapInvoice, mapLineItem, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
 
 const BUCKET = "booking-photos";
 const PHOTO_URL_TTL_SECONDS = 300; // 5 minutes — short-lived by design, minted fresh on every request, never cached or persisted
@@ -139,6 +140,25 @@ module.exports = async (req, res) => {
     if (req.method === "GET") return handleGetEstimate(req, res);
     if (req.method === "POST") return handleCreateEstimate(req, res, session);
     if (req.method === "PATCH") return handlePatchEstimate(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Phase 2 — Core Invoicing. An Invoice is its OWN table (public.invoices,
+  // see sql/2026-10-19_invoice-workflow.sql), tied to exactly one booking,
+  // same "financial isolation by construction" rationale as estimates. GET
+  // returns one invoice's detail (line items + payment history, read from
+  // the existing job_payments ledger — this never creates a second
+  // payment-ledger table); POST creates a draft invoice from a booking
+  // (idempotent — insert-or-fetch-existing, same pattern as Convert-to-Job);
+  // PATCH both edits a draft's line items and moves the invoice through its
+  // small stored lifecycle (draft -> finalized -> void). Same folding
+  // convention as every other ?resource= branch above: one more branch on
+  // this existing file, not a new Vercel function.
+  if (req.query.resource === "invoice") {
+    if (req.method === "GET") return handleGetInvoice(req, res);
+    if (req.method === "POST") return handleCreateInvoice(req, res, session);
+    if (req.method === "PATCH") return handlePatchInvoice(req, res, session);
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
@@ -1420,6 +1440,527 @@ async function handlePatchEstimate(req, res, session) {
   } catch (err) {
     console.error("Admin estimate update failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not update this estimate." });
+  }
+}
+
+// =======================================================================
+// Phase 2 — Core Invoicing (?resource=invoice). See
+// sql/2026-10-19_invoice-workflow.sql for the table design and the full
+// rationale this comment block only summarizes.
+//
+// job_payments (api/_lib/job-payments-ledger.js) remains the ONE payment
+// ledger — nothing here ever writes to it. An invoice's balance/derived
+// status is always computed from that booking's non-voided job_payments
+// rows at read time (deriveInvoiceStatus(), api/_lib/invoice-helpers.js),
+// never stored. Recording/voiding a payment stays exclusively on the
+// existing ?resource=job-payments endpoints above.
+//
+// Stored status: draft -> finalized -> void (or draft -> void). "Finalize"
+// (not "Send") is the deliberate name for the action that assigns the
+// permanent invoice number and locks the invoice's line items/total — this
+// app has no client-delivery/email capability yet, and "Sent" would wrongly
+// imply the client was emailed. That, plus Stripe Pay Now, are later
+// phases.
+//
+// A dumpster_pickup booking can never receive an invoice (same rule
+// job_payments already enforces, same reasoning: bill the primary rental,
+// never its auto-generated pickup job) — enforced in handleCreateInvoice()
+// below, not a DB constraint, same posture as every other
+// service_type-dependent rule in this codebase.
+// =======================================================================
+
+const INVOICE_LINE_DESCRIPTION_MAX = 500;
+const INVOICE_VOID_REASON_MAX = 300;
+
+// GET /api/admin/booking?resource=invoice&id=<uuid> — one invoice's full
+// detail: its line items, its booking's complete job_payments history (the
+// same rows the booking's own Payments section shows — this is a read-only
+// second view onto that one ledger, never a separate one), the client, and
+// a small booking summary. invoice.displayStatus/balanceDue/isOverdue are
+// computed fresh on every call, never cached or stored.
+//
+// Also callable as ?resource=invoice&bookingId=<uuid> (bookingId instead of
+// id) — a read-only lookup by booking rather than by invoice, used only by
+// admin/booking-detail.js's entry-point button to decide its own label
+// ("Create Invoice" / "Open Draft Invoice" / "View Invoice") without ever
+// needing a mutating POST just to check. Resolves to that booking's one
+// active (non-void) invoice, same scope as the Phase 2 "one active invoice
+// per booking" rule everywhere else; `{ ok: true, invoice: null }` (200,
+// not 404) when none exists yet — "no invoice for this job" is an entirely
+// normal state here, not an error.
+async function handleGetInvoice(req, res) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin invoice detail failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  let id = typeof req.query.id === "string" ? req.query.id.trim() : "";
+  const lookupBookingId = typeof req.query.bookingId === "string" ? req.query.bookingId.trim() : "";
+
+  if (!id && lookupBookingId && !UUID_RE.test(lookupBookingId)) {
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+  if (!id && !lookupBookingId) {
+    res.status(404).json({ error: "Invoice not found." });
+    return;
+  }
+
+  try {
+    if (!id) {
+      const activeRes = await supabase.from("invoices").select("id").eq("booking_id", lookupBookingId).neq("status", "void").maybeSingle();
+      if (activeRes.error) throw activeRes.error;
+      if (!activeRes.data) {
+        res.status(200).json({ ok: true, invoice: null });
+        return;
+      }
+      id = activeRes.data.id;
+    } else if (!UUID_RE.test(id)) {
+      res.status(404).json({ error: "Invoice not found." });
+      return;
+    }
+
+    const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", id).maybeSingle();
+    if (invoiceRes.error) throw invoiceRes.error;
+    if (!invoiceRes.data) {
+      res.status(404).json({ error: "Invoice not found." });
+      return;
+    }
+    const invoice = mapInvoice(invoiceRes.data);
+
+    const [lineItemsRes, paymentsRes, customerRes, bookingRes] = await Promise.all([
+      supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true }),
+      supabase
+        .from("job_payments")
+        .select(
+          "id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at"
+        )
+        .eq("booking_id", invoice.bookingId)
+        .order("payment_date", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase.from("customers").select("id, first_name, last_name, phone, email, address, city, state, zip").eq("id", invoice.customerId).maybeSingle(),
+      supabase
+        .from("bookings")
+        .select("id, service_type, appointment_date, service_address, service_city, service_state, service_zip")
+        .eq("id", invoice.bookingId)
+        .maybeSingle(),
+    ]);
+    if (lineItemsRes.error) throw lineItemsRes.error;
+    if (paymentsRes.error) throw paymentsRes.error;
+    if (customerRes.error) throw customerRes.error;
+    if (bookingRes.error) throw bookingRes.error;
+
+    const paymentRows = paymentsRes.data || [];
+    const netCollected = netCollectedFromLedgerRows(paymentRows.filter((p) => !p.voided_at));
+    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso());
+
+    const customer = customerRes.data;
+    const booking = bookingRes.data;
+
+    res.status(200).json({
+      ok: true,
+      invoice: Object.assign({}, invoice, derived, { netCollected: netCollected }),
+      lineItems: (lineItemsRes.data || []).map(mapLineItem),
+      jobPayments: paymentRows.map(serializeJobPayment),
+      customer: customer
+        ? {
+            id: customer.id,
+            firstName: customer.first_name,
+            lastName: customer.last_name,
+            phone: customer.phone,
+            email: customer.email,
+            address: customer.address,
+            city: customer.city,
+            state: customer.state,
+            zip: customer.zip,
+          }
+        : null,
+      booking: booking
+        ? {
+            id: booking.id,
+            serviceType: booking.service_type,
+            serviceLabel: serviceLabel(booking.service_type),
+            appointmentDate: booking.appointment_date,
+            serviceAddress: booking.service_address,
+            serviceCity: booking.service_city,
+            serviceState: booking.service_state,
+            serviceZip: booking.service_zip,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error("Admin invoice detail failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load this invoice." });
+  }
+}
+
+// POST /api/admin/booking?resource=invoice — body { bookingId }. Creates a
+// draft invoice for one booking. Re-fetches the booking server-side and
+// takes its customer_id from there — never from the client body (same
+// IDOR-hardening posture as Convert-to-Job's handleCreate() above).
+// Idempotent: a retried/double-clicked "Invoice" button hits
+// invoices_booking_id_active_uniq (at most one active — non-void — invoice
+// per booking, Phase 2 scope) on unique_violation, re-fetches, and returns
+// the existing invoice rather than erroring — same "insert; on
+// unique_violation, fetch-and-return" convention as estimates'/intake's own
+// idempotent creates.
+async function handleCreateInvoice(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin invoice create failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+  if (!bookingId || !UUID_RE.test(bookingId)) {
+    res.status(404).json({ error: "Booking not found." });
+    return;
+  }
+
+  try {
+    const bookingRes = await supabase.from("bookings").select("id, customer_id, service_type").eq("id", bookingId).maybeSingle();
+    if (bookingRes.error) throw bookingRes.error;
+    const booking = bookingRes.data;
+    if (!booking) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (booking.service_type === "dumpster_pickup") {
+      res.status(400).json({ error: "A pickup job cannot be invoiced. Invoice the dumpster rental instead." });
+      return;
+    }
+    if (!booking.customer_id) {
+      res.status(400).json({ error: "This booking has no client on file." });
+      return;
+    }
+
+    const insertRes = await supabase
+      .from("invoices")
+      .insert({ created_by: session.email, status: "draft", booking_id: bookingId, customer_id: booking.customer_id, total_amount: 0 })
+      .select(INVOICE_SELECT_COLS)
+      .single();
+
+    if (insertRes.error) {
+      if (insertRes.error.code === "23505") {
+        const existingRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("booking_id", bookingId).neq("status", "void").maybeSingle();
+        if (existingRes.error) throw existingRes.error;
+        if (existingRes.data) {
+          const lineItemsRes = await supabase
+            .from("invoice_line_items")
+            .select(LINE_ITEM_SELECT_COLS)
+            .eq("invoice_id", existingRes.data.id)
+            .order("sort_order", { ascending: true });
+          if (lineItemsRes.error) throw lineItemsRes.error;
+          res.status(200).json({ ok: true, invoice: mapInvoice(existingRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) });
+          return;
+        }
+      }
+      throw insertRes.error;
+    }
+
+    res.status(200).json({ ok: true, invoice: mapInvoice(insertRes.data), lineItems: [] });
+  } catch (err) {
+    console.error("Admin invoice create failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not create this invoice." });
+  }
+}
+
+// Recomputes and persists invoices.total_amount from the current sum of
+// invoice_line_items.amount for one invoice, returning the fresh invoice
+// row alongside its (already-fetched-for-the-sum) line items — every
+// line-item write below calls this exactly once, so total_amount can never
+// drift from the line items that actually produced it.
+async function recomputeInvoiceTotal(supabase, invoiceId, session) {
+  const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", invoiceId).order("sort_order", { ascending: true });
+  if (lineItemsRes.error) throw lineItemsRes.error;
+  const lineItems = lineItemsRes.data || [];
+  const total = Math.round(lineItems.reduce((sum, li) => sum + Number(li.amount || 0), 0) * 100) / 100;
+
+  const updateRes = await supabase
+    .from("invoices")
+    .update({ total_amount: total, updated_by: (session && session.email) || null, updated_at: new Date().toISOString() })
+    .eq("id", invoiceId)
+    .select(INVOICE_SELECT_COLS)
+    .single();
+  if (updateRes.error) throw updateRes.error;
+
+  return { invoice: updateRes.data, lineItems };
+}
+
+// PATCH /api/admin/booking?resource=invoice — body { id, action, ... }.
+// action is one of "updateDetails" (due date/notes) | "addLineItem" |
+// "updateLineItem" | "removeLineItem" (draft only — a finalized invoice's
+// details/line items/total are all locked; a correction after finalizing
+// is void + a new invoice, never an edit here) | "finalize" | "void".
+// Every action re-fetches the current invoice first, since every one of
+// them depends on current state.
+async function handlePatchInvoice(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin invoice update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Invoice not found." });
+    return;
+  }
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+  if (["updateDetails", "addLineItem", "updateLineItem", "removeLineItem", "finalize", "void"].indexOf(action) === -1) {
+    res.status(400).json({ error: "Invalid action." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    const current = currentRes.data;
+    if (!current) {
+      res.status(404).json({ error: "Invoice not found." });
+      return;
+    }
+
+    const isLineItemAction = action === "addLineItem" || action === "updateLineItem" || action === "removeLineItem";
+    if (isLineItemAction && current.status !== "draft") {
+      res.status(409).json({ error: "Only a draft invoice's line items can be edited." });
+      return;
+    }
+
+    if (action === "updateDetails") {
+      if (current.status !== "draft") {
+        res.status(409).json({ error: "Only a draft invoice can be edited." });
+        return;
+      }
+
+      const updatePayload = { updated_by: session.email, updated_at: new Date().toISOString() };
+      if (Object.prototype.hasOwnProperty.call(body, "dueDate")) {
+        const dueDateRaw = typeof body.dueDate === "string" ? body.dueDate.trim() : "";
+        if (!dueDateRaw) {
+          updatePayload.due_date = null;
+        } else if (!isValidIsoDate(dueDateRaw)) {
+          res.status(400).json({ error: "Please enter a valid due date." });
+          return;
+        } else {
+          updatePayload.due_date = dueDateRaw;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "notes")) {
+        updatePayload.notes = sanitizeText(body.notes, MAX.long) || null;
+      }
+
+      const updateRes = await supabase.from("invoices").update(updatePayload).eq("id", id).eq("status", "draft").select(INVOICE_SELECT_COLS).maybeSingle();
+      if (updateRes.error) throw updateRes.error;
+      if (!updateRes.data) {
+        res.status(409).json({ error: "This invoice is no longer a draft." });
+        return;
+      }
+
+      const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+      if (lineItemsRes.error) throw lineItemsRes.error;
+
+      res.status(200).json({ ok: true, invoice: mapInvoice(updateRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) });
+      return;
+    }
+
+    if (action === "addLineItem") {
+      const description = sanitizeText(body.description, INVOICE_LINE_DESCRIPTION_MAX);
+      if (!description) {
+        res.status(400).json({ error: "A description is required." });
+        return;
+      }
+      let quantity = 1;
+      if (body.quantity !== undefined && body.quantity !== null && body.quantity !== "") {
+        const n = Number(body.quantity);
+        if (!Number.isFinite(n) || n <= 0 || n > MAX_QUANTITY) {
+          res.status(400).json({ error: "Please enter a valid quantity." });
+          return;
+        }
+        quantity = n;
+      }
+      if (body.unitPrice === undefined || body.unitPrice === null || body.unitPrice === "") {
+        res.status(400).json({ error: "A unit price is required." });
+        return;
+      }
+      const unitPriceNum = Number(body.unitPrice);
+      if (!Number.isFinite(unitPriceNum) || unitPriceNum < 0 || unitPriceNum > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid unit price." });
+        return;
+      }
+      const unitPrice = Math.round(unitPriceNum * 100) / 100;
+      const amount = Math.round(quantity * unitPrice * 100) / 100;
+
+      const countRes = await supabase.from("invoice_line_items").select("id", { count: "exact", head: true }).eq("invoice_id", id);
+      if (countRes.error) throw countRes.error;
+
+      const insertRes = await supabase
+        .from("invoice_line_items")
+        .insert({ invoice_id: id, sort_order: countRes.count || 0, description: description, quantity: quantity, unit_price: unitPrice, amount: amount })
+        .select(LINE_ITEM_SELECT_COLS)
+        .single();
+      if (insertRes.error) throw insertRes.error;
+
+      const result = await recomputeInvoiceTotal(supabase, id, session);
+      res.status(200).json({ ok: true, invoice: mapInvoice(result.invoice), lineItems: result.lineItems.map(mapLineItem) });
+      return;
+    }
+
+    if (action === "updateLineItem") {
+      const lineItemId = typeof body.lineItemId === "string" ? body.lineItemId.trim() : "";
+      if (!lineItemId || !UUID_RE.test(lineItemId)) {
+        res.status(400).json({ error: "A valid line item id is required." });
+        return;
+      }
+      const existingRes = await supabase.from("invoice_line_items").select("id, invoice_id").eq("id", lineItemId).maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+      if (!existingRes.data || existingRes.data.invoice_id !== id) {
+        res.status(404).json({ error: "Line item not found." });
+        return;
+      }
+
+      const description = sanitizeText(body.description, INVOICE_LINE_DESCRIPTION_MAX);
+      if (!description) {
+        res.status(400).json({ error: "A description is required." });
+        return;
+      }
+      const quantity = Number(body.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > MAX_QUANTITY) {
+        res.status(400).json({ error: "Please enter a valid quantity." });
+        return;
+      }
+      const unitPriceNum = Number(body.unitPrice);
+      if (!Number.isFinite(unitPriceNum) || unitPriceNum < 0 || unitPriceNum > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid unit price." });
+        return;
+      }
+      const unitPrice = Math.round(unitPriceNum * 100) / 100;
+      const amount = Math.round(quantity * unitPrice * 100) / 100;
+
+      const updateRes = await supabase
+        .from("invoice_line_items")
+        .update({ description: description, quantity: quantity, unit_price: unitPrice, amount: amount, updated_at: new Date().toISOString() })
+        .eq("id", lineItemId)
+        .select(LINE_ITEM_SELECT_COLS)
+        .single();
+      if (updateRes.error) throw updateRes.error;
+
+      const result = await recomputeInvoiceTotal(supabase, id, session);
+      res.status(200).json({ ok: true, invoice: mapInvoice(result.invoice), lineItems: result.lineItems.map(mapLineItem) });
+      return;
+    }
+
+    if (action === "removeLineItem") {
+      const lineItemId = typeof body.lineItemId === "string" ? body.lineItemId.trim() : "";
+      if (!lineItemId || !UUID_RE.test(lineItemId)) {
+        res.status(400).json({ error: "A valid line item id is required." });
+        return;
+      }
+      const existingRes = await supabase.from("invoice_line_items").select("id, invoice_id").eq("id", lineItemId).maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+      if (!existingRes.data || existingRes.data.invoice_id !== id) {
+        res.status(404).json({ error: "Line item not found." });
+        return;
+      }
+
+      const deleteRes = await supabase.from("invoice_line_items").delete().eq("id", lineItemId);
+      if (deleteRes.error) throw deleteRes.error;
+
+      const result = await recomputeInvoiceTotal(supabase, id, session);
+      res.status(200).json({ ok: true, invoice: mapInvoice(result.invoice), lineItems: result.lineItems.map(mapLineItem) });
+      return;
+    }
+
+    if (action === "finalize") {
+      if (current.status !== "draft") {
+        res.status(409).json({ error: "This invoice has already been finalized." });
+        return;
+      }
+
+      const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+      if (lineItemsRes.error) throw lineItemsRes.error;
+      const lineItems = lineItemsRes.data || [];
+      if (!lineItems.length) {
+        res.status(400).json({ error: "Add at least one line item before finalizing this invoice." });
+        return;
+      }
+      if (!current.due_date) {
+        res.status(400).json({ error: "Set a due date before finalizing this invoice." });
+        return;
+      }
+      if (!(Number(current.total_amount) > 0)) {
+        res.status(400).json({ error: "This invoice's total must be greater than $0.00 before finalizing." });
+        return;
+      }
+
+      // Mints a real, permanent number — see
+      // sql/2026-10-19_invoice-workflow.sql §4's header for why a small gap
+      // here (this call succeeds but the conditional update just below
+      // matches zero rows) is an accepted, documented cost, never
+      // worth wrapping in a transaction or a second RPC round trip to avoid.
+      const numberRes = await supabase.rpc("next_invoice_number");
+      if (numberRes.error) throw numberRes.error;
+      const invoiceNumber = numberRes.data;
+      if (!invoiceNumber) throw new Error("next_invoice_number() returned no value.");
+
+      const finalizeRes = await supabase
+        .from("invoices")
+        .update({
+          status: "finalized",
+          invoice_number: invoiceNumber,
+          finalized_at: new Date().toISOString(),
+          updated_by: session.email,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .eq("status", "draft")
+        .select(INVOICE_SELECT_COLS)
+        .maybeSingle();
+      if (finalizeRes.error) throw finalizeRes.error;
+      if (!finalizeRes.data) {
+        res.status(409).json({ error: "This invoice has already been finalized." });
+        return;
+      }
+
+      res.status(200).json({ ok: true, invoice: mapInvoice(finalizeRes.data), lineItems: lineItems.map(mapLineItem) });
+      return;
+    }
+
+    // action === "void" — allowed from draft or finalized. Never touches
+    // invoice_line_items or job_payments: payments already recorded against
+    // the booking stay exactly as they are; voiding only means this bill no
+    // longer counts.
+    const reason = sanitizeText(body.reason, INVOICE_VOID_REASON_MAX);
+    if (!reason) {
+      res.status(400).json({ error: "A reason is required to void an invoice." });
+      return;
+    }
+
+    const voidRes = await supabase
+      .from("invoices")
+      .update({ status: "void", voided_at: new Date().toISOString(), voided_reason: reason, updated_by: session.email, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .neq("status", "void")
+      .select(INVOICE_SELECT_COLS)
+      .maybeSingle();
+    if (voidRes.error) throw voidRes.error;
+    if (!voidRes.data) {
+      res.status(409).json({ error: "This invoice has already been voided." });
+      return;
+    }
+
+    const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+    if (lineItemsRes.error) throw lineItemsRes.error;
+
+    res.status(200).json({ ok: true, invoice: mapInvoice(voidRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) });
+  } catch (err) {
+    console.error("Admin invoice update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update this invoice." });
   }
 }
 

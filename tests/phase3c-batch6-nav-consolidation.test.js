@@ -98,12 +98,14 @@ ALL_NAV_PAGES.forEach((rel) => {
 // destination, Website Agent, was appended LAST — see
 // tests/website-agent-dashboard-ui.test.js for its own nav-wiring checks.
 // Same non-regression note applies.
-test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, Website Agent, in that order, with no Requests/Intakes destination", () => {
+test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expenses, Other Revenue, Website Agent, Invoices, in that order, with no Requests/Intakes destination", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   assert.ok(sectionsMatch, "admin-chrome.js must define a SECTIONS list");
   const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue", "Website Agent"]);
+  // Phase 2 (Core Invoicing) added "Invoices" as an eighth section — see
+  // tests/phase2-invoice-workflow.test.js for its endpoint coverage.
+  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue", "Website Agent", "Invoices"]);
   assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
@@ -125,17 +127,22 @@ test("admin/admin-chrome.js: no SECTIONS entry carries an icon-only or desktop-s
 // backed section still must have one — this just allows one explicit,
 // documented exception rather than requiring every future utility
 // section to commission a new mascot image.
-test("admin/admin-chrome.js: every mascot-backed SECTIONS key has an image in MASCOT_SRC; website-agent is the one documented plain-icon exception", () => {
+test("admin/admin-chrome.js: every mascot-backed SECTIONS key has an image in MASCOT_SRC; website-agent and invoices are the two documented plain-icon exceptions", () => {
   const src = readNormalized("admin/admin-chrome.js");
   const sectionsMatch = src.match(/var SECTIONS = \[([\s\S]*?)\n\s*\];/);
   const keys = Array.from(sectionsMatch[1].matchAll(/key:\s*'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "expenses", "other-revenue", "website-agent"]);
+  // Phase 2 (Core Invoicing) added "invoices" as a second plain-icon
+  // section, same no-mascot-asset posture as website-agent.
+  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "expenses", "other-revenue", "website-agent", "invoices"]);
   const mascotSrcMatch = src.match(/var MASCOT_SRC = \{([\s\S]*?)\n\s*\};/);
   assert.ok(mascotSrcMatch, "admin-chrome.js must define MASCOT_SRC");
-  keys.filter((key) => key !== "website-agent").forEach((key) => {
+  const PLAIN_ICON_KEYS = ["website-agent", "invoices"];
+  keys.filter((key) => PLAIN_ICON_KEYS.indexOf(key) === -1).forEach((key) => {
     assert.ok(new RegExp("'?\\b" + key + "\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), key + " must map to a mascot image in MASCOT_SRC");
   });
-  assert.ok(!new RegExp("'?\\bwebsite-agent\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), "website-agent should NOT have a mascot entry — it must use the plain-icon fallback");
+  PLAIN_ICON_KEYS.forEach((key) => {
+    assert.ok(!new RegExp("'?\\b" + key + "\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), key + " should NOT have a mascot entry — it must use the plain-icon fallback");
+  });
   assert.ok(src.includes("PLAIN_ICON_BY_KEY"), "a plain-icon fallback map must exist for non-mascot sections");
 });
 

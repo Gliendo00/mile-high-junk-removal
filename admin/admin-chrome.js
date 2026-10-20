@@ -47,7 +47,11 @@
     // a plain monitor-with-a-pulse-line glyph, same stroke language as
     // every other non-mascot icon in this file, rather than commissioning
     // one just for this pass.
-    websiteAgent: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 10l2.5 2.5L12 8l2.5 4.5L17 10"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>'
+    websiteAgent: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 10l2.5 2.5L12 8l2.5 4.5L17 10"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>',
+    // Invoices (Phase 2 — Core Invoicing) — also no mascot asset: a plain
+    // document-with-lines glyph, same stroke language as Website Agent's
+    // own plain-icon fallback above.
+    invoices: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><line x1="9.5" y1="12" x2="14.5" y2="12"/><line x1="9.5" y1="15.5" x2="14.5" y2="15.5"/>'
   };
 
   function icon(name, cls) {
@@ -76,7 +80,7 @@
   // .admin-sheet-option-icon/.admin-nav-item-icon/.admin-bottom-nav-item-icon
   // already size both identically — see admin.css) — "More"/"Website
   // Agent" are the only sections with no mascot asset.
-  var PLAIN_ICON_BY_KEY = { 'website-agent': 'websiteAgent' };
+  var PLAIN_ICON_BY_KEY = { 'website-agent': 'websiteAgent', 'invoices': 'invoices' };
   function sectionIcon(key, cls) {
     if (MASCOT_SRC[key]) return mascotIcon(key, cls);
     return icon(PLAIN_ICON_BY_KEY[key] || 'moreGrid', cls);
@@ -99,14 +103,18 @@
     // section; mobile puts it in the existing More sheet (see
     // MORE_SHEET_KEYS below) rather than bumping something off the 4-item
     // bottom nav.
-    { key: 'website-agent', href: '/admin/website-agent/', label: 'Website Agent' }
+    { key: 'website-agent', href: '/admin/website-agent/', label: 'Website Agent' },
+    // Phase 2 — Core Invoicing. Same "no free mobile bottom-nav slot" posture
+    // as Website Agent just above: desktop shows it inline, mobile joins the
+    // More sheet.
+    { key: 'invoices', href: '/admin/invoices/', label: 'Invoices' }
   ];
 
   // Mobile bottom nav shows only these 4 as direct links; the rest live in
   // the More sheet. Desktop's inline nav still shows the full SECTIONS list
   // via buildDesktopNav() below, untouched.
   var BOTTOM_NAV_KEYS = ['home', 'schedule', 'leads', 'clients'];
-  var MORE_SHEET_KEYS = ['expenses', 'other-revenue', 'website-agent'];
+  var MORE_SHEET_KEYS = ['expenses', 'other-revenue', 'website-agent', 'invoices'];
 
   // Which section is "current" — by URL path, so no page needs a data
   // attribute or any other per-page marker. Booking/intake/request/lead
@@ -130,6 +138,10 @@
     if (path.indexOf('/admin/website-agent/') === 0 ||
         path.indexOf('/admin/agent-reports/') === 0 ||
         path.indexOf('/admin/agent-proposals/') === 0) return 'website-agent';
+    // Phase 2 — Core Invoicing. Covers /admin/invoice/ (detail) and
+    // /admin/invoices/ (list) in one prefix test, since 'invoice' is itself
+    // a prefix of 'invoices'.
+    if (path.indexOf('/admin/invoice') === 0) return 'invoices';
     return 'schedule'; // /admin/, /admin/booking*/
   }
 

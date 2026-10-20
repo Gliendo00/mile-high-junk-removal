@@ -74,11 +74,13 @@ test("admin-chrome.js: bottom nav is exactly Home, Schedule, Leads, Clients (in 
 // had — see admin-chrome.js's own header), so this project's existing
 // invariant becomes "Expenses + Other Revenue + Website Agent", not
 // "exactly those first two" forever.
-test("admin-chrome.js: the More sheet contains Expenses + Other Revenue + Website Agent (from SECTIONS) plus Log Out, reusing the existing .admin-sheet-* chrome", () => {
+test("admin-chrome.js: the More sheet contains Expenses + Other Revenue + Website Agent + Invoices (from SECTIONS) plus Log Out, reusing the existing .admin-sheet-* chrome", () => {
   const moreKeysMatch = chromeSrc.match(/var MORE_SHEET_KEYS = \[([^\]]*)\];/);
   assert.ok(moreKeysMatch, "admin-chrome.js must define MORE_SHEET_KEYS");
   const keys = Array.from(moreKeysMatch[1].matchAll(/'([^']+)'/g)).map((m) => m[1]);
-  assert.deepStrictEqual(keys, ["expenses", "other-revenue", "website-agent"]);
+  // Phase 2 (Core Invoicing) joined the More sheet the same way Website
+  // Agent did — no free mobile bottom-nav slot for an 8th section.
+  assert.deepStrictEqual(keys, ["expenses", "other-revenue", "website-agent", "invoices"]);
   assert.ok(
     /admin-sheet-overlay/.test(chromeSrc) && /admin-sheet-option/.test(chromeSrc) && /admin-sheet-cancel/.test(chromeSrc),
     "the More sheet must reuse the existing .admin-sheet-overlay/.admin-sheet-option/.admin-sheet-cancel chrome, not a new modal pattern"

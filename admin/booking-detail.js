@@ -389,6 +389,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     renderArchiveState(booking);
     renderJobPayments(data);
+    updateInvoiceEntryPoint(booking.serviceType);
 
     renderPhotos(data.photos);
 
@@ -1069,6 +1070,94 @@ document.addEventListener('DOMContentLoaded', function () {
         paymentVoidInFlight = false;
       });
   }
+
+  // ---------------------------------------------------------------------
+  // Phase 2 — Core Invoicing entry point. A pickup leg (dumpster_pickup)
+  // never gets this button at all — same rule the Payments section and
+  // api/admin/booking.js's handleCreateInvoice() both already enforce.
+  // Otherwise: a lightweight GET ?resource=invoice&bookingId= lookup (never
+  // a mutating POST just to render a label) decides the button's label —
+  // Create Invoice (none yet), Open Draft Invoice, or View Invoice — and
+  // where clicking it goes. Clicking when no invoice exists yet POSTs to
+  // create one (idempotent on the server, so this can never race into a
+  // duplicate) and navigates straight to it.
+  // ---------------------------------------------------------------------
+  var invoiceActionsEl = document.getElementById('d-invoice-actions');
+  var invoiceLinkEl = document.getElementById('d-invoice-link');
+  var invoiceCreateInFlight = false;
+
+  function updateInvoiceEntryPoint(serviceType) {
+    if (serviceType === 'dumpster_pickup') {
+      invoiceActionsEl.style.display = 'none';
+      return;
+    }
+    invoiceActionsEl.style.display = 'block';
+    invoiceLinkEl.textContent = 'Loading…';
+    invoiceLinkEl.removeAttribute('href');
+
+    adminFetch('/api/admin/booking?resource=invoice&bookingId=' + encodeURIComponent(bookingId))
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not check this job\'s invoice.');
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        if (body.invoice) {
+          invoiceLinkEl.textContent = body.invoice.status === 'draft' ? 'Open Draft Invoice' : 'View Invoice';
+          invoiceLinkEl.href = '/admin/invoice/?id=' + encodeURIComponent(body.invoice.id);
+        } else {
+          invoiceLinkEl.textContent = 'Create Invoice';
+          invoiceLinkEl.href = '#';
+        }
+      })
+      .catch(function () {
+        // Non-fatal — the rest of Booking Detail already rendered. Falls
+        // back to a plain "Create Invoice" link; clicking it still works
+        // (handleCreateInvoice() is idempotent either way), it just won't
+        // have pre-detected an existing draft.
+        invoiceLinkEl.textContent = 'Create Invoice';
+        invoiceLinkEl.href = '#';
+      });
+  }
+
+  invoiceLinkEl.addEventListener('click', function (e) {
+    if (invoiceLinkEl.getAttribute('href') && invoiceLinkEl.getAttribute('href') !== '#') return; // already resolved to a real invoice — plain navigation
+    e.preventDefault();
+    if (invoiceCreateInFlight) return;
+    invoiceCreateInFlight = true;
+    invoiceLinkEl.textContent = 'Creating…';
+
+    adminFetch('/api/admin/booking?resource=invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingId: bookingId }),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not create an invoice for this job.');
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body) return; // redirected to login
+        window.location.href = '/admin/invoice/?id=' + encodeURIComponent(body.invoice.id);
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not create an invoice for this job.', 'error');
+        invoiceLinkEl.textContent = 'Create Invoice';
+        invoiceCreateInFlight = false;
+      });
+  });
 
   // Re-fetches just the booking-detail GET (which already embeds
   // jobPayments/collectedRevenue) rather than a separate job-payments
