@@ -333,7 +333,9 @@ async function withInvoicePaymentLock(supabase, stripe, bookingId, options, muta
 
   if (resolution.reconciled && purpose === "invoice_void" && !(options && options.confirmVoidPaidInvoice)) {
     // Nothing to mutate yet — no claim acquired, no lock held.
-    return { ok: false, requiresConfirmation: true, message: "This invoice was just paid by card — the ledger now reflects it. Void anyway?" };
+    // reasonCode is the stable field callers should branch on; message is
+    // for display only and may change wording freely.
+    return { ok: false, requiresConfirmation: true, reasonCode: "invoice_void_requires_confirmation", message: "This invoice was just paid by card — the ledger now reflects it. Void anyway?" };
   }
 
   const myToken = crypto.randomUUID();

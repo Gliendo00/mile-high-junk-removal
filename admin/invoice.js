@@ -435,7 +435,15 @@ document.addEventListener('DOMContentLoaded', function () {
         return null;
       }
       return res.json().catch(function () { return null; }).then(function (body) {
-        if (!res.ok) throw new Error((body && body.error) || 'That did not work.');
+        if (!res.ok) {
+          // Structured fields (requiresConfirmation, unresolvedSendExpired,
+          // unresolvedSendUnrecoverable, reasonCode, ...) ride along on the
+          // error object as `body` so callers can branch on stable codes
+          // instead of matching the human-readable `message` text.
+          var err = new Error((body && body.error) || 'That did not work.');
+          err.body = body || {};
+          throw err;
+        }
         return body;
       });
     });
@@ -593,7 +601,9 @@ document.addEventListener('DOMContentLoaded', function () {
         sendInFlight = false;
         sendBtn.disabled = false;
         var msg = err && err.message ? err.message : 'Could not send this invoice.';
-        if (!confirmNewAttempt && (/unresolved/i.test(msg) || /could not be automatically recovered/i.test(msg))) {
+        var body = err && err.body;
+        var unresolvedSend = !!(body && (body.unresolvedSendExpired || body.unresolvedSendUnrecoverable));
+        if (!confirmNewAttempt && unresolvedSend) {
           if (window.confirm(msg + '\n\nStart a new send attempt now? The previously emailed link, if delivered, stays valid until a replacement is confirmed sent.')) {
             doSend(true);
             return;
@@ -627,7 +637,9 @@ document.addEventListener('DOMContentLoaded', function () {
         voidInFlight = false;
         voidBtn.disabled = false;
         var msg = err && err.message ? err.message : 'Could not void this invoice.';
-        if (!confirmVoidPaidInvoice && /just paid by card/i.test(msg)) {
+        var body = err && err.body;
+        var requiresConfirmation = !!(body && body.requiresConfirmation);
+        if (!confirmVoidPaidInvoice && requiresConfirmation) {
           if (window.confirm(msg + '\n\nVoid anyway?')) {
             doVoid(reason, true);
             return;

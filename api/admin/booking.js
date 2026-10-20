@@ -34,7 +34,7 @@ const {
   cleanupStalePaymentIntentAfterMirror,
 } = require("../_lib/invoice-helpers");
 const { hashAccessToken, encryptAccessToken, decryptAccessToken, generateRawAccessToken, getLinkSecretKey } = require("../_lib/invoice-crypto");
-const { centsToDecimalString } = require("../_lib/money");
+const { centsToDecimalString, decimalDollarsToPositiveCents } = require("../_lib/money");
 
 const RESEND_REQUEST_TIMEOUT_MS = 10000; // >= half of PAYMENT_CLAIM_TTL_MS's own 2x-provider-timeout rule, matched to SEND_CLAIM_TTL_MS (20s) the same way
 const SEND_RECOVERY_WINDOW_MS = 23 * 60 * 60 * 1000; // conservative 1h margin under Resend's 24h idempotency-key retention
@@ -2138,6 +2138,7 @@ async function handleSendInvoice(req, res, session, invoiceId) {
         myToken = null;
         res.status(409).json({
           unresolvedSendExpired: true,
+          reasonCode: "send_unresolved_expired",
           error: "The prior send's outcome is unresolved and its provider-idempotency safety window has expired. The existing link (if delivered) stays valid. Send again to start a fresh attempt.",
         });
         return;
@@ -2156,6 +2157,8 @@ async function handleSendInvoice(req, res, session, invoiceId) {
           myToken = null; // the RPC releases it (or raises, in which case it was never held under a valid token to begin with)
           if (unrecoverableRes.error) throw unrecoverableRes.error;
           res.status(409).json({
+            unresolvedSendUnrecoverable: true,
+            reasonCode: "send_unresolved_unrecoverable",
             error: "This invoice's pending send could not be automatically recovered (its secure link could not be decrypted) and needs manual review. Send again with confirmNewAttempt to start a fresh attempt — the existing link, if delivered, stays valid.",
           });
           return;
@@ -2172,6 +2175,7 @@ async function handleSendInvoice(req, res, session, invoiceId) {
         myToken = null;
         res.status(409).json({
           unresolvedSendUnrecoverable: true,
+          reasonCode: "send_unresolved_unrecoverable",
           error: "This invoice's pending send could not be automatically recovered and needs manual review. The existing link (if delivered) stays valid. Send again with confirmNewAttempt to start a fresh attempt.",
         });
         return;
@@ -4097,11 +4101,22 @@ async function handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, 
   // error_pending_review), which the guard also checks on every future
   // call — not by holding this temporary lock any longer than this one
   // synchronous call.
+  // Phase 3 money audit: integer cents from the shared decimal-string
+  // helper, never a float multiplication (Math.round(amount * 100) can be
+  // off by a cent for values like 1.005 under IEEE-754) — this is the
+  // actual amount Stripe will charge the customer's card.
+  const amountCents = decimalDollarsToPositiveCents(approvedRow.amount);
+  if (amountCents === null) {
+    console.error("Admin approve charge failed: invalid charge amount on rental_additional_charges row " + id + ": " + approvedRow.amount);
+    const failed = await markChargeFailed(supabase, id, "This charge has an invalid amount and cannot be processed.");
+    return { status: 200, body: { ok: true, charge: serializeCharge(failed) } };
+  }
+
   let intent;
   try {
     intent = await stripe.paymentIntents.create(
       {
-        amount: Math.round(approvedRow.amount * 100),
+        amount: amountCents,
         currency: "usd",
         customer: stripeCustomerId,
         payment_method: paymentMethodId,
