@@ -347,6 +347,14 @@ function postJobPayment(db, cookie, body) {
   currentFakeService = createFakeServiceClient(db);
   return run(bookingHandler, makeReq({ method: "POST", cookie: cookie, query: { resource: "job-payments" }, body: body }));
 }
+// Phase 3D Stage B — the invoice-specific manual payment path. Unlike
+// postJobPayment() above (generic, booking-keyed, never touches any
+// invoice's balance as of Stage B), this is what actually pays an
+// invoice down.
+function postInvoicePayment(db, cookie, body) {
+  currentFakeService = createFakeServiceClient(db);
+  return run(bookingHandler, makeReq({ method: "POST", cookie: cookie, query: { resource: "invoice-payment" }, body: body }));
+}
 function getInvoicesView(db, cookie, query) {
   currentFakeService = createFakeServiceClient(db);
   return run(bookingsHandler, makeReq({ method: "GET", cookie: cookie, query: Object.assign({ view: "invoices" }, query || {}) }));
@@ -570,9 +578,12 @@ test("Finalize: line items are locked afterward — the server itself rejects an
 // =======================================================================
 // Derived status: partially paid / paid / overdue — computed from
 // job_payments, never stored (this is the whole point of
-// deriveInvoiceStatus() — confirms recording a payment through the
-// EXISTING ?resource=job-payments endpoint, never a new invoice-specific
-// payment path, is enough to move an invoice's displayStatus).
+// deriveInvoiceStatus()). Phase 3D Stage B cutover: moving an invoice's
+// displayStatus now requires the invoice-specific ?resource=invoice-
+// payment path (postInvoicePayment()) — the generic ?resource=job-
+// payments endpoint (postJobPayment()) is booking-only and deliberately
+// never touches any invoice's balance anymore (see "Stage B cutover"
+// tests further down for that negative case explicitly).
 // =======================================================================
 
 test("Derived status: finalized + zero payments = 'finalized', not overdue when due date is in the future", async () => {
@@ -588,14 +599,14 @@ test("Derived status: finalized + zero payments = 'finalized', not overdue when 
   assert.strictEqual(detail.body.invoice.balanceDue, 349);
 });
 
-test("Derived status: a partial payment recorded via the EXISTING job-payments endpoint flips displayStatus to partially_paid", async () => {
+test("Derived status: a partial payment recorded via the invoice-specific endpoint flips displayStatus to partially_paid", async () => {
   adminAuthed();
   const db = freshDb();
   const invoiceId = await draftWithOneLineItem(db, AUTH_COOKIE, RENTAL_BOOKING_ID);
   db.invoices.find((i) => i.id === invoiceId).due_date = "2099-01-01";
   await patchInvoice(db, AUTH_COOKIE, { id: invoiceId, action: "finalize" });
 
-  const payRes = await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 100 });
+  const payRes = await postInvoicePayment(db, AUTH_COOKIE, { invoiceId: invoiceId, paymentMethod: "cash", amount: 100 });
   assert.strictEqual(payRes.statusCode, 200);
 
   const detail = await getInvoice(db, AUTH_COOKIE, invoiceId);
@@ -610,7 +621,7 @@ test("Derived status: a voided invoice's netCollected still reflects REAL job_pa
   const invoiceId = await draftWithOneLineItem(db, AUTH_COOKIE, RENTAL_BOOKING_ID);
   db.invoices.find((i) => i.id === invoiceId).due_date = "2099-01-01";
   await patchInvoice(db, AUTH_COOKIE, { id: invoiceId, action: "finalize" });
-  await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 100 });
+  await postInvoicePayment(db, AUTH_COOKIE, { invoiceId: invoiceId, paymentMethod: "cash", amount: 100 });
   await patchInvoice(db, AUTH_COOKIE, { id: invoiceId, action: "void", reason: "test" });
 
   const detail = await getInvoice(db, AUTH_COOKIE, invoiceId);
@@ -625,13 +636,30 @@ test("Derived status: paying the remainder flips displayStatus to paid, balance 
   db.invoices.find((i) => i.id === invoiceId).due_date = "2099-01-01";
   await patchInvoice(db, AUTH_COOKIE, { id: invoiceId, action: "finalize" });
 
-  await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 100 });
-  await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 249 });
+  await postInvoicePayment(db, AUTH_COOKIE, { invoiceId: invoiceId, paymentMethod: "cash", amount: 100 });
+  await postInvoicePayment(db, AUTH_COOKIE, { invoiceId: invoiceId, paymentMethod: "cash", amount: 249 });
 
   const detail = await getInvoice(db, AUTH_COOKIE, invoiceId);
   assert.strictEqual(detail.body.invoice.displayStatus, "paid");
   assert.strictEqual(detail.body.invoice.balanceDue, 0);
   assert.strictEqual(detail.body.invoice.isOverdue, false, "a fully-paid invoice is never shown as overdue, even past its due date");
+});
+
+test("Derived status (Stage B cutover): a generic booking payment via ?resource=job-payments no longer moves this invoice's displayStatus or balance at all", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const invoiceId = await draftWithOneLineItem(db, AUTH_COOKIE, RENTAL_BOOKING_ID);
+  db.invoices.find((i) => i.id === invoiceId).due_date = "2099-01-01";
+  await patchInvoice(db, AUTH_COOKIE, { id: invoiceId, action: "finalize" });
+
+  const payRes = await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 100 });
+  assert.strictEqual(payRes.statusCode, 200, "the generic endpoint itself still works — it just no longer attributes to any invoice");
+  assert.strictEqual(payRes.body.jobPayment.invoiceId, null);
+
+  const detail = await getInvoice(db, AUTH_COOKIE, invoiceId);
+  assert.strictEqual(detail.body.invoice.displayStatus, "finalized", "unchanged — a generic booking payment is never an invoice payment as of Stage B");
+  assert.strictEqual(detail.body.invoice.balanceDue, 349);
+  assert.strictEqual(detail.body.invoice.netCollected, 0);
 });
 
 test("Derived status: unpaid + due date in the past = isOverdue true, displayStatus still 'finalized' (overdue is a tag, not a bucket)", async () => {
@@ -787,7 +815,7 @@ test("List: ?status=overdue filters by the isOverdue FLAG, not a (nonexistent) d
   assert.strictEqual(res.body.invoices[0].id, overdueId);
 });
 
-test("List: a payment recorded against one invoice's booking never changes a different invoice's balance (per-booking ledger scoping, not global)", async () => {
+test("List: a payment recorded against one invoice never changes a sibling invoice's balance (per-invoice ledger scoping, not per-booking or global)", async () => {
   adminAuthed();
   const db = freshDb();
   const invoiceA = await draftWithOneLineItem(db, AUTH_COOKIE, RENTAL_BOOKING_ID);
@@ -798,7 +826,7 @@ test("List: a payment recorded against one invoice's booking never changes a dif
   db.invoices.find((i) => i.id === invoiceB).due_date = "2099-01-01";
   await patchInvoice(db, AUTH_COOKIE, { id: invoiceB, action: "finalize" });
 
-  await postJobPayment(db, AUTH_COOKIE, { bookingId: RENTAL_BOOKING_ID, paymentMethod: "cash", amount: 349 });
+  await postInvoicePayment(db, AUTH_COOKIE, { invoiceId: invoiceA, paymentMethod: "cash", amount: 349 });
 
   const list = await getInvoicesView(db, AUTH_COOKIE);
   const a = list.body.invoices.find((inv) => inv.id === invoiceA);

@@ -1829,6 +1829,16 @@ body.admin-print-mode .admin-bottom-nav { display: none !important; }
 .admin-invoice-job-pick-label { font-size: 12.5px; font-weight: 700; color: var(--color-accent-700, #2f6f13); }
 .admin-invoice-job-card.is-selected .admin-invoice-job-pick-label::before { content: '\2713\0020'; }
 
+/* Phase 3D Stage B — "Create without job" button (New Invoice), selected
+   state borrows the exact same is-selected treatment as a job card above
+   so the two options read as one mutually-exclusive choice. */
+#no-job-btn.is-selected {
+  border-color: var(--color-accent-700, #2f6f13);
+  background: var(--color-accent-100, #eef6e8);
+  color: var(--color-accent-700, #2f6f13);
+  box-shadow: 0 0 0 1.5px var(--color-accent-700, #2f6f13);
+}
+
 /* Lead Detail / Estimate Detail action rows (Schedule Estimate / Book Job /
    Convert to Job / Mark Completed / etc.) — a simple wrapping flex row so
    2-4 buttons never overflow at phone width. */

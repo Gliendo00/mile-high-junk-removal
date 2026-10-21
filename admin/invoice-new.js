@@ -7,17 +7,15 @@
 // file" list), and creating the invoice reuses the existing, idempotent
 // POST /api/admin/booking?resource=invoice (api/admin/booking.js's
 // handleCreateInvoice()) exactly as booking-detail.js's "Create Invoice"
-// link already does. This page only adds the missing "start from a client
-// instead of from one specific job's page" entry point.
+// link already does.
 //
-// A job selection is REQUIRED, not optional: invoices.booking_id and
-// job_payments.booking_id are both NOT NULL in the current schema (see
-// sql/2026-10-19_invoice-workflow.sql and sql/2026-09-19_phase3c-stage3-
-// job-payments-and-expenses.sql) — every payment-reconciliation path
-// (Stripe metadata, webhook reconciliation, the ledger itself) is keyed by
-// booking_id with no invoice-only alternative, so an invoice with no job
-// could never have a payment recorded against it. Nothing here attempts a
-// standalone/no-job invoice.
+// Phase 3D Stage B — "Create without job": a job selection is now
+// OPTIONAL. Choosing "Create without job" sends { customerId } instead of
+// { bookingId }; handleCreateInvoice() creates a standalone invoice
+// (booking_id null) that can later be billed via the invoice-specific
+// manual payment path and/or attached to a job afterward (see
+// admin/invoice.js's "Attach to Job"). selectedBookingId and
+// createWithoutJob are mutually exclusive — picking one clears the other.
 document.addEventListener('DOMContentLoaded', function () {
   var errorBanner = document.getElementById('error-banner');
   var loadingEl = document.getElementById('loading');
@@ -32,9 +30,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var jobEmptyEl = document.getElementById('job-empty');
   var jobListEl = document.getElementById('job-list');
   var jobHintEl = document.getElementById('job-hint');
+  var noJobBtn = document.getElementById('no-job-btn');
 
   var selectedClient = null;
   var selectedBookingId = null;
+  var createWithoutJob = false;
   var savingInFlight = false;
   var toastTimer = null;
   var jobsRequestToken = 0;
@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function updateSaveEnabled() {
-    saveBtn.disabled = !(selectedClient && selectedBookingId);
+    saveBtn.disabled = !(selectedClient && (selectedBookingId || createWithoutJob));
   }
 
   function renderJobCard(b) {
@@ -114,18 +114,31 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function selectBooking(bookingId, btnEl) {
     selectedBookingId = bookingId;
+    createWithoutJob = false;
+    noJobBtn.classList.remove('is-selected');
     var cards = jobListEl.querySelectorAll('.admin-invoice-job-card');
     Array.prototype.forEach.call(cards, function (c) { c.classList.toggle('is-selected', c === btnEl); });
     updateSaveEnabled();
     checkExistingInvoice(bookingId);
   }
 
+  function selectNoJob() {
+    createWithoutJob = true;
+    selectedBookingId = null;
+    noJobBtn.classList.add('is-selected');
+    var cards = jobListEl.querySelectorAll('.admin-invoice-job-card');
+    Array.prototype.forEach.call(cards, function (c) { c.classList.remove('is-selected'); });
+    jobHintEl.textContent = 'This invoice will not be tied to a job yet — you can attach one later from the invoice itself.';
+    updateSaveEnabled();
+  }
+  noJobBtn.addEventListener('click', selectNoJob);
+
   // A soft heads-up only — the create call below is itself idempotent
   // (handleCreateInvoice() re-fetches/returns the existing active invoice
   // on a unique_violation), so this is purely informational, never a
   // blocker, and never prevents submitting.
   function checkExistingInvoice(bookingId) {
-    jobHintEl.textContent = 'Select the job this invoice bills. Every invoice is tied to one job — this keeps payments and reconciliation accurate.';
+    jobHintEl.textContent = 'Select the job this invoice bills, or create it without one.';
     adminFetch('/api/admin/booking?resource=invoice&bookingId=' + encodeURIComponent(bookingId))
       .then(function (res) {
         if (!res.ok) return null;
@@ -182,6 +195,8 @@ document.addEventListener('DOMContentLoaded', function () {
   function onClientSelect(client) {
     selectedClient = client;
     selectedBookingId = null;
+    createWithoutJob = false;
+    noJobBtn.classList.remove('is-selected');
     updateSaveEnabled();
     if (client) {
       loadJobsForClient(client.id);
@@ -202,8 +217,8 @@ document.addEventListener('DOMContentLoaded', function () {
       showError('Please select a client first.');
       return;
     }
-    if (!selectedBookingId) {
-      showError('Please select the job this invoice bills.');
+    if (!selectedBookingId && !createWithoutJob) {
+      showError('Please select the job this invoice bills, or choose "Create without job".');
       return;
     }
 
@@ -214,7 +229,7 @@ document.addEventListener('DOMContentLoaded', function () {
     adminFetch('/api/admin/booking?resource=invoice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId: selectedBookingId }),
+      body: JSON.stringify(createWithoutJob ? { customerId: selectedClient.id } : { bookingId: selectedBookingId }),
     })
       .then(function (res) {
         if (res.status === 401) {
@@ -235,7 +250,7 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .finally(function () {
         savingInFlight = false;
-        saveBtn.disabled = !(selectedClient && selectedBookingId);
+        saveBtn.disabled = !(selectedClient && (selectedBookingId || createWithoutJob));
         saveBtn.textContent = 'Create Draft Invoice';
       });
   });

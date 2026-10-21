@@ -56,7 +56,7 @@
 const { getStripeClient } = require("./_lib/stripe-client");
 const { getServiceClient } = require("./_lib/supabase-admin");
 const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
-const { reconcileInvoicePaymentIntent, cleanupStalePaymentIntentAfterMirror } = require("./_lib/invoice-helpers");
+const { reconcileInvoicePaymentIntent } = require("./_lib/invoice-helpers");
 
 module.exports.config = { api: { bodyParser: false } };
 
@@ -228,10 +228,6 @@ async function reconcileSucceeded(supabase, stripe, intent) {
       amount: row.amount_charged,
       notes: "Initial dumpster rental payment, confirmed via webhook backstop (auto-recorded from Stripe).",
     });
-    // Phase 3 Category B — best-effort stale-PI cleanup for this booking's
-    // invoice (if any), never allowed to affect the mirror above, which
-    // has already committed. See api/_lib/invoice-helpers.js's header.
-    await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
     return;
   }
 
@@ -250,9 +246,6 @@ async function reconcileSucceeded(supabase, stripe, intent) {
       amount: row.amount,
       notes: "Approved additional charge, confirmed via webhook backstop (auto-recorded from Stripe).",
     });
-    // Phase 3 Category B — same best-effort cleanup as the rental-deposit
-    // backstop above.
-    await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
   }
 }
 

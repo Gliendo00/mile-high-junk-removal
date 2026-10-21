@@ -786,6 +786,17 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // tests/phase2-invoice-workflow.test.js.
       "api/admin/booking.js: .insert(",
       "api/admin/booking.js: .insert(",
+      // Phase 3D Stage B (invoice-centric cutover) added exactly two new
+      // inserts: handleCreateInvoicePayment()'s job_payments row
+      // (?resource=invoice-payment POST — the invoice-specific manual
+      // payment path, distinct from handleCreateJobPayment()'s generic
+      // booking one already counted above) and handleCreateInvoice()'s
+      // standalone-invoice branch (customerId given instead of bookingId
+      // — "Create without job"). See
+      // sql/2026-10-21_phase3d-stage-b-invoice-attribution-canonical.sql
+      // and tests/phase3d-stage-b-invoice-centric.test.js.
+      "api/admin/booking.js: .insert(",
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",

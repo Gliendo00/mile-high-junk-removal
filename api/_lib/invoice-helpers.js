@@ -13,6 +13,15 @@
 // RPCs this reads/writes) — still no second financial ledger anywhere in
 // this file; mirrorStripePaymentToLedger() (job-payments-ledger.js) remains
 // the one and only write path into job_payments.
+//
+// Phase 3D Stage B (sql/2026-10-21_phase3d-stage-b-invoice-attribution-
+// canonical.sql) is the invoice-centric cutover: computeInvoiceBalanceCents()
+// below reads job_payments by invoice_id alone (no booking_id fallback),
+// withInvoicePaymentLock() takes the specific invoice a mutation affects
+// instead of resolving "the" invoice for a booking, and
+// reconcileInvoicePaymentIntent() treats a PaymentIntent's metadata.bookingId
+// as an attribution snapshot rather than a second identity to enforce
+// strictly — see each function's own header below.
 
 const crypto = require("crypto");
 const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows } = require("./job-payments-ledger");
@@ -119,20 +128,15 @@ function isClaimStale(claimedAtIso, ttlMs) {
   return Date.now() - claimedAt >= ttlMs;
 }
 
-// The one, at-most-one-row, non-void invoice for a booking — Phase 2's own
-// unique index already guarantees at most one. Returns null if the
-// booking has none (e.g. a junk_removal job nobody has ever invoiced).
-async function findActiveInvoiceForBooking(supabase, bookingId) {
-  const { data, error } = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("booking_id", bookingId).neq("status", "void").maybeSingle();
-  if (error) throw error;
-  return data ? mapInvoice(data) : null;
-}
-
-// Live balance due, in integer cents, from job_payments directly — never
-// cached, never derived from anything else. May be negative (overpaid);
-// callers decide how to treat that.
+// Live balance due, in integer cents, from job_payments directly, keyed
+// by invoice_id — never booking_id, and never cached. Phase 3D Stage B:
+// this is now the ONLY formula an invoice's balance is ever computed by,
+// with no fallback to the booking's other payments — a generic booking
+// payment (invoice_id NULL) never counts toward any invoice's balance,
+// attached or standalone. May be negative (overpaid); callers decide how
+// to treat that.
 async function computeInvoiceBalanceCents(supabase, invoice) {
-  const { data: rows, error } = await supabase.from("job_payments").select("amount, payment_type").eq("booking_id", invoice.bookingId).is("voided_at", null);
+  const { data: rows, error } = await supabase.from("job_payments").select("amount, payment_type").eq("invoice_id", invoice.id).is("voided_at", null);
   if (error) throw error;
   const netCollected = netCollectedFromLedgerRows(rows || []);
   const totalCents = decimalDollarsToCents(invoice.totalAmount) || 0;
@@ -177,7 +181,18 @@ async function reconcileInvoicePaymentIntent(supabase, stripe, pi) {
       console.error("reconcileInvoicePaymentIntent: invoice " + invoiceId + " not found for PaymentIntent " + pi.id + " — HALTING, not mirroring. Manual review needed.");
       return;
     }
-    if (invoiceRow.booking_id !== metaBookingId) {
+    // Phase 3D Stage B: invoiceId (above) is this PaymentIntent's one
+    // canonical, exact identity — already matched by id, never fuzzy.
+    // bookingId is only ever an ATTRIBUTION SNAPSHOT taken at PI-creation
+    // time (handleInvoicePaymentIntentCreate sets it from the invoice's
+    // booking_id as it read it then) — for a standalone invoice that's
+    // null, and Attach-to-Job can legitimately set the invoice's real
+    // booking_id afterward, while this same PaymentIntent is still in
+    // flight. So: an empty snapshot is always allowed to catch up to a
+    // since-attached invoice; a NON-empty snapshot must still match
+    // exactly (attach is one-time/one-way, so a live mismatch here means
+    // something is genuinely wrong, not just a timing gap).
+    if (metaBookingId && metaBookingId !== invoiceRow.booking_id) {
       console.error(
         "reconcileInvoicePaymentIntent: booking mismatch for PaymentIntent " + pi.id + " — invoice.booking_id=" + invoiceRow.booking_id + " metadata.bookingId=" + metaBookingId + ". HALTING, not mirroring. Manual review needed."
       );
@@ -305,33 +320,23 @@ async function resolveInvoicePaymentIntentForMutation(supabase, stripe, invoice,
   return { blocked: true, reason: "Unrecognized payment state. Manual review needed." };
 }
 
-// Category A wrapper — resolves PI/claim state exactly ONCE (never
-// re-resolved inside mutationFn, which would see this wrapper's own
-// freshly-acquired claim and self-block), then briefly holds the
-// invoice's payment claim around the discretionary mutation itself, so a
-// Pay Now request cannot start between "guard passed" and "mutation
-// committed." Also blocks on an unresolved off-session additional charge
-// for the same booking — reuses rental_additional_charges' own durable
-// status column (processing / error_pending_review /
-// requires_customer_action); no new table or column.
-async function withInvoicePaymentLock(supabase, stripe, bookingId, options, mutationFn) {
+// Category A wrapper — Phase 3D Stage B: now fully invoice-centric. The
+// caller already has the SPECIFIC invoice this mutation affects (loaded
+// however it needed to — by id, or via the booking it's attached to) and
+// hands it in directly; this function no longer resolves "the" invoice
+// for a booking itself (Stage A's findActiveInvoiceForBooking() is gone
+// — a generic, booking-only payment has no invoice to resolve in the
+// first place, and never reaches this wrapper at all). Resolves PI/claim
+// state exactly ONCE (never re-resolved inside mutationFn, which would
+// see this wrapper's own freshly-acquired claim and self-block), then
+// briefly holds the invoice's payment claim around the discretionary
+// mutation itself, so a Pay Now request cannot start between "guard
+// passed" and "mutation committed."
+async function withInvoicePaymentLock(supabase, stripe, invoice, options, mutationFn) {
+  if (!invoice || !invoice.id) {
+    throw new Error("withInvoicePaymentLock requires a loaded invoice — it no longer resolves one from a bookingId.");
+  }
   const purpose = (options && options.purpose) || "balance_mutation";
-  const invoice = await findActiveInvoiceForBooking(supabase, bookingId);
-  if (!invoice) {
-    return mutationFn({ resolution: { ok: true }, invoice: null, lockToken: null });
-  }
-
-  const { data: unresolvedCharge, error: chargeErr } = await supabase
-    .from("rental_additional_charges")
-    .select("id, status")
-    .eq("booking_id", bookingId)
-    .in("status", ["processing", "error_pending_review", "requires_customer_action"])
-    .limit(1)
-    .maybeSingle();
-  if (chargeErr) throw chargeErr;
-  if (unresolvedCharge) {
-    return { ok: false, error: "An off-session charge for this booking is unresolved (status: " + unresolvedCharge.status + ") — resolve it via Check Status before proceeding." };
-  }
 
   const resolution = await resolveInvoicePaymentIntentForMutation(supabase, stripe, invoice, purpose);
   if (resolution.blocked) {
@@ -366,49 +371,6 @@ async function withInvoicePaymentLock(supabase, stripe, bookingId, options, muta
   }
 }
 
-// Category B — called AFTER an unconditional, already-committed
-// mirrorStripePaymentToLedger() write (rental deposit backstop,
-// off-session charge mirror, webhook backstops). Best-effort only: every
-// failure here is caught and logged, NEVER propagated — the real money
-// mirror this runs after has already succeeded, and nothing in this
-// function is allowed to undo or suppress that.
-async function cleanupStalePaymentIntentAfterMirror(supabase, stripe, bookingId) {
-  try {
-    const invoice = await findActiveInvoiceForBooking(supabase, bookingId);
-    if (!invoice || !invoice.activeStripePaymentIntentId) return;
-
-    const pi = await stripe.paymentIntents.retrieve(invoice.activeStripePaymentIntentId);
-
-    if (pi.status === "succeeded") {
-      await reconcileInvoicePaymentIntent(supabase, stripe, pi);
-      return;
-    }
-    if (CANCELABLE_PI_STATUSES.indexOf(pi.status) !== -1) {
-      const balanceCents = await computeInvoiceBalanceCents(supabase, invoice);
-      if (pi.amount !== balanceCents) {
-        const canceled = await stripe.paymentIntents.cancel(pi.id);
-        if (canceled.status === "canceled") {
-          await clearActivePaymentIntent(supabase, invoice.id, pi.id);
-        } else {
-          console.error("cleanupStalePaymentIntentAfterMirror: could not confirm cancellation of PaymentIntent " + pi.id + " for invoice " + invoice.id + " — manual review needed.");
-        }
-      }
-      return;
-    }
-    if (pi.status === "canceled") {
-      await clearActivePaymentIntent(supabase, invoice.id, pi.id);
-      return;
-    }
-    if (pi.status === "processing" || pi.status === "requires_capture") {
-      console.error("cleanupStalePaymentIntentAfterMirror: PaymentIntent " + pi.id + " for invoice " + invoice.id + " is in status '" + pi.status + "' — left untouched; manual review if this persists.");
-      return;
-    }
-    console.error("cleanupStalePaymentIntentAfterMirror: unrecognized PaymentIntent status '" + pi.status + "' for " + pi.id + " (invoice " + invoice.id + ") — manual review needed.");
-  } catch (err) {
-    console.error("cleanupStalePaymentIntentAfterMirror failed (non-fatal, logged only) for booking " + bookingId + ":", err && err.stack ? err.stack : err);
-  }
-}
-
 module.exports = {
   INVOICE_SELECT_COLS,
   LINE_ITEM_SELECT_COLS,
@@ -419,11 +381,9 @@ module.exports = {
   SEND_CLAIM_TTL_MS,
   CANCELABLE_PI_STATUSES,
   isClaimStale,
-  findActiveInvoiceForBooking,
   computeInvoiceBalanceCents,
   clearActivePaymentIntent,
   reconcileInvoicePaymentIntent,
   resolveInvoicePaymentIntentForMutation,
   withInvoicePaymentLock,
-  cleanupStalePaymentIntentAfterMirror,
 };

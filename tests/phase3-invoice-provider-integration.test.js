@@ -752,7 +752,7 @@ test("Pay Now: balance changing after the active-PI commit cancels the now-stale
   // A payment lands on this booking DURING the Stripe create() call —
   // changing the live balance the final re-check will see.
   createIntentImpl = async (params) => {
-    currentDb.job_payments.push({ booking_id: BOOKING_ID, amount: 50, payment_type: "payment", voided_at: null });
+    currentDb.job_payments.push({ invoice_id: INVOICE_ID, booking_id: BOOKING_ID, amount: 50, payment_type: "payment", voided_at: null });
     const id = makeStripeId("pi");
     const intent = { id, client_secret: id + "_secret", status: "requires_payment_method", amount: params.amount, currency: params.currency, metadata: Object.assign({}, params.metadata) };
     intentStore[id] = intent;
@@ -773,7 +773,7 @@ test("Pay Now: if canceling the now-stale PI fails, it is left in place (never b
   seedFinalizedInvoice();
   currentDb.invoice_delivery_attempts.push({ id: "att-1", invoice_id: INVOICE_ID, generation: 1, status: "accepted", access_token_hash: hash, access_token_ciphertext: null, recipient_email: "client@example.com", balance_due_cents: 34900 });
   createIntentImpl = async (params) => {
-    currentDb.job_payments.push({ booking_id: BOOKING_ID, amount: 50, payment_type: "payment", voided_at: null });
+    currentDb.job_payments.push({ invoice_id: INVOICE_ID, booking_id: BOOKING_ID, amount: 50, payment_type: "payment", voided_at: null });
     const id = makeStripeId("pi");
     const intent = { id, client_secret: id + "_secret", status: "requires_payment_method", amount: params.amount, currency: params.currency, metadata: Object.assign({}, params.metadata) };
     intentStore[id] = intent;
@@ -796,7 +796,7 @@ test("Pay Now: if the PI actually succeeded by the time of the final re-check (f
   seedFinalizedInvoice();
   currentDb.invoice_delivery_attempts.push({ id: "att-1", invoice_id: INVOICE_ID, generation: 1, status: "accepted", access_token_hash: hash, access_token_ciphertext: null, recipient_email: "client@example.com", balance_due_cents: 34900 });
   createIntentImpl = async (params) => {
-    currentDb.job_payments.push({ booking_id: BOOKING_ID, amount: 1, payment_type: "payment", voided_at: null }); // force a re-check mismatch
+    currentDb.job_payments.push({ invoice_id: INVOICE_ID, booking_id: BOOKING_ID, amount: 1, payment_type: "payment", voided_at: null }); // force a re-check mismatch
     const id = makeStripeId("pi");
     const intent = { id, client_secret: id + "_secret", status: "requires_payment_method", amount: params.amount, currency: params.currency, metadata: Object.assign({}, params.metadata) };
     intentStore[id] = intent;

@@ -35,10 +35,11 @@
 
     <div class="admin-form-section" id="job-section" style="display:none">
       <div class="admin-form-section-label">Job to Invoice</div>
-      <p class="admin-field-hint" id="job-hint">Select the job this invoice bills. Every invoice is tied to one job — this keeps payments and reconciliation accurate.</p>
+      <p class="admin-field-hint" id="job-hint">Select the job this invoice bills, or create it without one.</p>
       <div id="job-loading" class="admin-loading" style="display:none">Loading this client's jobs…</div>
-      <div id="job-empty" class="admin-empty" style="display:none">This client has no jobs that can be invoiced yet. Create a job for them first.</div>
+      <div id="job-empty" class="admin-empty" style="display:none">This client has no jobs that can be invoiced yet.</div>
       <ul id="job-list" class="admin-invoice-job-list" style="display:none"></ul>
+      <button type="button" id="no-job-btn" class="admin-btn admin-btn-outline" style="width:100%;margin-top:10px">Create without job</button>
     </div>
 
     <button type="submit" id="save-btn" class="admin-btn admin-btn-primary" style="width:100%;min-height:48px" disabled>Create Draft Invoice</button>

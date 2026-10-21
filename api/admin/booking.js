@@ -31,7 +31,6 @@ const {
   isClaimStale,
   withInvoicePaymentLock,
   computeInvoiceBalanceCents,
-  cleanupStalePaymentIntentAfterMirror,
 } = require("../_lib/invoice-helpers");
 const { hashAccessToken, encryptAccessToken, decryptAccessToken, generateRawAccessToken, getLinkSecretKey } = require("../_lib/invoice-crypto");
 const { centsToDecimalString, decimalDollarsToPositiveCents } = require("../_lib/money");
@@ -80,6 +79,18 @@ module.exports = async (req, res) => {
     if (req.method === "GET") return handleListJobPayments(req, res);
     if (req.method === "POST") return handleCreateJobPayment(req, res, session);
     if (req.method === "PATCH") return handleVoidJobPayment(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Phase 3D Stage B — the invoice-specific manual payment path (cash/
+  // Zelle/Venmo/check/card_venmo/other against a SPECIFIC invoice, never
+  // a generic booking payment). Void of an invoice-attributed row still
+  // goes through the shared ?resource=job-payments PATCH above — see
+  // handleVoidJobPayment()'s own header for why that one handler covers
+  // both cases.
+  if (req.query.resource === "invoice-payment") {
+    if (req.method === "POST") return handleCreateInvoicePayment(req, res, session);
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
@@ -256,7 +267,7 @@ module.exports = async (req, res) => {
       // first. Includes voided rows (the UI needs to show the full
       // financial-audit trail, not just what currently counts), but
       // effectiveRevenue below only sums the non-voided ones.
-      supabase.from("job_payments").select("id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at").eq("booking_id", id).order("payment_date", { ascending: false }).order("created_at", { ascending: false }),
+      supabase.from("job_payments").select("id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at").eq("booking_id", id).order("payment_date", { ascending: false }).order("created_at", { ascending: false }),
     ]);
     if (customerRes.error) throw customerRes.error;
     if (dumpsterRes.error) throw dumpsterRes.error;
@@ -1547,22 +1558,29 @@ async function handleGetInvoice(req, res) {
     }
     const invoice = mapInvoice(invoiceRes.data);
 
+    // Phase 3D Stage B: payments are scoped by invoice_id alone — this
+    // invoice's balance/history can never pick up a sibling invoice's
+    // (or a generic, un-attributed) payment on the same booking. A
+    // standalone invoice (bookingId null) simply skips the booking
+    // lookup rather than querying bookings.id = null.
     const [lineItemsRes, paymentsRes, customerRes, bookingRes, deliveryAttemptsRes] = await Promise.all([
       supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true }),
       supabase
         .from("job_payments")
         .select(
-          "id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at"
+          "id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at"
         )
-        .eq("booking_id", invoice.bookingId)
+        .eq("invoice_id", id)
         .order("payment_date", { ascending: false })
         .order("created_at", { ascending: false }),
       supabase.from("customers").select("id, first_name, last_name, phone, email, address, city, state, zip").eq("id", invoice.customerId).maybeSingle(),
-      supabase
-        .from("bookings")
-        .select("id, service_type, appointment_date, service_address, service_city, service_state, service_zip")
-        .eq("id", invoice.bookingId)
-        .maybeSingle(),
+      invoice.bookingId
+        ? supabase
+            .from("bookings")
+            .select("id, service_type, appointment_date, service_address, service_city, service_state, service_zip")
+            .eq("id", invoice.bookingId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
       // Phase 3 — Send history for the admin UI. Never exposes the
       // access_token_hash/ciphertext themselves, only the lifecycle
       // metadata an admin actually needs to see.
@@ -1634,16 +1652,30 @@ async function handleGetInvoice(req, res) {
   }
 }
 
-// POST /api/admin/booking?resource=invoice — body { bookingId }. Creates a
-// draft invoice for one booking. Re-fetches the booking server-side and
-// takes its customer_id from there — never from the client body (same
-// IDOR-hardening posture as Convert-to-Job's handleCreate() above).
-// Idempotent: a retried/double-clicked "Invoice" button hits
+// POST /api/admin/booking?resource=invoice — body { bookingId } or body
+// { customerId } (Phase 3D Stage B: bookingId is now optional — see
+// "Create without job" below). Creates a draft invoice. Attached-booking
+// behavior is unchanged from Phase 2: re-fetches the booking server-side
+// and takes its customer_id from there — never from the client body
+// (same IDOR-hardening posture as Convert-to-Job's handleCreate()
+// above). Idempotent: a retried/double-clicked "Invoice" button hits
 // invoices_booking_id_active_uniq (at most one active — non-void — invoice
 // per booking, Phase 2 scope) on unique_violation, re-fetches, and returns
 // the existing invoice rather than erroring — same "insert; on
 // unique_violation, fetch-and-return" convention as estimates'/intake's own
 // idempotent creates.
+//
+// Create without job (Phase 3D Stage B): bookingId omitted, customerId
+// required instead — re-fetched server-side the same way, never trusted
+// from the body beyond its id. Always booking_id: null, invoice_kind
+// stays its DEFAULT 'original' (never 'supplemental' — a standalone
+// SUPPLEMENTAL invoice is not a thing this app builds; the database's own
+// invoices_supplemental_requires_booking_chk would reject it anyway).
+// invoices_booking_id_active_uniq is scoped to booking_id, which is NULL
+// for every standalone invoice — NULLs are never equal to each other in a
+// unique index, so there is no idempotency key here and no 23505 branch:
+// a double-submit simply creates two separate draft invoices, same as any
+// other "no natural dedupe key" create in this app.
 async function handleCreateInvoice(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -1654,12 +1686,36 @@ async function handleCreateInvoice(req, res, session) {
 
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
-  if (!bookingId || !UUID_RE.test(bookingId)) {
-    res.status(404).json({ error: "Booking not found." });
-    return;
-  }
 
   try {
+    if (!bookingId) {
+      const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
+      if (!customerId || !UUID_RE.test(customerId)) {
+        res.status(404).json({ error: "Client not found." });
+        return;
+      }
+      const customerRes = await supabase.from("customers").select("id").eq("id", customerId).maybeSingle();
+      if (customerRes.error) throw customerRes.error;
+      if (!customerRes.data) {
+        res.status(404).json({ error: "Client not found." });
+        return;
+      }
+
+      const standaloneRes = await supabase
+        .from("invoices")
+        .insert({ created_by: session.email, status: "draft", booking_id: null, customer_id: customerId, total_amount: 0 })
+        .select(INVOICE_SELECT_COLS)
+        .single();
+      if (standaloneRes.error) throw standaloneRes.error;
+      res.status(200).json({ ok: true, invoice: mapInvoice(standaloneRes.data), lineItems: [] });
+      return;
+    }
+
+    if (!UUID_RE.test(bookingId)) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+
     const bookingRes = await supabase.from("bookings").select("id, customer_id, service_type").eq("id", bookingId).maybeSingle();
     if (bookingRes.error) throw bookingRes.error;
     const booking = bookingRes.data;
@@ -1733,7 +1789,9 @@ async function recomputeInvoiceTotal(supabase, invoiceId, session) {
 // action is one of "updateDetails" (due date/notes) | "addLineItem" |
 // "updateLineItem" | "removeLineItem" (draft only — a finalized invoice's
 // details/line items/total are all locked; a correction after finalizing
-// is void + a new invoice, never an edit here) | "finalize" | "void".
+// is void + a new invoice, never an edit here) | "finalize" | "void" |
+// "attach" (Phase 3D Stage B — attaches a standalone invoice to a job,
+// one time only; see its own block below).
 // Every action re-fetches the current invoice first, since every one of
 // them depends on current state.
 async function handlePatchInvoice(req, res, session) {
@@ -1751,7 +1809,7 @@ async function handlePatchInvoice(req, res, session) {
     return;
   }
   const action = typeof body.action === "string" ? body.action.trim() : "";
-  if (["updateDetails", "addLineItem", "updateLineItem", "removeLineItem", "finalize", "void", "send"].indexOf(action) === -1) {
+  if (["updateDetails", "addLineItem", "updateLineItem", "removeLineItem", "finalize", "void", "send", "attach"].indexOf(action) === -1) {
     res.status(400).json({ error: "Invalid action." });
     return;
   }
@@ -1989,43 +2047,97 @@ async function handlePatchInvoice(req, res, session) {
     // charge states) and holds a temporary claim around the void write itself
     // so a fresh Pay Now request cannot start mid-void. See
     // api/_lib/invoice-helpers.js's own header for the full design.
-    const reason = sanitizeText(body.reason, INVOICE_VOID_REASON_MAX);
-    if (!reason) {
-      res.status(400).json({ error: "A reason is required to void an invoice." });
-      return;
-    }
-    if (current.status === "void") {
-      res.status(409).json({ error: "This invoice has already been voided." });
-      return;
-    }
-
-    const stripe = getStripeClient();
-    const lockResult = await withInvoicePaymentLock(supabase, stripe, current.booking_id, { purpose: "invoice_void", confirmVoidPaidInvoice: !!body.confirmVoidPaidInvoice }, async () => {
-      const voidRes = await supabase
-        .from("invoices")
-        .update({ status: "void", voided_at: new Date().toISOString(), voided_reason: reason, updated_by: session.email, updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .neq("status", "void")
-        .select(INVOICE_SELECT_COLS)
-        .maybeSingle();
-      if (voidRes.error) throw voidRes.error;
-      if (!voidRes.data) {
-        return { ok: false, error: "This invoice has already been voided." };
-      }
-      const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
-      if (lineItemsRes.error) throw lineItemsRes.error;
-      return { ok: true, invoice: mapInvoice(voidRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) };
-    });
-
-    if (!lockResult.ok) {
-      if (lockResult.requiresConfirmation) {
-        res.status(409).json(Object.assign({ error: lockResult.message }, lockResult));
+    if (action === "void") {
+      const reason = sanitizeText(body.reason, INVOICE_VOID_REASON_MAX);
+      if (!reason) {
+        res.status(400).json({ error: "A reason is required to void an invoice." });
         return;
       }
-      res.status(409).json({ error: lockResult.error });
+      if (current.status === "void") {
+        res.status(409).json({ error: "This invoice has already been voided." });
+        return;
+      }
+
+      const stripe = getStripeClient();
+      const lockResult = await withInvoicePaymentLock(supabase, stripe, mapInvoice(current), { purpose: "invoice_void", confirmVoidPaidInvoice: !!body.confirmVoidPaidInvoice }, async () => {
+        const voidRes = await supabase
+          .from("invoices")
+          .update({ status: "void", voided_at: new Date().toISOString(), voided_reason: reason, updated_by: session.email, updated_at: new Date().toISOString() })
+          .eq("id", id)
+          .neq("status", "void")
+          .select(INVOICE_SELECT_COLS)
+          .maybeSingle();
+        if (voidRes.error) throw voidRes.error;
+        if (!voidRes.data) {
+          return { ok: false, error: "This invoice has already been voided." };
+        }
+        const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+        if (lineItemsRes.error) throw lineItemsRes.error;
+        return { ok: true, invoice: mapInvoice(voidRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) };
+      });
+
+      if (!lockResult.ok) {
+        if (lockResult.requiresConfirmation) {
+          res.status(409).json(Object.assign({ error: lockResult.message }, lockResult));
+          return;
+        }
+        res.status(409).json({ error: lockResult.error });
+        return;
+      }
+      res.status(200).json(lockResult);
       return;
     }
-    res.status(200).json(lockResult);
+
+    // action === "attach" — Phase 3D Stage B: attaches a standalone
+    // (booking_id-NULL) invoice to a job, one time only. Pre-checks here
+    // are just the fast, friendly-message cases; the heavy validation
+    // (booking exists, isn't a pickup job, belongs to the same customer,
+    // the booking doesn't already have its own active original invoice)
+    // all lives in the attach_invoice_to_booking() RPC itself — see
+    // sql/2026-10-21_phase3d-stage-b-invoice-attribution-canonical.sql's
+    // own header. This never calls that RPC bare: it's wrapped in
+    // withInvoicePaymentLock exactly like void/manual-invoice-payment
+    // above, so an in-flight Pay Now claim/PaymentIntent is resolved
+    // first and the claim token the lock acquires is what the RPC itself
+    // re-verifies.
+    if (action === "attach") {
+      if (current.status === "void") {
+        res.status(409).json({ error: "This invoice has been voided and cannot be attached to a job." });
+        return;
+      }
+      if (current.booking_id) {
+        res.status(409).json({ error: "This invoice is already attached to a job." });
+        return;
+      }
+      const attachBookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+      if (!attachBookingId || !UUID_RE.test(attachBookingId)) {
+        res.status(400).json({ error: "A valid job is required." });
+        return;
+      }
+
+      const attachStripe = getStripeClient();
+      const attachLockResult = await withInvoicePaymentLock(supabase, attachStripe, mapInvoice(current), { purpose: "attach_to_job" }, async ({ lockToken }) => {
+        const rpcRes = await supabase.rpc("attach_invoice_to_booking", {
+          p_invoice_id: id,
+          p_booking_id: attachBookingId,
+          p_payment_claim_token: lockToken,
+          p_actor_email: session.email,
+        });
+        if (rpcRes.error) {
+          return { ok: false, error: rpcRes.error.message || "Could not attach this invoice to a job." };
+        }
+        const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
+        if (lineItemsRes.error) throw lineItemsRes.error;
+        return { ok: true, invoice: mapInvoice(rpcRes.data), lineItems: (lineItemsRes.data || []).map(mapLineItem) };
+      });
+
+      if (!attachLockResult.ok) {
+        res.status(409).json({ error: attachLockResult.error });
+        return;
+      }
+      res.status(200).json(attachLockResult);
+      return;
+    }
   } catch (err) {
     console.error("Admin invoice update failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not update this invoice." });
@@ -3567,6 +3679,10 @@ function serializeJobPayment(row) {
   return {
     id: row.id,
     bookingId: row.booking_id,
+    // Phase 3D Stage B — null for a generic booking payment, the specific
+    // invoice's id for an invoice-attributed one (Pay Now or the manual
+    // invoice-payment endpoint). Lets the UI tell the two apart.
+    invoiceId: row.invoice_id,
     amount: row.amount,
     paymentMethod: row.payment_method,
     paymentType: row.payment_type,
@@ -3601,7 +3717,7 @@ async function handleListJobPayments(req, res) {
   try {
     const { data, error } = await supabase
       .from("job_payments")
-      .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
       .eq("booking_id", bookingId)
       .order("payment_date", { ascending: false })
       .order("created_at", { ascending: false });
@@ -3613,23 +3729,94 @@ async function handleListJobPayments(req, res) {
   }
 }
 
-// POST ?resource=job-payments — record one MANUAL payment (cash/Zelle/
-// Venmo/check/card_venmo/other, or a card payment collected outside
-// Stripe, e.g. in person on a card reader this system doesn't integrate
-// with). `paymentMethod:
-// "card_stripe"` is explicitly rejected here — that value is reserved for
-// rows written exclusively by mirrorStripePaymentToLedger() (see that
-// function's header), never by an admin picking it from a dropdown. This
-// keeps the guarantee absolute: every card_stripe row in this table really
-// did come from a confirmed Stripe collection, never a manual claim.
+// Shared validation for both manual-entry ledger paths below (the
+// generic ?resource=job-payments POST and the invoice-specific
+// ?resource=invoice-payment POST) — paymentMethod/paymentType/amount/
+// paymentDate/notes/reversesPaymentId mean exactly the same thing either
+// way; only WHAT the row gets attributed to differs between the two
+// callers. Returns { error } (a ready-to-send message) on the first
+// invalid field, else the validated/normalized fields.
+//
+// `paymentMethod: "card_stripe"` is explicitly rejected here — that value
+// is reserved for rows written exclusively by mirrorStripePaymentToLedger()
+// (see that function's header), never by an admin picking it from a
+// dropdown. This keeps the guarantee absolute: every card_stripe row in
+// this table really did come from a confirmed Stripe collection, never a
+// manual claim.
 //
 // Amount/refund semantics (see the migration SQL's job_payments comment
 // for the full reasoning): amount is ALWAYS a positive number; paymentType
 // ("payment" default, or "refund") is what determines the sign when
 // computing collected revenue. There is no in-place "correct this
 // payment's amount" path — see handleVoidJobPayment() below for how a
-// mistaken entry is fixed (void it, then POST a new corrected row here,
+// mistaken entry is fixed (void it, then POST a new corrected row,
 // optionally with reversesPaymentId pointing at the voided one).
+function validateManualPaymentFields(body) {
+  const paymentMethod = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
+  if (paymentMethod === "card_stripe") {
+    return { error: "Card/Stripe payments are recorded automatically and cannot be entered manually." };
+  }
+  if (JOB_PAYMENT_METHODS.indexOf(paymentMethod) === -1) {
+    return { error: "Please choose a valid payment method." };
+  }
+
+  const paymentType = body.paymentType === undefined || body.paymentType === null || body.paymentType === "" ? "payment" : String(body.paymentType).trim();
+  if (JOB_PAYMENT_TYPES.indexOf(paymentType) === -1) {
+    return { error: "Invalid payment type." };
+  }
+
+  if (body.amount === undefined || body.amount === null || body.amount === "") {
+    return { error: "An amount is required." };
+  }
+  const amountNum = Number(body.amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > JOB_PAYMENT_MAX_AMOUNT) {
+    return { error: "Please enter a valid amount." };
+  }
+  const amount = Math.round(amountNum * 100) / 100;
+
+  const todayIso = denverTodayIso();
+  const paymentDateRaw = typeof body.paymentDate === "string" ? body.paymentDate.trim() : "";
+  let paymentDate = todayIso;
+  if (paymentDateRaw) {
+    if (!isValidIsoDate(paymentDateRaw)) {
+      return { error: "Invalid payment date." };
+    }
+    if (paymentDateRaw < HISTORICAL_FLOOR_ISO) {
+      return { error: "Payment date cannot be before January 1, 2026." };
+    }
+    if (paymentDateRaw > todayIso) {
+      return { error: "Payment date cannot be in the future." };
+    }
+    paymentDate = paymentDateRaw;
+  }
+
+  const notes = sanitizeText(body.notes, JOB_PAYMENT_NOTES_MAX) || null;
+  // "other" is deliberately the one manual method that requires a note —
+  // every other method (cash/Zelle/Venmo/check/card_venmo) is already
+  // self-describing; "other" alone tells a future reader nothing about
+  // what was actually collected without one.
+  if (paymentMethod === "other" && !notes) {
+    return { error: "Please enter a description for this payment." };
+  }
+
+  let reversesPaymentId = null;
+  if (body.reversesPaymentId !== undefined && body.reversesPaymentId !== null && body.reversesPaymentId !== "") {
+    const rid = typeof body.reversesPaymentId === "string" ? body.reversesPaymentId.trim() : "";
+    if (!rid || !UUID_RE.test(rid)) {
+      return { error: "Invalid reference to a prior payment." };
+    }
+    reversesPaymentId = rid;
+  }
+
+  return { paymentMethod, paymentType, amount, paymentDate, notes, reversesPaymentId };
+}
+
+// POST ?resource=job-payments — record one generic, booking-level MANUAL
+// payment (cash/Zelle/Venmo/check/card_venmo/other, or a card payment
+// collected outside Stripe, e.g. in person on a card reader this system
+// doesn't integrate with). See validateManualPaymentFields() above for
+// the shared field rules. Phase 3D Stage B: this is deliberately never
+// an invoice payment — see handleCreateInvoicePayment() below for that.
 async function handleCreateJobPayment(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -3646,71 +3833,12 @@ async function handleCreateJobPayment(req, res, session) {
     return;
   }
 
-  const paymentMethod = typeof body.paymentMethod === "string" ? body.paymentMethod.trim() : "";
-  if (paymentMethod === "card_stripe") {
-    res.status(400).json({ error: "Card/Stripe payments are recorded automatically and cannot be entered manually." });
+  const fields = validateManualPaymentFields(body);
+  if (fields.error) {
+    res.status(400).json({ error: fields.error });
     return;
   }
-  if (JOB_PAYMENT_METHODS.indexOf(paymentMethod) === -1) {
-    res.status(400).json({ error: "Please choose a valid payment method." });
-    return;
-  }
-
-  const paymentType = body.paymentType === undefined || body.paymentType === null || body.paymentType === "" ? "payment" : String(body.paymentType).trim();
-  if (JOB_PAYMENT_TYPES.indexOf(paymentType) === -1) {
-    res.status(400).json({ error: "Invalid payment type." });
-    return;
-  }
-
-  if (body.amount === undefined || body.amount === null || body.amount === "") {
-    res.status(400).json({ error: "An amount is required." });
-    return;
-  }
-  const amountNum = Number(body.amount);
-  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > JOB_PAYMENT_MAX_AMOUNT) {
-    res.status(400).json({ error: "Please enter a valid amount." });
-    return;
-  }
-  const amount = Math.round(amountNum * 100) / 100;
-
-  const todayIso = denverTodayIso();
-  const paymentDateRaw = typeof body.paymentDate === "string" ? body.paymentDate.trim() : "";
-  let paymentDate = todayIso;
-  if (paymentDateRaw) {
-    if (!isValidIsoDate(paymentDateRaw)) {
-      res.status(400).json({ error: "Invalid payment date." });
-      return;
-    }
-    if (paymentDateRaw < HISTORICAL_FLOOR_ISO) {
-      res.status(400).json({ error: "Payment date cannot be before January 1, 2026." });
-      return;
-    }
-    if (paymentDateRaw > todayIso) {
-      res.status(400).json({ error: "Payment date cannot be in the future." });
-      return;
-    }
-    paymentDate = paymentDateRaw;
-  }
-
-  const notes = sanitizeText(body.notes, JOB_PAYMENT_NOTES_MAX) || null;
-  // "other" is deliberately the one manual method that requires a note —
-  // every other method (cash/Zelle/Venmo/check/card_venmo) is already
-  // self-describing; "other" alone tells a future reader nothing about
-  // what was actually collected without one.
-  if (paymentMethod === "other" && !notes) {
-    res.status(400).json({ error: "Please enter a description for this payment." });
-    return;
-  }
-
-  let reversesPaymentId = null;
-  if (body.reversesPaymentId !== undefined && body.reversesPaymentId !== null && body.reversesPaymentId !== "") {
-    const rid = typeof body.reversesPaymentId === "string" ? body.reversesPaymentId.trim() : "";
-    if (!rid || !UUID_RE.test(rid)) {
-      res.status(400).json({ error: "Invalid reference to a prior payment." });
-      return;
-    }
-    reversesPaymentId = rid;
-  }
+  const { paymentMethod, paymentType, amount, paymentDate, notes, reversesPaymentId } = fields;
 
   try {
     const bookingRes = await supabase.from("bookings").select("id, service_type").eq("id", bookingId).maybeSingle();
@@ -3728,27 +3856,116 @@ async function handleCreateJobPayment(req, res, session) {
       return;
     }
 
-    // Phase 3 Category A: a discretionary balance mutation must never
-    // proceed while an unresolved off-session charge, a live Pay Now
-    // claim, or a collectible Pay Now PaymentIntent exists for this
-    // booking's invoice. withInvoicePaymentLock resolves that state
-    // exactly once (canceling any cancelable PI unconditionally — see
-    // api/_lib/invoice-helpers.js) and holds a temporary claim around the
-    // insert itself so a fresh Pay Now request can't start mid-write.
+    // Phase 3D Stage B: the semantic cutover itself. A generic booking
+    // payment is never an invoice payment by implication anymore —
+    // invoice_id is always null here, unconditionally, never resolved
+    // from the booking's own invoice (that Stage A lookup is gone from
+    // resolveJobPaymentAttribution() entirely — see job-payments-
+    // ledger.js's header). Recording a payment AGAINST an invoice now
+    // requires the invoice-specific path (handleCreateInvoicePayment()
+    // below), which is also the only one of the two that locks an
+    // invoice — a booking-only payment never touches any invoice's claim
+    // or active PaymentIntent, because it can never change any
+    // invoice's balance.
+    const attribution = await resolveJobPaymentAttribution(supabase, { bookingId: bookingId });
+    const { data: created, error } = await supabase
+      .from("job_payments")
+      .insert({
+        booking_id: attribution.bookingId,
+        invoice_id: attribution.invoiceId,
+        invoice_id_classified: true,
+        amount: amount,
+        payment_method: paymentMethod,
+        payment_type: paymentType,
+        payment_date: paymentDate,
+        notes: notes,
+        reverses_payment_id: reversesPaymentId,
+        recorded_by: (session && session.email) || null,
+      })
+      .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .single();
+    if (error) throw error;
+    if (!created) throw new Error("Insert returned no row.");
+    res.status(200).json({ ok: true, jobPayment: serializeJobPayment(created) });
+  } catch (err) {
+    console.error("Admin create job payment failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not save this payment." });
+  }
+}
+
+// POST ?resource=invoice-payment — body { invoiceId, ... }. Phase 3D
+// Stage B: records one manual payment AGAINST A SPECIFIC INVOICE —
+// cash/Zelle/Venmo/check/card_venmo/other, same field rules as
+// handleCreateJobPayment() above (validateManualPaymentFields()). The
+// invoice must exist, be finalized, and be non-void — a draft invoice
+// has no real balance yet (nothing to pay down) and a void one is dead.
+// booking_id mirrors the invoice's own booking_id exactly (NULL for a
+// standalone invoice, that job's id when attached) — required by
+// job_payments_validate_attribution_trg, never independently chosen.
+// Routed through withInvoicePaymentLock(purpose:'balance_mutation') on
+// THIS invoice — a live Pay Now claim/PaymentIntent on it must not race
+// a fresh manual entry, same Category A posture as every other
+// discretionary balance mutation in this file.
+//
+// Reversal (reversesPaymentId): must reference a payment belonging to
+// this SAME invoice — reversing across invoices would misattribute one
+// invoice's correction to another's balance.
+async function handleCreateInvoicePayment(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin create invoice payment failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const invoiceId = typeof body.invoiceId === "string" ? body.invoiceId.trim() : "";
+  if (!invoiceId || !UUID_RE.test(invoiceId)) {
+    res.status(404).json({ error: "Invoice not found." });
+    return;
+  }
+
+  const fields = validateManualPaymentFields(body);
+  if (fields.error) {
+    res.status(400).json({ error: fields.error });
+    return;
+  }
+  const { paymentMethod, paymentType, amount, paymentDate, notes, reversesPaymentId } = fields;
+
+  try {
+    const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", invoiceId).maybeSingle();
+    if (invoiceRes.error) throw invoiceRes.error;
+    if (!invoiceRes.data) {
+      res.status(404).json({ error: "Invoice not found." });
+      return;
+    }
+    if (invoiceRes.data.status === "void") {
+      res.status(409).json({ error: "This invoice has been voided — no payment can be recorded against it." });
+      return;
+    }
+    if (invoiceRes.data.status !== "finalized") {
+      res.status(409).json({ error: "Only a finalized invoice can receive a payment." });
+      return;
+    }
+    const invoice = mapInvoice(invoiceRes.data);
+
+    if (reversesPaymentId) {
+      const priorRes = await supabase.from("job_payments").select("id, invoice_id").eq("id", reversesPaymentId).maybeSingle();
+      if (priorRes.error) throw priorRes.error;
+      if (!priorRes.data || priorRes.data.invoice_id !== invoiceId) {
+        res.status(400).json({ error: "The payment being reversed must belong to this same invoice." });
+        return;
+      }
+    }
+
     const stripe = getStripeClient();
-    const lockResult = await withInvoicePaymentLock(supabase, stripe, bookingId, { purpose: "balance_mutation" }, async () => {
-      // Phase 3D Stage A: route through the centralized resolver rather
-      // than writing booking_id alone — see
-      // sql/2026-10-21_phase3d-stage-a-invoice-attribution-compat.sql's
-      // own header for the full contract. This is the manual-entry path
-      // (no explicit invoice), so it always goes through the booking's
-      // sole-live-original-invoice lookup.
-      const attribution = await resolveJobPaymentAttribution(supabase, { bookingId: bookingId });
+    const lockResult = await withInvoicePaymentLock(supabase, stripe, invoice, { purpose: "balance_mutation" }, async () => {
       const { data: created, error } = await supabase
         .from("job_payments")
         .insert({
-          booking_id: attribution.bookingId,
-          invoice_id: attribution.invoiceId,
+          invoice_id: invoiceId,
+          booking_id: invoice.bookingId,
           invoice_id_classified: true,
           amount: amount,
           payment_method: paymentMethod,
@@ -3758,7 +3975,7 @@ async function handleCreateJobPayment(req, res, session) {
           reverses_payment_id: reversesPaymentId,
           recorded_by: (session && session.email) || null,
         })
-        .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
         .single();
       if (error) throw error;
       if (!created) throw new Error("Insert returned no row.");
@@ -3771,17 +3988,24 @@ async function handleCreateJobPayment(req, res, session) {
     }
     res.status(200).json(lockResult);
   } catch (err) {
-    console.error("Admin create job payment failed:", err && err.stack ? err.stack : err);
+    console.error("Admin create invoice payment failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save this payment." });
   }
 }
 
-// PATCH ?resource=job-payments { id, reason } — void one payment row. The
-// ONLY write this ledger's PATCH allows: amount/method/type/booking are
-// never editable once written (append-only, per the owner's explicit
-// financial-audit requirement — see the migration SQL). A wrong entry is
-// corrected by voiding it here, then POSTing a new, correct row (see
-// handleCreateJobPayment above) — never by mutating this row's numbers.
+// PATCH ?resource=job-payments { id, reason } — void one payment row,
+// generic booking payment OR invoice-attributed one alike (one shared
+// void path for the whole ledger — see handleCreateJobPayment()/
+// handleCreateInvoicePayment() above for why CREATE is split into two
+// instead). Phase 3D Stage B: only an invoice-attributed row's void locks
+// anything — that's the only case that can change a specific invoice's
+// balance and so must not race that invoice's own Pay Now claim/
+// PaymentIntent; a generic booking payment never touches any invoice at
+// all. The ONLY write this ledger's PATCH allows: amount/method/type/
+// booking are never editable once written (append-only, per the owner's
+// explicit financial-audit requirement — see the migration SQL). A wrong
+// entry is corrected by voiding it here, then POSTing a new, correct row
+// (see handleCreateJobPayment above) — never by mutating this row's numbers.
 // service_role's own column-level UPDATE grant enforces this a second way,
 // at the database permission level, independent of this handler.
 async function handleVoidJobPayment(req, res, session) {
@@ -3807,37 +4031,53 @@ async function handleVoidJobPayment(req, res, session) {
   }
 
   try {
-    const existingRes = await supabase.from("job_payments").select("id, booking_id").eq("id", id).maybeSingle();
+    const existingRes = await supabase.from("job_payments").select("id, booking_id, invoice_id").eq("id", id).maybeSingle();
     if (existingRes.error) throw existingRes.error;
     if (!existingRes.data) {
       res.status(409).json({ error: "This payment was not found, or has already been voided." });
       return;
     }
 
-    // Phase 3 Category A — same guard as handleCreateJobPayment above:
-    // voiding a payment changes the booking's collected balance, so it
-    // must not race a fresh Pay Now claim/PaymentIntent either.
-    const stripe = getStripeClient();
-    const lockResult = await withInvoicePaymentLock(supabase, stripe, existingRes.data.booking_id, { purpose: "balance_mutation" }, async () => {
+    const doVoid = async () => {
       const { data: voided, error } = await supabase
         .from("job_payments")
         .update({ voided_at: new Date().toISOString(), voided_reason: reason, updated_at: new Date().toISOString() })
         .eq("id", id)
         .is("voided_at", null)
-        .select("id, booking_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
         .maybeSingle();
       if (error) throw error;
       if (!voided) {
         return { ok: false, error: "This payment was not found, or has already been voided." };
       }
       return { ok: true, jobPayment: serializeJobPayment(voided) };
-    });
+    };
 
-    if (!lockResult.ok) {
-      res.status(409).json({ error: lockResult.error });
+    // Phase 3D Stage B: only an invoice-attributed row's void needs to
+    // lock anything — it's the only case that can change a specific
+    // invoice's balance and so must not race that invoice's own Pay Now
+    // claim/PaymentIntent. A generic booking payment (invoice_id null)
+    // never touches any invoice at all; voiding one is a plain,
+    // unlocked update.
+    let result;
+    if (existingRes.data.invoice_id) {
+      const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", existingRes.data.invoice_id).maybeSingle();
+      if (invoiceRes.error) throw invoiceRes.error;
+      if (!invoiceRes.data) {
+        res.status(409).json({ error: "This payment's invoice could not be found." });
+        return;
+      }
+      const stripe = getStripeClient();
+      result = await withInvoicePaymentLock(supabase, stripe, mapInvoice(invoiceRes.data), { purpose: "balance_mutation" }, doVoid);
+    } else {
+      result = await doVoid();
+    }
+
+    if (!result.ok) {
+      res.status(409).json({ error: result.error });
       return;
     }
-    res.status(200).json(lockResult);
+    res.status(200).json(result);
   } catch (err) {
     console.error("Admin void job payment failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not void this payment." });
@@ -4146,35 +4386,28 @@ async function handleApprove(id, res, session) {
       return;
     }
 
-    // Phase 3 Category A: initiating an off-session charge is a
-    // discretionary, money-moving action — it must not race a fresh Pay
-    // Now claim/PaymentIntent on this booking's invoice (if any). The
-    // temporary lock is held only for the duration of this synchronous
-    // Stripe call + its immediate status write below; any LONGER
-    // unresolved window (SCA pending, ambiguous outcome needing a human)
-    // is covered independently by rental_additional_charges' own durable
-    // status column, which withInvoicePaymentLock's guard also checks —
-    // see api/_lib/invoice-helpers.js's header for the full design.
-    const lockResult = await withInvoicePaymentLock(supabase, stripe, approvedRow.booking_id, { purpose: "balance_mutation" }, async () => {
-      return handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, stripeCustomerId, paymentMethodId);
-    });
+    // Phase 3D Stage B: this off-session charge is a generic, booking-
+    // level payment — never an invoice payment (see job-payments-
+    // ledger.js's header) — so there is no invoice to lock here anymore.
+    // The earlier Category A rationale (racing a Pay Now claim on this
+    // booking's invoice) no longer applies: a generic charge can never
+    // touch any invoice's balance now, attached or standalone.
+    const result = await handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, stripeCustomerId, paymentMethodId);
 
-    if (lockResult && lockResult.status) {
-      res.status(lockResult.status).json(lockResult.body);
+    if (result && result.status) {
+      res.status(result.status).json(result.body);
       return;
     }
-    res.status(409).json({ error: (lockResult && lockResult.error) || "Could not process this charge right now." });
+    res.status(409).json({ error: (result && result.error) || "Could not process this charge right now." });
   } catch (err) {
     console.error("Admin approve charge failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not process this charge." });
   }
 }
 
-// The actual off-session Stripe call + every outcome branch, extracted so
-// handleApprove() above can run it inside withInvoicePaymentLock's
-// temporary claim. Returns {status, body} for res.status(status).json(body)
-// — never calls res directly, so it composes cleanly with the lock
-// wrapper's own early-exit shapes (which never have a `status` field).
+// The actual off-session Stripe call + every outcome branch, extracted
+// out of handleApprove() above purely for readability. Returns {status,
+// body} for res.status(status).json(body) — never calls res directly.
 async function handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, stripeCustomerId, paymentMethodId) {
   await supabase.from("rental_additional_charges").update({ status: "processing", updated_at: new Date().toISOString() }).eq("id", id);
 
@@ -4200,15 +4433,11 @@ async function handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, 
   // on Stripe's side regardless of whether any write below succeeds.
   // Only internal ids, never customer data.
   //
-  // The temporary invoice payment lock (held by the caller,
-  // withInvoicePaymentLock, around this whole function) is released the
-  // moment this function returns — whether that's success, a definite
-  // decline, SCA-required, or a network-ambiguous outcome. The LONGER
-  // unresolved window (SCA pending, or a human needing to check the
-  // dashboard) is covered independently by rental_additional_charges'
-  // own durable status written below (requires_customer_action /
-  // error_pending_review), which the guard also checks on every future
-  // call — not by holding this temporary lock any longer than this one
+  // An unresolved outcome (SCA pending, or a human needing to check the
+  // dashboard) is covered by rental_additional_charges' own durable
+  // status written below (requires_customer_action / error_pending_
+  // review) — Check Status re-reads that status independently, rather
+  // than this function holding anything open longer than this one
   // synchronous call.
   // Phase 3 money audit: integer cents from the shared decimal-string
   // helper, never a float multiplication (Math.round(amount * 100) can be
@@ -4302,13 +4531,6 @@ async function handleApproveChargeStripeCall(supabase, stripe, id, approvedRow, 
     paymentDate: denverTodayIso(),
     notes: "Approved additional charge (auto-recorded from Stripe).",
   });
-
-  // Phase 3 Category B: the real money mirror above is unconditional and
-  // already committed — this is purely best-effort cleanup of this
-  // booking's invoice (if any) active Pay-Now PaymentIntent, now possibly
-  // stale relative to the balance this charge just changed. Never allowed
-  // to affect this function's own response either way.
-  await cleanupStalePaymentIntentAfterMirror(supabase, stripe, approvedRow.booking_id);
 
   const { data: paidRow, error: paidErr } = await supabase
     .from("rental_additional_charges")
@@ -4440,10 +4662,6 @@ async function handleCheckStatus(id, res) {
       });
       const { data } = await supabase.from("rental_additional_charges").update({ status: "paid", failure_reason: null, updated_at: new Date().toISOString() }).eq("id", id).select("*").maybeSingle();
       updated = data || updated;
-
-      // Phase 3 Category B — same unconditional-mirror-then-best-effort-
-      // cleanup posture as handleApprove()'s own success path above.
-      await cleanupStalePaymentIntentAfterMirror(supabase, stripe, row.booking_id);
     } else if (intent.status === "canceled" || intent.status === "requires_payment_method") {
       // The customer's authentication attempt failed, expired, or was
       // never completed — no charge occurred, so this is safely retryable
