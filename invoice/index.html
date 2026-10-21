@@ -11,7 +11,13 @@
   Deliberately NO third-party scripts/analytics here besides js.stripe.com
   (Stripe Elements) — see vercel.json's headers block for the enforcing
   CSP. No Google tag, no chat widget, nothing that could see or exfiltrate
-  the access token this page handles.
+  the access token this page handles. This also means no Google Fonts
+  (style-src is 'self' 'unsafe-inline' only, deliberately, with no
+  fonts.googleapis.com/fonts.gstatic.com allowance) — invoice.css's
+  Fredoka/Work Sans tokens fall back to the system UI font stack on this
+  page specifically, unlike every other page on the site. Widening this
+  page's CSP to add a cosmetic webfont is not worth it on the one page
+  that handles the payment access token.
 
   The raw access token lives ONLY in the URL fragment (#token=...) and, for
   the lifetime of this page load, a single in-memory JS variable — never in
@@ -32,9 +38,6 @@
   logic above moved.
 -->
 <link rel="icon" href="../images/favicon.png" type="image/png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Work+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="invoice.css">
 </head>
 <body>
