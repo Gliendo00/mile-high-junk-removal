@@ -2349,7 +2349,21 @@ function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
   const invoiceNumber = escapeHtmlForInvoiceEmail(invoiceRow.invoice_number || "");
   const dueDate = escapeHtmlForInvoiceEmail(formatDueDateForEmail(invoiceRow.due_date));
   const safeLink = escapeHtmlForInvoiceEmail(link);
-  const logoUrl = "https://www.milehighjunkremoval.net/images/mile-high-junk-removal-logo-invoice.png";
+  // Nov 2026 mobile-header pass: same asset the public invoice page uses,
+  // but the @2x (960px) source — displayed at 112px (2x of the previous
+  // 56px), so it still renders crisp on a high-DPI phone screen rather
+  // than just being a blown-up version of the smaller source. Deliberately
+  // NOT behind a @media query: Gmail's mobile apps are inconsistent about
+  // honoring <style>-block media queries, and most opens of this email are
+  // already on a phone, so a single generous fixed size that looks right
+  // everywhere beats a responsive rule that might silently not apply on
+  // the one client (Gmail mobile) this was built to be reliable on.
+  const logoUrl = "https://www.milehighjunkremoval.net/images/mile-high-junk-removal-logo-invoice@2x.png";
+  // balance_due drives the CTA wording — "Pay" language only when there is
+  // actually something to pay. A $0 invoice (paid in full, or finalized
+  // with no balance) still gets a working link, just without the
+  // misleading "Pay" word.
+  const ctaLabel = Number(balanceDueCents) > 0 ? "View &amp; Pay Invoice" : "View Invoice";
   const FONT = "Arial, Helvetica, sans-serif";
   const PINE = "#153320";
   const GREEN = "#2f6f13";
@@ -2362,16 +2376,20 @@ function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
     "<tr><td align=\"center\">" +
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family:' + FONT + ';">' +
 
-    // Header — logo + business name.
-    '<tr><td style="padding:24px 28px 16px;" align="center">' +
-    '<img src="' + logoUrl + '" width="56" height="56" alt="Mile High Junk Removal" style="display:block;margin:0 auto 10px;border:0;border-radius:50%;">' +
-    '<div style="font-size:18px;font-weight:bold;color:' + PINE + ';">Mile High Junk Removal</div>' +
+    // Header — logo + business name. The logo is the one element in this
+    // email deliberately sized to be the strongest visual anchor on
+    // mobile — as large and as crisp as a single centered <img> can
+    // reliably be across Gmail/Apple Mail/Outlook mobile without relying
+    // on a media query.
+    '<tr><td style="padding:30px 28px 20px;" align="center">' +
+    '<img src="' + logoUrl + '" width="112" height="112" alt="Mile High Junk Removal" style="display:block;margin:0 auto 16px;border:0;border-radius:50%;-ms-interpolation-mode:bicubic;">' +
+    '<div style="font-size:20px;font-weight:bold;color:' + PINE + ';">Mile High Junk Removal</div>' +
     '</td></tr>' +
 
     // Invoice number + intro line.
     '<tr><td style="padding:0 28px 4px;" align="center">' +
-    '<p style="margin:0 0 4px;font-size:14px;color:' + MUTED + ';">Invoice</p>' +
-    '<p style="margin:0 0 14px;font-size:22px;font-weight:bold;color:' + PINE + ';">' + invoiceNumber + '</p>' +
+    '<p style="margin:0 0 3px;font-size:14px;color:' + MUTED + ';">Invoice</p>' +
+    '<p style="margin:0 0 12px;font-size:22px;font-weight:bold;color:' + PINE + ';">' + invoiceNumber + '</p>' +
     "</td></tr>" +
 
     // Amount due banner.
@@ -2387,7 +2405,7 @@ function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
     // CTA button.
     '<tr><td style="padding:0 28px 22px;" align="center">' +
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background-color:' + BTN_GREEN + ';" align="center">' +
-    '<a href="' + safeLink + '" style="display:inline-block;padding:14px 32px;font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;">View &amp; Pay Invoice</a>' +
+    '<a href="' + safeLink + '" style="display:inline-block;padding:14px 32px;font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;">' + ctaLabel + '</a>' +
     "</td></tr></table>" +
     '<p style="margin:14px 0 0;font-size:11.5px;color:' + MUTED + ';">If the button doesn’t work, copy and paste this link:<br><a href="' + safeLink + '" style="color:' + GREEN + ';word-break:break-all;">' + safeLink + '</a></p>' +
     "</td></tr>" +
