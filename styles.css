@@ -489,6 +489,8 @@ a.tag-outline:hover { background: var(--color-neon-deep); }
 .social-arrow:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .social-arrow-prev { left: -10px; }
 .social-arrow-next { right: -10px; }
+.social-follow { display: inline-flex; align-items: center; gap: 8px; position: relative; padding-left: 46px; margin: 8px 0; }
+.social-follow img { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; display: block; }
 @media (max-width: 860px) {
   .social-track .social-card { flex: 0 0 78vw; max-width: 300px; }
   .social-arrow { display: none; }
@@ -605,4 +607,168 @@ a.tag-outline:hover { background: var(--color-neon-deep); }
 @media (max-width: 860px) {
   .sticky-cta-bar { display: flex; }
   body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+}
+
+/* Public-site visual system. Scoped so shared CRM/invoice styles stay intact.
+   Legacy neon token names remain compatible with existing page markup. */
+body.public-site {
+  --color-text: #27342c;
+  --color-dark: #27332b;
+  --color-accent: #287a3e;
+  --color-accent-2: #488450;
+  --color-neon: #a9d477;
+  --color-neon-deep: #96c65f;
+  --color-divider: #d8dfd9;
+  --color-accent-100: #f2f8eb;
+  --color-accent-200: #deedcb;
+  --color-accent-300: #c5dfa5;
+  --color-accent-400: #add17f;
+  --color-accent-500: #85b654;
+  --color-accent-600: #3b8748;
+  --color-accent-700: #287a3e;
+  --color-accent-800: #286237;
+  --color-accent-900: #263e2c;
+  --color-accent-2-100: #f2f8eb;
+  --color-accent-2-200: #deedcb;
+  --color-neutral-600: #586e5d;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 2px 6px rgb(27 39 31 / 6%);
+  --shadow-md: 0 6px 18px rgb(27 39 31 / 9%);
+  --shadow-lg: 0 12px 30px rgb(27 39 31 / 12%);
+  --section-pad: 56px;
+  --cta-pad: 48px;
+  font-size: 16px;
+  line-height: 1.65;
+}
+.public-site :is(h1, h2, h3, h4) { line-height: 1.2; text-wrap: balance; }
+/* Match only the sticky navigation bars and top wordmark to the footer. */
+.public-site :is(.nav-utility, .sticky-cta-bar) { background: #202220; }
+.public-site .nav-brand-word {
+  color: var(--color-footer);
+  font-family: "Tallhaus", var(--font-heading);
+}
+.public-site .text-muted { color: #59665e; }
+.public-site .btn {
+  min-height: 44px;
+  padding: 11px 20px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.public-site :is(.btn-primary, .btn-urgent) {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 3px 9px rgb(40 122 62 / 18%);
+}
+.public-site :is(.btn-primary, .btn-urgent):hover { background: #206632; border-color: #206632; }
+.public-site :is(.btn-primary, .btn-urgent):active { background: #19542a; }
+.public-site .btn-secondary {
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent-800);
+  box-shadow: none;
+}
+.public-site .btn-secondary:hover { background: var(--color-accent-100); border-color: var(--color-accent); }
+.public-site .btn-pill-accent {
+  background: transparent;
+  border-color: var(--color-accent);
+  color: var(--color-accent-800);
+  box-shadow: none;
+}
+.public-site .btn-pill-accent:hover { background: var(--color-accent-200); border-color: var(--color-accent); }
+.public-site :is(.nav-utility-cta, .btn-urgent-pulse) { animation: none; }
+@keyframes booking-glow {
+  0%, 70%, 100% { box-shadow: 0 3px 16px rgb(151 235 59 / 35%), 0 0 0 0 rgb(151 235 59 / 0%); }
+  15% { box-shadow: 0 3px 24px rgb(151 235 59 / 65%), 0 0 0 0 rgb(151 235 59 / 65%); }
+  60% { box-shadow: 0 3px 16px rgb(151 235 59 / 35%), 0 0 0 13px rgb(151 235 59 / 0%); }
+}
+.public-site .nav-utility-cta {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 3px 16px rgb(151 235 59 / 35%);
+}
+.public-site .nav-utility-cta:is(:hover, :focus-visible) { background: #206632; border-color: #206632; }
+@media (prefers-reduced-motion: no-preference) {
+  .public-site .nav-utility-cta {
+    animation: booking-glow 3.5s ease-out infinite;
+    transition: transform 180ms ease, background 180ms ease, border-color 180ms ease;
+  }
+  .public-site .nav-utility-cta:is(:hover, :focus-visible) { transform: translateY(-2px) scale(1.04); }
+  .public-site .nav-utility-cta:active { transform: translateY(0) scale(0.98); }
+}
+.public-site .btn-lg { padding: 14px 26px; font-size: 15px; }
+.public-site .btn-sm { padding: 10px 18px; font-size: 14px; }
+.public-site :is(.nav-utility-phone, .nav-utility-cta) { padding: 10px 18px; font-size: 13px; }
+.public-site :is(.btn-secondary-invert, .sticky-cta-bar .btn-secondary, .nav-utility-phone) {
+  color: #f2f8eb;
+  border-color: #a9d477;
+  background: transparent;
+}
+.public-site :is(.btn-secondary-invert, .sticky-cta-bar .btn-secondary):hover { background: rgb(169 212 119 / 12%); }
+.public-site .site-footer .btn-pill-accent { color: #f2f8eb; border-color: #a9d477; }
+.public-site .site-footer .btn-pill-accent:hover { background: rgb(169 212 119 / 12%); }
+.public-site .btn:focus-visible { outline: 3px solid #85b654; outline-offset: 3px; }
+.public-site .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.public-site :is(.tag-accent-2, .tag-outline, .icon-badge-accent2) { color: #263e2c; }
+.public-site .tag-outline { border-color: #96c65f; }
+.public-site .tag { line-height: 1.5; }
+.public-site .card {
+  padding: 20px;
+  gap: 12px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+/* Carry the secondary CTA outline into service, city and review cards. */
+.public-site :is(.stat-card, .services-grid .card, .reviews-track .card, #service-areas .card,
+  a.card[href$="-junk-removal.html"]) {
+  border-color: #85b654;
+}
+.public-site :is(.services-grid a.card, #service-areas a.card,
+  a.card[href$="-junk-removal.html"]) {
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+.public-site :is(.services-grid a.card, #service-areas a.card,
+  a.card[href$="-junk-removal.html"]):is(:hover, :focus-visible) {
+  border-color: var(--color-accent);
+}
+.public-site .card-body { font-size: 14px; line-height: 1.65; opacity: 1; color: #59665e; }
+.public-site .card-meta { color: #59665e; }
+.public-site :is(.social-card, .nav-dropdown-panel) { border: 1px solid var(--color-divider); border-radius: var(--radius-lg); }
+.public-site :is(.social-card, .social-arrow, .gallery-grid > img) { border: 1px solid #85b654; }
+.public-site .input { min-height: 44px; border-radius: var(--radius-sm); padding: 10px 14px; }
+.public-site .field > label { font-size: 13px; color: #46554b; }
+.public-site .nav-hamburger { width: 44px; height: 44px; padding: 5px; }
+.public-site .site-footer .text-muted { color: inherit; }
+.public-site .hero-grid { column-gap: 40px !important; }
+.public-site .wizard-steps li { opacity: 1; color: #59665e; }
+.public-site .wizard-steps :is(li.is-active, li.is-done) { color: var(--color-text); }
+.public-site .wizard-actions .btn-secondary { background: #fff; }
+.public-site :is(.booking-hero-panel, .booking-service-panel, .booking-map,
+  .wizard-step[data-step="2"], .wizard-step[data-step="3"],
+  .wizard-step[data-step="4"], .wizard-step[data-step="5"], .review-heading-panel) { background: #fff; }
+@media (max-width: 860px) {
+  body.public-site { --section-pad: 44px; --cta-pad: 40px; }
+  .public-site :is(.hero-grid, .why-grid) { gap: 28px !important; }
+}
+@media (max-width: 560px) {
+  body.public-site { --section-pad: 36px; --cta-pad: 32px; }
+  .public-site h2 { font-size: 28px; }
+  .public-site h3 { font-size: 22px; }
+  .public-site .card { padding: 18px; }
+  .public-site .sticky-cta-bar .btn { padding: 12px 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .public-site .btn { transition: none; }
 }

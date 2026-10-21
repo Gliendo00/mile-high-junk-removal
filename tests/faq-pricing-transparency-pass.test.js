@@ -49,7 +49,7 @@ function faqPageOf(content, rel) {
 }
 
 function visibleFaqPairs(content) {
-  const bodyStart = content.indexOf("<body>");
+  const bodyStart = content.search(/<body\b[^>]*>/i);
   const body = content.slice(bodyStart);
   const pairRe = /<h3[^>]*>([\s\S]*?)<\/h3>\s*<p class="text-muted"[^>]*>([\s\S]*?)<\/p>/g;
   const pairs = [];
