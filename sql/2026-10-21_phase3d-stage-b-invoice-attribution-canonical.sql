@@ -641,7 +641,7 @@ COMMIT;
 --
 --   v_claim := gen_random_uuid();
 --   UPDATE public.invoices SET payment_claim_token = v_claim, payment_claimed_at = now() WHERE id = v_invoice_standalone;
---   SELECT public.attach_invoice_to_booking(v_invoice_standalone, v_booking6, v_claim, 'smoke-test') INTO v_result;
+--   SELECT * INTO v_result FROM public.attach_invoice_to_booking(v_invoice_standalone, v_booking6, v_claim, 'smoke-test');
 --   ASSERT v_result.booking_id = v_booking6, 'TEST 6: expected invoice.booking_id set to booking6';
 --   ASSERT v_result.payment_claim_token IS NULL, 'TEST 6: expected the payment claim released by attach';
 --
