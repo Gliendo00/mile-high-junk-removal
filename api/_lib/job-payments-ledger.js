@@ -11,15 +11,17 @@
 // handlers, not through this file — mirrorStripePaymentToLedger() below is
 // exclusively the auto-mirror path for Stripe collections.
 //
-// Phase 3D Stage A — resolveJobPaymentAttribution() below is the ONE
+// Phase 3D Stage B — resolveJobPaymentAttribution() below is the ONE
 // centralized write-path resolver every job_payments insert/upsert in
-// this codebase routes through (see sql/2026-10-21_phase3d-stage-a-
-// invoice-attribution-compat.sql's own header, "Stage A application
-// contract", for the full design this implements verbatim). No balance
-// read anywhere is touched by this — invoice balances stay booking_id-
-// keyed in Stage A; this only makes invoice_id/invoice_id_classified
-// correct on every new row, so Stage B can later switch reads to
-// invoice_id with zero drift.
+// this codebase routes through. Stage A's own branch (falling back to a
+// booking's sole live original invoice when no explicitInvoiceId was
+// given) is gone as of the Stage B cutover: a generic job/booking
+// payment is no longer an invoice payment by implication — invoice_id is
+// now ONLY ever set by a caller that explicitly knows which invoice a
+// payment belongs to (Stripe Pay Now's reconcileInvoicePaymentIntent(),
+// and the admin's manual invoice-payment endpoint). See
+// sql/2026-10-21_phase3d-stage-b-invoice-attribution-canonical.sql's own
+// header for the schema side of this cutover.
 
 // "card_venmo" ("Card (Venmo)") and "other" were added as manual-entry
 // methods after the original five — see
@@ -30,48 +32,36 @@
 const VALID_PAYMENT_METHODS = ["card_stripe", "cash", "zelle", "venmo", "check", "card_venmo", "other"];
 const VALID_PAYMENT_TYPES = ["payment", "refund"];
 
-// Phase 3D Stage A — the one centralized resolver every job_payments
+// Phase 3D Stage B — the one centralized resolver every job_payments
 // insert/upsert routes through to compute its (invoice_id, booking_id)
-// pair. Never called directly by application code outside this file and
-// api/admin/booking.js's handleCreateJobPayment() — those are the two
-// write paths, enumerated and audited in Stage A's own migration file.
+// pair. Never called directly by application code outside this file,
+// api/admin/booking.js's handleCreateJobPayment() (generic booking
+// payments), and handleCreateInvoicePayment() (manual invoice payments)
+// — the write paths enumerated and audited in Stage B's own migration
+// file.
 //
-//   explicitInvoiceId given: short-circuit, no lookup — the caller
-//   already knows exactly which invoice this payment is for (Stripe Pay
-//   Now, via reconcileInvoicePaymentIntent()). bookingId is passed
-//   through exactly as given (the invoice's own booking_id, already
-//   resolved by that caller) — never re-derived here.
+//   explicitInvoiceId given: short-circuit — the caller already knows
+//   exactly which invoice this payment is for (Stripe Pay Now, via
+//   reconcileInvoicePaymentIntent(); the manual invoice-payment
+//   endpoint). bookingId is passed through exactly as given (that
+//   invoice's own booking_id, already resolved by the caller) — never
+//   re-derived here.
 //
-//   explicitInvoiceId absent, bookingId given: look up that booking's
-//   sole non-void ORIGINAL invoice (at most one, guaranteed by
-//   invoices_booking_id_active_original_uniq) and attribute to it if
-//   found. This is what preserves today's booking-wide balance outcome
-//   for the payment — still the only formula invoice balances are read
-//   by in Stage A — so that when Stage B later switches reads to
-//   invoice_id, nothing about an existing invoice's balance changes.
-//   invoice_id stays null if the booking has no live original invoice.
+//   explicitInvoiceId absent: invoiceId is always null, no lookup at
+//   all. This is the Stage B cutover itself — Stage A's "fall back to
+//   the booking's sole live original invoice" branch is gone. A generic
+//   job/booking payment is never implicitly an invoice payment anymore;
+//   recording one against a specific invoice now requires going through
+//   the invoice workflow and passing explicitInvoiceId.
 //
-// Never throws on its own terms — a failed lookup propagates to the
-// caller exactly like any other Supabase error from this file, which
-// mirrorStripePaymentToLedger() below already catches as part of its own
-// "never throw" contract; handleCreateJobPayment() already wraps its own
-// call in a try/catch that logs and 500s.
+// Synchronous and side-effect-free now that the lookup branch is gone;
+// still async so every existing call site (which already awaits it)
+// needs no change.
 async function resolveJobPaymentAttribution(supabase, { bookingId, explicitInvoiceId }) {
   if (explicitInvoiceId) {
     return { invoiceId: explicitInvoiceId, bookingId: bookingId || null };
   }
-  if (!bookingId) {
-    return { invoiceId: null, bookingId: null };
-  }
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("id")
-    .eq("booking_id", bookingId)
-    .neq("status", "void")
-    .eq("invoice_kind", "original")
-    .maybeSingle();
-  if (error) throw error;
-  return { invoiceId: data ? data.id : null, bookingId: bookingId };
+  return { invoiceId: null, bookingId: bookingId || null };
 }
 
 // Mirrors one successfully collected Stripe transaction into job_payments.

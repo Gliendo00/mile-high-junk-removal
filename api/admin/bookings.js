@@ -2739,11 +2739,16 @@ async function handleLeadsView(req, res, supabase) {
 // above, which already loads full sets rather than paging.
 //
 // job_payments stays the one payment ledger: this bulk-fetches every
-// non-voided payment row for every booking any invoice here points at, in
-// one IN(...) query, groups them by booking_id in JS, and runs
-// netCollectedFromLedgerRows() per group — never a second per-invoice
-// round trip, and never a column on invoices itself that could drift from
-// this computed number.
+// non-voided payment row for every invoice here, in one IN(...) query,
+// groups them by invoice_id in JS, and runs netCollectedFromLedgerRows()
+// per group — never a second per-invoice round trip, and never a column
+// on invoices itself that could drift from this computed number.
+//
+// Phase 3D Stage B: keyed by invoice_id, not booking_id — a generic
+// booking payment (or a sibling invoice's payment, for a booking that
+// somehow had more than one over time) never counts toward this invoice's
+// collected total, and a standalone invoice (booking_id null) is covered
+// exactly the same way every attached one is.
 //
 // ?status= (optional) filters by the DERIVED status (draft/finalized/
 // partially_paid/paid/void) — applied in JS after deriveInvoiceStatus()
@@ -2755,17 +2760,17 @@ async function handleInvoicesView(req, res, supabase) {
     const invoiceRows = invoicesRes.data || [];
 
     const customerIds = Array.from(new Set(invoiceRows.map((r) => r.customer_id).filter(Boolean)));
-    const bookingIds = Array.from(new Set(invoiceRows.map((r) => r.booking_id).filter(Boolean)));
+    const invoiceIds = invoiceRows.map((r) => r.id);
 
     const [customersRes, paymentsRes] = await Promise.all([
       customerIds.length
         ? supabase.from("customers").select("id, first_name, last_name").in("id", customerIds)
         : Promise.resolve({ data: [], error: null }),
-      bookingIds.length
+      invoiceIds.length
         ? supabase
             .from("job_payments")
-            .select("booking_id, amount, payment_type, voided_at")
-            .in("booking_id", bookingIds)
+            .select("invoice_id, amount, payment_type, voided_at")
+            .in("invoice_id", invoiceIds)
             .is("voided_at", null)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -2777,9 +2782,9 @@ async function handleInvoicesView(req, res, supabase) {
       customerNameById[c.id] = [c.first_name, c.last_name].filter(Boolean).join(" ") || null;
     });
 
-    const paymentsByBooking = {};
+    const paymentsByInvoice = {};
     (paymentsRes.data || []).forEach((p) => {
-      (paymentsByBooking[p.booking_id] || (paymentsByBooking[p.booking_id] = [])).push(p);
+      (paymentsByInvoice[p.invoice_id] || (paymentsByInvoice[p.invoice_id] = [])).push(p);
     });
 
     const todayIso = denverTodayIso();
@@ -2787,7 +2792,7 @@ async function handleInvoicesView(req, res, supabase) {
 
     let invoices = invoiceRows.map((row) => {
       const invoice = mapInvoice(row);
-      const netCollected = netCollectedFromLedgerRows(paymentsByBooking[row.booking_id] || []);
+      const netCollected = netCollectedFromLedgerRows(paymentsByInvoice[row.id] || []);
       const derived = deriveInvoiceStatus(invoice, netCollected, todayIso);
       return Object.assign({ customerName: customerNameById[row.customer_id] || null }, invoice, derived);
     });

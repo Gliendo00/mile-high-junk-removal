@@ -135,6 +135,27 @@ document.addEventListener('DOMContentLoaded', function () {
   var notesInputEl = document.getElementById('iv-notes-input');
   var detailsSaveBtn = document.getElementById('iv-details-save-btn');
   var paymentsListEl = document.getElementById('iv-payments-list');
+  var paymentVoidInFlight = false;
+
+  // Phase 3D Stage B — Attach to Job
+  var attachJobBtn = document.getElementById('iv-attach-job-btn');
+  var attachSection = document.getElementById('iv-attach-section');
+  var attachLoadingEl = document.getElementById('iv-attach-loading');
+  var attachEmptyEl = document.getElementById('iv-attach-empty');
+  var attachJobListEl = document.getElementById('iv-attach-job-list');
+  var attachCancelBtn = document.getElementById('iv-attach-cancel-btn');
+  var attachRequestToken = 0;
+  var attachInFlight = false;
+
+  // Phase 3D Stage B — invoice-specific Record Payment
+  var paymentFormSection = document.getElementById('iv-payment-form-section');
+  var paymentUnavailableHint = document.getElementById('iv-payment-unavailable-hint');
+  var paymentMethodSelectEl = document.getElementById('iv-payment-method-select');
+  var paymentAmountEl = document.getElementById('iv-payment-amount-input');
+  var paymentDateEl = document.getElementById('iv-payment-date-input');
+  var paymentNotesEl = document.getElementById('iv-payment-notes-input');
+  var paymentAddBtn = document.getElementById('iv-payment-add-btn');
+  var paymentAddInFlight = false;
 
   function resetLineItemForm() {
     editingLineItemId = null;
@@ -254,8 +275,62 @@ document.addEventListener('DOMContentLoaded', function () {
         row.appendChild(reasonLine);
       }
 
+      if (!payment.isVoided) {
+        var voidPaymentBtn = document.createElement('button');
+        voidPaymentBtn.type = 'button';
+        voidPaymentBtn.className = 'admin-btn admin-btn-danger admin-print-hide';
+        voidPaymentBtn.style.marginTop = '6px';
+        voidPaymentBtn.textContent = 'Void';
+        voidPaymentBtn.addEventListener('click', function () { voidInvoicePayment(payment.id, voidPaymentBtn); });
+        row.appendChild(voidPaymentBtn);
+      }
+
       paymentsListEl.appendChild(row);
     });
+  }
+
+  // Phase 3D Stage B — voids an invoice-attributed payment row. Reuses
+  // the exact same shared PATCH ?resource=job-payments endpoint
+  // admin/booking-detail.js's own voidJobPayment() uses — handleVoidJobPayment()
+  // on the server locks THIS invoice (not the booking) for a row with a
+  // non-null invoiceId, same posture as every other invoice-money
+  // mutation on this page.
+  function voidInvoicePayment(paymentId, btn) {
+    if (paymentVoidInFlight) return;
+    var reason = window.prompt('Reason for voiding this payment (required):');
+    if (reason === null) return; // cancelled
+    reason = reason.trim();
+    if (!reason) {
+      showToast('A reason is required to void a payment.', 'error');
+      return;
+    }
+    paymentVoidInFlight = true;
+    btn.disabled = true;
+    btn.textContent = 'Voiding…';
+
+    adminFetch('/api/admin/booking?resource=job-payments', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: paymentId, reason: reason }),
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not void this payment.');
+          return body;
+        });
+      })
+      .then(function () {
+        showToast('Payment voided.', 'success');
+        return load();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not void this payment.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Void';
+      })
+      .finally(function () {
+        paymentVoidInFlight = false;
+      });
   }
 
   function render(data) {
@@ -314,8 +389,24 @@ document.addEventListener('DOMContentLoaded', function () {
     var addrLine1 = addressSource.serviceAddress || addressSource.address;
     var addrLine2 = [addressSource.serviceCity || addressSource.city, addressSource.serviceState || addressSource.state, addressSource.serviceZip || addressSource.zip].filter(Boolean).join(', ');
     set('iv-address', [addrLine1, addrLine2].filter(Boolean).join('\n') || 'No address on file.');
+    // Job — Phase 3D Stage B: a standalone invoice (bookingId null) shows
+    // "Not attached to a job" plus an Attach to Job action instead of the
+    // job link. The Attach to Job panel itself stays closed unless the
+    // admin opens it (see attachJobBtn's click handler below); this only
+    // decides whether the OPEN-IT button is even offered.
     var jobLink = document.getElementById('iv-job-link');
-    jobLink.href = '/admin/booking/?id=' + encodeURIComponent(invoice.bookingId);
+    var noJobText = document.getElementById('iv-no-job-text');
+    if (invoice.bookingId) {
+      jobLink.href = '/admin/booking/?id=' + encodeURIComponent(invoice.bookingId);
+      jobLink.style.display = '';
+      noJobText.style.display = 'none';
+      attachJobBtn.style.display = 'none';
+      closeAttachSection();
+    } else {
+      jobLink.style.display = 'none';
+      noJobText.style.display = '';
+      attachJobBtn.style.display = isVoid ? 'none' : 'inline-flex';
+    }
 
     // Line items
     renderLineItems(lineItems, isDraft);
@@ -354,8 +445,15 @@ document.addEventListener('DOMContentLoaded', function () {
       balanceStatEl.classList.add(invoice.isOverdue ? 'is-overdue' : 'is-due');
     }
     renderPayments(jobPayments);
-    var recordPaymentLink = document.getElementById('iv-record-payment-link');
-    recordPaymentLink.href = '/admin/booking/?id=' + encodeURIComponent(invoice.bookingId);
+    // Record Payment — only ever offered against a finalized, non-void
+    // invoice (handleCreateInvoicePayment()'s own rule: nothing to pay
+    // down on a draft, nothing to collect on a void one).
+    var canRecordPayment = invoice.status === 'finalized';
+    paymentFormSection.style.display = canRecordPayment ? 'block' : 'none';
+    paymentUnavailableHint.style.display = canRecordPayment || isVoid ? 'none' : 'block';
+    if (canRecordPayment && !paymentDateEl.value) {
+      paymentDateEl.value = new Date().toISOString().slice(0, 10);
+    }
 
     // Actions — status-gated, mirroring api/admin/booking.js's own
     // handlePatchInvoice() transition rules exactly, so the UI never
@@ -663,6 +761,150 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     doVoid(reason, false);
   });
+
+  // ---------------------------------------------------------------------
+  // Record Payment — Phase 3D Stage B. Posts to the invoice-specific
+  // manual payment endpoint; never touches the generic, booking-level
+  // ?resource=job-payments path (that one deliberately never affects any
+  // invoice's balance as of Stage B — see job-payments-ledger.js).
+  // ---------------------------------------------------------------------
+  paymentAddBtn.addEventListener('click', function () {
+    if (paymentAddInFlight) return;
+    var amount = Number(paymentAmountEl.value);
+    if (!paymentAmountEl.value || !Number.isFinite(amount) || amount <= 0) {
+      showToast('Please enter a valid amount.', 'error');
+      return;
+    }
+    if (paymentMethodSelectEl.value === 'other' && !paymentNotesEl.value.trim()) {
+      showToast('Please enter a description for this payment.', 'error');
+      return;
+    }
+
+    paymentAddInFlight = true;
+    paymentAddBtn.disabled = true;
+    paymentAddBtn.textContent = 'Saving…';
+
+    adminFetch('/api/admin/booking?resource=invoice-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        invoiceId: invoiceId,
+        amount: amount,
+        paymentMethod: paymentMethodSelectEl.value,
+        paymentDate: paymentDateEl.value || undefined,
+        notes: paymentNotesEl.value.trim(),
+      }),
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not save this payment.');
+          return body;
+        });
+      })
+      .then(function () {
+        showToast('Payment recorded.', 'success');
+        paymentAmountEl.value = '';
+        paymentNotesEl.value = '';
+        return load();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not save this payment.', 'error');
+      })
+      .finally(function () {
+        paymentAddInFlight = false;
+        paymentAddBtn.disabled = false;
+        paymentAddBtn.textContent = 'Record Payment';
+      });
+  });
+
+  // ---------------------------------------------------------------------
+  // Attach to Job — Phase 3D Stage B. Scoped to the invoice's OWN client
+  // only (GET /api/admin/client already returns just that client's jobs;
+  // attach_invoice_to_booking() re-enforces the same-customer rule
+  // server-side regardless). A pickup job is filtered out client-side,
+  // same convention as admin/invoice-new.js's job picker — the server
+  // rejects it too, this just avoids offering a dead end.
+  // ---------------------------------------------------------------------
+  function closeAttachSection() {
+    attachSection.style.display = 'none';
+    while (attachJobListEl.firstChild) attachJobListEl.removeChild(attachJobListEl.firstChild);
+  }
+
+  function renderAttachJobCard(b) {
+    var li = document.createElement('li');
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'admin-booking-card admin-invoice-job-card';
+    btn.appendChild((function () { var d = document.createElement('div'); d.className = 'admin-card-name'; d.textContent = b.serviceLabel || b.serviceType || '—'; return d; })());
+    var when = document.createElement('div');
+    when.className = 'admin-card-when';
+    var whenParts = [formatDate(b.appointmentDate) || 'No date set'];
+    if (b.timeLabel) whenParts.push(b.timeLabel);
+    when.textContent = whenParts.join(' · ');
+    btn.appendChild(when);
+    btn.addEventListener('click', function () { doAttach(b.id, btn); });
+    li.appendChild(btn);
+    return li;
+  }
+
+  function doAttach(bookingId, btnEl) {
+    if (attachInFlight) return;
+    attachInFlight = true;
+    if (btnEl) btnEl.disabled = true;
+    patchInvoice({ action: 'attach', bookingId: bookingId })
+      .then(function (body) {
+        if (!body) return;
+        showToast('Invoice attached to job.', 'success');
+        closeAttachSection();
+        return load();
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not attach this invoice to that job.', 'error');
+      })
+      .finally(function () {
+        attachInFlight = false;
+        if (btnEl) btnEl.disabled = false;
+      });
+  }
+
+  attachJobBtn.addEventListener('click', function () {
+    if (!currentInvoice) return;
+    var myToken = ++attachRequestToken;
+    attachSection.style.display = 'block';
+    attachJobListEl.style.display = 'none';
+    attachEmptyEl.style.display = 'none';
+    attachLoadingEl.style.display = 'block';
+    while (attachJobListEl.firstChild) attachJobListEl.removeChild(attachJobListEl.firstChild);
+
+    adminFetch('/api/admin/client?id=' + encodeURIComponent(currentInvoice.customerId))
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || "Could not load this client's jobs.");
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body || myToken !== attachRequestToken) return;
+        attachLoadingEl.style.display = 'none';
+        var eligible = (body.bookings || []).filter(function (b) { return b.serviceType !== 'dumpster_pickup'; });
+        if (!eligible.length) {
+          attachEmptyEl.style.display = 'block';
+          return;
+        }
+        eligible.forEach(function (b) { attachJobListEl.appendChild(renderAttachJobCard(b)); });
+        attachJobListEl.style.display = 'flex';
+      })
+      .catch(function (err) {
+        if (myToken !== attachRequestToken) return;
+        attachLoadingEl.style.display = 'none';
+        showToast(err && err.message ? err.message : "Could not load this client's jobs.", 'error');
+      });
+  });
+  attachCancelBtn.addEventListener('click', closeAttachSection);
 
   if (!invoiceId) {
     showError('Missing invoice id.');

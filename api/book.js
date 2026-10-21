@@ -2155,9 +2155,12 @@ async function handleInvoicePublic(req, res) {
       }
     }
 
+    // Phase 3D Stage B: scoped by invoice_id — never booking_id, which
+    // would leak a sibling invoice's (or a generic, un-attributed)
+    // payment on the same job into this invoice's own balance.
     const [lineItemsRes, paymentsRes, customerRes] = await Promise.all([
       supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", resolved.invoiceId).order("sort_order", { ascending: true }),
-      supabase.from("job_payments").select("amount, payment_type, voided_at").eq("booking_id", invoice.bookingId),
+      supabase.from("job_payments").select("amount, payment_type, voided_at").eq("invoice_id", resolved.invoiceId),
       supabase.from("customers").select("first_name, last_name, address, city, state, zip").eq("id", invoice.customerId).maybeSingle(),
     ]);
     if (lineItemsRes.error) throw lineItemsRes.error;
