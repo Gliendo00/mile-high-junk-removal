@@ -483,6 +483,56 @@ test("overweight: multiple tons overweight bills the full multiple", async () =>
   assert.strictEqual(res.body.charge.amount, 250);
 });
 
+// 2026-10-21 rate-correction audit — the project's current overweight rate
+// is $125/ton (bumped from $90/ton on 2026-09-18-v2; see
+// api/_lib/rental-pricing.js's own header). These pin the exact worked
+// example from that audit, plus every other boundary it called out, so a
+// future accidental revert to $90 (or any other rate) fails loudly here
+// rather than only being noticed by eye.
+test("overweight: the exact audited example — 5,240 lb actual, 4,000 lb included, 1,240 lb over, 0.62 tons, $125/ton = $77.50", async () => {
+  configureAdminAuth();
+  const db = freshDb();
+  const res = await proposeCharge(db, { bookingId: RENTAL_BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 5240 });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.overweightLbs, undefined); // only present on the no-charge/weightRecorded response shape
+  assert.strictEqual(res.body.charge.quantity, 0.62);
+  assert.strictEqual(res.body.charge.rate, 125.0);
+  assert.strictEqual(res.body.charge.amount, 77.5);
+});
+
+test("overweight: 6,000 lb actual = 1 ton over * $125/ton = $125.00 exactly", async () => {
+  configureAdminAuth();
+  const db = freshDb();
+  const res = await proposeCharge(db, { bookingId: RENTAL_BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 6000 });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.quantity, 1);
+  assert.strictEqual(res.body.charge.rate, 125.0);
+  assert.strictEqual(res.body.charge.amount, 125.0);
+});
+
+test("overweight: below the included 4,000 lb (e.g. 3,999 lb) is $0 — no charge row, weight still recorded", async () => {
+  configureAdminAuth();
+  const db = freshDb();
+  const res = await proposeCharge(db, { bookingId: RENTAL_BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 3999 });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge, null);
+  assert.strictEqual(res.body.weightRecorded, true);
+  assert.strictEqual(db.rental_additional_charges.length, 0);
+});
+
+test("overweight: fractional-pound precision is preserved exactly — 1 lb over bills $0.06 (rounded from $0.0625), never $0.00 or $0.07", async () => {
+  configureAdminAuth();
+  const db = freshDb();
+  const res = await proposeCharge(db, { bookingId: RENTAL_BOOKING_ID, chargeType: "overweight_tonnage", actualWeightLbs: 4001 });
+  assert.strictEqual(res.statusCode, 200);
+  assert.strictEqual(res.body.charge.quantity, 0.0005);
+  assert.strictEqual(res.body.charge.amount, 0.06);
+});
+
+test("api/_lib/rental-pricing.js: OVERAGE_TON_RATE is $125.00, not the superseded $90.00 rate", () => {
+  assert.strictEqual(rentalPricing.OVERAGE_TON_RATE, 125.0);
+});
+
 // =======================================================================
 // Dumpster closeout — additional_days
 // =======================================================================
