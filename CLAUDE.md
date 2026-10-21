@@ -16,6 +16,11 @@ Production safety is the highest priority.
 
 ## Required Workflow
 
+For simultaneous Codex/Claude sessions, follow `docs/parallel-work.md`: use one
+worktree per task and one designated production deployer. After an authorized
+deployment, run `npm run verify:live` from the deployed checkout and inspect the
+production page before reporting success. Never overwrite another session's work.
+
 Before modifying the website:
 
 1. Inspect the existing implementation.

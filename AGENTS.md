@@ -155,6 +155,11 @@ If `CLAUDE.md` and this file differ, follow the stricter safety rule.
 
 ## Git workflow
 
+For simultaneous Codex/Claude sessions, follow `docs/parallel-work.md`: use one
+worktree per task and one designated production deployer. After an authorized
+deployment, run `npm run verify:live` from the deployed checkout and inspect the
+production page before reporting success. Never overwrite another session's work.
+
 Do not make meaningful feature or visual changes directly on `main`.
 
 For changes:
