@@ -111,14 +111,30 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
-  // Integration indicators — GSC / GA4 / CRM DATA / PROPOSAL SYNC. Pure
-  // configured-or-not booleans from the server (no secret values ever
-  // reach this page — see api/admin/bookings.js's handleAgentDashboard()).
+  // Integration indicators — GSC / GA4 / CRM DATA / PROPOSAL SYNC.
+  // Audit fix: GSC/GA4 now carry a real 4-state status object
+  // ({state: 'connected'|'error'|'stale'|'not_configured', reason,
+  // checkedAt} — see api/admin/bookings.js's handleAgentDashboard(),
+  // which derives this from agent/history/integration-health.json, a
+  // REAL probe result from the GitHub Actions runner, never from this
+  // Vercel function's own env vars) instead of a plain configured-or-not
+  // boolean — a credential that's present but broken now reads as ERROR,
+  // never a false CONNECTED, and an API/auth failure is never collapsed
+  // into NOT CONFIGURED. CRM DATA/PROPOSAL SYNC stay plain booleans (a
+  // real Supabase client IS constructible in this Vercel function, so a
+  // presence check is still the honest answer for those two) — this
+  // function accepts either shape. No secret value ever reaches this
+  // page either way.
   // -----------------------------------------------------------------
-  function buildIntegrationChip(label, connected) {
-    var chip = el('span', 'admin-wa-integration-chip' + (connected ? ' is-connected' : ''));
+  var INTEGRATION_STATE_LABELS = { connected: 'CONNECTED', error: 'ERROR', stale: 'STALE', not_configured: 'NOT CONFIGURED' };
+  function buildIntegrationChip(label, value) {
+    var state = value && typeof value === 'object' ? value.state : value ? 'connected' : 'not_configured';
+    var reason = value && typeof value === 'object' ? value.reason : null;
+    var stateClass = 'is-' + String(state).replace(/_/g, '-');
+    var chip = el('span', 'admin-wa-integration-chip ' + stateClass);
     chip.appendChild(el('span', 'admin-wa-integration-dot'));
-    chip.appendChild(el('span', null, label + ' ● ' + (connected ? 'CONNECTED' : 'NOT CONFIGURED')));
+    chip.appendChild(el('span', null, label + ' ● ' + (INTEGRATION_STATE_LABELS[state] || 'NOT CONFIGURED')));
+    if (reason) chip.title = reason;
     return chip;
   }
   function renderIntegrations(integrations) {

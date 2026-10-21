@@ -151,6 +151,112 @@ async function main() {
       assert.strictEqual(res.body.integrations.proposalSync, true);
     });
 
+    // -----------------------------------------------------------------
+    // Audit fix (2026-10-21): GSC/GA4 integration status now comes from
+    // agent/history/integration-health.json (a REAL probe result the
+    // GitHub Actions runner's --check-integrations step writes — see
+    // agent/lib/integration-health.js's header) instead of an env-var
+    // presence check evaluated in THIS Vercel function (which could
+    // never see those env vars anyway — they're never provisioned to
+    // Vercel by design). Same snapshot/restore pattern tests/agent-cli-
+    // refresh-local-source-evidence.test.js already uses for its own
+    // real small fixture file, since this module's HEALTH_PATH is a
+    // captured constant (same convention as local-source-candidate-
+    // log.js's own LOG_PATH), not independently injectable per test.
+    // -----------------------------------------------------------------
+    const { HEALTH_PATH } = require("../agent/lib/integration-health");
+    function snapshotHealthFile() {
+      return fs.existsSync(HEALTH_PATH) ? fs.readFileSync(HEALTH_PATH, "utf8") : null;
+    }
+    function restoreHealthFile(snapshot) {
+      if (snapshot === null) {
+        if (fs.existsSync(HEALTH_PATH)) fs.unlinkSync(HEALTH_PATH);
+      } else {
+        fs.writeFileSync(HEALTH_PATH, snapshot, "utf8");
+      }
+    }
+    function writeHealth(health) {
+      const dir = path.dirname(HEALTH_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(HEALTH_PATH, JSON.stringify(health), "utf8");
+    }
+
+    await test("?view=agent-dashboard: with no integration-health.json file at all, GSC/GA4 both report not_configured (never a crash, never a false CONNECTED)", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        if (fs.existsSync(HEALTH_PATH)) fs.unlinkSync(HEALTH_PATH);
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.body.integrations.gsc.state, "not_configured");
+        assert.strictEqual(res.body.integrations.ga4.state, "not_configured");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
+    await test("?view=agent-dashboard: GSC configured+ok and fresh reports CONNECTED; GA4 not configured at all reports not_configured — independently, not coupled", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        writeHealth({ at: new Date().toISOString(), gsc: { configured: true, ok: true, reason: null }, ga4: { configured: false, ok: null, reason: null } });
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.body.integrations.gsc.state, "connected");
+        assert.strictEqual(res.body.integrations.ga4.state, "not_configured");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
+    await test("?view=agent-dashboard: a configured-but-broken credential reports ERROR, never a false CONNECTED — and the reason is surfaced, not swallowed", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        writeHealth({ at: new Date().toISOString(), gsc: { configured: true, ok: false, reason: "Search Analytics API error: 403 Forbidden" }, ga4: { configured: true, ok: true, reason: null } });
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.body.integrations.gsc.state, "error");
+        assert.strictEqual(res.body.integrations.gsc.reason, "Search Analytics API error: 403 Forbidden");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
+    await test("?view=agent-dashboard: a good-but-OLD reading (the daily check hasn't run in over 36h) reports STALE, not a misleadingly-current CONNECTED", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        const oldAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        writeHealth({ at: oldAt, gsc: { configured: true, ok: true, reason: null }, ga4: { configured: true, ok: true, reason: null } });
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.body.integrations.gsc.state, "stale");
+        assert.strictEqual(res.body.integrations.ga4.state, "stale");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
+    await test("?view=agent-dashboard: an OLD error reading still reports ERROR, not STALE — a recorded failure is never time-gated away", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        const oldAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        writeHealth({ at: oldAt, gsc: { configured: true, ok: false, reason: "token request failed" }, ga4: { configured: true, ok: true, reason: null } });
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.body.integrations.gsc.state, "error");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
+    await test("?view=agent-dashboard: a malformed/corrupt integration-health.json degrades to not_configured, never a 500", async () => {
+      const snapshot = snapshotHealthFile();
+      try {
+        const dir = path.dirname(HEALTH_PATH);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(HEALTH_PATH, "{not valid json", "utf8");
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.statusCode, 200);
+        assert.strictEqual(res.body.integrations.gsc.state, "not_configured");
+        assert.strictEqual(res.body.integrations.ga4.state, "not_configured");
+      } finally {
+        restoreHealthFile(snapshot);
+      }
+    });
+
     await test("?view=agent-dashboard cumulative metrics sum findings/fixes/research/no-change across ALL recorded runs", async () => {
       installSeededLog([
         {

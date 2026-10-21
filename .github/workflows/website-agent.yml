@@ -354,6 +354,36 @@ jobs:
           # mechanism already used for local/human ADC. Avoids the
           # redundant-impersonation setup the brief asked to avoid.
 
+      - name: Check GSC/GA4 integration health (daily and weekly)
+        # CRM cleanup/verification audit (2026-10-21) — see agent/lib/
+        # integration-health.js's own header for the full why: the
+        # Website Agent dashboard used to decide CONNECTED/NOT CONFIGURED
+        # purely from an env-var presence check evaluated inside the
+        # Vercel function serving it, but these credentials are never
+        # provisioned to Vercel by design, so that check could never see
+        # anything but "absent" regardless of whether this real GitHub
+        # Actions -> WIF -> Google API path actually works. This step
+        # runs ONE minimal, real probe against each API (reusing the
+        # SAME auth/client code the Golden diagnostics above already
+        # exercise — no new Google client, no new auth path) and
+        # overwrites agent/history/integration-health.json with the
+        # outcome, which the dashboard reads instead. Runs on BOTH daily
+        # and weekly (not gated to one) so the dashboard's status is at
+        # most one day stale in the normal case; a `--check-integrations`
+        # failure never fails this job (see runCheckIntegrations()'s own
+        # non-blocking posture in agent/cli.js) and never fails this
+        # step's own exit code either, by the same design — always
+        # records the outcome, never gates the run. Deliberately BEFORE
+        # the weekly-only refresh steps below, same ordering rationale as
+        # every other non-weekly-specific step in this job: runs
+        # unconditionally on every non-diagnostic dispatch.
+        if: env.RUN_TYPE == 'daily' || env.RUN_TYPE == 'weekly'
+        run: node agent/cli.js --check-integrations
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+
       - name: Refresh completed-job evidence (weekly only)
         # Pre-acceptance hardening (audit finding #1, baseline 2bff317) —
         # this step previously existed only as agent/cli.js's

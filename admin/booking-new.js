@@ -152,11 +152,21 @@ document.addEventListener('DOMContentLoaded', function () {
   appointmentDateInput.value = todayIso;
   appointmentDateInput.min = todayIso;
 
-  // Pickup can never be before delivery (the Appointment Date field) —
-  // kept in sync client-side as a convenience; the server independently
-  // re-validates this regardless.
+  // Audit fix — pickup can never be ON delivery day either (same day as
+  // the Appointment Date field), not just never before it: a dumpster
+  // can't be delivered and picked up the same day, so the date-picker's
+  // own min now matches the server's `<=` rejection exactly, rather than
+  // letting an admin pick the delivery date itself and have it silently
+  // accepted as a "manual" override. Kept in sync client-side as a
+  // convenience only; the server independently re-validates this regardless.
+  function addDaysIso(iso, days) {
+    var parts = iso.split('-').map(Number);
+    var dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
+  }
   function syncPickupDateMin() {
-    pickupDateInput.min = appointmentDateInput.value;
+    pickupDateInput.min = addDaysIso(appointmentDateInput.value, 1);
   }
   appointmentDateInput.addEventListener('change', syncPickupDateMin);
   syncPickupDateMin();

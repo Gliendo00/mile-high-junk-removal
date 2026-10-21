@@ -51,6 +51,16 @@ document.addEventListener('DOMContentLoaded', function () {
     return parts.year + '-' + parts.month + '-' + parts.day;
   }
 
+  // Audit fix — pickup can never be ON delivery day, not just never
+  // before it; see api/admin/booking.js's handleUpdate() `<=` rejection.
+  // Same small local copy as admin/booking-new.js's own.
+  function addDaysIso(iso, days) {
+    var parts = iso.split('-').map(Number);
+    var dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
+  }
+
   var errorBanner = document.getElementById('error-banner');
   var loadingEl = document.getElementById('loading');
   var toastEl = document.getElementById('admin-toast');
@@ -141,11 +151,11 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   serviceTypeSelect.addEventListener('change', updateDumpsterVisibility);
 
-  // Pickup can never be before delivery (the Appointment Date field) —
-  // kept in sync client-side as a convenience; the server independently
-  // re-validates this regardless.
+  // Pickup can never be ON delivery day (the Appointment Date field),
+  // same as the server's `<=` rejection — kept in sync client-side as a
+  // convenience; the server independently re-validates this regardless.
   appointmentDateInput.addEventListener('change', function () {
-    pickupDateInput.min = appointmentDateInput.value;
+    pickupDateInput.min = addDaysIso(appointmentDateInput.value, 1);
   });
 
   // Google Places address autocomplete — Phase 3C Stage 2.4. Purely
@@ -307,7 +317,7 @@ document.addEventListener('DOMContentLoaded', function () {
       timeModeLabelEl.textContent = 'Appointment Time';
     }
     appointmentDateInput.value = booking.appointmentDate || '';
-    pickupDateInput.min = appointmentDateInput.value;
+    pickupDateInput.min = appointmentDateInput.value ? addDaysIso(appointmentDateInput.value, 1) : '';
     populateTimeWindowOptions(booking.timeWindow || '');
 
     // Initial mode: exact time wins if the loaded booking has one (matches

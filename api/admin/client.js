@@ -218,6 +218,11 @@ async function handleList(req, res) {
         scoped(supabase.from("customers").select(cols).ilike("phone", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
         scoped(supabase.from("customers").select(cols).ilike("email", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
         scoped(supabase.from("customers").select(cols).ilike("address", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
+        // Audit fix — `city` was already selected (`cols` above) and shown
+        // in results, but never actually searched: a city-fragment-only
+        // query (e.g. "Aurora") matched nothing unless that word happened
+        // to also appear in the `address` text.
+        scoped(supabase.from("customers").select(cols).ilike("city", pattern)).limit(LIST_SEARCH_FIELD_LIMIT),
       ];
       // Skipped (rather than run with an all-matching "%%" pattern) when
       // the search has no digits at all, e.g. a plain name search.

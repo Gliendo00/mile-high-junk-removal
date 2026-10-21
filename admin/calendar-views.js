@@ -320,8 +320,11 @@ window.AdminCalendarViews = (function () {
     // Same status-aware precedence as admin/schedule.js's Today/Tomorrow/
     // Yesterday cards — completed prefers Actual Collected, non-completed
     // always shows Quoted (never implies a booked job is already paid).
+    // Dashboard Revenue audit fix: same ledger-authoritative source as
+    // admin/schedule.js's own card price — see that file's comment.
+    var dailyCompletedAmount = typeof job.revenueAmount === 'number' ? job.revenueAmount : job.finalPrice;
     var priceText = job.status === 'completed'
-      ? (formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
+      ? (formatPrice(dailyCompletedAmount) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
       : formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) metaParts.push(priceText);
     a.appendChild(el('div', 'admin-daily-job-card-meta', metaParts.join(' · ')));

@@ -434,6 +434,27 @@ test("clients list: search matches by email", async () => {
   assert.strictEqual(res.body.clients[0].id, NOJOBS_ID);
 });
 
+// Audit fix (2026-10-21): `city` was already selected/displayed but never
+// actually part of the search's ilike clauses — a city-fragment-only
+// query matched nothing unless that word also happened to appear in the
+// `address` text. Alex's address ("456 Oak Ave") shares no words with
+// "Aurora" at all, so this can only pass via the new city ilike clause.
+test("clients list: search matches by city fragment — the exact audit finding (city was selected/displayed but never searched)", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: { search: "Aurora" } }));
+  assert.strictEqual(res.body.clients.length, 1);
+  assert.strictEqual(res.body.clients[0].id, ALEX_ID);
+});
+
+test("clients list: city search is case-insensitive and matches a partial fragment", async () => {
+  adminAuthed();
+  currentFakeService = createFakeServiceClient(freshDb());
+  const res = await run(clientsHandler, makeReq({ cookie: AUTH_COOKIE, query: { search: "auror" } }));
+  assert.strictEqual(res.body.clients.length, 1);
+  assert.strictEqual(res.body.clients[0].id, ALEX_ID);
+});
+
 test("clients list: search with no matches returns an empty (not error) result", async () => {
   adminAuthed();
   currentFakeService = createFakeServiceClient(freshDb());

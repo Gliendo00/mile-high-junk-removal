@@ -43,6 +43,13 @@
 //     Each file is a categorical, deterministic combination of evidence
 //     already gathered by the steps above — never a raw payload, never
 //     content/copy, never a new finding type.)
+//   - agent/history/integration-health.json          (daily AND weekly
+//     runs, OVERWRITTEN each run — CRM cleanup/verification audit,
+//     2026-10-21, via the new --check-integrations step — see
+//     agent/lib/integration-health.js's header. A minimal, structured
+//     {configured, ok, reason} record per integration — never a raw API
+//     response, never a credential; scanForCredentialLeak() below still
+//     runs over it like every other allowed file regardless.)
 // All of the above are already git-tracked, append-only/small-diff JSON
 // — exactly the "legitimate Agent artifacts" the brief describes.
 // Nothing else is in the allowlist: not agent/context/local-source-
@@ -130,6 +137,9 @@ const ALLOWED_PATH_PATTERNS = [
   // raw content/copy and never a new finding type (agent/lib/run-
   // synthesis.js's header).
   /^agent\/research\/results\/[^/]+\.json$/,
+  // CRM cleanup/verification audit (2026-10-21) — single-file treatment,
+  // same as agent/history/research-rotation-state.json above.
+  /^agent\/history\/integration-health\.json$/,
 ];
 
 // Deliberately pattern-based, not a secrets-scanning dependency — this
@@ -250,7 +260,7 @@ function main() {
     console.error("safe-commit: REFUSING to commit — unexpected path(s) changed outside the Agent-artifact allowlist:");
     for (const e of disallowed) console.error(`  ${e.status} ${e.path}`);
     console.error(
-      "Only agent/history/log.ndjson, agent/history/research-rotation-state.json, agent/research/firstparty/*.json, agent/research/local-sources/*.json, agent/history/local-source-candidate-log.json, agent/research/completed-jobs/*.json, and agent/research/results/*.json are ever expected to change from an unattended --daily/--weekly/diagnostic run. Investigate before re-running."
+      "Only agent/history/log.ndjson, agent/history/research-rotation-state.json, agent/research/firstparty/*.json, agent/research/local-sources/*.json, agent/history/local-source-candidate-log.json, agent/research/completed-jobs/*.json, agent/research/results/*.json, and agent/history/integration-health.json are ever expected to change from an unattended --daily/--weekly/diagnostic run. Investigate before re-running."
     );
     process.exitCode = 1;
     return;

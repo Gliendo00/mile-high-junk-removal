@@ -3576,38 +3576,20 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 }
 .admin-home-search-input::placeholder { color: var(--color-neutral-500, #8ba88e); }
 .admin-home-search-input:disabled { cursor: not-allowed; }
-.admin-home-search-ask {
-  flex: none;
-  border: 0;
-  border-radius: var(--admin-radius-full);
-  background: var(--color-accent-700, #2f6f13);
-  color: #fff;
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 12.5px;
-  padding: 8px 14px;
-  cursor: not-allowed;
-}
-.admin-home-search-ask:disabled { opacity: 0.55; }
-/* Reuses the same dashed/muted "not yet active" visual language as
-   .admin-calendar-jump-btn elsewhere in this file rather than inventing a
-   new "disabled" treatment — just repositioned (UI refinement pass #2) out
-   of normal document flow so it no longer costs its own row of height. */
-.admin-home-search-badge {
+/* Audit fix — the search box is wired to the real client search now (see
+   admin/home.js); the "Ask" button and "Coming soon" badge are gone, and
+   this results panel overlays absolutely within .admin-home-search-wrap
+   (position: relative, above) so opening it never pushes the metric cards
+   below down the page — unlike the inline .admin-typeahead-panel used in
+   the booking/estimate/intake forms, which is fine pushing content down
+   there. */
+.admin-home-search-wrap .admin-typeahead-panel {
   position: absolute;
-  top: -8px;
-  right: 14px;
-  display: inline-block;
-  padding: 2px 9px;
-  border: 1px dashed var(--color-neutral-300, #dcd3c4);
-  border-radius: var(--admin-radius-full);
-  background: var(--admin-tint);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--color-accent-700, #2f6f13);
-  box-shadow: 0 1px 2px rgba(20, 21, 15, 0.08);
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  box-shadow: 0 6px 16px rgba(20, 21, 15, 0.12);
 }
 
 /* 4 metric cards — Needs Attention / Today / Booked / Revenue. Deliberately
@@ -3882,10 +3864,11 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
    was previously a full card with its own header+body, which was too much
    weight for a section with no real data behind it yet). The right-side
    "Not connected yet" pill reuses the same dashed/muted "not yet active"
-   treatment as .admin-home-search-badge/.admin-calendar-jump-btn — the
-   established visual language this app already uses for "real feature,
-   not wired up yet" rather than a generic empty state. Never fabricates
-   activity — see admin/home.js's header. */
+   treatment as .admin-calendar-jump-btn (the search box's own "Coming
+   soon" badge this comment used to also cite is gone — audit fix, see
+   admin/home.js) — the established visual language this app already uses
+   for "real feature, not wired up yet" rather than a generic empty state.
+   Never fabricates activity — see admin/home.js's header. */
 .admin-home-marketing-row {
   display: flex;
   align-items: center;
@@ -4407,6 +4390,15 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 }
 .admin-wa-integration-chip.is-connected { color: var(--color-accent-700, #2f6f13); border-color: rgba(47, 111, 19, 0.25); }
 .admin-wa-integration-chip.is-connected .admin-wa-integration-dot { background: var(--color-accent-700, #2f6f13); }
+/* Audit fix — GSC/GA4 now report a real 4-state status (connected/error/
+   stale/not_configured — see api/admin/bookings.js's handleAgentDashboard())
+   instead of a plain configured-or-not boolean, so a credential that's
+   present but broken reads as ERROR, not a false CONNECTED. CRM DATA/
+   PROPOSAL SYNC stay plain booleans (.is-connected only) — unchanged. */
+.admin-wa-integration-chip.is-error { color: #b91c1c; border-color: rgba(185, 28, 28, 0.25); }
+.admin-wa-integration-chip.is-error .admin-wa-integration-dot { background: #b91c1c; }
+.admin-wa-integration-chip.is-stale { color: #b45309; border-color: rgba(180, 83, 9, 0.25); }
+.admin-wa-integration-chip.is-stale .admin-wa-integration-dot { background: #b45309; }
 
 .admin-wa-metrics {
   display: grid;

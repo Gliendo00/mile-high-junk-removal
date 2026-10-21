@@ -799,8 +799,17 @@ async function handleCreate(req, res, session) {
         res.status(400).json({ error: "Please enter a valid pickup date." });
         return;
       }
-      if (pickupDateInput < appointmentDate) {
-        res.status(400).json({ error: "Pickup date cannot be before the delivery date." });
+      // Audit fix — this used to be `<` (before delivery only), which let a
+      // manual pickupDate equal to the delivery date through silently: a
+      // dumpster can't be delivered and picked back up the same day, so
+      // same-day is never a real override, only an accidental one (a
+      // date-picker opened pre-highlighted on "today," a copy/paste, a
+      // stale form value). `<=` rejects that same-day case the same way
+      // "before delivery" already was, instead of silently skipping the
+      // correct addDaysIso(appointmentDate, DEFAULT_RENTAL_DAYS) default
+      // below and storing a sticky, wrong, never-self-correcting override.
+      if (pickupDateInput <= appointmentDate) {
+        res.status(400).json({ error: "Pickup date must be after the delivery date (the rental's " + DEFAULT_RENTAL_DAYS + " included days run from delivery)." });
         return;
       }
       pickupDate = pickupDateInput;
@@ -2863,8 +2872,11 @@ async function handleUpdate(req, res) {
         res.status(400).json({ error: "Please enter a valid pickup date." });
         return;
       }
-      if (pickupDateInput < appointmentDate) {
-        res.status(400).json({ error: "Pickup date cannot be before the delivery date." });
+      // Audit fix — same `<=` rejection as handleCreate() above, for the
+      // same reason: same-day is never a real override, only ever an
+      // accidental one.
+      if (pickupDateInput <= appointmentDate) {
+        res.status(400).json({ error: "Pickup date must be after the delivery date (the rental's " + DEFAULT_RENTAL_DAYS + " included days run from delivery)." });
         return;
       }
       pickupDate = pickupDateInput;
@@ -4781,7 +4793,16 @@ const POSTGRES_UNIQUE_VIOLATION = "23505";
 // exactly 5 calendar days after delivery — e.g. a Sep 25 delivery defaults
 // to a Sep 30 pickup. Only ever applied when an admin hasn't manually
 // overridden the pickup date (dumpster_rentals.pickup_date_is_manual).
-const DEFAULT_RENTAL_DAYS = 5;
+// Audit fix — this used to be its own separate hardcoded `5`, independent
+// of api/_lib/rental-pricing.js's own INCLUDED_DAYS (the pricing engine's
+// "single source of truth" for the same policy number, per that file's own
+// comment); nothing enforced the two ever agreeing. Now derived from that
+// same constant so there is exactly one "5" for this policy, not two that
+// happen to match today. tests/phase4-stage1-dumpster-pickup-auto-job.test.js's
+// "rental-pricing.js constants are byte-for-byte unchanged" assertion is
+// about rental-pricing.js's own file, not this reference to it, so it is
+// unaffected by this change.
+const DEFAULT_RENTAL_DAYS = rentalPricing.INCLUDED_DAYS;
 // What a bare `<input type="time">.value` submits (24-hour "HH:MM", no
 // seconds) — the only shape this endpoint ever accepts from a client for
 // exact_time; Postgres accepts it directly, no ":00" suffix needed.
@@ -4958,8 +4979,17 @@ async function ensurePickupBooking(supabase, rentalBooking, dumpsterRow) {
           customer_id: rentalBooking.customer_id,
           service_type: "dumpster_pickup",
           appointment_date: dumpsterRow.pickup_date,
-          time_window: null,
-          exact_time: null,
+          // Audit fix — preserve the rental's own delivery time/window on
+          // the generated pickup at creation time, instead of always
+          // null/null, so the pickup's Schedule card shows a real time
+          // rather than "—" by default. This is a one-time copy made only
+          // here, at creation: once the pickup row exists, nothing in this
+          // file ever rewrites its time_window/exact_time again (unlike
+          // pickup_date, which syncPickupBookingDate() does keep mirroring
+          // while non-manual) — so a later, intentional time change made
+          // directly on the pickup job itself is never clobbered.
+          time_window: rentalBooking.time_window || null,
+          exact_time: rentalBooking.exact_time || null,
           status: "booked",
           description: "Dumpster pickup for the rental delivered " + rentalBooking.appointment_date + ".",
           estimated_price: null,

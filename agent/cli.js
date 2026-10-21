@@ -214,6 +214,25 @@
 //     --refresh-lead-event-evidence/--refresh-local-source-evidence,
 //     BEFORE --weekly, same precedent as those steps.
 //
+//   node agent/cli.js --check-integrations
+//     CRM cleanup/verification audit (2026-10-21) — see agent/lib/
+//     integration-health.js's own header for the full why. Runs one
+//     minimal, REAL probe against Search Console and one against GA4
+//     (not just an env-var presence check), and overwrites
+//     agent/history/integration-health.json with the outcome — the
+//     Website Agent dashboard (api/admin/bookings.js's
+//     handleAgentDashboard()) reads that file instead of checking these
+//     env vars itself, since they are never provisioned to Vercel by
+//     design (see this file's own "Vercel / DB impact" cross-reference
+//     in agent/README.md). ALWAYS exits 0 — this is a status check, not
+//     a gate; a probe failure is recorded honestly in the file, not
+//     treated as a reason to fail whatever run it's part of. Wired into
+//     the EXISTING daily scheduled workflow run (not a new manual-only
+//     diagnostic) in .github/workflows/website-agent.yml, so the
+//     dashboard's status is at most one day stale in the normal case —
+//     and visibly STALE, not silently wrong, if that schedule itself
+//     stops running.
+//
 // Nothing here activates a schedule — see agent/README.md's "Scheduling
 // architecture" section for the recommended cadence and why it is
 // deliberately NOT turned on by this phase.
@@ -234,6 +253,7 @@ const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
 const { selectWeeklyLocalSourceCandidates, picksWithNoRelevantSource, needsFetchThisRun } = require("./lib/local-source-candidates");
 const { writeLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
 const { runSynthesis } = require("./lib/run-synthesis");
+const { checkIntegrationHealth, writeIntegrationHealth } = require("./lib/integration-health");
 
 // Phase 13a — see agent/lib/run-synthesis.js's header for the full
 // architecture. Deterministic/network-free: never runs the audits,
@@ -648,6 +668,19 @@ async function runFetchLocalSource(entryId, options = {}) {
   console.log(`Local-source evidence fetch: 1 evidence entry written to ${filePath}.`);
 }
 
+// CRM cleanup/verification audit (2026-10-21) — see agent/lib/
+// integration-health.js's own header for the full why. Always exits 0: a
+// probe failure is recorded honestly in the written file, never treated
+// as a reason to fail this step or the run it's part of — this is a
+// status check, not a gate, same non-blocking posture
+// --refresh-local-source-evidence already has for its own candidate log.
+async function runCheckIntegrations() {
+  const health = await checkIntegrationHealth();
+  const filePath = writeIntegrationHealth(health);
+  const describe = (name, result) => (result.configured ? (result.ok ? `${name} OK` : `${name} ERROR: ${result.reason}`) : `${name} not configured`);
+  console.log(`Integration health check: ${describe("GSC", health.gsc)}; ${describe("GA4", health.ga4)}. Written to ${filePath}.`);
+}
+
 function printRecord(record, asJson) {
   if (asJson) {
     console.log(JSON.stringify(record, null, 2));
@@ -751,6 +784,11 @@ async function main() {
     return;
   }
 
+  if (args.includes("--check-integrations")) {
+    await runCheckIntegrations();
+    return;
+  }
+
   if (args.includes("--run-synthesis")) {
     runRunSynthesis();
     return;
@@ -819,6 +857,7 @@ module.exports = {
   runRefreshLocalSourceEvidence,
   runRefreshLeadEventEvidence,
   runRunSynthesis,
+  runCheckIntegrations,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

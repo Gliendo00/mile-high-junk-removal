@@ -346,6 +346,78 @@ test("pickup date defaults to exactly 5 calendar days after delivery, and the pi
   assert.strictEqual(pickup.appointment_date, FUTURE_DELIVERY_PLUS_5_ISO, "pickup booking's own appointment_date must mirror dumpster_rentals.pickup_date");
 });
 
+// Audit fix (2026-10-21): the auto-generated pickup used to ALWAYS carry
+// time_window: null, exact_time: null, regardless of the rental's own
+// delivery time — the pickup's Schedule card showed no time at all by
+// default. It now preserves the rental's own time_window/exact_time at
+// creation (a one-time copy, never re-synced afterward — see
+// ensurePickupBooking()'s own comment in api/admin/booking.js), so the
+// pickup leg genuinely "preserves the relevant scheduled time/window" as
+// the business expects, unless/until something later sets the pickup's
+// own time directly.
+test("the auto-generated pickup preserves the rental's own time_window at creation, instead of always null/null", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { timeWindow: "w_0800_1000" });
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.time_window, "w_0800_1000", "the pickup must mirror the rental's own delivery time window, not default to null");
+  assert.strictEqual(pickup.exact_time, null);
+});
+
+test("the auto-generated pickup preserves the rental's own exact_time (not a time window) at creation", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { timeWindow: undefined, exactTime: "09:00" });
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.exact_time, "09:00", "the pickup must mirror the rental's own exact delivery time");
+  assert.strictEqual(pickup.time_window, null);
+});
+
+// =======================================================================
+// Audit fix (2026-10-21) — literal cross-month/cross-year/DST test cases,
+// exactly as specified in the bug report, rather than only the relative-
+// to-"today" FUTURE_DELIVERY_PLUS_5_ISO cases above. "Past Job" mode
+// (mode: "past") is used for a delivery date on/before today (the
+// HISTORICAL_FLOOR_ISO = 2026-01-01 floor still applies); "new" mode is
+// used for a delivery date in the future — the +5-day arithmetic under
+// test (addDaysIso()) is identical in both modes.
+// =======================================================================
+test("literal case 1: delivery Oct 20, 2026 -> pickup Oct 25, 2026 (the exact dates from the confirmed production bug report)", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { mode: "past", appointmentDate: "2026-10-20" });
+  assert.strictEqual(res.body.dumpster.pickupDate, "2026-10-25");
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.appointment_date, "2026-10-25");
+});
+
+test("literal case 2: delivery Oct 30, 2026 -> pickup Nov 4, 2026 (cross-month boundary)", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { appointmentDate: "2026-10-30" });
+  assert.strictEqual(res.body.dumpster.pickupDate, "2026-11-04");
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.appointment_date, "2026-11-04");
+});
+
+test("literal case 3: delivery Dec 29, 2026 -> pickup Jan 3, 2027 (cross-year boundary)", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { appointmentDate: "2026-12-29" });
+  assert.strictEqual(res.body.dumpster.pickupDate, "2027-01-03");
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.appointment_date, "2027-01-03");
+});
+
+test("literal case 4: delivery Oct 29, 2026 -> pickup Nov 3, 2026, spanning America/Denver's Nov 1, 2026 DST 'fall back' transition — the local calendar date stays exactly +5 days, never shifted by an hour/day", async () => {
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await createRental(db, cust, { appointmentDate: "2026-10-29" });
+  assert.strictEqual(res.body.dumpster.pickupDate, "2026-11-03");
+  const pickup = findPickup(db, res.body.booking.id);
+  assert.strictEqual(pickup.appointment_date, "2026-11-03");
+});
+
 test("same client/address/rental context is carried onto the pickup booking", async () => {
   const cust = makeCustomer({ first_name: "Pat", last_name: "Lee" });
   const db = freshDb({ customers: [cust] });
@@ -810,6 +882,22 @@ test("api/_lib/rental-pricing.js constants are byte-for-byte unchanged by this s
   assert.strictEqual(rentalPricing.OVERAGE_TON_RATE, 125.0);
   assert.strictEqual(rentalPricing.OVERAGE_DAY_RATE, 15.0);
   assert.strictEqual(rentalPricing.RENTAL_AGREEMENT_VERSION, "2026-09-18-v2");
+});
+
+// Audit fix (2026-10-21): api/admin/booking.js's own DEFAULT_RENTAL_DAYS
+// used to be an independent hardcoded `5`, with nothing enforcing it ever
+// stayed in sync with rental-pricing.js's own INCLUDED_DAYS — two "5"s
+// that happened to agree, not one. It is now literally derived from that
+// same constant (rentalPricing.INCLUDED_DAYS), checked here via the
+// actual pickup-date-default BEHAVIOR (not just a source-text grep),
+// since the real risk this closes is "someone later changes the business
+// policy in rental-pricing.js and the pickup default silently keeps
+// using the old number."
+test("the auto-pickup's +5-day default is driven by rental-pricing.js's INCLUDED_DAYS, not an independent constant — changing one changes the other", () => {
+  const rentalPricing = require("../api/_lib/rental-pricing");
+  const bookingModuleSrc = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "booking.js"), "utf8");
+  assert.ok(/const DEFAULT_RENTAL_DAYS = rentalPricing\.INCLUDED_DAYS;/.test(bookingModuleSrc), "DEFAULT_RENTAL_DAYS must be derived from rentalPricing.INCLUDED_DAYS, not its own separate literal");
+  assert.strictEqual(rentalPricing.INCLUDED_DAYS, 5, "sanity check — today's actual policy value, so the behavioral test above (+5 days) stays meaningful");
 });
 
 test("a normal payment + tip flow on the RENTAL booking itself (not the pickup) still works exactly as before", async () => {

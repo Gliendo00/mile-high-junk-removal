@@ -198,6 +198,12 @@ async function main() {
     assert.strictEqual(isPathAllowed("agent/history/local-source-candidate-log.json.bak"), false);
   });
 
+  await test("CRM cleanup/verification audit (2026-10-21): isPathAllowed() allows the single, overwritten agent/history/integration-health.json file, but not a nested/renamed variant", () => {
+    assert.strictEqual(isPathAllowed("agent/history/integration-health.json"), true);
+    assert.strictEqual(isPathAllowed("agent/history/integration-health/extra.json"), false);
+    assert.strictEqual(isPathAllowed("agent/history/integration-health.json.bak"), false);
+  });
+
   await test("parsePorcelainStatus() parses modified/untracked/renamed and quoted-path lines", () => {
     const output = [
       "M  agent/history/log.ndjson",
