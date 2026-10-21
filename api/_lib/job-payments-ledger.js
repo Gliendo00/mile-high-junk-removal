@@ -10,6 +10,16 @@
 // created directly by api/admin/booking.js's own resource=job-payments
 // handlers, not through this file — mirrorStripePaymentToLedger() below is
 // exclusively the auto-mirror path for Stripe collections.
+//
+// Phase 3D Stage A — resolveJobPaymentAttribution() below is the ONE
+// centralized write-path resolver every job_payments insert/upsert in
+// this codebase routes through (see sql/2026-10-21_phase3d-stage-a-
+// invoice-attribution-compat.sql's own header, "Stage A application
+// contract", for the full design this implements verbatim). No balance
+// read anywhere is touched by this — invoice balances stay booking_id-
+// keyed in Stage A; this only makes invoice_id/invoice_id_classified
+// correct on every new row, so Stage B can later switch reads to
+// invoice_id with zero drift.
 
 // "card_venmo" ("Card (Venmo)") and "other" were added as manual-entry
 // methods after the original five — see
@@ -19,6 +29,50 @@
 // array is only the allowed value list).
 const VALID_PAYMENT_METHODS = ["card_stripe", "cash", "zelle", "venmo", "check", "card_venmo", "other"];
 const VALID_PAYMENT_TYPES = ["payment", "refund"];
+
+// Phase 3D Stage A — the one centralized resolver every job_payments
+// insert/upsert routes through to compute its (invoice_id, booking_id)
+// pair. Never called directly by application code outside this file and
+// api/admin/booking.js's handleCreateJobPayment() — those are the two
+// write paths, enumerated and audited in Stage A's own migration file.
+//
+//   explicitInvoiceId given: short-circuit, no lookup — the caller
+//   already knows exactly which invoice this payment is for (Stripe Pay
+//   Now, via reconcileInvoicePaymentIntent()). bookingId is passed
+//   through exactly as given (the invoice's own booking_id, already
+//   resolved by that caller) — never re-derived here.
+//
+//   explicitInvoiceId absent, bookingId given: look up that booking's
+//   sole non-void ORIGINAL invoice (at most one, guaranteed by
+//   invoices_booking_id_active_original_uniq) and attribute to it if
+//   found. This is what preserves today's booking-wide balance outcome
+//   for the payment — still the only formula invoice balances are read
+//   by in Stage A — so that when Stage B later switches reads to
+//   invoice_id, nothing about an existing invoice's balance changes.
+//   invoice_id stays null if the booking has no live original invoice.
+//
+// Never throws on its own terms — a failed lookup propagates to the
+// caller exactly like any other Supabase error from this file, which
+// mirrorStripePaymentToLedger() below already catches as part of its own
+// "never throw" contract; handleCreateJobPayment() already wraps its own
+// call in a try/catch that logs and 500s.
+async function resolveJobPaymentAttribution(supabase, { bookingId, explicitInvoiceId }) {
+  if (explicitInvoiceId) {
+    return { invoiceId: explicitInvoiceId, bookingId: bookingId || null };
+  }
+  if (!bookingId) {
+    return { invoiceId: null, bookingId: null };
+  }
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("id")
+    .eq("booking_id", bookingId)
+    .neq("status", "void")
+    .eq("invoice_kind", "original")
+    .maybeSingle();
+  if (error) throw error;
+  return { invoiceId: data ? data.id : null, bookingId: bookingId };
+}
 
 // Mirrors one successfully collected Stripe transaction into job_payments.
 // MUST NEVER throw and must never be allowed to affect the caller's own
@@ -38,15 +92,28 @@ const VALID_PAYMENT_TYPES = ["payment", "refund"];
 // PaymentIntent (e.g. the synchronous success path AND the webhook backstop
 // both firing for one transaction) safely produces exactly one row, not
 // two, with no read-before-write race.
-async function mirrorStripePaymentToLedger(supabase, { bookingId, stripePaymentIntentId, amount, paymentDate, notes }) {
-  if (!supabase || !bookingId || !stripePaymentIntentId) return;
+//
+// invoiceId (new, optional): the ONE invoice-originated caller
+// (api/_lib/invoice-helpers.js's reconcileInvoicePaymentIntent()) passes
+// this explicitly — Stripe Pay Now always knows exactly which invoice a
+// PaymentIntent belongs to, so it is never left to the booking-lookup
+// branch of resolveJobPaymentAttribution(). Every other caller omits it
+// and goes through that lookup. Either way this function now always
+// writes invoice_id_classified = true, per Stage A's contract.
+async function mirrorStripePaymentToLedger(supabase, { bookingId, invoiceId, stripePaymentIntentId, amount, paymentDate, notes }) {
+  if (!supabase || !stripePaymentIntentId) return;
+  if (!bookingId && !invoiceId) return;
   const amountNum = Number(amount);
   if (!Number.isFinite(amountNum) || amountNum <= 0) return;
 
   try {
+    const attribution = await resolveJobPaymentAttribution(supabase, { bookingId, explicitInvoiceId: invoiceId });
+
     const { error } = await supabase.from("job_payments").upsert(
       {
-        booking_id: bookingId,
+        booking_id: attribution.bookingId,
+        invoice_id: attribution.invoiceId,
+        invoice_id_classified: true,
         amount: Math.round(amountNum * 100) / 100,
         payment_method: "card_stripe",
         payment_type: "payment",
@@ -127,6 +194,7 @@ function denverTodayIso() {
 module.exports = {
   VALID_PAYMENT_METHODS,
   VALID_PAYMENT_TYPES,
+  resolveJobPaymentAttribution,
   mirrorStripePaymentToLedger,
   netCollectedFromLedgerRows,
   effectiveRevenue,
