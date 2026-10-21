@@ -152,31 +152,58 @@
       </div>
     </section>
 
-    <!-- 7c. Additional Charges (Phase 3C Stage 2.5-v2, dumpster rental
-         only). A proposed charge here moves no money — only clicking
-         Approve on a proposed row does, and only after this same page
-         calls PATCH ?resource=charges with an explicit admin action. -->
+    <!-- 7c. Rental Closeout / Additional Charges (Phase 3C Stage 2.5-v2 +
+         Phase 5). A proposed charge here moves no money. Clicking "Approve
+         & Charge" on a proposed row (legacy, still available) charges the
+         vaulted card directly via Stripe. "Create Final Charges" (Phase 5)
+         instead turns every still-proposed charge into a line item on this
+         rental's own invoice — no Stripe call at all — see
+         api/admin/booking.js's handleInvoiceCharges(). -->
     <section class="admin-section" id="d-charges-section" style="display:none">
-      <h2>Additional Charges</h2>
+      <h2>Rental Closeout</h2>
       <div id="d-charges-list" class="admin-charges-list"></div>
 
       <div class="admin-form-section" style="margin-top:14px">
         <div class="admin-field">
-          <label for="d-charge-type">Propose a new charge</label>
+          <label for="d-charge-type">Add Charge</label>
           <select id="d-charge-type">
             <!-- No rate shown here — overweight tonnage's rate is this
                  specific booking's own locked-in value (could be an older
                  $90/ton booking or a current $125/ton one), shown in the
                  calculated-context panel below once a weight is entered,
                  never a single hardcoded figure in this static list. -->
-            <option value="overweight_tonnage">Overweight tonnage</option>
-            <option value="additional_days">Additional days ($15.00/day)</option>
-            <option value="other">Other (flat amount)</option>
+            <option value="overweight_tonnage">Overweight</option>
+            <option value="additional_days">Extra rental days</option>
+            <option value="relocation">Relocation</option>
+            <option value="blocked_pickup">Blocked pickup / dry run</option>
+            <option value="rule_violation">Rule violation / special handling</option>
+            <option value="other">Custom charge</option>
           </select>
         </div>
-        <div class="admin-field" id="d-charge-quantity-row">
-          <label for="d-charge-quantity" id="d-charge-quantity-label">Extra days beyond the included 5</label>
-          <input type="number" id="d-charge-quantity" inputmode="decimal" min="0" step="0.01" placeholder="1.5">
+        <div class="admin-field" id="d-charge-days-row" style="display:none">
+          <div class="admin-charge-weight-context" style="display:block">
+            <div class="admin-row">
+              <div class="admin-row-label">Included rental period</div>
+              <div class="admin-row-value" id="d-charge-days-included">5 days</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Total days (delivery → pickup)</div>
+              <div class="admin-row-value" id="d-charge-days-total">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Extra days</div>
+              <div class="admin-row-value" id="d-charge-days-extra">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Rate</div>
+              <div class="admin-row-value" id="d-charge-days-rate">—</div>
+            </div>
+            <div class="admin-row">
+              <div class="admin-row-label">Calculated charge</div>
+              <div class="admin-row-value" id="d-charge-days-amount">—</div>
+            </div>
+          </div>
+          <span class="admin-field-hint">Calculated automatically from this rental's Delivery Date and Pickup Date above.</span>
         </div>
         <div class="admin-field" id="d-charge-weight-row" style="display:none">
           <label for="d-charge-weight">Actual scale weight (lbs)</label>
@@ -201,6 +228,13 @@
             </div>
           </div>
         </div>
+        <!-- Override (overweight_tonnage/additional_days only) — optional.
+             Leave blank to bill exactly the calculated amount above. -->
+        <div class="admin-field" id="d-charge-override-row" style="display:none">
+          <label for="d-charge-override-amount">Override amount (optional)</label>
+          <input type="number" id="d-charge-override-amount" inputmode="decimal" min="0" step="0.01" placeholder="Leave blank to use the calculated amount">
+          <input type="text" id="d-charge-override-reason" maxlength="500" placeholder="Reason for the override (optional)" style="margin-top:6px">
+        </div>
         <div class="admin-field" id="d-charge-amount-row" style="display:none">
           <label for="d-charge-amount">Amount</label>
           <input type="number" id="d-charge-amount" inputmode="decimal" min="0" step="0.01" placeholder="50.00">
@@ -209,7 +243,16 @@
           <label for="d-charge-description">Description</label>
           <input type="text" id="d-charge-description" maxlength="500" placeholder="What is this charge for?">
         </div>
-        <button type="button" id="d-charge-propose-btn" class="admin-btn admin-btn-outline">Propose Charge</button>
+        <button type="button" id="d-charge-propose-btn" class="admin-btn admin-btn-outline">Add Charge</button>
+      </div>
+
+      <div class="admin-form-section" style="margin-top:14px;border-top:1px solid var(--color-neutral-200,#e5e2da);padding-top:14px">
+        <div class="admin-row">
+          <div class="admin-row-label">Additional amount due</div>
+          <div class="admin-row-value" id="d-closeout-due">$0.00</div>
+        </div>
+        <button type="button" id="d-closeout-finalize-btn" class="admin-btn admin-btn-primary" disabled>Create Final Charges</button>
+        <div id="d-closeout-result" style="display:none;margin-top:10px"></div>
       </div>
     </section>
 
@@ -363,6 +406,7 @@
 <script src="../admin-chrome.js"></script>
 <script src="../status-ui.js"></script>
 <script src="../job-closeout.js"></script>
+<script src="../refund-ui.js"></script>
 <script src="../admin-fetch.js"></script>
 <script src="../nav-badge.js"></script>
 <script src="../phone-format.js"></script>

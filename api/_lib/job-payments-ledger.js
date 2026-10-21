@@ -146,6 +146,23 @@ function netCollectedFromLedgerRows(rows) {
   return Math.round(total * 100) / 100;
 }
 
+// Phase 5 — SUM(payment) only, ignoring every "refund"-typed row entirely
+// (never subtracted, unlike netCollectedFromLedgerRows above). Pass the
+// same already-fetched, already-non-voided rows either function would
+// take. Used by deriveInvoiceStatus() to tell apart "never collected
+// anything" from "collected, then fully refunded back to net $0" — both
+// have netCollected <= 0, but only the second is genuinely "Refunded"
+// rather than plain "finalized" (unpaid).
+function grossCollectedFromLedgerRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  let total = 0;
+  for (const row of rows) {
+    if (row.paymentType === "refund" || row.payment_type === "refund") continue;
+    total += Number(row.amount) || 0;
+  }
+  return Math.round(total * 100) / 100;
+}
+
 // The Stage 3 bookings.final_price compatibility rule (see the proposal
 // doc's "Existing bookings.final_price compatibility" section):
 //   - if this booking has any non-voided job_payments rows, the ledger
@@ -187,6 +204,7 @@ module.exports = {
   resolveJobPaymentAttribution,
   mirrorStripePaymentToLedger,
   netCollectedFromLedgerRows,
+  grossCollectedFromLedgerRows,
   effectiveRevenue,
   denverTodayIso,
 };

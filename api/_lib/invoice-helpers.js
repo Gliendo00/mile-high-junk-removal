@@ -89,7 +89,18 @@ function mapLineItem(row) {
 // netCollectedFromLedgerRows() — computed by the caller, never here).
 // todayIso: the caller's own denverTodayIso() — not computed in this file,
 // so every call site stays on exactly one "today" definition.
-function deriveInvoiceStatus(invoice, netCollected, todayIso) {
+//
+// grossCollected (Phase 5, optional): SUM(payment) only, ignoring refunds
+// (job-payments-ledger.js's grossCollectedFromLedgerRows() — same rows,
+// computed by the caller same as netCollected). Only purpose: tell apart
+// "this invoice never collected anything" from "collected, then fully
+// refunded back to net $0 or less" — both have netCollected <= 0, but
+// Part 8 explicitly wants the second case labeled "Refunded," not
+// "finalized" (which reads as "still awaiting its first payment"). Omitted
+// entirely by a caller that hasn't computed it (every existing call site
+// before Phase 5) simply never reaches the "refunded" branch below —
+// backward compatible, no behavior change for those callers.
+function deriveInvoiceStatus(invoice, netCollected, todayIso, grossCollected) {
   if (!invoice || invoice.status === "draft") {
     return { displayStatus: "draft", balanceDue: null, isOverdue: false };
   }
@@ -100,8 +111,20 @@ function deriveInvoiceStatus(invoice, netCollected, todayIso) {
   const total = Number(invoice.totalAmount) || 0;
   const collected = Number(netCollected) || 0;
   const balanceDue = Math.max(Math.round((total - collected) * 100) / 100, 0);
-  const displayStatus = balanceDue <= 0 ? "paid" : collected > 0 ? "partially_paid" : "finalized";
-  const isOverdue = displayStatus !== "paid" && !!invoice.dueDate && typeof todayIso === "string" && invoice.dueDate < todayIso;
+  const gross = Number(grossCollected) || 0;
+  // Phase 5 bugfix: "refunded" (collected <= 0 after netting out a refund,
+  // but gross > 0 — i.e. money WAS collected, then given back) must be
+  // checked independently of balanceDue, not nested inside the
+  // balanceDue <= 0 branch. For any invoice with a positive total,
+  // collected <= 0 forces balanceDue back UP to (approximately) the full
+  // total — balanceDue <= 0 and collected <= 0 can essentially never both
+  // hold at once, which made the original nested check dead code: a fully
+  // refunded invoice fell through to the balanceDue > 0 / collected <= 0
+  // "finalized" branch instead, reading as "never billed" rather than
+  // "refunded." See this function's own header and job-payments-ledger.js's
+  // grossCollectedFromLedgerRows() header for the intended behavior.
+  const displayStatus = collected <= 0 && gross > 0 ? "refunded" : balanceDue <= 0 ? "paid" : collected > 0 ? "partially_paid" : "finalized";
+  const isOverdue = displayStatus !== "paid" && displayStatus !== "refunded" && !!invoice.dueDate && typeof todayIso === "string" && invoice.dueDate < todayIso;
 
   return { displayStatus, balanceDue, isOverdue };
 }

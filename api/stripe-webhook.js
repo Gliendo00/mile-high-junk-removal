@@ -35,6 +35,14 @@
 //     the one thing this app has NO other way to learn about — recorded as
 //     Stripe's own dispute.status verbatim (informational only; no
 //     automated action is ever taken from it).
+//   - charge.refunded (Phase 5): backstop for the admin CRM's own
+//     synchronous refund flow (handleRefundJobPayment() in
+//     api/admin/booking.js) and the only way a refund issued directly in
+//     the Stripe Dashboard/API (outside this CRM entirely) ever reaches
+//     job_payments. Idempotent the same way payment capture already is —
+//     see reconcileRefunded() below. Requires this event type to be
+//     enabled on the Stripe webhook endpoint's own configuration in the
+//     Stripe Dashboard (not something this codebase controls).
 //
 // Every write below is an absolute SET-by-stripe_payment_intent_id update
 // (never an increment, never "add a new row per event"), so processing the
@@ -55,7 +63,7 @@
 // raw bytes are read directly from the request stream.
 const { getStripeClient } = require("./_lib/stripe-client");
 const { getServiceClient } = require("./_lib/supabase-admin");
-const { mirrorStripePaymentToLedger } = require("./_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, denverTodayIso } = require("./_lib/job-payments-ledger");
 const { reconcileInvoicePaymentIntent } = require("./_lib/invoice-helpers");
 
 module.exports.config = { api: { bodyParser: false } };
@@ -168,9 +176,70 @@ async function applyEvent(supabase, stripe, event) {
     return;
   }
 
+  // Phase 5 — refund backstop. The admin CRM's own synchronous refund flow
+  // (api/admin/booking.js's handleRefundJobPayment()) already writes its
+  // ledger row immediately after a confirmed stripe.refunds.create() call,
+  // so for a refund issued THROUGH this CRM, the upsert below (same
+  // onConflict:"stripe_refund_id", ignoreDuplicates:true shape
+  // mirrorStripePaymentToLedger() already uses) is a harmless no-op — the
+  // row already exists. This exists for the two cases that path can't
+  // cover: (1) a crash between that Stripe call succeeding and its own
+  // insert, and (2) a refund issued directly in the Stripe Dashboard/API,
+  // completely outside this CRM — this is the ONLY way such a refund ever
+  // reaches job_payments at all. A charge can carry more than one refund
+  // (multiple partials); every one of them is walked, not just the newest.
+  if (type === "charge.refunded") {
+    const charge = obj;
+    if (!charge || !charge.payment_intent) return;
+    await reconcileRefunded(supabase, charge);
+    return;
+  }
+
   // Every other webhook kind (charge.succeeded, customer.created, etc. this
   // project doesn't act on) is intentionally a no-op — acknowledged with
   // 200 by the caller, nothing to update.
+}
+
+// See the "charge.refunded" branch above for why this exists. Attribution
+// (booking_id/invoice_id) is resolved from the ORIGINAL "payment"-typed
+// job_payments row for this same PaymentIntent — if none is found (e.g. a
+// PaymentIntent this app never captured through its own code at all), the
+// refund is logged and skipped rather than guessed at.
+async function reconcileRefunded(supabase, charge) {
+  const refunds = (charge.refunds && Array.isArray(charge.refunds.data) ? charge.refunds.data : []).filter((r) => r.status === "succeeded");
+  if (!refunds.length) return;
+
+  const originalRes = await supabase
+    .from("job_payments")
+    .select("booking_id, invoice_id")
+    .eq("stripe_payment_intent_id", charge.payment_intent)
+    .eq("payment_type", "payment")
+    .is("voided_at", null)
+    .maybeSingle();
+  if (originalRes.error) throw originalRes.error;
+  if (!originalRes.data) {
+    console.error("Stripe webhook: charge.refunded for payment_intent " + charge.payment_intent + " has no matching job_payments row to attribute the refund to — skipped.");
+    return;
+  }
+  const { booking_id: bookingId, invoice_id: invoiceId } = originalRes.data;
+
+  for (const refund of refunds) {
+    const { error } = await supabase.from("job_payments").upsert(
+      {
+        booking_id: bookingId,
+        invoice_id: invoiceId,
+        invoice_id_classified: true,
+        amount: refund.amount / 100,
+        payment_method: "card_stripe",
+        payment_type: "refund",
+        payment_date: denverTodayIso(),
+        notes: "Stripe refund" + (refund.reason ? " (" + refund.reason + ")" : "") + ", confirmed via webhook backstop (auto-recorded from Stripe).",
+        stripe_refund_id: refund.id,
+      },
+      { onConflict: "stripe_refund_id", ignoreDuplicates: true }
+    );
+    if (error) throw error;
+  }
 }
 
 // Tries rental_payments first (the initial charge), then

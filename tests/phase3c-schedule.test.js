@@ -797,6 +797,14 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // and tests/phase3d-stage-b-invoice-centric.test.js.
       "api/admin/booking.js: .insert(",
       "api/admin/booking.js: .insert(",
+      // Phase 5 (Dumpster Rental Extra Charges + Refunds) added exactly two
+      // new inserts: handleInvoiceCharges()'s own invoices row (a brand-new
+      // invoice, created only when a rental has none yet, found-or-created
+      // the same idempotent way handleCreateInvoice() already does) and its
+      // invoice_line_items row for each charge it turns into a line item.
+      // See tests/phase5-dumpster-charges-refunds.test.js.
+      "api/admin/booking.js: .insert(",
+      "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect.
       "api/admin/booking.js: .update(",
@@ -909,10 +917,27 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // Phase 5 added exactly three new updates, all inside
+      // handleInvoiceCharges(): the rental_additional_charges status ->
+      // "invoiced" transition, its invoice_line_item_id link-back write,
+      // and its own auto-finalize of a brand-new invoice (a separate call
+      // site from the shared "finalize" action's own update, which already
+      // counted above under Phase 2). See
+      // tests/phase5-dumpster-charges-refunds.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       // Batch 2C added exactly one new upsert — handleUpdate()'s
       // dumpster_rentals write, keyed onConflict: "booking_id" (a real
       // UNIQUE constraint, Phase 1). See
       // tests/phase3c-dumpster-rental-admin.test.js.
+      "api/admin/booking.js: .upsert(",
+      // Phase 5 added exactly one new upsert — handleRefundJobPayment()'s
+      // job_payments row, keyed onConflict: "stripe_refund_id" (mirrors
+      // mirrorStripePaymentToLedger()'s own idempotent-upsert pattern for
+      // the exact same reason — a retried refund request after a confirmed
+      // Stripe call must never create a second ledger row). See
+      // tests/phase5-dumpster-charges-refunds.test.js.
       "api/admin/booking.js: .upsert(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

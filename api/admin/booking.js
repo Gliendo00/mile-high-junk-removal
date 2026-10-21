@@ -19,7 +19,15 @@ const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
-const { mirrorStripePaymentToLedger, resolveJobPaymentAttribution, effectiveRevenue, netCollectedFromLedgerRows, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
+const {
+  mirrorStripePaymentToLedger,
+  resolveJobPaymentAttribution,
+  effectiveRevenue,
+  netCollectedFromLedgerRows,
+  grossCollectedFromLedgerRows,
+  VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS,
+  VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES,
+} = require("../_lib/job-payments-ledger");
 const { ALL_COMPLIMENTARY_REASON_KEYS, complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 const {
   INVOICE_SELECT_COLS,
@@ -78,7 +86,17 @@ module.exports = async (req, res) => {
   if (req.query.resource === "job-payments") {
     if (req.method === "GET") return handleListJobPayments(req, res);
     if (req.method === "POST") return handleCreateJobPayment(req, res, session);
-    if (req.method === "PATCH") return handleVoidJobPayment(req, res, session);
+    // Phase 5 — PATCH now branches on an optional body.action: "refund"
+    // (the new Stripe-backed refund flow, handleRefundJobPayment() below)
+    // or anything else/absent (unchanged — void, handleVoidJobPayment()).
+    // Kept on this same resource/method rather than a new one, matching
+    // this file's own established "one more branch on an existing
+    // resource" convention (see ?resource=charges's header).
+    if (req.method === "PATCH") {
+      const patchBody = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+      if (patchBody.action === "refund") return handleRefundJobPayment(req, res, session);
+      return handleVoidJobPayment(req, res, session);
+    }
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
@@ -260,7 +278,9 @@ module.exports = async (req, res) => {
         // rate/included weight to show/use it correctly when proposing an
         // overweight charge (see handleProposeCharge() below), rather than
         // silently assuming the current global rate applies.
-        .select("payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason, included_tons, overage_ton_rate")
+        .select(
+          "payment_status, amount_charged, payment_method_summary, stripe_payment_intent_id, agreement_version, agreement_accepted_at, dispute_status, failure_reason, included_tons, overage_ton_rate, included_days, overage_day_rate"
+        )
         .eq("booking_id", id)
         .maybeSingle(),
       // Phase 3C Stage 3 — every job_payments row for this booking, newest
@@ -438,6 +458,12 @@ module.exports = async (req, res) => {
         includedTons: payment && payment.included_tons != null ? payment.included_tons : rentalPricing.INCLUDED_TONS,
         overageTonRate: payment && payment.overage_ton_rate != null ? payment.overage_ton_rate : rentalPricing.OVERAGE_TON_RATE,
         isBookingSpecific: !!(payment && payment.overage_ton_rate != null),
+        // Phase 5 — same booking-specific-first/global-fallback rule as
+        // the two fields above, for additional_days' own live preview
+        // (see admin/booking-detail.js's updateDaysContext()).
+        includedDays: payment && payment.included_days != null ? payment.included_days : rentalPricing.INCLUDED_DAYS,
+        overageDayRate: payment && payment.overage_day_rate != null ? payment.overage_day_rate : rentalPricing.OVERAGE_DAY_RATE,
+        isDaysRateBookingSpecific: !!(payment && payment.overage_day_rate != null),
       },
       // Phase 3C Stage 3 — the cross-service-type payment ledger. jobPayments
       // is every row (voided included, oldest financial-audit trail first
@@ -1577,7 +1603,7 @@ async function handleGetInvoice(req, res) {
       supabase
         .from("job_payments")
         .select(
-          "id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at"
+          JOB_PAYMENT_SELECT_COLS
         )
         .eq("invoice_id", id)
         .order("payment_date", { ascending: false })
@@ -1606,8 +1632,10 @@ async function handleGetInvoice(req, res) {
     if (deliveryAttemptsRes.error) throw deliveryAttemptsRes.error;
 
     const paymentRows = paymentsRes.data || [];
-    const netCollected = netCollectedFromLedgerRows(paymentRows.filter((p) => !p.voided_at));
-    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso());
+    const nonVoidedPaymentRows = paymentRows.filter((p) => !p.voided_at);
+    const netCollected = netCollectedFromLedgerRows(nonVoidedPaymentRows);
+    const grossCollected = grossCollectedFromLedgerRows(nonVoidedPaymentRows);
+    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso(), grossCollected);
 
     const customer = customerRes.data;
     const booking = bookingRes.data;
@@ -3676,7 +3704,23 @@ async function handleReviewRequestAction(req, res, session) {
 // reconciliation action — see its own header comment below.
 // ---------------------------------------------------------------------
 
-const CHARGE_TYPES = ["overweight_tonnage", "additional_days", "other"];
+// Phase 5 — relocation/blocked_pickup/rule_violation added alongside the
+// original overweight_tonnage/additional_days/other. None of the three has
+// a fixed rate anywhere in the current rental agreement (checked
+// book/index.html before adding these) — they behave exactly like "other"
+// (FLAT_CHARGE_TYPES below): a flat, admin-entered amount with a required
+// description, just reported under their own type instead of lumped into
+// "other." Only overweight_tonnage/additional_days are server-computed.
+const CHARGE_TYPES = ["overweight_tonnage", "additional_days", "relocation", "blocked_pickup", "rule_violation", "other"];
+const FLAT_CHARGE_TYPES = ["relocation", "blocked_pickup", "rule_violation", "other"];
+// The two charge types rental_additional_charges actually bills on its own
+// schedule from rental-pricing.js — one proposed row of EACH per booking at
+// a time, enforced by hasActiveChargeOfType() below (Part 10: "no duplicate
+// closeout charge creation from double-click/retry"). A booking can freely
+// have any number of flat-type (FLAT_CHARGE_TYPES) charges, since those are
+// each a distinct, admin-described event with no natural "one per booking"
+// limit.
+const RATE_BASED_CHARGE_TYPES = ["overweight_tonnage", "additional_days"];
 const MAX_QUANTITY = 999999;
 // A generous sanity bound on a scale-weight reading (100,000 lbs), not a
 // real physical limit — just enough to reject an obvious typo before it
@@ -3686,6 +3730,9 @@ const MAX_WEIGHT_LBS = 100000;
 const JOB_PAYMENT_NOTES_MAX = 500;
 const JOB_PAYMENT_VOID_REASON_MAX = 300;
 const JOB_PAYMENT_MAX_AMOUNT = 999999;
+
+const JOB_PAYMENT_SELECT_COLS =
+  "id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, stripe_refund_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at";
 
 function serializeJobPayment(row) {
   return {
@@ -3701,6 +3748,10 @@ function serializeJobPayment(row) {
     paymentDate: row.payment_date,
     notes: row.notes,
     stripePaymentIntentId: row.stripe_payment_intent_id,
+    // Phase 5 — only ever set on a "refund"-typed row created by
+    // handleRefundJobPayment(); the Stripe refund object's own id, for the
+    // same display/audit purpose stripePaymentIntentId already serves.
+    stripeRefundId: row.stripe_refund_id,
     reversesPaymentId: row.reverses_payment_id,
     voidedAt: row.voided_at,
     voidedReason: row.voided_reason,
@@ -3729,7 +3780,7 @@ async function handleListJobPayments(req, res) {
   try {
     const { data, error } = await supabase
       .from("job_payments")
-      .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .select(JOB_PAYMENT_SELECT_COLS)
       .eq("booking_id", bookingId)
       .order("payment_date", { ascending: false })
       .order("created_at", { ascending: false });
@@ -3820,7 +3871,78 @@ function validateManualPaymentFields(body) {
     reversesPaymentId = rid;
   }
 
+  // Phase 5 — Part 7's "relationship back to the original payment" is
+  // mandatory for a manual refund, not optional the way it is for an
+  // ordinary correction entry: a refund with no original payment to point
+  // at has nothing to validate its amount against (see
+  // computeRefundableBalance() below) and nothing to show as "Refund of
+  // the $349 Cash payment on Oct 3" in the ledger UI.
+  if (paymentType === "refund" && !reversesPaymentId) {
+    return { error: "Please choose which payment this refund is for." };
+  }
+
+  // Part 6B — every path into this validator is a MANUAL entry
+  // (paymentMethod "card_stripe" was already rejected above; a real
+  // Stripe refund goes through handleRefundJobPayment()'s own separate
+  // Stripe-calling path instead, never through here). This CRM has no way
+  // to actually move money for cash/Zelle/Venmo/check/other — a manual
+  // "refund" row only RECORDS that a refund happened; the admin must
+  // explicitly confirm they already returned the money some other way,
+  // enforced server-side (defense in depth), not only as a UI checkbox.
+  if (paymentType === "refund" && body.confirmedExternalReturn !== true) {
+    return { error: "Please confirm the money was already returned to the customer outside the CRM before recording this refund." };
+  }
+
   return { paymentMethod, paymentType, amount, paymentDate, notes, reversesPaymentId };
+}
+
+// Phase 5 — "never refund more than the remaining refundable amount"
+// (Part 10), computed once here and reused by both the manual-refund path
+// (handleCreateJobPayment/handleCreateInvoicePayment, via
+// validateReversedPayment() below) and the Stripe-refund path
+// (handleRefundJobPayment()). originalPaymentId must be a "payment"-typed,
+// non-voided row; refundable = that row's own amount, minus every
+// non-voided "refund"-typed row that already points back at it via
+// reverses_payment_id. A voided refund doesn't count against the balance
+// it would have reduced — voiding a refund row means "this refund entry
+// was a mistake," not "the money was un-refunded."
+async function computeRefundableBalance(supabase, originalPaymentId) {
+  const originalRes = await supabase
+    .from("job_payments")
+    .select("id, booking_id, invoice_id, amount, payment_method, payment_type, voided_at, stripe_payment_intent_id")
+    .eq("id", originalPaymentId)
+    .maybeSingle();
+  if (originalRes.error) throw originalRes.error;
+  const original = originalRes.data;
+  if (!original) return { error: "The original payment could not be found." };
+  if (original.voided_at) return { error: "That payment has been voided and cannot be refunded." };
+  if (original.payment_type !== "payment") return { error: "Only a payment can be refunded, not another refund." };
+
+  const refundsRes = await supabase.from("job_payments").select("amount").eq("reverses_payment_id", originalPaymentId).eq("payment_type", "refund").is("voided_at", null);
+  if (refundsRes.error) throw refundsRes.error;
+  const alreadyRefunded = (refundsRes.data || []).reduce((sum, r) => sum + Number(r.amount || 0), 0);
+  const refundable = Math.round((Number(original.amount) - alreadyRefunded) * 100) / 100;
+
+  return { original, alreadyRefunded: Math.round(alreadyRefunded * 100) / 100, refundable };
+}
+
+// Shared by both manual-payment create endpoints below: once
+// validateManualPaymentFields() has confirmed a refund's reversesPaymentId
+// is present, this independently re-validates it server-side (never trusts
+// the amount the client showed in its own live-computed preview) and
+// returns a ready-to-send error, or nothing if the refund is within
+// bounds.
+async function validateRefundAmount(supabase, reversesPaymentId, amount) {
+  const balance = await computeRefundableBalance(supabase, reversesPaymentId);
+  if (balance.error) return balance.error;
+  if (amount > balance.refundable + 0.001) {
+    return "This refund of " + formatMoney(amount) + " exceeds the remaining refundable balance of " + formatMoney(balance.refundable) + ".";
+  }
+  return null;
+}
+
+function formatMoney(n) {
+  return "$" + Number(n).toFixed(2);
 }
 
 // POST ?resource=job-payments — record one generic, booking-level MANUAL
@@ -3884,6 +4006,18 @@ async function handleCreateJobPayment(req, res, session) {
         res.status(400).json({ error: "The payment being reversed must also be a generic booking payment, not one attributed to an invoice." });
         return;
       }
+
+      // Phase 5 — manual-refund amount bound ("never refund more than the
+      // remaining refundable amount," Part 10). Only meaningful for
+      // paymentType "refund"; a plain correction entry (reversesPaymentId
+      // set on an ordinary "payment" row) is unaffected.
+      if (paymentType === "refund") {
+        const refundError = await validateRefundAmount(supabase, reversesPaymentId, amount);
+        if (refundError) {
+          res.status(400).json({ error: refundError });
+          return;
+        }
+      }
     }
 
     // Phase 3D Stage B: the semantic cutover itself. A generic booking
@@ -3912,7 +4046,7 @@ async function handleCreateJobPayment(req, res, session) {
         reverses_payment_id: reversesPaymentId,
         recorded_by: (session && session.email) || null,
       })
-      .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+      .select(JOB_PAYMENT_SELECT_COLS)
       .single();
     if (error) throw error;
     if (!created) throw new Error("Insert returned no row.");
@@ -3987,6 +4121,15 @@ async function handleCreateInvoicePayment(req, res, session) {
         res.status(400).json({ error: "The payment being reversed must belong to this same invoice." });
         return;
       }
+
+      // Phase 5 — same manual-refund amount bound as handleCreateJobPayment().
+      if (paymentType === "refund") {
+        const refundError = await validateRefundAmount(supabase, reversesPaymentId, amount);
+        if (refundError) {
+          res.status(400).json({ error: refundError });
+          return;
+        }
+      }
     }
 
     const stripe = getStripeClient();
@@ -4005,7 +4148,7 @@ async function handleCreateInvoicePayment(req, res, session) {
           reverses_payment_id: reversesPaymentId,
           recorded_by: (session && session.email) || null,
         })
-        .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .select(JOB_PAYMENT_SELECT_COLS)
         .single();
       if (error) throw error;
       if (!created) throw new Error("Insert returned no row.");
@@ -4074,7 +4217,7 @@ async function handleVoidJobPayment(req, res, session) {
         .update({ voided_at: new Date().toISOString(), voided_reason: reason, updated_at: new Date().toISOString() })
         .eq("id", id)
         .is("voided_at", null)
-        .select("id, booking_id, invoice_id, amount, payment_method, payment_type, payment_date, notes, stripe_payment_intent_id, reverses_payment_id, voided_at, voided_reason, recorded_by, created_at")
+        .select(JOB_PAYMENT_SELECT_COLS)
         .maybeSingle();
       if (error) throw error;
       if (!voided) {
@@ -4114,6 +4257,186 @@ async function handleVoidJobPayment(req, res, session) {
   }
 }
 
+const REFUND_REASON_MAX = 300;
+
+// PATCH ?resource=job-payments { action:"refund", paymentId, amount,
+// reason, clientRequestId } — Part 6A, the Stripe-backed refund path. A
+// GENUINELY SEPARATE financial event from the original payment (see this
+// file's header note on handleVoidJobPayment() above): the original
+// job_payments row is NEVER touched — not voided, not edited — a new
+// "refund"-typed row is inserted alongside it, linked back via
+// reverses_payment_id (see computeRefundableBalance()'s own header for
+// why that column now also serves this purpose).
+//
+// Ordering is the whole safety story here, same discipline this file
+// already uses for the direct-charge additional-charges flow
+// (handleApprove()): Stripe is called FIRST; the ledger row is written
+// ONLY after Stripe confirms success, and the insert is idempotent
+// (upsert on the new job_payments_stripe_refund_idx unique index,
+// ignoreDuplicates — identical shape to mirrorStripePaymentToLedger()'s
+// own upsert) so a crash between a successful Stripe call and this insert
+// is safely recoverable by simply retrying the exact same request: Stripe
+// itself de-duplicates the SECOND stripe.refunds.create call via the
+// idempotency key (built from paymentId + the caller's own
+// clientRequestId — a fresh value per refund ATTEMPT the admin UI
+// generates once per modal-open/confirm, not per amount, so two genuinely
+// different refunds of the same amount never collide), returning the
+// SAME already-created Stripe refund object rather than refunding twice;
+// the subsequent upsert then either inserts the still-missing row or, if
+// it already exists from an earlier successful attempt, is a safe no-op.
+// If Stripe's call itself fails/errors, nothing is ever written here —
+// "if Stripe rejects/fails the refund, do not record a successful refund
+// in our ledger" (Part 10) holds by construction, not by a rollback.
+async function handleRefundJobPayment(req, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin refund job payment failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+
+  const paymentId = typeof body.paymentId === "string" ? body.paymentId.trim() : "";
+  if (!paymentId || !UUID_RE.test(paymentId)) {
+    res.status(400).json({ error: "A valid payment id is required." });
+    return;
+  }
+
+  const amountNum = Number(body.amount);
+  if (!Number.isFinite(amountNum) || amountNum <= 0 || amountNum > JOB_PAYMENT_MAX_AMOUNT) {
+    res.status(400).json({ error: "Please enter a valid refund amount." });
+    return;
+  }
+  const amount = rentalPricing.round2(amountNum);
+
+  const reason = sanitizeText(body.reason, REFUND_REASON_MAX);
+  if (!reason) {
+    res.status(400).json({ error: "A reason is required to issue a refund." });
+    return;
+  }
+
+  // Not displayed, not stored verbatim as given — only ever used to build
+  // a deterministic Stripe idempotency key below. A short, plain-token
+  // shape is enough (and keeps the idempotency key itself well-formed);
+  // the UI generates a fresh one per refund attempt (crypto.randomUUID()
+  // or equivalent), never reused across two different intended refunds.
+  const clientRequestId = typeof body.clientRequestId === "string" ? body.clientRequestId.trim() : "";
+  if (!clientRequestId || !/^[A-Za-z0-9_-]{1,100}$/.test(clientRequestId)) {
+    res.status(400).json({ error: "This request is missing a required reference id. Please try again." });
+    return;
+  }
+
+  try {
+    const balance = await computeRefundableBalance(supabase, paymentId);
+    if (balance.error) {
+      res.status(400).json({ error: balance.error });
+      return;
+    }
+    const original = balance.original;
+    if (original.payment_method !== "card_stripe" || !original.stripe_payment_intent_id) {
+      res.status(400).json({ error: "Only a card (Stripe) payment can be refunded this way. Use a manual refund entry for cash/Zelle/Venmo/check/other." });
+      return;
+    }
+    if (amount > balance.refundable + 0.001) {
+      res.status(400).json({ error: "This refund of " + formatMoney(amount) + " exceeds the remaining refundable balance of " + formatMoney(balance.refundable) + "." });
+      return;
+    }
+
+    const amountCents = decimalDollarsToPositiveCents(amount);
+    if (amountCents === null) {
+      res.status(400).json({ error: "Please enter a valid refund amount." });
+      return;
+    }
+
+    const stripe = getStripeClient();
+    if (!stripe) {
+      console.error("Admin refund job payment failed: STRIPE_SECRET_KEY not configured");
+      res.status(500).json({ error: "Payment processing is not configured." });
+      return;
+    }
+
+    let refund;
+    try {
+      refund = await stripe.refunds.create(
+        { payment_intent: original.stripe_payment_intent_id, amount: amountCents, reason: "requested_by_customer" },
+        { idempotencyKey: "refund:" + paymentId + ":" + clientRequestId }
+      );
+    } catch (stripeErr) {
+      // Nothing is written to job_payments on this path — see this
+      // function's own header. A clean, specific message where Stripe
+      // gives one; a generic fallback otherwise.
+      console.error("Admin refund job payment: Stripe refund failed for payment " + paymentId + ":", stripeErr && stripeErr.stack ? stripeErr.stack : stripeErr);
+      const message = (stripeErr && stripeErr.message) || "Stripe could not process this refund.";
+      res.status(402).json({ error: message });
+      return;
+    }
+
+    const insertFields = {
+      booking_id: original.booking_id,
+      invoice_id: original.invoice_id,
+      invoice_id_classified: true,
+      amount: amount,
+      payment_method: "card_stripe",
+      payment_type: "refund",
+      payment_date: denverTodayIso(),
+      notes: reason,
+      reverses_payment_id: paymentId,
+      stripe_refund_id: refund.id,
+      recorded_by: session.email,
+    };
+
+    const doInsert = async () => {
+      const { data: created, error } = await supabase
+        .from("job_payments")
+        .upsert(insertFields, { onConflict: "stripe_refund_id", ignoreDuplicates: true })
+        .select(JOB_PAYMENT_SELECT_COLS);
+      if (error) throw error;
+      // ignoreDuplicates means a retried request (same Stripe refund,
+      // already recorded) returns zero rows here rather than the existing
+      // one — re-select by the now-guaranteed-unique stripe_refund_id so
+      // the response always carries the real row either way.
+      if (created && created.length) return { ok: true, jobPayment: serializeJobPayment(created[0]) };
+      const existingRes = await supabase.from("job_payments").select(JOB_PAYMENT_SELECT_COLS).eq("stripe_refund_id", refund.id).maybeSingle();
+      if (existingRes.error) throw existingRes.error;
+      if (!existingRes.data) throw new Error("Refund succeeded at Stripe but could not be recorded or re-read.");
+      return { ok: true, jobPayment: serializeJobPayment(existingRes.data) };
+    };
+
+    let result;
+    if (original.invoice_id) {
+      const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", original.invoice_id).maybeSingle();
+      if (invoiceRes.error) throw invoiceRes.error;
+      if (!invoiceRes.data) {
+        // Stripe has already refunded the money at this point — recording
+        // the ledger row must not be skipped just because the invoice
+        // lookup is unexpectedly empty; fall back to an unlocked insert
+        // rather than silently losing a confirmed refund.
+        result = await doInsert();
+      } else {
+        const refundStripe = getStripeClient();
+        result = await withInvoicePaymentLock(supabase, refundStripe, mapInvoice(invoiceRes.data), { purpose: "balance_mutation" }, doInsert);
+      }
+    } else {
+      result = await doInsert();
+    }
+
+    if (!result.ok) {
+      // Stripe has already refunded the money — this is a bookkeeping
+      // failure, not a financial one. Reported distinctly so the admin
+      // knows to check Stripe/retry recording rather than retry the refund
+      // itself (retrying is safe either way, per this function's own
+      // idempotency, but the message should not imply nothing happened).
+      res.status(500).json({ error: "The refund succeeded at Stripe but could not be recorded: " + (result.error || "unknown error") + ". It is safe to retry." });
+      return;
+    }
+    res.status(200).json(result);
+  } catch (err) {
+    console.error("Admin refund job payment failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not process this refund." });
+  }
+}
+
 function serializeCharge(row) {
   return {
     id: row.id,
@@ -4131,9 +4454,48 @@ function serializeCharge(row) {
     stripePaymentIntentId: row.stripe_payment_intent_id,
     failureReason: row.failure_reason,
     disputeStatus: row.dispute_status,
+    // Phase 5 — override audit trail. calculatedAmount is only ever
+    // non-null when an admin overrode a server-computed amount (see
+    // handleProposeCharge()'s overrideAmount handling) — amount above is
+    // always the one actually billed; calculatedAmount preserves what the
+    // formula originally produced, for history.
+    calculatedAmount: row.calculated_amount,
+    overrideReason: row.override_reason,
+    overriddenBy: row.overridden_by,
+    overriddenAt: row.overridden_at,
+    // Phase 5 — set once this charge becomes an invoice line item via
+    // ?resource=charges PATCH {action:"invoice"} (handleInvoiceCharges()).
+    invoiceLineItemId: row.invoice_line_item_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+const CHARGE_SELECT_COLS =
+  "id, booking_id, charge_type, quantity, rate, amount, description, status, proposed_by, proposed_at, approved_by, approved_at, stripe_payment_intent_id, failure_reason, dispute_status, calculated_amount, override_reason, overridden_by, overridden_at, invoice_line_item_id, created_at, updated_at";
+
+// Part 10 — "no duplicate closeout charge creation from double-click/
+// retry," applied to the two rate-based types: a booking can have at most
+// one NON-voided overweight_tonnage charge and one NON-voided
+// additional_days charge "in flight or settled" at a time ('voided' is the
+// only status that frees up a fresh propose — mirrors how a voided
+// job_payments row never blocks a corrected re-entry). A 'failed' charge is
+// still "in flight" here (it's retried via Approve, not by proposing a new
+// one) — this intentionally blocks a second overweight/extra-days propose
+// while an earlier one of the same type is proposed/approved/processing/
+// failed/paid/invoiced/awaiting review, exactly the race a double-click or
+// a resubmitted form would otherwise create.
+async function hasActiveChargeOfType(supabase, bookingId, chargeType) {
+  const { data, error } = await supabase
+    .from("rental_additional_charges")
+    .select("id")
+    .eq("booking_id", bookingId)
+    .eq("charge_type", chargeType)
+    .neq("status", "voided")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data;
 }
 
 // GET ?resource=charges&bookingId=<uuid> — list every additional charge for
@@ -4164,13 +4526,18 @@ async function handleListCharges(req, res) {
 
 // POST ?resource=charges — propose a new additional charge. Moves no
 // money: writes at most one rental_additional_charges row with
-// status: "proposed". `chargeType` plus `quantity` (additional_days),
-// `amount` (other), or `actualWeightLbs` (overweight_tonnage, since the
-// 2026-09-18-v2 pricing update — see below) are the only fields ever read
-// from the body — never a client-submitted `amount` for the two
-// rate-based types, and never a client-submitted `rate` at all; both are
-// always computed here from api/_lib/rental-pricing.js's current rates (or
-// this booking's own locked-in ones) and snapshotted onto the row.
+// status: "proposed". `chargeType` plus `actualWeightLbs`
+// (overweight_tonnage, since the 2026-09-18-v2 pricing update — see
+// below), nothing extra (additional_days — Phase 5: always computed from
+// this rental's own delivery/pickup dates, never a client-submitted day
+// count), or `amount`+`description` (the flat FLAT_CHARGE_TYPES) are the
+// only fields ever read from the body for the charge's BASE amount — never
+// a client-submitted `amount` for the two rate-based types, and never a
+// client-submitted `rate` at all; both are always computed here from
+// api/_lib/rental-pricing.js's current rates (or this booking's own
+// locked-in ones) and snapshotted onto the row. Phase 5 also accepts an
+// optional `overrideAmount` (+ optional `overrideReason`) for the two
+// rate-based types only — see the override block below.
 async function handleProposeCharge(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -4207,6 +4574,19 @@ async function handleProposeCharge(req, res, session) {
       return;
     }
 
+    // Part 10 — block a second overweight/extra-days charge while an
+    // earlier non-voided one of the SAME type already exists for this
+    // booking. See hasActiveChargeOfType()'s own header for exactly what
+    // counts as "active." Flat types (FLAT_CHARGE_TYPES) have no such
+    // limit — each is its own distinct, admin-described event.
+    if (RATE_BASED_CHARGE_TYPES.includes(chargeType)) {
+      const alreadyActive = await hasActiveChargeOfType(supabase, bookingId, chargeType);
+      if (alreadyActive) {
+        res.status(409).json({ error: "A charge of this type already exists for this rental. Void it first if you need to redo it." });
+        return;
+      }
+    }
+
     // 2026-09-18 hardening audit, §11 — the rate applied is THIS booking's
     // own locked-in schedule (frozen at booking time on rental_payments),
     // never the current global api/_lib/rental-pricing.js constants. A
@@ -4215,27 +4595,47 @@ async function handleProposeCharge(req, res, session) {
     // current global rate only when this booking has no rental_payments
     // row of its own to read from (e.g. an admin-created dumpster rental
     // that was never paid online, which locked in no rate schedule) —
-    // there is nothing else to fall back to in that case. included_tons is
-    // read the same way, added for the 2026-09-18-v2 pricing update (see
-    // overweight_tonnage below) — a booking's own included weight must be
-    // used for its own overage math too, not just its own rate.
+    // there is nothing else to fall back to in that case. included_tons/
+    // included_days are read the same way (included_days added Phase 5,
+    // for additional_days' own date-based calc below) — a booking's own
+    // included allowance must be used for its own overage math too, not
+    // just its own rate.
     let bookingRate = null;
     let bookingIncludedTons = null;
+    let bookingIncludedDays = null;
     const bookingPricingRes = await supabase
       .from("rental_payments")
-      .select("overage_ton_rate, overage_day_rate, included_tons")
+      .select("overage_ton_rate, overage_day_rate, included_tons, included_days")
       .eq("booking_id", bookingId)
       .maybeSingle();
     if (bookingPricingRes.error) throw bookingPricingRes.error;
     if (bookingPricingRes.data) {
       bookingRate = { overweight_tonnage: bookingPricingRes.data.overage_ton_rate, additional_days: bookingPricingRes.data.overage_day_rate };
       bookingIncludedTons = bookingPricingRes.data.included_tons;
+      bookingIncludedDays = bookingPricingRes.data.included_days;
     }
+
+    // Phase 5 — optional override of a server-computed amount
+    // (overweight_tonnage/additional_days only). Validated once up front;
+    // applied after the real calculation below so calculatedAmount always
+    // preserves what the formula produced, per Part 2/3's audit
+    // requirement. A flat type never has anything to override — its
+    // admin-entered `amount` already IS the final amount.
+    let overrideAmount = null;
+    if (RATE_BASED_CHARGE_TYPES.includes(chargeType) && body.overrideAmount !== undefined && body.overrideAmount !== null && body.overrideAmount !== "") {
+      const o = Number(body.overrideAmount);
+      if (!Number.isFinite(o) || o <= 0 || o > MAX_PRICE) {
+        res.status(400).json({ error: "Please enter a valid override amount." });
+        return;
+      }
+      overrideAmount = rentalPricing.round2(o);
+    }
+    const overrideReason = sanitizeText(body.overrideReason, MAX.long) || null;
 
     let quantity = null;
     let rate = null;
     let amount;
-    if (chargeType === "other") {
+    if (FLAT_CHARGE_TYPES.includes(chargeType)) {
       const n = Number(body.amount);
       if (!Number.isFinite(n) || n <= 0 || n > MAX_PRICE) {
         res.status(400).json({ error: "Please enter a valid amount." });
@@ -4273,13 +4673,14 @@ async function handleProposeCharge(req, res, session) {
       quantity = computed.quantityTons;
       amount = computed.amount;
 
-      if (amount <= 0) {
-        // At or under the included weight — nothing to charge.
-        // rental_additional_charges.amount has a CHECK (amount > 0), so a
-        // zero-amount row can never be inserted (and shouldn't be — this
-        // is a legitimate, common outcome during the data-collection
-        // window, not an error). The scale weight is already saved above;
-        // tell the admin that plainly rather than proposing a charge.
+      if (amount <= 0 && overrideAmount === null) {
+        // At or under the included weight, and no override given —
+        // nothing to charge. rental_additional_charges.amount has a
+        // CHECK (amount > 0), so a zero-amount row can never be inserted
+        // (and shouldn't be — this is a legitimate, common outcome during
+        // the data-collection window, not an error). The scale weight is
+        // already saved above; tell the admin that plainly rather than
+        // proposing a charge.
         res.status(200).json({
           ok: true,
           charge: null,
@@ -4291,14 +4692,54 @@ async function handleProposeCharge(req, res, session) {
         return;
       }
     } else {
-      const q = Number(body.quantity);
-      if (!Number.isFinite(q) || q <= 0 || q > MAX_QUANTITY) {
-        res.status(400).json({ error: "Please enter a valid quantity." });
+      // additional_days — Phase 5: always computed from this rental's own
+      // delivery_date/pickup_date (dumpster_rentals), never a manually
+      // typed day count. See api/_lib/rental-pricing.js's
+      // additionalDaysCharge() for the plain calendar-day-diff formula.
+      const dumpsterRes = await supabase.from("dumpster_rentals").select("delivery_date, pickup_date").eq("booking_id", bookingId).maybeSingle();
+      if (dumpsterRes.error) throw dumpsterRes.error;
+      if (!dumpsterRes.data || !dumpsterRes.data.delivery_date || !dumpsterRes.data.pickup_date) {
+        res.status(400).json({ error: "This rental has no delivery/pickup dates on file to calculate extra days from." });
         return;
       }
-      quantity = rentalPricing.round2(q);
-      rate = (bookingRate && bookingRate[chargeType] != null ? Number(bookingRate[chargeType]) : null) || rentalPricing.overageRate(chargeType);
-      amount = rentalPricing.round2(quantity * rate);
+
+      const includedDays = bookingIncludedDays != null ? Number(bookingIncludedDays) : rentalPricing.INCLUDED_DAYS;
+      rate = (bookingRate && bookingRate.additional_days != null ? Number(bookingRate.additional_days) : null) || rentalPricing.overageRate("additional_days");
+      const computed = rentalPricing.additionalDaysCharge(dumpsterRes.data.delivery_date, dumpsterRes.data.pickup_date, includedDays, rate);
+      quantity = computed.extraDays;
+      amount = computed.amount;
+
+      if (amount <= 0 && overrideAmount === null) {
+        // Within the included rental period, and no override given —
+        // nothing to charge. Same non-error "nothing to do yet" shape as
+        // the overweight branch above.
+        res.status(200).json({
+          ok: true,
+          charge: null,
+          extraDaysRecorded: true,
+          totalDays: computed.totalDays,
+          includedDays: includedDays,
+          extraDays: 0,
+        });
+        return;
+      }
+    }
+
+    // Apply the override, if one was given and actually differs from the
+    // computed amount — calculatedAmount preserves the original formula
+    // result either way (even when the override happens to match it,
+    // recording it costs nothing and is simpler than a "did it really
+    // change" comparison).
+    let calculatedAmount = null;
+    let overriddenBy = null;
+    let overriddenAt = null;
+    let finalOverrideReason = null;
+    if (overrideAmount !== null) {
+      calculatedAmount = amount;
+      amount = overrideAmount;
+      overriddenBy = session.email;
+      overriddenAt = new Date().toISOString();
+      finalOverrideReason = overrideReason;
     }
 
     const { data: created, error } = await supabase
@@ -4312,8 +4753,12 @@ async function handleProposeCharge(req, res, session) {
         description: description,
         status: "proposed",
         proposed_by: session.email,
+        calculated_amount: calculatedAmount,
+        override_reason: finalOverrideReason,
+        overridden_by: overriddenBy,
+        overridden_at: overriddenAt,
       })
-      .select("*")
+      .select(CHARGE_SELECT_COLS)
       .single();
     if (error || !created) throw error || new Error("Insert returned no row.");
 
@@ -4324,24 +4769,257 @@ async function handleProposeCharge(req, res, session) {
   }
 }
 
-// PATCH ?resource=charges { id, action: "approve" | "check-status" }.
-// Dispatches on body.action: "approve" (the money-moving action — see
-// handleApprove() below) or "check-status" (a safe, non-charging
-// reconciliation re-fetch — see handleCheckStatus() below, only ever
-// useful for a charge stuck at "requires_customer_action" or
-// "error_pending_review").
+// PATCH ?resource=charges { id, action: "approve" | "check-status" } OR
+// { action: "invoice", bookingId }. Dispatches on body.action: "approve"
+// (the money-moving direct-off-session-Stripe action — see handleApprove()
+// below), "check-status" (a safe, non-charging reconciliation re-fetch —
+// see handleCheckStatus() below, only ever useful for a charge stuck at
+// "requires_customer_action" or "error_pending_review"), or Phase 5's
+// "invoice" (the Rental Closeout "Create Final Charges" action — turns
+// every currently-proposed charge for one booking into invoice line
+// items; see handleInvoiceCharges() below). "invoice" is keyed by
+// bookingId, not a single charge id, since it processes every proposed
+// charge for that rental in one shot.
 async function handleApproveCharge(req, res, session) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const action = typeof body.action === "string" ? body.action.trim() : "";
+
+  if (action === "invoice") {
+    const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
+    if (!bookingId || !UUID_RE.test(bookingId)) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    return handleInvoiceCharges(bookingId, res, session);
+  }
+
   const id = typeof body.id === "string" ? body.id.trim() : "";
   if (!id || !UUID_RE.test(id)) {
     res.status(404).json({ error: "Charge not found." });
     return;
   }
-  const action = typeof body.action === "string" ? body.action.trim() : "";
   if (action === "approve") return handleApprove(id, res, session);
   if (action === "check-status") return handleCheckStatus(id, res);
   res.status(400).json({ error: "Invalid action." });
 }
+
+// Phase 5 — "Create Final Charges": turns every currently-proposed
+// rental_additional_charges row for one dumpster-rental booking into a
+// real invoice_line_items row, on that booking's own invoice (found via
+// the exact same "one active, non-void invoice per booking" lookup
+// handleGetInvoice()'s bookingId path and handleCreateInvoice() both
+// already use — created fresh, idempotently, if this booking has none
+// yet). Deliberately NOT a new checkout system: no Stripe call happens
+// here at all — this only ever writes invoice_line_items + recomputes
+// invoices.total_amount, exactly the same write handleGetInvoice's own
+// addLineItem action makes for a draft invoice. The difference from that
+// generic action: this is allowed to append to an ALREADY-FINALIZED
+// invoice too (Part 5's explicit requirement — "if the invoice was
+// previously fully paid... should correctly become partially/unpaid for
+// the new remaining balance"), because balance/display status are always
+// derived live from job_payments (see api/_lib/invoice-helpers.js's
+// computeInvoiceBalanceCents()/deriveInvoiceStatus()) — bumping
+// total_amount on a finalized invoice already flips its derived status
+// from "paid" to "partially_paid" with zero other code involved. This is
+// a narrow, separate code path specifically for closeout charges, NOT a
+// general loosening of handlePatchInvoice's own "line items are
+// draft-only" rule — ordinary invoice editing is completely untouched.
+//
+// Each charge row is transitioned 'proposed' -> 'invoiced' with the SAME
+// optimistic-concurrency guard (`.eq("status", "proposed")`) handleApprove()
+// uses for its own 'proposed'/'failed' -> 'approved' transition — a charge
+// already invoiced (or approved/paid via the separate direct-charge path,
+// or voided) by the time this runs is simply skipped, never double-billed.
+// This is also what makes a double-click/retry of "Create Final Charges"
+// itself safe: the second call finds zero still-'proposed' rows and
+// returns a clean "nothing to invoice" rather than creating a second set
+// of line items.
+async function handleInvoiceCharges(bookingId, res, session) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin invoice charges failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  try {
+    const bookingRes = await supabase.from("bookings").select("id, customer_id, service_type").eq("id", bookingId).maybeSingle();
+    if (bookingRes.error) throw bookingRes.error;
+    const booking = bookingRes.data;
+    if (!booking) {
+      res.status(404).json({ error: "Booking not found." });
+      return;
+    }
+    if (booking.service_type !== "dumpster_rental") {
+      res.status(400).json({ error: "Only a dumpster rental's own charges can be added to an invoice." });
+      return;
+    }
+    if (!booking.customer_id) {
+      res.status(400).json({ error: "This booking has no client on file." });
+      return;
+    }
+
+    const proposedRes = await supabase
+      .from("rental_additional_charges")
+      .select(CHARGE_SELECT_COLS)
+      .eq("booking_id", bookingId)
+      .eq("status", "proposed")
+      .order("created_at", { ascending: true });
+    if (proposedRes.error) throw proposedRes.error;
+    const proposedCharges = proposedRes.data || [];
+    if (!proposedCharges.length) {
+      res.status(400).json({ error: "No proposed charges to add to an invoice." });
+      return;
+    }
+
+    // Find (or idempotently create) this booking's one active invoice —
+    // identical lookup/insert/23505-recovery shape as handleCreateInvoice()
+    // above, just inlined here since this call site already knows the
+    // booking row exists and isn't a pickup leg.
+    let invoiceRow = null;
+    let wasNewlyCreated = false;
+    const existingInvoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("booking_id", bookingId).neq("status", "void").maybeSingle();
+    if (existingInvoiceRes.error) throw existingInvoiceRes.error;
+    if (existingInvoiceRes.data) {
+      invoiceRow = existingInvoiceRes.data;
+    } else {
+      const insertRes = await supabase
+        .from("invoices")
+        .insert({ created_by: session.email, status: "draft", booking_id: bookingId, customer_id: booking.customer_id, total_amount: 0 })
+        .select(INVOICE_SELECT_COLS)
+        .single();
+      if (insertRes.error) {
+        if (insertRes.error.code === "23505") {
+          const raceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("booking_id", bookingId).neq("status", "void").maybeSingle();
+          if (raceRes.error) throw raceRes.error;
+          if (!raceRes.data) throw insertRes.error;
+          invoiceRow = raceRes.data;
+        } else {
+          throw insertRes.error;
+        }
+      } else {
+        invoiceRow = insertRes.data;
+        wasNewlyCreated = true;
+      }
+    }
+
+    if (invoiceRow.status === "void") {
+      res.status(409).json({ error: "This booking's invoice has been voided. Create a new one from the booking's Invoice action first." });
+      return;
+    }
+
+    const countRes = await supabase.from("invoice_line_items").select("id", { count: "exact", head: true }).eq("invoice_id", invoiceRow.id);
+    if (countRes.error) throw countRes.error;
+    let nextSortOrder = countRes.count || 0;
+
+    const invoicedCharges = [];
+    for (const charge of proposedCharges) {
+      const flipRes = await supabase
+        .from("rental_additional_charges")
+        .update({ status: "invoiced", updated_at: new Date().toISOString() })
+        .eq("id", charge.id)
+        .eq("status", "proposed")
+        .select(CHARGE_SELECT_COLS)
+        .maybeSingle();
+      if (flipRes.error) throw flipRes.error;
+      if (!flipRes.data) continue; // already processed/voided elsewhere — skip, never double-bill
+
+      const quantity = charge.quantity != null && Number(charge.quantity) > 0 ? Number(charge.quantity) : 1;
+      const unitPrice = rentalPricing.round2(Number(charge.amount) / quantity);
+      const lineItemRes = await supabase
+        .from("invoice_line_items")
+        .insert({
+          invoice_id: invoiceRow.id,
+          sort_order: nextSortOrder++,
+          description: chargeLineItemDescription(charge),
+          quantity: quantity,
+          unit_price: unitPrice,
+          amount: charge.amount,
+        })
+        .select(LINE_ITEM_SELECT_COLS)
+        .single();
+      if (lineItemRes.error) throw lineItemRes.error;
+
+      const linkRes = await supabase
+        .from("rental_additional_charges")
+        .update({ invoice_line_item_id: lineItemRes.data.id, updated_at: new Date().toISOString() })
+        .eq("id", charge.id)
+        .select(CHARGE_SELECT_COLS)
+        .single();
+      if (linkRes.error) throw linkRes.error;
+      invoicedCharges.push(serializeCharge(linkRes.data));
+    }
+
+    if (!invoicedCharges.length) {
+      res.status(409).json({ error: "Those charges were already processed elsewhere." });
+      return;
+    }
+
+    let result = await recomputeInvoiceTotal(supabase, invoiceRow.id, session);
+
+    // Only a BRAND-NEW invoice (created by this very call, never seen by
+    // the admin yet) is auto-finalized — an existing draft invoice the
+    // admin may already be composing is left exactly as they had it;
+    // they finalize it themselves via the ordinary invoice UI when ready,
+    // same workflow as any other invoice. An already-finalized invoice
+    // needs no further action here at all — its balance/status already
+    // recompute live from the bumped total_amount.
+    if (wasNewlyCreated) {
+      const todayIso = denverTodayIso();
+      const numberRes = await supabase.rpc("next_invoice_number");
+      if (numberRes.error) throw numberRes.error;
+      const invoiceNumber = numberRes.data;
+      if (invoiceNumber) {
+        const finalizeRes = await supabase
+          .from("invoices")
+          .update({
+            status: "finalized",
+            invoice_number: invoiceNumber,
+            due_date: todayIso,
+            finalized_at: new Date().toISOString(),
+            updated_by: session.email,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", invoiceRow.id)
+          .eq("status", "draft")
+          .select(INVOICE_SELECT_COLS)
+          .maybeSingle();
+        if (finalizeRes.error) throw finalizeRes.error;
+        if (finalizeRes.data) result.invoice = finalizeRes.data;
+      }
+    }
+
+    res.status(200).json({ ok: true, invoice: mapInvoice(result.invoice), lineItems: result.lineItems.map(mapLineItem), charges: invoicedCharges });
+  } catch (err) {
+    console.error("Admin invoice charges failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not add these charges to an invoice." });
+  }
+}
+
+// Human-readable invoice_line_items.description for one invoiced charge —
+// the only place this project ever turns a rental_additional_charges row
+// into customer-facing invoice text. Mirrors
+// admin/booking-detail.js's own formatChargeQuantity() display wording so
+// the invoice and the Rental Closeout list never disagree about what a
+// charge actually was.
+function chargeLineItemDescription(charge) {
+  if (charge.charge_type === "overweight_tonnage") {
+    const lbs = Math.round(Number(charge.quantity) * 2000);
+    return "Dumpster rental overweight charge — " + lbs + " lb over included weight (" + charge.quantity + " tons × $" + Number(charge.rate).toFixed(2) + "/ton)";
+  }
+  if (charge.charge_type === "additional_days") {
+    return "Dumpster rental extra days — " + charge.quantity + " day" + (Number(charge.quantity) === 1 ? "" : "s") + " × $" + Number(charge.rate).toFixed(2) + "/day";
+  }
+  const label = CHARGE_TYPE_LABELS[charge.charge_type] || "Additional charge";
+  return charge.description ? label + " — " + charge.description : label;
+}
+
+const CHARGE_TYPE_LABELS = {
+  relocation: "Dumpster relocation charge",
+  blocked_pickup: "Blocked pickup / dry run charge",
+  rule_violation: "Rule violation / special handling charge",
+  other: "Additional charge",
+};
 
 // Approve AND process an additional charge in one atomic admin action —
 // the money-moving path. The UPDATE that transitions to "approved" is

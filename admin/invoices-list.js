@@ -17,6 +17,10 @@ document.addEventListener('DOMContentLoaded', function () {
     finalized: 'Finalized',
     partially_paid: 'Partially Paid',
     paid: 'Paid',
+    // Phase 5 — fully refunded back to net $0 or less after having
+    // actually collected something; see deriveInvoiceStatus()'s own
+    // header for why this is distinct from "finalized" (never collected).
+    refunded: 'Refunded',
     void: 'Void',
   };
 
@@ -104,7 +108,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function updateCounts() {
-    var counts = { all: allInvoices.length, draft: 0, finalized: 0, partially_paid: 0, paid: 0, overdue: 0, void: 0 };
+    var counts = { all: allInvoices.length, draft: 0, finalized: 0, partially_paid: 0, paid: 0, refunded: 0, overdue: 0, void: 0 };
     allInvoices.forEach(function (inv) {
       if (counts[inv.displayStatus] !== undefined) counts[inv.displayStatus]++;
       if (inv.isOverdue) counts.overdue++;

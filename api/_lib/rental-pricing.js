@@ -107,6 +107,31 @@ function overweightCharge(actualWeightLbs, includedTons, tonRate) {
   };
 }
 
+// Phase 5 — extra-rental-days billing, computed from the rental's own
+// delivery/pickup dates (dumpster_rentals.delivery_date/pickup_date)
+// rather than a manually-typed day count. Both inputs are plain
+// "YYYY-MM-DD" date-only strings; Date.parse of that exact format is
+// specified by ECMA-262 to be UTC midnight, so a plain calendar-day
+// difference (no timezone, no DST exposure — these are civil dates, not
+// instants) is exact. Never rounds toward the customer's favor: a partial
+// day past the included period still counts as a full extra day, same
+// spirit as every other "how many days over" billing rule in this
+// project (see time-windows.js's own date-only conventions).
+function additionalDaysCharge(deliveryDateIso, pickupDateIso, includedDays, dayRate) {
+  const deliveryMs = Date.parse(deliveryDateIso + "T00:00:00Z");
+  const pickupMs = Date.parse(pickupDateIso + "T00:00:00Z");
+  if (!Number.isFinite(deliveryMs) || !Number.isFinite(pickupMs)) {
+    return { totalDays: null, extraDays: 0, amount: 0 };
+  }
+  const totalDays = Math.round((pickupMs - deliveryMs) / 86400000);
+  const extraDays = Math.max(0, totalDays - includedDays);
+  return {
+    totalDays: totalDays,
+    extraDays: extraDays,
+    amount: round2(extraDays * dayRate),
+  };
+}
+
 module.exports = {
   BASE_RATE,
   INCLUDED_DAYS,
@@ -119,4 +144,5 @@ module.exports = {
   baseRentalAmount,
   overageRate,
   overweightCharge,
+  additionalDaysCharge,
 };

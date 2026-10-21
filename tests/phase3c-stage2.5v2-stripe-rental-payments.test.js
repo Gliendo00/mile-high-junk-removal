@@ -1540,18 +1540,24 @@ test("admin charges: proposing an overweight_tonnage charge computes amount from
   assert.strictEqual(confirmChargeCallLog.length, 0, "a proposal must never move money");
   assert.strictEqual(db.dumpster_rentals[0].actual_weight_lbs, 7000, "the actual scale weight must be persisted on the rental itself");
 });
-test("admin charges: proposing an additional_days charge computes amount from the day rate", async () => {
+test("admin charges: proposing an additional_days charge computes amount from the day rate (Phase 5 — always from this rental's own delivery/pickup dates, never a client-submitted quantity)", async () => {
   const db = freshDb();
   resetStripe();
   currentFakeService = createFakeServiceClient(db);
   configureAdminAuth();
   db.bookings.push({ id: BOOKING_ID, service_type: "dumpster_rental" });
+  // 8 total days (Jan 1 -> Jan 9), 5 included -> 3 extra days * $15 = $45.00.
+  db.dumpster_rentals.push({ booking_id: BOOKING_ID, delivery_date: "2026-01-01", pickup_date: "2026-01-09" });
   const res = await run(
     bookingHandler,
-    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "additional_days", quantity: 3 } })
+    // No quantity in the body at all — the server must ignore/not require
+    // one; a stray client-submitted quantity (if sent) must also have no
+    // effect, which this omission already proves implicitly.
+    makeReq({ method: "POST", query: { resource: "charges" }, cookie: adminCookie(), body: { bookingId: BOOKING_ID, chargeType: "additional_days" } })
   );
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(res.body.charge.amount, 45.0);
+  assert.strictEqual(res.body.charge.quantity, 3);
 });
 test("admin charges: proposing on a non-dumpster-rental booking is rejected", async () => {
   const db = freshDb();
@@ -2001,8 +2007,16 @@ test("admin booking detail (GET): payment is null for a booking with no rental_p
   // 2026-09-18-v2 pricing update — even with no rental_payments row at all,
   // the admin UI must still see an explicit applicable rate/included
   // weight (the global fallback), and know plainly that it IS the
-  // fallback, not this booking's own locked value.
-  assert.deepStrictEqual(res.body.rentalPricingContext, { includedTons: rentalPricing.INCLUDED_TONS, overageTonRate: rentalPricing.OVERAGE_TON_RATE, isBookingSpecific: false });
+  // fallback, not this booking's own locked value. Phase 5 added the same
+  // fallback pair for the day rate/included days.
+  assert.deepStrictEqual(res.body.rentalPricingContext, {
+    includedTons: rentalPricing.INCLUDED_TONS,
+    overageTonRate: rentalPricing.OVERAGE_TON_RATE,
+    isBookingSpecific: false,
+    includedDays: rentalPricing.INCLUDED_DAYS,
+    overageDayRate: rentalPricing.OVERAGE_DAY_RATE,
+    isDaysRateBookingSpecific: false,
+  });
 });
 test("admin booking detail (GET): 2026-09-18-v2 — surfaces THIS booking's own locked-in rate/included weight as rentalPricingContext, explicitly marked booking-specific, and actualWeightLbs from dumpster_rentals", async () => {
   const db = freshDb();
@@ -2015,7 +2029,18 @@ test("admin booking detail (GET): 2026-09-18-v2 — surfaces THIS booking's own 
 
   const res = await run(bookingHandler, makeReq({ method: "GET", query: { id: BOOKING_ID }, cookie: adminCookie() }));
   assert.strictEqual(res.statusCode, 200);
-  assert.deepStrictEqual(res.body.rentalPricingContext, { includedTons: 2, overageTonRate: 90, isBookingSpecific: true });
+  // This fixture's rental_payments row only locks in included_tons/
+  // overage_ton_rate (an older booking from before the day-rate columns
+  // existed) — the day-rate pair correctly falls back to the current
+  // global constants, with isDaysRateBookingSpecific staying false.
+  assert.deepStrictEqual(res.body.rentalPricingContext, {
+    includedTons: 2,
+    overageTonRate: 90,
+    isBookingSpecific: true,
+    includedDays: rentalPricing.INCLUDED_DAYS,
+    overageDayRate: rentalPricing.OVERAGE_DAY_RATE,
+    isDaysRateBookingSpecific: false,
+  });
   assert.strictEqual(res.body.dumpster.actualWeightLbs, 4240);
   assert.strictEqual(res.body.payment.includedTons, 2);
   assert.strictEqual(res.body.payment.overageTonRate, 90);

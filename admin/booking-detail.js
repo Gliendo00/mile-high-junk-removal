@@ -56,8 +56,20 @@ document.addEventListener('DOMContentLoaded', function () {
     error_pending_review: 'Needs Review — Check Stripe',
     paid_reconciliation_required: 'Paid — Record Incomplete, Check Stripe',
     requires_customer_action: 'Needs Customer Authentication',
+    // Phase 5 — this charge became an invoice line item via "Create Final
+    // Charges," never a direct card charge. A genuinely different terminal
+    // state from "Paid" above (see api/admin/booking.js's
+    // handleInvoiceCharges() header).
+    invoiced: 'Invoiced',
   };
-  var CHARGE_TYPE_TEXT = { overweight_tonnage: 'Overweight tonnage', additional_days: 'Additional days', other: 'Other' };
+  var CHARGE_TYPE_TEXT = {
+    overweight_tonnage: 'Overweight',
+    additional_days: 'Extra rental days',
+    relocation: 'Relocation',
+    blocked_pickup: 'Blocked pickup / dry run',
+    rule_violation: 'Rule violation / special handling',
+    other: 'Custom charge',
+  };
 
   var bookingId = null;
   var currentStatus = 'new';
@@ -80,6 +92,12 @@ document.addEventListener('DOMContentLoaded', function () {
   // the real charge — that's always recomputed server-side.
   var currentPricingContext = null;
   var currentActualWeightLbs = null;
+  // Phase 5 — raw ISO dates (not the formatted display strings set() writes
+  // into #d-delivery-date/#d-pickup-date), kept for the Extra Rental Days
+  // live preview below (updateDaysContext()). Null until render() runs for
+  // a dumpster_rental booking that actually has a dumpster_rentals row.
+  var currentDeliveryDateIso = null;
+  var currentPickupDateIso = null;
 
   function showError(msg) {
     loadingEl.style.display = 'none';
@@ -354,12 +372,15 @@ document.addEventListener('DOMContentLoaded', function () {
       set('d-material', data.dumpster.materialType);
       set('d-placement', data.dumpster.placementNotes);
       currentActualWeightLbs = data.dumpster.actualWeightLbs != null ? data.dumpster.actualWeightLbs : null;
+      currentDeliveryDateIso = data.dumpster.deliveryDate || null;
+      currentPickupDateIso = data.dumpster.pickupDate || null;
     }
     currentPricingContext = data.rentalPricingContext || null;
     if (chargeWeightEl && currentActualWeightLbs != null && !chargeWeightEl.value) {
       chargeWeightEl.value = currentActualWeightLbs;
     }
     updateWeightContext();
+    updateDaysContext();
 
     // Phase 3C Stage 2.5-v2 — Payment (only present for a dumpster rental
     // that was booked and paid online) + Additional Charges (shown for any
@@ -531,9 +552,12 @@ document.addEventListener('DOMContentLoaded', function () {
   // ---------------------------------------------------------------------
   var chargesListEl = document.getElementById('d-charges-list');
   var chargeTypeEl = document.getElementById('d-charge-type');
-  var chargeQuantityRow = document.getElementById('d-charge-quantity-row');
-  var chargeQuantityLabel = document.getElementById('d-charge-quantity-label');
-  var chargeQuantityEl = document.getElementById('d-charge-quantity');
+  var chargeDaysRow = document.getElementById('d-charge-days-row');
+  var chargeDaysIncludedEl = document.getElementById('d-charge-days-included');
+  var chargeDaysTotalEl = document.getElementById('d-charge-days-total');
+  var chargeDaysExtraEl = document.getElementById('d-charge-days-extra');
+  var chargeDaysRateEl = document.getElementById('d-charge-days-rate');
+  var chargeDaysAmountEl = document.getElementById('d-charge-days-amount');
   var chargeWeightRow = document.getElementById('d-charge-weight-row');
   var chargeWeightEl = document.getElementById('d-charge-weight');
   var chargeWeightContext = document.getElementById('d-charge-weight-context');
@@ -541,6 +565,9 @@ document.addEventListener('DOMContentLoaded', function () {
   var chargeWeightOverEl = document.getElementById('d-charge-weight-over');
   var chargeWeightRateEl = document.getElementById('d-charge-weight-rate');
   var chargeWeightAmountEl = document.getElementById('d-charge-weight-amount');
+  var chargeOverrideRow = document.getElementById('d-charge-override-row');
+  var chargeOverrideAmountEl = document.getElementById('d-charge-override-amount');
+  var chargeOverrideReasonEl = document.getElementById('d-charge-override-reason');
   var chargeAmountRow = document.getElementById('d-charge-amount-row');
   var chargeAmountEl = document.getElementById('d-charge-amount');
   var chargeDescriptionRow = document.getElementById('d-charge-description-row');
@@ -548,17 +575,24 @@ document.addEventListener('DOMContentLoaded', function () {
   var chargeProposeBtn = document.getElementById('d-charge-propose-btn');
   var chargeApproveInFlight = false;
   var chargeCheckStatusInFlight = false;
+  // The 4 flat, admin-entered-amount charge types (Part 1) — all share the
+  // exact same Amount+Description form fields and server validation (see
+  // api/admin/booking.js's FLAT_CHARGE_TYPES).
+  var FLAT_CHARGE_TYPES = ['relocation', 'blocked_pickup', 'rule_violation', 'other'];
+  var RATE_BASED_CHARGE_TYPES = ['overweight_tonnage', 'additional_days'];
 
   function updateChargeFormMode() {
     var type = chargeTypeEl.value;
-    var isOther = type === 'other';
+    var isFlat = FLAT_CHARGE_TYPES.indexOf(type) !== -1;
     var isWeight = type === 'overweight_tonnage';
-    chargeQuantityRow.style.display = !isOther && !isWeight ? '' : 'none';
+    var isDays = type === 'additional_days';
+    chargeDaysRow.style.display = isDays ? '' : 'none';
     chargeWeightRow.style.display = isWeight ? '' : 'none';
-    chargeAmountRow.style.display = isOther ? '' : 'none';
-    chargeDescriptionRow.style.display = isOther ? '' : 'none';
-    chargeQuantityLabel.textContent = 'Extra days beyond the included 5';
+    chargeOverrideRow.style.display = RATE_BASED_CHARGE_TYPES.indexOf(type) !== -1 ? '' : 'none';
+    chargeAmountRow.style.display = isFlat ? '' : 'none';
+    chargeDescriptionRow.style.display = isFlat ? '' : 'none';
     if (isWeight) updateWeightContext();
+    if (isDays) updateDaysContext();
   }
 
   // 2026-09-18-v2 pricing update — live preview only, mirroring
@@ -593,6 +627,36 @@ document.addEventListener('DOMContentLoaded', function () {
     chargeWeightAmountEl.textContent = amount > 0 ? formatPrice(amount) : '$0.00 — no overage charge';
   }
   chargeWeightEl.addEventListener('input', updateWeightContext);
+
+  // Phase 5 — Extra Rental Days live preview, mirroring
+  // api/_lib/rental-pricing.js's additionalDaysCharge() formula exactly
+  // (plain calendar-day difference between the rental's own delivery/pickup
+  // dates, never a manually typed day count). The REAL charge is always
+  // recomputed server-side from the same booking's own dumpster_rentals
+  // dates — this only ever informs what the admin sees before submitting.
+  function updateDaysContext() {
+    if (chargeTypeEl.value !== 'additional_days') return;
+    if (!currentPricingContext || !currentDeliveryDateIso || !currentPickupDateIso) {
+      chargeDaysTotalEl.textContent = '—';
+      chargeDaysExtraEl.textContent = '—';
+      chargeDaysRateEl.textContent = '—';
+      chargeDaysAmountEl.textContent = 'No delivery/pickup dates on file yet.';
+      return;
+    }
+    var includedDays = Number(currentPricingContext.includedDays);
+    var rate = Number(currentPricingContext.overageDayRate);
+    var deliveryMs = Date.parse(currentDeliveryDateIso + 'T00:00:00Z');
+    var pickupMs = Date.parse(currentPickupDateIso + 'T00:00:00Z');
+    var totalDays = Math.round((pickupMs - deliveryMs) / 86400000);
+    var extraDays = Math.max(0, totalDays - includedDays);
+    var amount = Math.round(extraDays * rate * 100) / 100;
+
+    chargeDaysIncludedEl.textContent = includedDays + ' days';
+    chargeDaysTotalEl.textContent = totalDays + ' day' + (totalDays === 1 ? '' : 's');
+    chargeDaysExtraEl.textContent = extraDays + ' day' + (extraDays === 1 ? '' : 's');
+    chargeDaysRateEl.textContent = '$' + rate.toFixed(2) + '/day' + (currentPricingContext.isDaysRateBookingSpecific ? ' (this booking’s locked-in rate)' : ' (current rate — no rate locked in for this booking)');
+    chargeDaysAmountEl.textContent = amount > 0 ? formatPrice(amount) : '$0.00 — within the included rental period';
+  }
   chargeTypeEl.addEventListener('change', updateChargeFormMode);
   updateChargeFormMode();
 
@@ -608,10 +672,25 @@ document.addEventListener('DOMContentLoaded', function () {
       return lbs + ' lb' + (lbs === 1 ? '' : 's') + ' over (' + charge.quantity + ' tons) · $' + Number(charge.rate).toFixed(2) + '/ton';
     }
     if (charge.chargeType === 'additional_days') return charge.quantity + ' extra day' + (charge.quantity === 1 ? '' : 's') + ' · $' + Number(charge.rate).toFixed(2) + '/day';
-    return charge.description || 'Other';
+    return charge.description || CHARGE_TYPE_TEXT[charge.chargeType] || 'Charge';
+  }
+
+  // Sum of every still-'proposed' charge — the amount "Create Final
+  // Charges" would currently add to this rental's invoice. Recomputed
+  // every renderCharges() call so it can never drift from what's actually
+  // on screen.
+  var currentCharges = [];
+  function updateCloseoutSummary() {
+    var dueEl = document.getElementById('d-closeout-due');
+    var finalizeBtn = document.getElementById('d-closeout-finalize-btn');
+    var proposed = currentCharges.filter(function (c) { return c.status === 'proposed'; });
+    var total = proposed.reduce(function (sum, c) { return sum + Number(c.amount || 0); }, 0);
+    dueEl.textContent = formatPrice(Math.round(total * 100) / 100) || '$0.00';
+    finalizeBtn.disabled = proposed.length === 0;
   }
 
   function renderCharges(charges) {
+    currentCharges = charges || [];
     while (chargesListEl.firstChild) chargesListEl.removeChild(chargesListEl.firstChild);
     if (!charges.length) {
       var empty = document.createElement('p');
@@ -619,6 +698,7 @@ document.addEventListener('DOMContentLoaded', function () {
       empty.style.color = 'var(--color-neutral-600, #82796a)';
       empty.textContent = 'No additional charges yet.';
       chargesListEl.appendChild(empty);
+      updateCloseoutSummary();
       return;
     }
     charges.forEach(function (charge) {
@@ -646,6 +726,17 @@ document.addEventListener('DOMContentLoaded', function () {
       metaLine.className = 'admin-charge-row-meta';
       metaLine.textContent = 'Proposed by ' + (charge.proposedBy || '—') + ' · ' + formatDateTime(charge.proposedAt);
       row.appendChild(metaLine);
+
+      // Phase 5 — override audit trail (Part 2/3's "preserve the original
+      // calculated information"). calculatedAmount is only ever non-null
+      // when an admin actually overrode the server-computed amount.
+      if (charge.calculatedAmount != null) {
+        var overrideLine = document.createElement('div');
+        overrideLine.className = 'admin-charge-row-meta';
+        overrideLine.textContent =
+          'Overridden from calculated ' + (formatPrice(charge.calculatedAmount) || '$0.00') + ' by ' + (charge.overriddenBy || '—') + ' · ' + formatDateTime(charge.overriddenAt) + (charge.overrideReason ? ' — ' + charge.overrideReason : '');
+        row.appendChild(overrideLine);
+      }
 
       if (charge.status === 'failed' && charge.failureReason) {
         var reasonLine = document.createElement('div');
@@ -697,6 +788,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       chargesListEl.appendChild(row);
     });
+    updateCloseoutSummary();
   }
 
   function loadCharges() {
@@ -721,7 +813,7 @@ document.addEventListener('DOMContentLoaded', function () {
   chargeProposeBtn.addEventListener('click', function () {
     var chargeType = chargeTypeEl.value;
     var body = { bookingId: bookingId, chargeType: chargeType };
-    if (chargeType === 'other') {
+    if (FLAT_CHARGE_TYPES.indexOf(chargeType) !== -1) {
       var amount = Number(chargeAmountEl.value);
       if (!chargeAmountEl.value || !Number.isFinite(amount) || amount <= 0) {
         showToast('Please enter a valid amount.', 'error');
@@ -744,13 +836,22 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       body.actualWeightLbs = weightLbs;
-    } else {
-      var quantity = Number(chargeQuantityEl.value);
-      if (!chargeQuantityEl.value || !Number.isFinite(quantity) || quantity <= 0) {
-        showToast('Please enter a valid quantity.', 'error');
+    }
+    // additional_days — Phase 5: no client-submitted quantity at all; the
+    // server always computes it from this rental's own delivery/pickup
+    // dates (see updateDaysContext() above for the display-only mirror).
+
+    // Phase 5 — optional override (overweight_tonnage/additional_days
+    // only; the override row is hidden for every other type, so
+    // chargeOverrideAmountEl.value is always '' for those).
+    if (RATE_BASED_CHARGE_TYPES.indexOf(chargeType) !== -1 && chargeOverrideAmountEl.value.trim() !== '') {
+      var overrideAmount = Number(chargeOverrideAmountEl.value);
+      if (!Number.isFinite(overrideAmount) || overrideAmount <= 0) {
+        showToast('Please enter a valid override amount, or leave it blank.', 'error');
         return;
       }
-      body.quantity = quantity;
+      body.overrideAmount = overrideAmount;
+      if (chargeOverrideReasonEl.value.trim()) body.overrideReason = chargeOverrideReasonEl.value.trim();
     }
 
     chargeProposeBtn.disabled = true;
@@ -769,20 +870,24 @@ document.addEventListener('DOMContentLoaded', function () {
           });
       })
       .then(function (resBody) {
-        chargeQuantityEl.value = '';
         chargeAmountEl.value = '';
         chargeDescriptionEl.value = '';
+        chargeOverrideAmountEl.value = '';
+        chargeOverrideReasonEl.value = '';
         if (resBody && resBody.weightRecorded) {
           currentActualWeightLbs = resBody.actualWeightLbs != null ? resBody.actualWeightLbs : Number(chargeWeightEl.value);
         }
         if (resBody && resBody.charge === null && resBody.weightRecorded) {
-          // Weight at or under the included amount — nothing was charged,
-          // only recorded. rental_additional_charges never gets a $0 row
-          // (its own CHECK (amount > 0) wouldn't allow one), so this is a
-          // normal, non-error outcome, not a failed charge attempt.
+          // Weight at or under the included amount, no override given —
+          // nothing was charged, only recorded. rental_additional_charges
+          // never gets a $0 row (its own CHECK (amount > 0) wouldn't allow
+          // one), so this is a normal, non-error outcome, not a failed
+          // charge attempt.
           showToast('Scale weight recorded — at or under the included weight, so no overage charge.', 'success');
+        } else if (resBody && resBody.charge === null && resBody.extraDaysRecorded) {
+          showToast('Within the included rental period — no extra-days charge.', 'success');
         } else {
-          showToast(chargeType === 'overweight_tonnage' ? 'Scale weight recorded and overage charge proposed.' : 'Charge proposed.', 'success');
+          showToast(chargeType === 'overweight_tonnage' ? 'Scale weight recorded and overage charge added.' : 'Charge added.', 'success');
         }
         loadCharges();
       })
@@ -791,6 +896,61 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .finally(function () {
         chargeProposeBtn.disabled = false;
+      });
+  });
+
+  // Phase 5 — "Create Final Charges": turns every currently-proposed
+  // charge for this rental into a line item on its own invoice. See
+  // api/admin/booking.js's handleInvoiceCharges() for the full write
+  // sequence; this click handler only ever sends bookingId — the server
+  // decides which charges qualify and is itself idempotent against a
+  // double-click (a second click simply finds nothing left to invoice).
+  var closeoutFinalizeBtn = document.getElementById('d-closeout-finalize-btn');
+  var closeoutResultEl = document.getElementById('d-closeout-result');
+  var closeoutInFlight = false;
+  closeoutFinalizeBtn.addEventListener('click', function () {
+    if (closeoutInFlight) return;
+    closeoutInFlight = true;
+    closeoutFinalizeBtn.disabled = true;
+    closeoutFinalizeBtn.textContent = 'Creating…';
+
+    adminFetch('/api/admin/booking?resource=charges', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'invoice', bookingId: bookingId }),
+    })
+      .then(function (res) {
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (resBody) {
+            if (!res.ok) throw new Error((resBody && resBody.error) || 'Could not add these charges to an invoice.');
+            return resBody;
+          });
+      })
+      .then(function (resBody) {
+        var invoice = resBody && resBody.invoice;
+        showToast('Final charges created. Added to the invoice.', 'success');
+        while (closeoutResultEl.firstChild) closeoutResultEl.removeChild(closeoutResultEl.firstChild);
+        if (invoice) {
+          var link = document.createElement('a');
+          link.className = 'admin-btn admin-btn-outline';
+          link.href = '/admin/invoice/?id=' + encodeURIComponent(invoice.id);
+          link.textContent = 'View Invoice — Balance Due ' + (formatPrice(invoice.balanceDue != null ? invoice.balanceDue : invoice.totalAmount) || '$0.00');
+          closeoutResultEl.appendChild(link);
+          closeoutResultEl.style.display = 'block';
+        }
+        loadCharges();
+        updateInvoiceEntryPoint(currentServiceType);
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not add these charges to an invoice.', 'error');
+      })
+      .finally(function () {
+        closeoutInFlight = false;
+        closeoutFinalizeBtn.disabled = false;
+        closeoutFinalizeBtn.textContent = 'Create Final Charges';
+        updateCloseoutSummary();
       });
   });
 
@@ -1031,6 +1191,37 @@ document.addEventListener('DOMContentLoaded', function () {
         voidBtn.textContent = 'Void';
         voidBtn.addEventListener('click', function () { voidJobPayment(payment.id, voidBtn); });
         row.appendChild(voidBtn);
+
+        // Phase 5 — Refund, only on a non-voided "payment" row (refunding
+        // a refund doesn't mean anything) that still has something left to
+        // refund. refundableHint is computed from this SAME already-loaded
+        // list — see admin/refund-ui.js's own header for why the server
+        // re-validates this independently regardless.
+        if (payment.paymentType !== 'refund') {
+          var alreadyRefunded = payments
+            .filter(function (p) { return p.paymentType === 'refund' && !p.isVoided && p.reversesPaymentId === payment.id; })
+            .reduce(function (sum, p) { return sum + Number(p.amount || 0); }, 0);
+          var refundable = Math.round((Number(payment.amount) - alreadyRefunded) * 100) / 100;
+          if (refundable > 0) {
+            var refundBtn = document.createElement('button');
+            refundBtn.type = 'button';
+            refundBtn.className = 'admin-btn admin-btn-outline';
+            refundBtn.style.marginTop = '6px';
+            refundBtn.style.marginLeft = '8px';
+            refundBtn.textContent = 'Refund';
+            refundBtn.addEventListener('click', function () {
+              window.AdminRefund.open({
+                payment: payment,
+                refundableHint: refundable,
+                onComplete: function () {
+                  showToast('Refund recorded.', 'success');
+                  reloadJobPayments();
+                },
+              });
+            });
+            row.appendChild(refundBtn);
+          }
+        }
       }
 
       jobPaymentsListEl.appendChild(row);
