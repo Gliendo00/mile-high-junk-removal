@@ -214,8 +214,15 @@ async function reconcileInvoicePaymentIntent(supabase, stripe, pi) {
       console.error("reconcileInvoicePaymentIntent: PaymentIntent " + pi.id + " belongs to generation " + metaGeneration + " but invoice " + invoiceId + " is currently at generation " + invoiceRow.payment_generation + " — mirroring the real captured money anyway.");
     }
 
+    // Phase 3D Stage A: invoiceId is passed explicitly — this is the one
+    // invoice-originated mirror call, so it never goes through
+    // resolveJobPaymentAttribution()'s booking-lookup branch inside
+    // mirrorStripePaymentToLedger(). bookingId is still passed too
+    // (invoiceRow.booking_id, already validated above) for the row's
+    // job/revenue attribution — unchanged in substance from today.
     await mirrorStripePaymentToLedger(supabase, {
       bookingId: invoiceRow.booking_id,
+      invoiceId: invoiceId,
       stripePaymentIntentId: pi.id,
       amount: centsToDecimalString(pi.amount_received),
       notes: notes,

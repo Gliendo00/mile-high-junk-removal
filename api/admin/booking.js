@@ -19,7 +19,7 @@ const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
-const { mirrorStripePaymentToLedger, effectiveRevenue, netCollectedFromLedgerRows, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, resolveJobPaymentAttribution, effectiveRevenue, netCollectedFromLedgerRows, VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, VALID_PAYMENT_TYPES: JOB_PAYMENT_TYPES } = require("../_lib/job-payments-ledger");
 const { ALL_COMPLIMENTARY_REASON_KEYS, complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 const {
   INVOICE_SELECT_COLS,
@@ -3737,10 +3737,19 @@ async function handleCreateJobPayment(req, res, session) {
     // insert itself so a fresh Pay Now request can't start mid-write.
     const stripe = getStripeClient();
     const lockResult = await withInvoicePaymentLock(supabase, stripe, bookingId, { purpose: "balance_mutation" }, async () => {
+      // Phase 3D Stage A: route through the centralized resolver rather
+      // than writing booking_id alone — see
+      // sql/2026-10-21_phase3d-stage-a-invoice-attribution-compat.sql's
+      // own header for the full contract. This is the manual-entry path
+      // (no explicit invoice), so it always goes through the booking's
+      // sole-live-original-invoice lookup.
+      const attribution = await resolveJobPaymentAttribution(supabase, { bookingId: bookingId });
       const { data: created, error } = await supabase
         .from("job_payments")
         .insert({
-          booking_id: bookingId,
+          booking_id: attribution.bookingId,
+          invoice_id: attribution.invoiceId,
+          invoice_id_classified: true,
           amount: amount,
           payment_method: paymentMethod,
           payment_type: paymentType,
