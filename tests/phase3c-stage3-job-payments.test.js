@@ -676,6 +676,82 @@ test("GET booking detail: tip_amount is completely independent of collectedReven
   assert.strictEqual(res.body.collectedRevenue, 275, "collectedRevenue must never include tip_amount");
 });
 
+// Post-cleanup audit (2026-10-21) — booking-detail "Actual Collected"
+// regression coverage: multiple payments, a refund, and a dumpster_pickup
+// leg, at the actual GET-endpoint level (the unit-level netting math was
+// already covered above for netCollectedFromLedgerRows() directly).
+test("GET booking detail: multiple non-voided payments sum into collectedRevenue, counted exactly once each", async () => {
+  adminAuthed();
+  const booking = makeBooking({ final_price: 275 });
+  const db = freshDb({
+    bookings: [booking],
+    job_payments: [
+      { id: makeId(), booking_id: booking.id, amount: 100, payment_method: "card_stripe", payment_type: "payment", payment_date: "2026-09-01", notes: null, stripe_payment_intent_id: "pi_1", reverses_payment_id: null, voided_at: null, voided_reason: null, recorded_by: ADMIN_EMAIL, created_at: nowIso() },
+      { id: makeId(), booking_id: booking.id, amount: 400, payment_method: "cash", payment_type: "payment", payment_date: "2026-09-02", notes: null, stripe_payment_intent_id: null, reverses_payment_id: null, voided_at: null, voided_reason: null, recorded_by: ADMIN_EMAIL, created_at: nowIso() },
+    ],
+  });
+  const res = await req(db, { query: { id: booking.id } });
+  assert.strictEqual(res.body.collectedRevenue, 500);
+  assert.strictEqual(res.body.collectedRevenueSource, "ledger");
+  assert.strictEqual(res.body.jobPayments.length, 2);
+});
+
+test("GET booking detail: a refund subtracts from collectedRevenue, a void is excluded — both at once nets correctly", async () => {
+  adminAuthed();
+  const booking = makeBooking({ final_price: 275 });
+  const db = freshDb({
+    bookings: [booking],
+    job_payments: [
+      { id: makeId(), booking_id: booking.id, amount: 500, payment_method: "cash", payment_type: "payment", payment_date: "2026-09-01", notes: null, stripe_payment_intent_id: null, reverses_payment_id: null, voided_at: null, voided_reason: null, recorded_by: ADMIN_EMAIL, created_at: nowIso() },
+      { id: makeId(), booking_id: booking.id, amount: 50, payment_method: "cash", payment_type: "refund", payment_date: "2026-09-03", notes: null, stripe_payment_intent_id: null, reverses_payment_id: null, voided_at: null, voided_reason: null, recorded_by: ADMIN_EMAIL, created_at: nowIso() },
+      { id: makeId(), booking_id: booking.id, amount: 999, payment_method: "zelle", payment_type: "payment", payment_date: "2026-09-04", notes: null, stripe_payment_intent_id: null, reverses_payment_id: null, voided_at: nowIso(), voided_reason: "entered in error", recorded_by: ADMIN_EMAIL, created_at: nowIso() },
+    ],
+  });
+  const res = await req(db, { query: { id: booking.id } });
+  assert.strictEqual(res.body.collectedRevenue, 450, "500 payment - 50 refund = 450; the voided $999 row must not count");
+  assert.strictEqual(res.body.collectedRevenueSource, "ledger");
+  assert.strictEqual(res.body.jobPayments.length, 3, "all three rows still appear in the audit trail");
+});
+
+test("GET booking detail: a dumpster_pickup leg reports no economic collectedRevenue even if job_payments rows are somehow attached to it", async () => {
+  adminAuthed();
+  const pickup = makeBooking({ service_type: "dumpster_pickup", final_price: null });
+  const db = freshDb({
+    bookings: [pickup],
+    job_payments: [{ id: makeId(), booking_id: pickup.id, amount: 50, payment_method: "cash", payment_type: "payment", payment_date: "2026-09-01", notes: null, stripe_payment_intent_id: null, reverses_payment_id: null, voided_at: null, voided_reason: null, recorded_by: ADMIN_EMAIL, created_at: nowIso() }],
+  });
+  const res = await req(db, { query: { id: pickup.id } });
+  assert.strictEqual(res.body.booking.serviceType, "dumpster_pickup");
+  // The server computes collectedRevenue the same generic way regardless of
+  // serviceType (the UI's own non-economic "N/A — pickup" state is what
+  // keeps this from ever being presented as real pickup revenue — see the
+  // admin/booking-detail.js source guard below); a pickup should never
+  // realistically carry job_payments rows in practice (see Phase 4 Stage 1).
+  assert.strictEqual(res.body.collectedRevenue, 50);
+});
+
+test("admin/booking-detail.js: 'Actual Collected' never gets stuck on a loading/undefined state, uses explicit wording when there is no ledger yet, and never shows a dollar amount for a dumpster_pickup leg — source guard", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "admin", "booking-detail.js"), "utf8");
+  const startIdx = src.indexOf("function renderJobPayments");
+  assert.ok(startIdx !== -1, "renderJobPayments must exist");
+  const fnSrc = src.slice(startIdx, startIdx + 600);
+  assert.ok(/dumpster_pickup/.test(fnSrc), "renderJobPayments must special-case dumpster_pickup for the Collected row");
+  assert.ok(!/'Loading/.test(fnSrc), "the Collected row must never be left on a literal 'Loading…' placeholder — it is rendered synchronously from the already-fetched booking-detail response, never a separate pending fetch");
+  assert.ok(/Not collected yet/.test(fnSrc), "a job with no ledger rows and no final_price must show explicit 'Not collected yet' wording, not stay blank/undefined");
+});
+
+test("api/admin/booking.js and api/admin/bookings.js (dashboard) compute collected/revenue through the exact same shared effectiveRevenue()/netCollectedFromLedgerRows() helpers — no second, independently-drifting implementation", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const detailSrc = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "booking.js"), "utf8");
+  const dashboardSrc = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "bookings.js"), "utf8");
+  assert.ok(/require\(["']\.\.\/_lib\/job-payments-ledger["']\)/.test(detailSrc) && /effectiveRevenue/.test(detailSrc));
+  assert.ok(/require\(["']\.\.\/_lib\/job-payments-ledger["']\)/.test(dashboardSrc) && /effectiveRevenue/.test(dashboardSrc));
+  assert.ok(!/function effectiveRevenue/.test(detailSrc) && !/function effectiveRevenue/.test(dashboardSrc), "neither file may define its own local effectiveRevenue — both must import the one shared implementation");
+});
+
 // =======================================================================
 // Tip (bookings.tip_amount) — restored admin entry/edit via PATCH ?resource=tip
 // =======================================================================

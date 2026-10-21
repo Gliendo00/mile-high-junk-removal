@@ -931,7 +931,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function renderJobPayments(data) {
     var booking = data.booking || {};
-    set('d-collected-revenue', data.collectedRevenue != null ? formatPrice(data.collectedRevenue) : 'Not set yet');
+    // A pickup leg carries no price/revenue by design (Phase 4 Stage 1) — show
+    // an explicit non-economic state instead of the generic "no ledger yet"
+    // wording below, which would otherwise read as "payment still pending".
+    if (booking.serviceType === 'dumpster_pickup') {
+      set('d-collected-revenue', 'N/A — pickup, no charge');
+    } else {
+      set('d-collected-revenue', data.collectedRevenue != null ? formatPrice(data.collectedRevenue) : 'Not collected yet');
+    }
 
     currentTipAmount = booking.tipAmount != null ? booking.tipAmount : null;
     var tipText = formatPrice(currentTipAmount);
