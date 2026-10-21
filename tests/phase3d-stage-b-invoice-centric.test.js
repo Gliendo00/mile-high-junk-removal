@@ -581,6 +581,25 @@ test("Cross-invoice reversal rejection: a reversesPaymentId belonging to a DIFFE
   assert.strictEqual(detailB.body.invoice.netCollected, 0, "the rejected cross-invoice reversal must never have been written");
 });
 
+test("Generic booking reversal rejection: a generic ?resource=job-payments entry cannot claim to reverse an invoice-attributed payment (symmetric to the cross-invoice reversal check)", async () => {
+  adminAuthed();
+  const db = freshDb();
+  const created = await createInvoice(db, { bookingId: BOOKING_A1 });
+  const invoiceId = created.body.invoice.id;
+  await finalizeWithLineItem(db, invoiceId, 100);
+  const invoicePayment = await postInvoicePayment(db, { invoiceId: invoiceId, paymentMethod: "cash", amount: 100 });
+  assert.strictEqual(invoicePayment.statusCode, 200);
+
+  const genericReversal = await postJobPayment(db, {
+    bookingId: BOOKING_A1,
+    paymentMethod: "cash",
+    amount: 100,
+    reversesPaymentId: invoicePayment.body.jobPayment.id,
+  });
+  assert.strictEqual(genericReversal.statusCode, 400);
+  assert.strictEqual(db.job_payments.filter((p) => p.reverses_payment_id === invoicePayment.body.jobPayment.id).length, 0, "the rejected cross-attribution reversal must never have been written");
+});
+
 // =======================================================================
 // Standalone invoice creation
 // =======================================================================

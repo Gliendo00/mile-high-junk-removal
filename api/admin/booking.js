@@ -3856,6 +3856,24 @@ async function handleCreateJobPayment(req, res, session) {
       return;
     }
 
+    // Phase 3D Stage B: a generic booking payment can only reverse another
+    // generic (invoice_id null) payment — the same same-attribution rule
+    // handleCreateInvoicePayment() enforces in the other direction. Without
+    // this, a booking-level entry could claim to "reverse" an invoice-
+    // attributed row it has no attribution relationship to at all.
+    if (reversesPaymentId) {
+      const priorRes = await supabase.from("job_payments").select("id, invoice_id").eq("id", reversesPaymentId).maybeSingle();
+      if (priorRes.error) throw priorRes.error;
+      // Loose null check deliberately: a real SELECT always returns an
+      // explicit null for this nullable column, but some fixtures (and any
+      // row literal that simply never set the key) come back as
+      // undefined — both mean "no invoice attribution" here.
+      if (!priorRes.data || priorRes.data.invoice_id != null) {
+        res.status(400).json({ error: "The payment being reversed must also be a generic booking payment, not one attributed to an invoice." });
+        return;
+      }
+    }
+
     // Phase 3D Stage B: the semantic cutover itself. A generic booking
     // payment is never an invoice payment by implication anymore —
     // invoice_id is always null here, unconditionally, never resolved
