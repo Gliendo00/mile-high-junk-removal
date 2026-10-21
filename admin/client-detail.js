@@ -137,10 +137,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var footer = el('div', 'admin-card-footer');
     // Status-aware (Phase 3C Stage 2.5 addendum) — see admin/schedule.js's
-    // identical comment: completed prefers Actual Collected, non-completed
+    // identical comment: completed prefers the ledger-sourced
+    // revenueAmount (Phase 5 — api/admin/client.js now computes this the
+    // same refund-aware way api/admin/bookings.js's fetchScheduleJobs()
+    // already does for every other revenue surface; see that file's own
+    // comment for why a plain finalPrice would otherwise keep showing a
+    // since-refunded amount as if nothing had changed), non-completed
     // always shows Quoted, never implying a not-yet-completed job is paid.
     var priceText = b.status === 'completed'
-      ? (formatPrice(b.finalPrice) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax))
+      ? (typeof b.revenueAmount === 'number' ? formatPrice(b.revenueAmount) : formatPrice(b.finalPrice)) || formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax)
       : formatQuotedAmount(b.estimatedPrice, b.estimatedPriceMax);
     footer.appendChild(el('span', null, priceText || ''));
     footer.appendChild(el('span', 'admin-card-view', 'View Request →'));

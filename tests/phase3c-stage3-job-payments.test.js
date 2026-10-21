@@ -533,8 +533,22 @@ test("POST job-payments: a refund entry is accepted and reduces net collected re
   adminAuthed();
   const booking = makeBooking();
   const db = freshDb({ bookings: [booking] });
-  await createPayment(db, { bookingId: booking.id, amount: 500, paymentMethod: "card_stripe".replace("card_stripe", "cash") }); // manual $500 for setup
-  await createPayment(db, { bookingId: booking.id, amount: 50, paymentMethod: "cash", paymentType: "refund", notes: "partial refund for delay" });
+  const original = await createPayment(db, { bookingId: booking.id, amount: 500, paymentMethod: "cash" }); // manual $500 for setup
+  // Phase 5 — a manual refund now requires both reversesPaymentId (which
+  // original payment this refunds — see computeRefundableBalance()) and an
+  // explicit confirmedExternalReturn:true (this CRM never moves money for
+  // a manual method; the admin must confirm they already returned it some
+  // other way). See tests/phase5-dumpster-charges-refunds.test.js for the
+  // dedicated coverage of both requirements and the refundable-balance cap.
+  await createPayment(db, {
+    bookingId: booking.id,
+    amount: 50,
+    paymentMethod: "cash",
+    paymentType: "refund",
+    notes: "partial refund for delay",
+    reversesPaymentId: original.body.jobPayment.id,
+    confirmedExternalReturn: true,
+  });
   const res = await listPayments(db, booking.id);
   const total = netCollectedFromLedgerRows(res.body.jobPayments.map((p) => ({ amount: p.amount, paymentType: p.paymentType })));
   assert.strictEqual(total, 450);
@@ -608,8 +622,12 @@ test("PATCH job-payments: there is no way to edit amount/method/type through thi
   const src = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "booking.js"), "utf8");
   const startIdx = src.indexOf("async function handleVoidJobPayment");
   assert.ok(startIdx !== -1, "handleVoidJobPayment must exist");
-  const nextFnIdx = src.indexOf("\nfunction serializeCharge", startIdx);
-  assert.ok(nextFnIdx !== -1, "expected serializeCharge() to immediately follow handleVoidJobPayment in source order");
+  // Phase 5 inserted handleRefundJobPayment directly after
+  // handleVoidJobPayment (a deliberate, separate refund code path with its
+  // own write shape — see that function's own header) — it is now the
+  // immediate next function in source order, not serializeCharge.
+  const nextFnIdx = src.indexOf("\nasync function handleRefundJobPayment", startIdx);
+  assert.ok(nextFnIdx !== -1, "expected handleRefundJobPayment() to immediately follow handleVoidJobPayment in source order");
   const fnSrc = src.slice(startIdx, nextFnIdx);
   assert.ok(/\.update\(\{\s*voided_at:/.test(fnSrc), "the only update() call in handleVoidJobPayment must set voided_at first");
   assert.ok(!/amount:|payment_method:|payment_type:|booking_id:/.test(fnSrc.replace(/\/\/.*$/gm, "")), "handleVoidJobPayment must never write amount/payment_method/payment_type/booking_id");

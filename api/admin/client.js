@@ -12,6 +12,7 @@ const { requireAdmin } = require("../_lib/admin-auth");
 const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus } = require("../_lib/booking-format");
 const { normalizePhone, normalizeEmail } = require("../_lib/customer-identity");
+const { effectiveRevenue } = require("../_lib/job-payments-ledger");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -96,39 +97,82 @@ module.exports = async (req, res) => {
     const bookingsRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, is_complimentary, service_address, service_city, service_state, service_zip, created_at"
       )
       .eq("customer_id", id)
       .order("created_at", { ascending: false });
     if (bookingsRes.error) throw bookingsRes.error;
+    const bookingRows = bookingsRes.data || [];
 
-    const bookings = (bookingsRes.data || []).map((b) => ({
-      id: b.id,
-      serviceType: b.service_type,
-      serviceLabel: serviceLabel(b.service_type),
-      appointmentDate: b.appointment_date,
-      timeWindow: b.time_window,
-      timeWindowLabel: timeWindowLabel(b.time_window),
-      timeLabel: effectiveTimeLabel(b.time_window, b.exact_time),
-      status: normalizedStatus(b.status),
-      statusLabel: statusLabel(b.status),
-      estimatedPrice: b.estimated_price,
-      estimatedPriceMax: b.estimated_price_max,
-      finalPrice: b.final_price,
-      createdAt: b.created_at,
-      // Historical job location — always this booking's own snapshot first.
-      // The fallback to the client's current address only covers a legacy
-      // booking with no snapshot of its own (same behavior as
-      // api/admin/booking.js, added in Phase 3B Step 2) — the client's
-      // current address is never used as the primary source, so a later
-      // change to it can never rewrite what this card shows for a past job.
-      serviceAddress: {
-        address: b.service_address || customer.address || null,
-        city: b.service_city || customer.city || null,
-        state: b.service_state || customer.state || null,
-        zip: b.service_zip || customer.zip || null,
-      },
-    }));
+    // Phase 5 — ledger-sourced revenue, mirroring api/admin/bookings.js's
+    // fetchScheduleJobs() exactly (same completed/non-pickup scoping, same
+    // effectiveRevenue()/is_complimentary rule): this page previously read
+    // raw final_price straight off the booking row, so a refund issued
+    // after a job was completed never showed up here — this client's
+    // history kept showing the ORIGINAL amount as if nothing had been
+    // refunded, the same bug class 40bd9a6 already fixed for the
+    // dashboard/schedule views. Scoped to completed, non-dumpster_pickup
+    // bookings only; every other booking's displayed amount is still its
+    // plain estimated/final price, unaffected.
+    const completedBookingIds = bookingRows.filter((b) => normalizedStatus(b.status) === "completed" && b.service_type !== "dumpster_pickup").map((b) => b.id);
+    const ledgerRowsByBooking = {};
+    if (completedBookingIds.length) {
+      const paymentsRes = await supabase.from("job_payments").select("booking_id, amount, payment_type").in("booking_id", completedBookingIds).is("voided_at", null);
+      if (paymentsRes.error) throw paymentsRes.error;
+      (paymentsRes.data || []).forEach((row) => {
+        if (!ledgerRowsByBooking[row.booking_id]) ledgerRowsByBooking[row.booking_id] = [];
+        ledgerRowsByBooking[row.booking_id].push(row);
+      });
+    }
+
+    const bookings = bookingRows.map((b) => {
+      const isCompletedCountable = normalizedStatus(b.status) === "completed" && b.service_type !== "dumpster_pickup";
+      let revenueAmount = null;
+      let revenueSource = null;
+      if (isCompletedCountable) {
+        if (b.is_complimentary) {
+          revenueAmount = 0;
+          revenueSource = "complimentary";
+        } else {
+          const rev = effectiveRevenue(ledgerRowsByBooking[b.id] || [], b.final_price);
+          revenueAmount = rev.amount === null ? 0 : rev.amount;
+          revenueSource = rev.source;
+        }
+      }
+      return {
+        id: b.id,
+        serviceType: b.service_type,
+        serviceLabel: serviceLabel(b.service_type),
+        appointmentDate: b.appointment_date,
+        timeWindow: b.time_window,
+        timeWindowLabel: timeWindowLabel(b.time_window),
+        timeLabel: effectiveTimeLabel(b.time_window, b.exact_time),
+        status: normalizedStatus(b.status),
+        statusLabel: statusLabel(b.status),
+        estimatedPrice: b.estimated_price,
+        estimatedPriceMax: b.estimated_price_max,
+        finalPrice: b.final_price,
+        // Phase 5 — the ledger-aware figure admin/client-detail.js should
+        // actually display for a completed, non-pickup job (null for
+        // everything else, same as every other revenue surface in this
+        // app) — see the comment above.
+        revenueAmount: revenueAmount,
+        revenueSource: revenueSource,
+        createdAt: b.created_at,
+        // Historical job location — always this booking's own snapshot first.
+        // The fallback to the client's current address only covers a legacy
+        // booking with no snapshot of its own (same behavior as
+        // api/admin/booking.js, added in Phase 3B Step 2) — the client's
+        // current address is never used as the primary source, so a later
+        // change to it can never rewrite what this card shows for a past job.
+        serviceAddress: {
+          address: b.service_address || customer.address || null,
+          city: b.service_city || customer.city || null,
+          state: b.service_state || customer.state || null,
+          zip: b.service_zip || customer.zip || null,
+        },
+      };
+    });
 
     res.status(200).json({
       ok: true,

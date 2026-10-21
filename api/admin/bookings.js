@@ -12,7 +12,7 @@ const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normaliz
 const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
 const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
-const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows, effectiveRevenue } = require("../_lib/job-payments-ledger");
+const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows, grossCollectedFromLedgerRows, effectiveRevenue } = require("../_lib/job-payments-ledger");
 const { INVOICE_SELECT_COLS, mapInvoice, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
@@ -2877,8 +2877,10 @@ async function handleInvoicesView(req, res, supabase) {
 
     let invoices = invoiceRows.map((row) => {
       const invoice = mapInvoice(row);
-      const netCollected = netCollectedFromLedgerRows(paymentsByInvoice[row.id] || []);
-      const derived = deriveInvoiceStatus(invoice, netCollected, todayIso);
+      const invoicePaymentRows = paymentsByInvoice[row.id] || [];
+      const netCollected = netCollectedFromLedgerRows(invoicePaymentRows);
+      const grossCollected = grossCollectedFromLedgerRows(invoicePaymentRows);
+      const derived = deriveInvoiceStatus(invoice, netCollected, todayIso, grossCollected);
       return Object.assign({ customerName: customerNameById[row.customer_id] || null }, invoice, derived);
     });
 

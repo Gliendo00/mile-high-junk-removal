@@ -1105,10 +1105,16 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // in api/_lib/invoice-helpers.js — a DIFFERENT file, so none of those
   // add to THIS file's own .update( count; see that module and
   // tests/phase3-invoice-delivery.test.js for their own coverage.
+  // Phase 5 (Dumpster Rental Extra Charges + Refunds) added exactly three
+  // more: handleInvoiceCharges()'s rental_additional_charges status ->
+  // "invoiced" transition, its invoice_line_item_id link-back write, and
+  // its own invoice (NOT via the shared finalize action) auto-finalize —
+  // all three only reachable from the new ?resource=charges PATCH
+  // {action:"invoice"} path. See tests/phase5-dumpster-charges-refunds.test.js.
   assert.strictEqual(
     updateCalls,
-    38,
-    "booking.js must have exactly 38 .update( calls (32 as of Phase 2 Core Invoicing + 6 Phase 3 handleSendInvoice claim acquire/release sites) — anything else needs deliberate review"
+    41,
+    "booking.js must have exactly 41 .update( calls (32 as of Phase 2 Core Invoicing + 6 Phase 3 handleSendInvoice claim acquire/release sites + 3 Phase 5 closeout-invoicing writes) — anything else needs deliberate review"
   );
 });
 

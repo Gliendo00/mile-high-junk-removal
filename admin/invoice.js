@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', function () {
     finalized: 'Finalized',
     partially_paid: 'Partially Paid',
     paid: 'Paid',
+    refunded: 'Refunded',
     void: 'Void',
   };
   var JOB_PAYMENT_METHOD_TEXT = { card_stripe: 'Card (Stripe)', cash: 'Cash', zelle: 'Zelle', venmo: 'Venmo', check: 'Check', card_venmo: 'Card (Venmo)', other: 'Other' };
@@ -283,6 +284,34 @@ document.addEventListener('DOMContentLoaded', function () {
         voidPaymentBtn.textContent = 'Void';
         voidPaymentBtn.addEventListener('click', function () { voidInvoicePayment(payment.id, voidPaymentBtn); });
         row.appendChild(voidPaymentBtn);
+
+        // Phase 5 — same Refund button/sheet as admin/booking-detail.js's
+        // Payments list; see admin/refund-ui.js's own header.
+        if (payment.paymentType !== 'refund') {
+          var alreadyRefunded = jobPayments
+            .filter(function (p) { return p.paymentType === 'refund' && !p.isVoided && p.reversesPaymentId === payment.id; })
+            .reduce(function (sum, p) { return sum + Number(p.amount || 0); }, 0);
+          var refundable = Math.round((Number(payment.amount) - alreadyRefunded) * 100) / 100;
+          if (refundable > 0) {
+            var refundBtn = document.createElement('button');
+            refundBtn.type = 'button';
+            refundBtn.className = 'admin-btn admin-btn-outline admin-print-hide';
+            refundBtn.style.marginTop = '6px';
+            refundBtn.style.marginLeft = '8px';
+            refundBtn.textContent = 'Refund';
+            refundBtn.addEventListener('click', function () {
+              window.AdminRefund.open({
+                payment: payment,
+                refundableHint: refundable,
+                onComplete: function () {
+                  showToast('Refund recorded.', 'success');
+                  load();
+                },
+              });
+            });
+            row.appendChild(refundBtn);
+          }
+        }
       }
 
       paymentsListEl.appendChild(row);

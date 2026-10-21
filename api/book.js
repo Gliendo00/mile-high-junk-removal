@@ -89,7 +89,7 @@ const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
-const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows } = require("./_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows, grossCollectedFromLedgerRows } = require("./_lib/job-payments-ledger");
 const { getCorrelationId, logEvent } = require("./_lib/correlation-id");
 const { hashAccessToken } = require("./_lib/invoice-crypto");
 const {
@@ -2167,8 +2167,10 @@ async function handleInvoicePublic(req, res) {
     if (paymentsRes.error) throw paymentsRes.error;
     if (customerRes.error) throw customerRes.error;
 
-    const netCollected = netCollectedFromLedgerRows((paymentsRes.data || []).filter(function (p) { return !p.voided_at; }));
-    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso());
+    const nonVoidedPaymentRows = (paymentsRes.data || []).filter(function (p) { return !p.voided_at; });
+    const netCollected = netCollectedFromLedgerRows(nonVoidedPaymentRows);
+    const grossCollected = grossCollectedFromLedgerRows(nonVoidedPaymentRows);
+    const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso(), grossCollected);
     const customer = customerRes.data;
 
     res.status(200).json({

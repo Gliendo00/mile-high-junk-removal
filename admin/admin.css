@@ -1692,6 +1692,7 @@ button.admin-financial-card:focus-visible {
 .admin-invoice-status-finalized { background: #0e7490; color: #fff; }
 .admin-invoice-status-partially_paid { background: #b45309; color: #fff; }
 .admin-invoice-status-paid { background: #2f6f13; color: #fff; }
+.admin-invoice-status-refunded { background: #7c3aed; color: #fff; }
 .admin-invoice-status-void { background: #b91c1c; color: #fff; }
 
 /* Overdue is a separate, orthogonal flag, never a sixth status bucket (an
