@@ -64,10 +64,12 @@
 // date here, since that would be a lead-business-logic change, explicitly
 // out of scope for this pass.
 //
-// Search Whisperer is a disabled visual shell only — the input and button
-// both carry the native `disabled` attribute, there is no click handler,
-// no fetch, and no backend for it. It is wired to real search in a future
-// pass.
+// Global client search (audit fix — was a disabled "Coming soon" visual
+// shell with no click handler/fetch/backend). Now wired to the SAME
+// GET /api/admin/clients search endpoint and query contract admin/
+// clients-list.js and admin/client-picker.js already use — not a second
+// search implementation — so this box can never drift from what those
+// pages find for the same term. See initSearch() below.
 //
 // Every dynamic value is written with textContent/DOM construction, never
 // innerHTML — same no-innerHTML discipline as every other admin/*.js file.
@@ -93,18 +95,130 @@ document.addEventListener('DOMContentLoaded', function () {
   var timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   document.getElementById('dash-greeting').textContent = timeGreeting + ', Junkers.';
 
-  // Search Whisperer's placeholder is shortened on a narrow phone (UI
-  // refinement pass #2) — the full "(leads, clients, jobs, notes, etc.)"
-  // parenthetical was getting visually clipped against the Ask button on a
-  // real 360-430px screenshot. A placeholder's text can't be swapped by a
-  // CSS media query, so this is set once here, on load, from the actual
-  // viewport width — not re-evaluated on resize/rotation, since a phone's
-  // width in a single session is effectively fixed and re-checking would
-  // add complexity for a case that doesn't happen in practice.
-  var searchInput = document.getElementById('search-whisperer-input');
-  if (searchInput && window.matchMedia && window.matchMedia('(max-width: 480px)').matches) {
-    searchInput.placeholder = 'Search CRM…';
-  }
+  // -----------------------------------------------------------------
+  // Global client search — audit fix. Same debounce/abort/401-redirect
+  // pattern as admin/client-picker.js's own typeahead (that file's header
+  // comment has the full reasoning for each piece); this is a simpler,
+  // navigation-only variant with no "Create Client" toggle and no keyboard
+  // highlight-cycling, since clicking a result here always just navigates
+  // to that client's profile rather than filling a form field.
+  // -----------------------------------------------------------------
+  (function initSearch() {
+    var SEARCH_DEBOUNCE_MS = 150;
+    var SEARCH_LIMIT = 8;
+    var input = document.getElementById('search-whisperer-input');
+    var panel = document.getElementById('search-whisperer-panel');
+    var resultsBox = document.getElementById('search-whisperer-results');
+    if (!input || !panel || !resultsBox) return;
+
+    var debounceTimer = null;
+    var currentAbortController = null;
+
+    function abortInFlightSearch() {
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+    }
+    function openPanel() {
+      panel.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+    function closePanel() {
+      panel.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+    function resultsBoxClear() {
+      while (resultsBox.firstChild) resultsBox.removeChild(resultsBox.firstChild);
+    }
+    function renderEmpty(text) {
+      resultsBoxClear();
+      var row = document.createElement('div');
+      row.className = 'admin-picker-empty';
+      row.textContent = text;
+      resultsBox.appendChild(row);
+      openPanel();
+    }
+    function renderResults(clients) {
+      resultsBoxClear();
+      if (!clients.length) {
+        renderEmpty('No matching clients');
+        return;
+      }
+      clients.forEach(function (c) {
+        var a = document.createElement('a');
+        a.className = 'admin-picker-item';
+        a.href = '/admin/client/?id=' + encodeURIComponent(c.id);
+        var name = document.createElement('span');
+        name.className = 'admin-picker-item-name';
+        name.textContent = [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client';
+        a.appendChild(name);
+        var metaParts = [];
+        if (c.phone) metaParts.push(typeof window.formatPhone === 'function' ? window.formatPhone(c.phone) : c.phone);
+        if (c.city) metaParts.push(c.city);
+        if (c.email) metaParts.push(c.email);
+        var meta = document.createElement('span');
+        meta.className = 'admin-picker-item-meta';
+        meta.textContent = metaParts.join(' · ') || 'No contact info on file';
+        a.appendChild(meta);
+        resultsBox.appendChild(a);
+      });
+      openPanel();
+    }
+
+    function runSearch(term) {
+      abortInFlightSearch();
+      var controller = new AbortController();
+      currentAbortController = controller;
+      var url = '/api/admin/clients?limit=' + SEARCH_LIMIT + '&search=' + encodeURIComponent(term);
+      adminFetch(url, { signal: controller.signal })
+        .then(function (res) {
+          if (res.status === 401) {
+            window.location.href = '/admin/login/';
+            return null;
+          }
+          if (!res.ok) throw new Error('search failed');
+          return res.json().catch(function () { return null; });
+        })
+        .then(function (body) {
+          if (!body) return;
+          renderResults(body.clients || []);
+        })
+        .catch(function (err) {
+          if (err && err.name === 'AbortError') return; // superseded by a newer search
+          renderEmpty('Could not load clients right now.');
+        });
+    }
+
+    input.addEventListener('input', function () {
+      clearTimeout(debounceTimer);
+      var value = input.value.trim();
+      if (!value) {
+        abortInFlightSearch();
+        closePanel();
+        resultsBoxClear();
+        return;
+      }
+      renderEmpty('Searching…');
+      debounceTimer = setTimeout(function () {
+        runSearch(value);
+      }, SEARCH_DEBOUNCE_MS);
+    });
+
+    input.addEventListener('focus', function () {
+      if (input.value.trim() && resultsBox.firstChild) openPanel();
+    });
+
+    // Single document-level listener, same pattern as client-picker.js —
+    // works identically for a touch tap or a physical-mouse click outside
+    // the search box.
+    document.addEventListener('mousedown', function (e) {
+      if (!panel.hidden && !input.contains(e.target) && !panel.contains(e.target)) closePanel();
+    }, true);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !panel.hidden) closePanel();
+    });
+  })();
 
   var errorBanner = document.getElementById('error-banner');
   var loadingEl = document.getElementById('loading');
@@ -190,9 +304,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // The exact Completed-Revenue / Booked rules, duplicated from admin/
   // schedule-financials.js's own completedRevenueAmount()/bookedJobAmount()
   // (see that file's header for the full reasoning) — never re-derived
-  // differently here.
+  // differently here. Dashboard Revenue audit fix: reads job.revenueAmount
+  // (computed server-side in fetchScheduleJobs() via the job_payments
+  // ledger) first, same as schedule-financials.js's own copy — see that
+  // file's comment on this exact function for the full rationale.
   function completedRevenueAmount(job) {
     if (job.isComplimentary) return 0;
+    if (typeof job.revenueAmount === 'number') return job.revenueAmount;
     var hasFinal = job.finalPrice !== null && job.finalPrice !== undefined && job.finalPrice !== '';
     var amount = Number(hasFinal ? job.finalPrice : job.estimatedPrice);
     return Number.isFinite(amount) ? amount : 0;

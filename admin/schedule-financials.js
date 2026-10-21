@@ -117,8 +117,20 @@ window.AdminScheduleFinancials = (function () {
   // job's complimentaryValue (what the service would have been worth) is
   // completely separate and is NEVER read here — see buildComplimentaryRows()
   // below for where it's used instead.
+  // Dashboard Revenue audit fix — api/admin/bookings.js's fetchScheduleJobs()
+  // now computes this server-side via the SAME effectiveRevenue()/
+  // job_payments ledger logic the booking-detail/closeout page and
+  // Invoices list already trust, instead of the admin-typed finalPrice
+  // snapshot (see that function's own comment for why: a completed job
+  // with partial payments, a post-completion charge, or a refund recorded
+  // through job_payments but never hand-retyped into finalPrice used to
+  // silently diverge between this dashboard and the job's own detail
+  // page). job.revenueAmount is null for anything that isn't a completed,
+  // non-pickup job; the isComplimentary/finalPrice fallback below only
+  // ever fires against an older cached response that predates this field.
   function completedRevenueAmount(job) {
     if (job.isComplimentary) return 0;
+    if (typeof job.revenueAmount === 'number') return job.revenueAmount;
     var hasFinal = job.finalPrice !== null && job.finalPrice !== undefined && job.finalPrice !== '';
     var amount = Number(hasFinal ? job.finalPrice : job.estimatedPrice);
     return Number.isFinite(amount) ? amount : 0;

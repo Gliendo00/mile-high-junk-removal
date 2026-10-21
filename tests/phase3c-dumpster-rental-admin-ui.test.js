@@ -117,10 +117,16 @@ test("admin/booking-edit.js: a manual pickup date left blank is rejected client-
   assert.ok(/if \(pickupDateIsManual && !pickupDateInput\.value\) \{/.test(dumpsterBlock));
 });
 
-test("admin/booking-edit.js: pickup date's min stays in sync with the Appointment Date field, both on load and on every change", () => {
+// Audit fix (2026-10-21): pickup can never be ON delivery day either, not
+// just never before it — a dumpster can't be delivered and picked up the
+// same day, so same-day was never a real override, only ever an
+// accidental one. The date-picker's own min now excludes the delivery
+// date itself (addDaysIso(..., 1)) rather than allowing it, matching the
+// server's own `<=` rejection in api/admin/booking.js's handleUpdate().
+test("admin/booking-edit.js: pickup date's min excludes the delivery date itself (addDaysIso +1), staying in sync with the Appointment Date field both on load and on every change", () => {
   const src = readNormalized("admin/booking-edit.js");
-  assert.ok(/pickupDateInput\.min = appointmentDateInput\.value;/.test(src));
-  assert.ok(/appointmentDateInput\.addEventListener\('change', function \(\) \{\s*pickupDateInput\.min = appointmentDateInput\.value;/.test(src));
+  assert.ok(/pickupDateInput\.min = addDaysIso\(appointmentDateInput\.value, 1\);/.test(src));
+  assert.ok(/appointmentDateInput\.addEventListener\('change', function \(\) \{\s*pickupDateInput\.min = addDaysIso\(appointmentDateInput\.value, 1\);/.test(src));
 });
 
 // =======================================================================

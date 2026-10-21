@@ -12,7 +12,7 @@ const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normaliz
 const { effectiveTimeSortMinutes } = require("../_lib/time-windows");
 const { HISTORICAL_FLOOR_ISO, HISTORICAL_FLOOR_YEAR, HISTORICAL_FLOOR_MONTH } = require("../_lib/historical-floor");
 const { EXPENSE_CATEGORIES, ALL_EXPENSE_CATEGORY_KEYS } = require("../_lib/expense-categories");
-const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows } = require("../_lib/job-payments-ledger");
+const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows, effectiveRevenue } = require("../_lib/job-payments-ledger");
 const { INVOICE_SELECT_COLS, mapInvoice, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
@@ -743,28 +743,58 @@ function handleGetAgentReport(req, res) {
 // agent has actually recorded, never an invented score. `pagesMonitored`
 // is the one exception: a snapshot of the MOST RECENT run's page count,
 // since "pages monitored" doesn't make sense as a running sum.
+// Audit fix — GSC/GA4's status used to be isSearchConsoleConfigured()/
+// isGa4Configured() (plain env-var presence) evaluated HERE, inside this
+// Vercel function. But those five env vars are, by this project's own
+// documented design, never provisioned to Vercel — only to the GitHub
+// Actions runner that actually runs the Agent CLI (see agent/README.md's
+// "Vercel / DB impact" section) — so that check could never render
+// anything but NOT CONFIGURED here, regardless of whether the real
+// GitHub Actions -> WIF -> Google API path is actually working, and a
+// credential that's present but broken would misleadingly render as
+// CONNECTED (presence-only, no API call). This now reads
+// agent/history/integration-health.json instead — a REAL probe result
+// the GitHub Actions runner's new `--check-integrations` step writes
+// (see agent/lib/integration-health.js's header) — the same cross-
+// process-boundary pattern this dashboard already uses for every other
+// number on this page (agent/history/log.ndjson).
+//
+// STALE_AFTER_MS: the daily scheduled run (plus weekly) refreshes this
+// file roughly once a day; 36h gives one day's slack before a GOOD
+// LAST READING stops being trusted as still-current — distinct from
+// ERROR, which is never time-gated (a recorded failure is a failure
+// regardless of how long ago it was recorded).
+const INTEGRATION_HEALTH_STALE_AFTER_MS = 36 * 60 * 60 * 1000;
+
+function classifyIntegrationHealth(entry, checkedAt, now) {
+  if (!entry || entry.configured === false) return { state: "not_configured", reason: null, checkedAt: checkedAt || null };
+  if (entry.ok === false) return { state: "error", reason: entry.reason || null, checkedAt: checkedAt || null };
+  const isStale = checkedAt ? now.getTime() - new Date(checkedAt).getTime() > INTEGRATION_HEALTH_STALE_AFTER_MS : true;
+  return { state: isStale ? "stale" : "connected", reason: null, checkedAt: checkedAt || null };
+}
+
 function handleAgentDashboard(req, res) {
   const history = loadAgentHistoryModule(res);
   if (!history) return;
 
-  let searchConsoleConfigured = false;
-  let ga4Configured = false;
+  let integrationHealth = null;
   try {
-    searchConsoleConfigured = require("../../agent/lib/search-console-client").isSearchConsoleConfigured();
+    integrationHealth = require("../../agent/lib/integration-health").loadIntegrationHealth();
   } catch (e) {
-    searchConsoleConfigured = false;
+    integrationHealth = null;
   }
-  try {
-    ga4Configured = require("../../agent/lib/ga4-client").isGa4Configured();
-  } catch (e) {
-    ga4Configured = false;
-  }
+  const now = new Date();
+  const searchConsoleStatus = classifyIntegrationHealth(integrationHealth && integrationHealth.gsc, integrationHealth && integrationHealth.at, now);
+  const ga4Status = classifyIntegrationHealth(integrationHealth && integrationHealth.ga4, integrationHealth && integrationHealth.at, now);
   // Plain env-var presence check — deliberately NOT getServiceClient()
   // (which constructs a real @supabase/supabase-js client): this view
   // must never touch Supabase at all, same hard rule as agent-activity/
   // agent-reports above (see this function's header) — CRM DATA/PROPOSAL
   // SYNC both ultimately depend on these same two credentials being
-  // configured, so one shared check is the honest answer for both.
+  // configured, so one shared check is the honest answer for both. Unlike
+  // GSC/GA4 above, these ARE read directly by this Vercel function every
+  // other time it touches Supabase, so a presence check here is genuinely
+  // informative, not a check against a credential this process never sees.
   const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
 
   try {
@@ -774,7 +804,7 @@ function handleAgentDashboard(req, res) {
         ok: true,
         connected: false,
         status: "not-connected",
-        integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+        integrations: { gsc: searchConsoleStatus, ga4: ga4Status, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
         metrics: null,
         latestRun: null,
         daily: { lastRun: null },
@@ -809,7 +839,7 @@ function handleAgentDashboard(req, res) {
       ok: true,
       connected: true,
       status: dashboardOverallStatus(latestSummary),
-      integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+      integrations: { gsc: searchConsoleStatus, ga4: ga4Status, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
       metrics: {
         pagesMonitored: latestSummary.pagesChecked,
         findingsTotal,
@@ -833,7 +863,7 @@ function handleAgentDashboard(req, res) {
       ok: true,
       connected: false,
       status: "unknown",
-      integrations: { gsc: searchConsoleConfigured, ga4: ga4Configured, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
+      integrations: { gsc: searchConsoleStatus, ga4: ga4Status, crmData: supabaseConfigured, proposalSync: supabaseConfigured },
       metrics: null,
       latestRun: null,
       daily: { lastRun: null },
@@ -1417,8 +1447,56 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
     });
   }
 
+  // Dashboard Revenue audit fix — Day/Week/Month/Home all render from this
+  // one `jobs` array (admin/schedule-financials.js, admin/home.js), so
+  // computing the ledger-authoritative amount HERE, once, is what makes
+  // every dashboard surface agree with each other and with the booking-
+  // detail/closeout page and Invoices list, which already trust
+  // effectiveRevenue()/job_payments over a hand-typed final_price snapshot
+  // (see api/_lib/job-payments-ledger.js's own header for the rule: "if
+  // this booking has any non-voided job_payments rows, the ledger total is
+  // authoritative"). Scoped to completed, non-pickup bookings only — a
+  // booked/rental_out job's dollar figure is still its estimated_price
+  // (Booked, not Revenue), and a dumpster_pickup helper leg never carries
+  // price fields at all. Keyed by booking_id (not invoice_id), so this
+  // naturally includes every kind of payment row — generic/legacy,
+  // invoice-attributed manual, and Stripe-mirrored alike — with no separate
+  // invoice-total addition anywhere in this file, so nothing here can ever
+  // double-count a payment that's also reflected in an invoice's own
+  // balance (computed independently, by invoice_id, in invoice-helpers.js).
+  const completedBookingIds = bookings.filter((b) => normalizedStatus(b.status) === "completed" && b.service_type !== "dumpster_pickup").map((b) => b.id);
+  const ledgerRowsByBooking = {};
+  if (completedBookingIds.length) {
+    const paymentsRes = await supabase.from("job_payments").select("booking_id, amount, payment_type").in("booking_id", completedBookingIds).is("voided_at", null);
+    if (paymentsRes.error) throw paymentsRes.error;
+    (paymentsRes.data || []).forEach((row) => {
+      if (!ledgerRowsByBooking[row.booking_id]) ledgerRowsByBooking[row.booking_id] = [];
+      ledgerRowsByBooking[row.booking_id].push(row);
+    });
+  }
+
   const jobs = bookings.map((b) => {
     const customer = customersById[b.customer_id] || null;
+    // revenueAmount/revenueSource: null for anything that isn't a completed,
+    // non-pickup job (booked/rental_out jobs are Booked, not Revenue; a
+    // pickup leg is never either). A complimentary job stays $0 regardless
+    // of any ledger row, matching completedRevenueAmount()'s own existing
+    // isComplimentary short-circuit on the client — enforced here too so
+    // revenueAmount itself is already the final truth, not something the
+    // client has to re-derive.
+    const isCompletedCountable = normalizedStatus(b.status) === "completed" && b.service_type !== "dumpster_pickup";
+    let revenueAmount = null;
+    let revenueSource = null;
+    if (isCompletedCountable) {
+      if (b.is_complimentary) {
+        revenueAmount = 0;
+        revenueSource = "complimentary";
+      } else {
+        const rev = effectiveRevenue(ledgerRowsByBooking[b.id] || [], b.final_price);
+        revenueAmount = rev.amount === null ? 0 : rev.amount;
+        revenueSource = rev.source;
+      }
+    }
     return {
       id: b.id,
       serviceType: b.service_type,
@@ -1437,6 +1515,13 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
       estimatedPrice: b.estimated_price,
       estimatedPriceMax: b.estimated_price_max,
       finalPrice: b.final_price,
+      // Dashboard Revenue audit fix — the ledger-authoritative amount for a
+      // completed, non-pickup job (null for anything else); see this
+      // function's own comment above computeFromJobs. completedRevenueAmount()
+      // in admin/schedule-financials.js and admin/home.js reads this instead
+      // of finalPrice now.
+      revenueAmount: revenueAmount,
+      revenueSource: revenueSource,
       // Batch 3 addendum — complimentary/free job tracking. isComplimentary
       // is what admin/schedule-financials.js's completedRevenueAmount()
       // checks FIRST, before ever looking at finalPrice/estimatedPrice (see

@@ -219,8 +219,16 @@ document.addEventListener('DOMContentLoaded', function () {
     // exists on it (recorded early, before the job was marked complete) —
     // showing that number here would incorrectly read as "already paid."
     // One number, unlabeled, to keep the card compact — never both.
+    // Dashboard Revenue audit fix: Actual Collected now reads
+    // job.revenueAmount (the ledger-authoritative figure computed
+    // server-side in fetchScheduleJobs(), same source the Revenue/Net
+    // counters use) instead of the raw finalPrice snapshot, so this card
+    // can never show a different "actual collected" number than the
+    // counters above it. Falls back to finalPrice only for an older
+    // cached response that predates this field.
+    var completedAmount = typeof job.revenueAmount === 'number' ? job.revenueAmount : job.finalPrice;
     var priceText = job.status === 'completed'
-      ? (formatPrice(job.finalPrice) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
+      ? (formatPrice(completedAmount) || formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax))
       : formatQuotedAmount(job.estimatedPrice, job.estimatedPriceMax);
     if (priceText) main.appendChild(el('div', 'admin-schedule-card-price', priceText));
 

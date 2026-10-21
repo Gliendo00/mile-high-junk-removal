@@ -24,28 +24,25 @@
     <div class="admin-home-greeting-sub">Here's your Mile High snapshot for today.</div>
   </div>
 
-  <!-- Search Whisperer — visual shell only, deliberately real-looking but
-       inert (native disabled attributes, no click handler, no fetch). See
-       admin/home.js's header comment for why. Shown immediately, not
-       gated behind the data loading state below. The "Coming soon" badge
-       is absolutely positioned against .admin-home-search-wrap (see
-       admin.css) — a small flag on the search bar's own corner rather than
-       a second row, so it adds zero extra vertical height (UI refinement
-       pass #2) — still announced to screen readers via aria-describedby.
-       The input's placeholder is shortened at narrow widths by
-       admin/home.js on load (not CSS — a placeholder's text can't be
-       swapped by a media query) so it never collides with/gets clipped
-       before the Ask button on a narrow phone; the richer placeholder is
-       kept on wider screens. -->
+  <!-- Global client search (audit fix — was a disabled "Coming soon"
+       visual shell; see admin/home.js's header comment). Hits the exact
+       same GET /api/admin/clients search endpoint as admin/clients-list.js
+       and admin/client-picker.js, not a second search system. Shown
+       immediately, not gated behind the data loading state below. The
+       results panel reuses .admin-typeahead-panel/.admin-picker-* (see
+       admin.css), positioned absolutely within this relatively-positioned
+       wrap so opening it never pushes the metrics cards below down the
+       page. -->
   <div class="admin-home-search-wrap">
     <div class="admin-home-search">
       <span class="admin-home-search-icon" aria-hidden="true">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </span>
-      <input type="text" id="search-whisperer-input" class="admin-home-search-input" placeholder="Search CRM… (leads, clients, jobs, notes, etc.)" disabled aria-describedby="search-whisperer-note">
-      <button type="button" class="admin-home-search-ask" disabled>Ask</button>
+      <input type="search" id="search-whisperer-input" class="admin-home-search-input" placeholder="Search clients… (name, phone, email, address)" autocomplete="off" aria-label="Search clients by name, phone, email, or address" aria-expanded="false">
     </div>
-    <span id="search-whisperer-note" class="admin-home-search-badge">Coming soon</span>
+    <div id="search-whisperer-panel" class="admin-typeahead-panel" hidden>
+      <div id="search-whisperer-results" class="admin-picker-results"></div>
+    </div>
   </div>
 
   <div id="loading" class="admin-loading">Loading dashboard…</div>

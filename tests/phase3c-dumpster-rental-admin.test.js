@@ -327,6 +327,25 @@ test("New Job (dumpster_rental): an explicit pickupDate before the delivery date
   assert.strictEqual(db.dumpster_rentals.length, 0);
 });
 
+// Audit fix (2026-10-21): a confirmed production bug where a pickup date
+// equal to the delivery date — accidental (a date-picker opened pre-
+// highlighted on "today," a copy/paste, a stale form value) — was
+// silently ACCEPTED as a manual override, entirely bypassing the correct
+// addDaysIso(delivery, 5) default. Same day never makes sense for a real
+// override (a dumpster can't be delivered and picked up the same day),
+// so this must now be rejected the same way "before delivery" already
+// was, not just the one day earlier than this suite's existing test.
+test("New Job (dumpster_rental): an explicit pickupDate EQUAL TO the delivery date (the exact bug this audit found) is rejected, no rows written — same-day was silently accepted before this fix, bypassing the +5-day default", async () => {
+  adminAuthed();
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const res = await req(db, { method: "POST", body: newJobBody({ customerId: cust.id, appointmentDate: "2099-09-25", pickupDate: "2099-09-25" }) });
+  assert.strictEqual(res.statusCode, 400);
+  assert.ok(/after the delivery date/.test(res.body.error), "error message must explain pickup must be AFTER delivery");
+  assert.strictEqual(db.bookings.length, 0);
+  assert.strictEqual(db.dumpster_rentals.length, 0);
+});
+
 test("New Job (dumpster_rental): material type and placement notes are saved when provided", async () => {
   adminAuthed();
   const cust = makeCustomer();
@@ -524,6 +543,21 @@ test("Edit Job: a manual pickup date before the delivery date is rejected, nothi
 
   const res = await req(db, { method: "PATCH", body: editBody(booking, { pickupDateManual: true, pickupDate: "2026-09-01" }) });
   assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.dumpster_rentals[0].pickup_date, "2026-09-30", "unchanged");
+});
+
+// Audit fix (2026-10-21) — same-day rejection, edit path. seedDumpsterBooking's
+// default appointment_date is 2026-09-25 (see its own defaults above).
+test("Edit Job: a manual pickup date EQUAL TO the delivery date is rejected, nothing written — the edit-path twin of the exact bug this audit found", async () => {
+  adminAuthed();
+  const cust = makeCustomer();
+  const db = freshDb({ customers: [cust] });
+  const booking = seedDumpsterBooking(db, { customer_id: cust.id });
+  seedRental(db, booking.id);
+
+  const res = await req(db, { method: "PATCH", body: editBody(booking, { pickupDateManual: true, pickupDate: "2026-09-25" }) });
+  assert.strictEqual(res.statusCode, 400);
+  assert.ok(/after the delivery date/.test(res.body.error));
   assert.strictEqual(db.dumpster_rentals[0].pickup_date, "2026-09-30", "unchanged");
 });
 

@@ -57,7 +57,12 @@ test("admin/schedule.js: the status pill is a real <button>, built and appended 
   const src = readSrc("admin/schedule.js");
   const fnStart = src.indexOf("function renderJobCard");
   assert.ok(fnStart !== -1);
-  const fnBody = src.slice(fnStart, fnStart + 3600);
+  // Window widened 3600 -> 4200 (audit fix, 2026-10-21): admin/schedule.js's
+  // Dashboard Revenue audit fix added an explanatory comment earlier in
+  // this same function (the Actual Collected price label now reads
+  // job.revenueAmount) — pure comment/content growth, not a reordering —
+  // which pushed card.appendChild(main) past the old fixed window.
+  const fnBody = src.slice(fnStart, fnStart + 4200);
 
   const statusBtnIdx = fnBody.indexOf("var statusBtn = document.createElement('button')");
   const topAppendIdx = fnBody.indexOf("card.appendChild(top)");

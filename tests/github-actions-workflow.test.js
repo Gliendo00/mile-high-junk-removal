@@ -484,6 +484,30 @@ await test("a generic 'Record workflow start time' step exists, runs uncondition
     assert.ok(mainRunIdx > completedJobsIdx, "completed-job evidence refresh must run BEFORE the main --daily/--weekly Agent pass");
   });
 
+  await test("CRM cleanup/verification audit (2026-10-21): the integration-health check step exists, runs for BOTH daily and weekly dispatches (not gated to one), runs AFTER Google Cloud auth and BEFORE the main Agent step, and uses the same Google credentials as the Golden diagnostics", () => {
+    const block = extractStepBlock(code, /Check GSC\/GA4 integration health/);
+    assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]daily['"]\s*\|\|\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must run for both daily and weekly, unlike the weekly-only evidence-refresh steps");
+    assert.ok(/--check-integrations/.test(block));
+    assert.strictEqual(/apply-safe/.test(block), false);
+    assert.strictEqual(/continue-on-error/.test(block), false);
+    assert.ok(/vars\.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT/.test(block) && /vars\.GSC_SITE_URL/.test(block) && /vars\.GA4_PROPERTY_ID/.test(block), "needs the same Google credentials the Golden diagnostics already use — no separate credential path");
+
+    const lines = code.split("\n");
+    const authIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Authenticate to Google Cloud/.test(l));
+    const healthIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Check GSC\/GA4 integration health/.test(l));
+    const mainRunIdx = lines.findIndex((l) => /^\s*- name:/.test(l) && /Run Website Agent/.test(l));
+    assert.ok(authIdx > -1 && healthIdx > -1 && mainRunIdx > -1);
+    assert.ok(healthIdx > authIdx, "integration-health check must run AFTER Google Cloud auth is established");
+    assert.ok(mainRunIdx > healthIdx, "integration-health check must run BEFORE the main --daily/--weekly Agent pass");
+  });
+
+  await test("CRM cleanup/verification audit (2026-10-21): the integration-health check step's addition does not disturb any diagnostic's isolation — no diagnostic invokes --check-integrations, and it never runs for a diagnostic dispatch", () => {
+    for (const diagName of [/Run Golden Search Console diagnostic/, /Run Golden GA4 diagnostic/, /Run Denver LeafDrop local-source diagnostic/]) {
+      const block = extractStepBlock(code, diagName);
+      assert.strictEqual(/--check-integrations/.test(block), false);
+    }
+  });
+
   await test("Pre-acceptance hardening (audit finding #1): the cross-source synthesis step exists, runs ONLY for weekly dispatches, runs AFTER every other weekly-only refresh step and BEFORE the main Agent step, and needs no credentials", () => {
     const block = extractStepBlock(code, /Run cross-source evidence synthesis/);
     assert.ok(/if:\s*env.RUN_TYPE\s*==\s*['"]weekly['"]/.test(block), "must be gated to weekly dispatches only");

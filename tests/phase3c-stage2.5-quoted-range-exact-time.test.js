@@ -1003,11 +1003,14 @@ test("GET schedule: a booked job's payload carries both estimatedPrice/estimated
     const src = readSrc(file);
     const start = src.indexOf("function " + fn);
     assert.ok(start !== -1, fn + "() must exist in " + file);
-    // Window widened 2200 -> 3000 (CRM visual redesign, 2026-10): schedule.js's
-    // renderJobCard() picked up ~250 extra chars of explanatory comment ahead
-    // of this same unchanged status==='completed' check, pushing it just past
-    // the old fixed window. Comfortable margin added for future small edits.
-    const body = src.slice(start, start + 3000);
+    // Window widened 2200 -> 3000 (CRM visual redesign, 2026-10), then
+    // 3000 -> 3800 (dashboard-revenue audit fix, 2026-10-21): schedule.js's
+    // renderJobCard() picked up another explanatory comment ahead of this
+    // same unchanged status==='completed' check (Actual Collected now
+    // reads job.revenueAmount, not finalPrice — see that comment), again
+    // pushing it past the old fixed window. Comfortable margin added for
+    // future small edits.
+    const body = src.slice(start, start + 3800);
     assert.ok(/===\s*'completed'/.test(body), file + "'s " + fn + "() must gate the Actual-Collected-first branch on status === 'completed', not apply it unconditionally");
     assert.ok(/formatQuotedAmount/.test(body), file + "'s " + fn + "() must be able to fall back to/lead with the range-aware Quoted amount");
   });
