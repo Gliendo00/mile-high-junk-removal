@@ -80,9 +80,12 @@ document.addEventListener('DOMContentLoaded', function () {
     badges.appendChild(statusBadge);
     if (inv.isOverdue) badges.appendChild(el('span', 'admin-overdue-badge', 'Overdue'));
     meta.appendChild(badges);
-    var amountText = inv.displayStatus === 'draft' || inv.displayStatus === 'void' ? formatPrice(inv.totalAmount) : formatPrice(inv.balanceDue) + ' due';
-    meta.appendChild(el('span', 'admin-invoice-row-amount', amountText || '$0.00'));
-    if (inv.dueDate) meta.appendChild(el('span', 'admin-client-row-meta-text', 'Due ' + formatDate(inv.dueDate)));
+    var isBilled = inv.displayStatus !== 'draft' && inv.displayStatus !== 'void';
+    var amountEl = el('span', 'admin-invoice-row-amount', (isBilled ? formatPrice(inv.balanceDue) : formatPrice(inv.totalAmount)) || '$0.00');
+    if (isBilled && Number(inv.balanceDue) > 0) amountEl.classList.add(inv.isOverdue ? 'is-overdue' : 'is-due');
+    meta.appendChild(amountEl);
+    if (isBilled) meta.appendChild(el('span', 'admin-invoice-row-amount-label', Number(inv.balanceDue) > 0 ? 'balance due' : 'paid in full'));
+    if (inv.dueDate) meta.appendChild(el('span', 'admin-client-row-meta-text' + (inv.isOverdue ? ' is-overdue' : ''), 'Due ' + formatDate(inv.dueDate)));
     a.appendChild(meta);
 
     li.appendChild(a);

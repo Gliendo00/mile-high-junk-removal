@@ -2307,18 +2307,100 @@ function escapeHtmlForInvoiceEmail(s) {
 // needing to snapshot yet another field for byte-identical recovery
 // retries); invoice number/due date/notes are already immutable once
 // finalized, so they're safe to read live rather than snapshotted.
+// Oct 2026 visual redesign — brand-matched to the redesigned public invoice
+// page (site/invoice/) and the real Mile High Junk Removal logo, but this
+// is an EMAIL, not a web page: table-based layout, inline styles only, no
+// <style> block (stripped by Gmail in several contexts), no webfonts (system
+// font stack only — Fredoka/Work Sans are not reliable in Outlook desktop's
+// Word rendering engine), no flexbox/grid, and the logo is referenced by its
+// absolute production URL (an <img src>, never embedded/base64 — standard
+// email practice; this is the same already-tracked site/images/mile-high-
+// junk-removal-logo-invoice.png asset the public invoice page uses).
+//
+// PURITY IS LOAD-BEARING: this function's output must stay a deterministic
+// function of exactly (invoiceRow, balanceDueCents, link) — no Date.now(),
+// Math.random(), or any other nondeterminism — because handleSendInvoice()
+// above calls it fresh on every Send attempt, including a RECOVERED retry
+// of an already-pending generation, and relies on the Resend API's
+// Idempotency-Key (invoice-send:{invoiceId}:{generation}) to guarantee a
+// retried generation never sends a second, different-looking email. Keeping
+// this function pure is what makes that guarantee meaningful rather than
+// coincidental: the exact same three inputs on a recovered retry produce the
+// exact same HTML string, byte for byte, same as before this redesign.
+const EMAIL_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+// Plain string parsing of a "YYYY-MM-DD" date — deliberately NOT a Date
+// object/toLocaleDateString(), which would depend on the server process's
+// own timezone (irrelevant here, but worth avoiding on principle) and,
+// more importantly, would add a non-deterministic-feeling dependency to a
+// function whose purity (see buildInvoiceSendEmailHtml's header) is
+// load-bearing for Send retry behavior. Falls back to the raw string for
+// anything that doesn't match, same as the field's prior "Not set"
+// fallback.
+function formatDueDateForEmail(isoDate) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate || "");
+  if (!m) return isoDate || "Not set";
+  const monthName = EMAIL_MONTH_NAMES[Number(m[2]) - 1];
+  if (!monthName) return isoDate;
+  return monthName + " " + Number(m[3]) + ", " + m[1];
+}
+
 function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
   const amountDue = escapeHtmlForInvoiceEmail(centsToDecimalString(balanceDueCents));
   const invoiceNumber = escapeHtmlForInvoiceEmail(invoiceRow.invoice_number || "");
-  const dueDate = escapeHtmlForInvoiceEmail(invoiceRow.due_date || "Not set");
+  const dueDate = escapeHtmlForInvoiceEmail(formatDueDateForEmail(invoiceRow.due_date));
   const safeLink = escapeHtmlForInvoiceEmail(link);
+  const logoUrl = "https://www.milehighjunkremoval.net/images/mile-high-junk-removal-logo-invoice.png";
+  const FONT = "Arial, Helvetica, sans-serif";
+  const PINE = "#153320";
+  const GREEN = "#2f6f13";
+  const BTN_GREEN = "#3f8a19";
+  const MUTED = "#5b6b5f";
+  const DIVIDER = "#e1ebe3";
   return (
-    '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;">' +
-    "<h2 style=\"margin:0 0 12px;\">Mile High Junk Removal</h2>" +
-    "<p>Invoice <strong>" + invoiceNumber + "</strong> is ready.</p>" +
-    "<p>Amount due: <strong>$" + amountDue + "</strong><br>Due date: " + dueDate + "</p>" +
-    '<p><a href="' + safeLink + '" style="display:inline-block;background:#1a73e8;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;">View &amp; Pay Invoice</a></p>' +
-    '<p style="font-size:12px;color:#666;">If the button doesn\'t work, copy and paste this link: ' + safeLink + "</p>" +
+    '<div style="margin:0;padding:0;background-color:#eef6f1;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef6f1;padding:24px 12px;">' +
+    "<tr><td align=\"center\">" +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family:' + FONT + ';">' +
+
+    // Header — logo + business name.
+    '<tr><td style="padding:24px 28px 16px;" align="center">' +
+    '<img src="' + logoUrl + '" width="56" height="56" alt="Mile High Junk Removal" style="display:block;margin:0 auto 10px;border:0;border-radius:50%;">' +
+    '<div style="font-size:18px;font-weight:bold;color:' + PINE + ';">Mile High Junk Removal</div>' +
+    '</td></tr>' +
+
+    // Invoice number + intro line.
+    '<tr><td style="padding:0 28px 4px;" align="center">' +
+    '<p style="margin:0 0 4px;font-size:14px;color:' + MUTED + ';">Invoice</p>' +
+    '<p style="margin:0 0 14px;font-size:22px;font-weight:bold;color:' + PINE + ';">' + invoiceNumber + '</p>' +
+    "</td></tr>" +
+
+    // Amount due banner.
+    '<tr><td style="padding:0 28px 18px;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:' + PINE + ';border-radius:10px;">' +
+    '<tr><td style="padding:16px 18px;" align="center">' +
+    '<div style="font-size:12px;font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;color:#ffffff;opacity:0.85;">Balance Due</div>' +
+    '<div style="font-size:28px;font-weight:bold;color:#ffffff;margin-top:2px;">$' + amountDue + '</div>' +
+    '<div style="font-size:12.5px;color:#ffffff;opacity:0.85;margin-top:4px;">Due ' + dueDate + '</div>' +
+    "</td></tr></table>" +
+    "</td></tr>" +
+
+    // CTA button.
+    '<tr><td style="padding:0 28px 22px;" align="center">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="border-radius:8px;background-color:' + BTN_GREEN + ';" align="center">' +
+    '<a href="' + safeLink + '" style="display:inline-block;padding:14px 32px;font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;">View &amp; Pay Invoice</a>' +
+    "</td></tr></table>" +
+    '<p style="margin:14px 0 0;font-size:11.5px;color:' + MUTED + ';">If the button doesn’t work, copy and paste this link:<br><a href="' + safeLink + '" style="color:' + GREEN + ';word-break:break-all;">' + safeLink + '</a></p>' +
+    "</td></tr>" +
+
+    // Footer — contact info.
+    '<tr><td style="padding:18px 28px 24px;border-top:1px solid ' + DIVIDER + ';" align="center">' +
+    '<p style="margin:0;font-size:12.5px;color:' + MUTED + ';">303-990-1812 &middot; milehighjunkremoval.net</p>' +
+    '<p style="margin:6px 0 0;font-size:12.5px;font-style:italic;color:' + GREEN + ';">Let Us Haul Your Stress Away!</p>' +
+    "</td></tr>" +
+
+    "</table>" +
+    "</td></tr>" +
+    "</table>" +
     "</div>"
   );
 }

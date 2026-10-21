@@ -29,7 +29,10 @@
     totalAmount: document.getElementById("total-amount"),
     amountPaid: document.getElementById("amount-paid"),
     balanceDue: document.getElementById("balance-due"),
+    balanceBanner: document.getElementById("balance-banner"),
     dueDateLine: document.getElementById("due-date-line"),
+    finalizedDateLine: document.getElementById("finalized-date-line"),
+    invoiceNotesCard: document.getElementById("invoice-notes-card"),
     invoiceNotes: document.getElementById("invoice-notes"),
     paySection: document.getElementById("pay-section"),
     payButton: document.getElementById("pay-button"),
@@ -48,6 +51,18 @@
   function money(amount) {
     var n = Number(amount) || 0;
     return "$" + n.toFixed(2);
+  }
+
+  // due_date/finalized_at display formatting only — purely cosmetic, never
+  // touches the values themselves. due_date is a plain DATE (no time
+  // component), so it's parsed as local midnight (appending T00:00:00)
+  // the same way the admin invoice detail page already does, to avoid a
+  // UTC-vs-local off-by-one-day display bug.
+  function formatDate(value, isDateOnly) {
+    if (!value) return "";
+    var d = new Date(isDateOnly ? value + "T00:00:00" : value);
+    if (isNaN(d.getTime())) return value;
+    return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   }
 
   function readTokenFromFragment() {
@@ -121,25 +136,48 @@
     el.totalAmount.textContent = money(data.totalAmount);
     el.amountPaid.textContent = money(data.amountPaid);
     el.balanceDue.textContent = money(data.balanceDue);
-    el.dueDateLine.textContent = data.dueDate ? "Due date: " + data.dueDate : "";
+
+    if (data.finalizedAt) {
+      el.finalizedDateLine.textContent = "Issued " + formatDate(data.finalizedAt, false);
+      el.finalizedDateLine.hidden = false;
+    } else {
+      el.finalizedDateLine.hidden = true;
+    }
+    if (data.dueDate) {
+      el.dueDateLine.textContent = "Due " + formatDate(data.dueDate, true);
+      el.dueDateLine.hidden = false;
+    } else {
+      el.dueDateLine.hidden = true;
+    }
 
     if (data.notes) {
       el.invoiceNotes.textContent = data.notes;
-      el.invoiceNotes.hidden = false;
+      el.invoiceNotesCard.hidden = false;
     } else {
-      el.invoiceNotes.hidden = true;
+      el.invoiceNotesCard.hidden = true;
     }
 
     el.paySection.hidden = true;
     el.paidMessage.hidden = true;
     el.voidMessage.hidden = true;
+    el.balanceBanner.hidden = false;
+    el.balanceBanner.classList.remove("is-overdue");
 
     if (data.displayStatus === "void") {
       el.voidMessage.hidden = false;
+      el.balanceBanner.hidden = true;
     } else if (data.displayStatus === "paid" || Number(data.balanceDue) <= 0) {
       el.paidMessage.hidden = false;
+      el.balanceBanner.hidden = true;
     } else {
       el.paySection.hidden = false;
+      if (data.isOverdue) el.balanceBanner.classList.add("is-overdue");
+      // Reflects the live server-computed balance — same value the Pay
+      // Now flow itself charges, never a client-side guess — so the label
+      // is always accurate even before Stripe's payment element has
+      // mounted (mountPaymentElement() below relabels it "Submit Payment"
+      // only once an actual PaymentIntent is in hand).
+      el.payButton.textContent = "Pay " + money(data.balanceDue);
     }
 
     showOnly("invoice");

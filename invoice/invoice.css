@@ -1,0 +1,341 @@
+/* Public invoice/pay page — Oct 2026 visual redesign.
+   Mirrors the main site's "High Country" design system tokens
+   (site/styles.css :root) rather than importing that stylesheet wholesale
+   — this page is deliberately self-contained (see index.html's own CSP
+   note: no third-party scripts/styles besides Stripe), so the handful of
+   tokens actually used here are copied, not linked. */
+:root {
+  color-scheme: light;
+  --iv-bg: #eef6f1;
+  --iv-surface: #ffffff;
+  --iv-text: #1b2b20;
+  --iv-text-muted: #5b6b5f;
+  --iv-accent: #5fb52a;
+  --iv-accent-dark: #2f6f13;
+  --iv-pine: #153320;
+  --iv-divider: #e1ebe3;
+  --iv-amber: #b45309;
+  --iv-amber-bg: #fdf3e3;
+  --iv-red: #b91c1c;
+  --iv-red-bg: #fdecea;
+  --iv-green-bg: #e6f4ea;
+
+  --iv-font-heading: "Fredoka", system-ui, sans-serif;
+  --iv-font-body: "Work Sans", system-ui, sans-serif;
+
+  --iv-radius-sm: 7px;
+  --iv-radius-md: 12px;
+  --iv-radius-lg: 20px;
+
+  --iv-shadow-sm: 0 1px 3px rgba(21, 51, 32, 0.08);
+  --iv-shadow-md: 0 6px 18px rgba(21, 51, 32, 0.1);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--iv-bg);
+  color: var(--iv-text);
+  font-family: var(--iv-font-body);
+  font-size: 15px;
+  line-height: 1.5;
+}
+[hidden] { display: none !important; }
+img { max-width: 100%; display: block; }
+
+.iv-page {
+  min-height: 100vh;
+  padding: 28px 16px 48px;
+  display: flex;
+  justify-content: center;
+}
+.iv-wrap { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ------------------------------------------------------------------ */
+/* Loading / unavailable                                               */
+/* ------------------------------------------------------------------ */
+.iv-loading-card {
+  width: 100%;
+  max-width: 420px;
+  margin: 18vh auto 0;
+  text-align: center;
+  color: var(--iv-text-muted);
+  font-size: 14px;
+}
+.iv-spinner {
+  width: 32px;
+  height: 32px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  border: 3px solid var(--iv-divider);
+  border-top-color: var(--iv-accent-dark);
+  animation: iv-spin 0.8s linear infinite;
+}
+@keyframes iv-spin { to { transform: rotate(360deg); } }
+
+.iv-unavailable-card {
+  max-width: 420px;
+  margin: 10vh auto 0;
+  text-align: center;
+}
+.iv-unavailable-card .iv-logo { margin: 0 auto 14px; }
+.iv-unavailable-message { font-weight: 600; margin: 4px 0 6px; }
+.iv-unavailable-help { color: var(--iv-text-muted); font-size: 13.5px; margin: 0 0 18px; }
+
+/* ------------------------------------------------------------------ */
+/* Header                                                               */
+/* ------------------------------------------------------------------ */
+.iv-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 4px 2px;
+}
+/* Round crop — same treatment as the site's own .nav-brand-logo (58px
+   circle, object-fit:cover, a subtle ring) so this is recognizably the
+   same logo mark as the rest of milehighjunkremoval.net, not a re-cropped
+   one-off. Uses the logo's original black-background export (the real
+   asset, not a transparent re-render) since the circular crop already
+   gives it a clean edge against this card's white background. */
+.iv-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(21, 51, 32, 0.12);
+  flex: none;
+}
+.iv-business-name {
+  font-family: var(--iv-font-heading);
+  font-weight: 700;
+  font-size: 20px;
+  color: var(--iv-pine);
+  margin: 0;
+}
+.iv-business-meta { font-size: 12.5px; color: var(--iv-text-muted); margin-top: 2px; }
+
+/* ------------------------------------------------------------------ */
+/* Cards                                                                */
+/* ------------------------------------------------------------------ */
+.iv-card {
+  background: var(--iv-surface);
+  border-radius: var(--iv-radius-lg);
+  box-shadow: var(--iv-shadow-sm);
+  padding: 18px 20px;
+}
+.iv-section-label {
+  font-family: var(--iv-font-heading);
+  font-weight: 600;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iv-accent-dark);
+  margin-bottom: 10px;
+}
+
+.iv-summary-card { box-shadow: var(--iv-shadow-md); }
+.iv-summary-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.iv-summary-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iv-text-muted);
+  margin-bottom: 2px;
+}
+/* Deliberately NOT the page's loudest element — the invoice number is a
+   reference label, not the thing a client is here to act on (that's the
+   Balance Due banner / status badge). Kept as an <h1> for document
+   structure, but sized/weighted like body text. */
+.iv-invoice-number {
+  font-family: var(--iv-font-body);
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--iv-text);
+  margin: 0;
+}
+.iv-summary-dates { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; font-size: 13px; color: var(--iv-text-muted); }
+.iv-due-date { font-weight: 700; color: var(--iv-text); }
+
+/* Status badge — invoice.js sets className = "status-badge " + one of
+   status-due/status-paid/status-void/status-overdue; these exact class
+   names are the contract, restyled here rather than renamed. */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-family: var(--iv-font-heading);
+  font-weight: 600;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.status-paid { background: var(--iv-green-bg); color: #1e7e34; }
+.status-due { background: var(--iv-amber-bg); color: var(--iv-amber); }
+.status-overdue { background: var(--iv-red-bg); color: var(--iv-red); }
+.status-void { background: #eceff1; color: #546e7a; }
+
+/* ------------------------------------------------------------------ */
+/* Bill To                                                              */
+/* ------------------------------------------------------------------ */
+.iv-bill-to { font-size: 15px; font-weight: 600; white-space: pre-line; }
+
+/* ------------------------------------------------------------------ */
+/* Line items — invoice.js populates <tbody id="line-items-body"> with
+   plain <tr><td>x4</td></tr> rows (description/qty/rate/amount, in that
+   order) via createElement, no classes — all styling below targets the
+   table/column structure itself, never a row-injected class. */
+/* ------------------------------------------------------------------ */
+.iv-table-scroll { overflow-x: auto; margin: 0 -2px; }
+.iv-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 420px; }
+.iv-table th {
+  text-align: left;
+  font-family: var(--iv-font-heading);
+  font-weight: 600;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--iv-text-muted);
+  padding: 0 4px 8px;
+  border-bottom: 2px solid var(--iv-divider);
+}
+.iv-table td {
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--iv-divider);
+  vertical-align: top;
+}
+.iv-table tbody tr:last-child td { border-bottom: none; }
+.iv-table th.iv-col-qty, .iv-table td:nth-child(2) { text-align: center; width: 54px; }
+.iv-table th.iv-col-rate, .iv-table td:nth-child(3) { text-align: right; width: 90px; }
+.iv-table th.iv-col-amount, .iv-table td:nth-child(4) { text-align: right; width: 100px; font-weight: 700; color: var(--iv-text); }
+
+.iv-totals { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--iv-divider); display: flex; flex-direction: column; gap: 6px; }
+.iv-totals-row { display: flex; justify-content: space-between; font-size: 14px; color: var(--iv-text-muted); }
+.iv-totals-row span:last-child { font-weight: 700; color: var(--iv-text); font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------------ */
+/* Balance Due banner — the single most important number on the page.  */
+/* ------------------------------------------------------------------ */
+.iv-balance-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--iv-pine);
+  color: #fff;
+  border-radius: var(--iv-radius-lg);
+  padding: 18px 22px;
+  box-shadow: var(--iv-shadow-md);
+}
+.iv-balance-banner-label {
+  font-family: var(--iv-font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+.iv-balance-banner-amount {
+  font-family: var(--iv-font-heading);
+  font-weight: 700;
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.iv-balance-banner.is-overdue { background: #7a1810; }
+
+/* ------------------------------------------------------------------ */
+/* Notes                                                                */
+/* ------------------------------------------------------------------ */
+.iv-notes { font-size: 14px; color: var(--iv-text); white-space: pre-wrap; margin: 0; }
+
+/* ------------------------------------------------------------------ */
+/* Pay Now                                                              */
+/* ------------------------------------------------------------------ */
+.iv-pay-secure-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--iv-text-muted);
+  margin: 0 0 14px;
+}
+#payment-element { margin-bottom: 14px; }
+.iv-pay-error { color: var(--iv-red); font-size: 13px; margin-top: 10px; min-height: 1em; }
+
+.iv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 20px;
+  border-radius: var(--iv-radius-sm);
+  border: none;
+  font-family: var(--iv-font-body);
+  font-weight: 700;
+  font-size: 16px;
+  cursor: pointer;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.iv-btn-primary { background: #3f8a19; color: #fff; box-shadow: var(--iv-shadow-sm); }
+.iv-btn-primary:hover { background: #326e14; }
+.iv-btn-primary:disabled { opacity: 0.6; cursor: default; }
+.iv-btn-outline { background: #fff; color: var(--iv-accent-dark); border: 1.5px solid var(--iv-accent-dark); }
+.iv-pay-button { font-size: 17px; }
+
+/* ------------------------------------------------------------------ */
+/* Paid / Void state cards                                             */
+/* ------------------------------------------------------------------ */
+.iv-state-card {
+  text-align: center;
+  padding: 32px 20px;
+  border-radius: var(--iv-radius-lg);
+  box-shadow: var(--iv-shadow-sm);
+}
+.iv-state-card svg { margin: 0 auto 10px; }
+.iv-state-title { font-family: var(--iv-font-heading); font-weight: 700; font-size: 19px; }
+.iv-state-sub { font-size: 13.5px; margin: 4px 0 0; }
+.iv-state-paid { background: var(--iv-green-bg); color: #1e7e34; }
+.iv-state-paid .iv-state-sub { color: #1e7e34; opacity: 0.85; }
+.iv-state-void { background: #eceff1; color: #546e7a; }
+.iv-state-void .iv-state-sub { color: #546e7a; opacity: 0.85; }
+
+/* ------------------------------------------------------------------ */
+/* Footer                                                               */
+/* ------------------------------------------------------------------ */
+.iv-footer { text-align: center; padding: 10px 12px 0; color: var(--iv-text-muted); font-size: 12.5px; }
+.iv-footer-business { font-family: var(--iv-font-heading); font-weight: 600; color: var(--iv-pine); font-size: 14px; }
+.iv-footer-meta { margin-top: 2px; }
+.iv-footer-tagline { margin-top: 8px; font-style: italic; color: var(--iv-accent-dark); font-weight: 600; }
+
+/* ------------------------------------------------------------------ */
+/* Mobile                                                               */
+/* ------------------------------------------------------------------ */
+@media (max-width: 480px) {
+  .iv-page { padding: 18px 12px 36px; }
+  .iv-card { padding: 16px; border-radius: var(--iv-radius-md); }
+  .iv-logo { width: 48px; height: 48px; }
+  .iv-business-name { font-size: 17px; }
+  .iv-balance-banner { padding: 16px 18px; border-radius: var(--iv-radius-md); }
+  .iv-balance-banner-amount { font-size: 25px; }
+
+  /* The Rate column is dropped (never removed from the DOM — invoice.js
+     always writes all 4 <td>s; this only hides the 3rd one visually) so
+     Description/Qty/Amount — the three a client actually needs to total
+     up what they're paying for — fit without horizontal scroll on a phone.
+     Amount is the one column that must never be the one scrolled out of
+     view. */
+  .iv-table { font-size: 13px; min-width: 0; table-layout: fixed; }
+  .iv-table th.iv-col-rate, .iv-table td:nth-child(3) { display: none; }
+  .iv-table th.iv-col-qty, .iv-table td:nth-child(2) { width: 34px; padding-left: 2px; padding-right: 2px; }
+  .iv-table th.iv-col-amount, .iv-table td:nth-child(4) { width: 76px; }
+  .iv-table-scroll { overflow-x: visible; }
+}
+
+@media (min-width: 560px) {
+  .iv-wrap { gap: 16px; }
+}

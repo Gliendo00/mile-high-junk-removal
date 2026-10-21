@@ -20,74 +20,131 @@
   why the fragment is deliberately left in the visible URL rather than
   stripped via history.replaceState (reload/back-forward/3DS-return
   reliability).
+
+  invoice.js's own el{} map of getElementById() ids is the contract this
+  markup must preserve exactly: loading-state, unavailable-state,
+  unavailable-message, invoice-state, invoice-number, status-badge,
+  bill-to, line-items-body, total-amount, amount-paid, balance-due,
+  due-date-line, finalized-date-line, invoice-notes, pay-section,
+  pay-button, payment-element, pay-error, paid-message, void-message. Only
+  the markup/CSS around those ids has changed for the Oct 2026 visual
+  redesign (real branding/logo/colors) — none of the token/Stripe/fetch
+  logic above moved.
 -->
 <link rel="icon" href="../images/favicon.png" type="image/png">
-<style>
-  :root { color-scheme: light; }
-  body { margin: 0; padding: 24px 16px; font-family: Arial, Helvetica, sans-serif; background: #f6f7f9; color: #1a1a1a; }
-  .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 28px 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { color: #666; font-size: 14px; margin-bottom: 20px; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #eee; }
-  th:last-child, td:last-child { text-align: right; }
-  .totals-row td { font-weight: 700; border-top: 2px solid #ddd; border-bottom: none; }
-  .status-badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
-  .status-paid { background: #e6f4ea; color: #1e7e34; }
-  .status-due, .status-overdue { background: #fdecea; color: #c62828; }
-  .status-void { background: #eceff1; color: #546e7a; }
-  .status-processing { background: #fff8e1; color: #8a6d00; }
-  #pay-section { margin-top: 20px; }
-  #pay-button { background: #1a73e8; color: #fff; border: none; border-radius: 6px; padding: 12px 20px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; }
-  #pay-button:disabled { opacity: 0.6; cursor: default; }
-  #payment-element { margin: 14px 0; }
-  #error-message, #pay-error { color: #c62828; font-size: 13px; margin-top: 8px; min-height: 1em; }
-  .bill-to { font-size: 13px; color: #444; margin-bottom: 16px; }
-  .notes { font-size: 13px; color: #444; margin: 16px 0; white-space: pre-wrap; }
-  [hidden] { display: none !important; }
-  .business-name { font-weight: 700; }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Work+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="invoice.css">
 </head>
 <body>
-<div class="card">
-  <div id="loading-state">
-    <p class="sub">Loading invoice&hellip;</p>
+<div class="iv-page">
+
+  <div id="loading-state" class="iv-loading-card">
+    <div class="iv-spinner" aria-hidden="true"></div>
+    <p>Loading your invoice&hellip;</p>
   </div>
 
-  <div id="unavailable-state" hidden>
-    <h1 class="business-name">Mile High Junk Removal</h1>
-    <p class="sub" id="unavailable-message">This invoice link is invalid or no longer available.</p>
+  <div id="unavailable-state" class="iv-card iv-unavailable-card" hidden>
+    <img class="iv-logo" src="../images/mile-high-junk-removal-logo-invoice.png" alt="Mile High Junk Removal" width="72" height="72">
+    <h1 class="iv-business-name">Mile High Junk Removal</h1>
+    <p class="iv-unavailable-message" id="unavailable-message">This invoice link is invalid or no longer available.</p>
+    <p class="iv-unavailable-help">If you believe this is a mistake, call or text us and we'll sort it out right away.</p>
+    <a class="iv-btn iv-btn-outline" href="tel:+13039901812">Call 303-990-1812</a>
   </div>
 
-  <div id="invoice-state" hidden>
-    <h1 class="business-name">Mile High Junk Removal</h1>
-    <p class="sub">Invoice <strong id="invoice-number"></strong> &mdash; <span id="status-badge" class="status-badge"></span></p>
+  <div id="invoice-state" class="iv-wrap" hidden>
 
-    <div class="bill-to" id="bill-to"></div>
+    <!-- Branded header -->
+    <header class="iv-header">
+      <img class="iv-logo" src="../images/mile-high-junk-removal-logo-invoice.png" alt="Mile High Junk Removal" width="64" height="64">
+      <div class="iv-header-text">
+        <div class="iv-business-name">Mile High Junk Removal</div>
+        <div class="iv-business-meta">Denver &amp; the Front Range &middot; 303-990-1812 &middot; milehighjunkremoval.net</div>
+      </div>
+    </header>
 
-    <table>
-      <thead>
-        <tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
-      </thead>
-      <tbody id="line-items-body"></tbody>
-      <tfoot>
-        <tr><td colspan="3">Total</td><td id="total-amount"></td></tr>
-        <tr><td colspan="3">Paid</td><td id="amount-paid"></td></tr>
-        <tr class="totals-row"><td colspan="3">Balance due</td><td id="balance-due"></td></tr>
-      </tfoot>
-    </table>
-
-    <p class="sub" id="due-date-line"></p>
-    <p class="notes" id="invoice-notes" hidden></p>
-
-    <div id="pay-section" hidden>
-      <button id="pay-button" type="button">Pay Now</button>
-      <div id="payment-element"></div>
-      <div id="pay-error"></div>
+    <div class="iv-card iv-summary-card">
+      <div class="iv-summary-top">
+        <div>
+          <div class="iv-summary-label">Invoice</div>
+          <h1 class="iv-invoice-number" id="invoice-number">&nbsp;</h1>
+        </div>
+        <span id="status-badge" class="status-badge">&nbsp;</span>
+      </div>
+      <div class="iv-summary-dates">
+        <div class="iv-summary-date" id="finalized-date-line" hidden></div>
+        <div class="iv-summary-date iv-due-date" id="due-date-line" hidden></div>
+      </div>
     </div>
 
-    <p class="sub" id="paid-message" hidden>Paid in full. Thank you!</p>
-    <p class="sub" id="void-message" hidden>This invoice has been voided &mdash; no payment is due.</p>
+    <div class="iv-card">
+      <div class="iv-section-label">Billed To</div>
+      <div class="iv-bill-to" id="bill-to">&nbsp;</div>
+    </div>
+
+    <div class="iv-card iv-line-items-card">
+      <div class="iv-section-label">Services</div>
+      <div class="iv-table-scroll">
+        <table class="iv-table">
+          <thead>
+            <tr><th>Description</th><th class="iv-col-qty">Qty</th><th class="iv-col-rate">Rate</th><th class="iv-col-amount">Amount</th></tr>
+          </thead>
+          <tbody id="line-items-body"></tbody>
+        </table>
+      </div>
+
+      <div class="iv-totals">
+        <div class="iv-totals-row">
+          <span>Subtotal</span>
+          <span id="total-amount">$0.00</span>
+        </div>
+        <div class="iv-totals-row">
+          <span>Paid</span>
+          <span id="amount-paid">$0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="iv-balance-banner" id="balance-banner">
+      <span class="iv-balance-banner-label" id="balance-banner-label">Balance Due</span>
+      <span class="iv-balance-banner-amount" id="balance-due">$0.00</span>
+    </div>
+
+    <div class="iv-card" id="invoice-notes-card" hidden>
+      <div class="iv-section-label">Note from Mile High Junk Removal</div>
+      <p class="iv-notes" id="invoice-notes"></p>
+    </div>
+
+    <div id="pay-section" class="iv-card iv-pay-card" hidden>
+      <div class="iv-section-label">Payment</div>
+      <p class="iv-pay-secure-note">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Secure payment powered by Stripe
+      </p>
+      <div id="payment-element"></div>
+      <button id="pay-button" type="button" class="iv-btn iv-btn-primary iv-pay-button">Pay Now</button>
+      <div id="pay-error" class="iv-pay-error"></div>
+    </div>
+
+    <div id="paid-message" class="iv-state-card iv-state-paid" hidden>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
+      <div class="iv-state-title">Paid in Full</div>
+      <p class="iv-state-sub">Thank you for your business!</p>
+    </div>
+
+    <div id="void-message" class="iv-state-card iv-state-void" hidden>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 8l8 8M16 8l-8 8"/></svg>
+      <div class="iv-state-title">This Invoice Was Voided</div>
+      <p class="iv-state-sub">No payment is due.</p>
+    </div>
+
+    <footer class="iv-footer">
+      <div class="iv-footer-business">Mile High Junk Removal</div>
+      <div class="iv-footer-meta">303-990-1812 &middot; milehighjunkremoval.net</div>
+      <div class="iv-footer-tagline">Let Us Haul Your Stress Away!</div>
+    </footer>
+
   </div>
 </div>
 <!-- Stripe.js MUST be loaded from js.stripe.com — Stripe does not permit

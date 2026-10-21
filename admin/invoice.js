@@ -348,6 +348,11 @@ document.addEventListener('DOMContentLoaded', function () {
     // "fully paid" since balanceDue is hardcoded to 0 once voided).
     set('iv-collected', isDraft ? 'Not billed yet' : formatPrice(invoice.netCollected));
     set('iv-balance-due', isDraft ? '—' : formatPrice(invoice.balanceDue));
+    var balanceStatEl = document.getElementById('iv-balance-due');
+    balanceStatEl.classList.remove('is-due', 'is-overdue');
+    if (!isDraft && !isVoid && Number(invoice.balanceDue) > 0) {
+      balanceStatEl.classList.add(invoice.isOverdue ? 'is-overdue' : 'is-due');
+    }
     renderPayments(jobPayments);
     var recordPaymentLink = document.getElementById('iv-record-payment-link');
     recordPaymentLink.href = '/admin/booking/?id=' + encodeURIComponent(invoice.bookingId);

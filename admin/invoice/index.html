@@ -41,8 +41,10 @@
       <div class="admin-detail-hero-actions admin-print-hide">
         <button type="button" id="iv-finalize-btn" class="admin-btn admin-btn-primary">Finalize Invoice</button>
         <button type="button" id="iv-send-btn" class="admin-btn admin-btn-primary">Send Invoice</button>
-        <button type="button" id="iv-void-btn" class="admin-btn admin-btn-danger">Void Invoice</button>
         <button type="button" id="iv-print-btn" class="admin-btn admin-btn-outline">Print / Save as PDF</button>
+      </div>
+      <div class="admin-detail-hero-actions-secondary admin-print-hide">
+        <button type="button" id="iv-void-btn" class="admin-btn admin-btn-danger">Void Invoice</button>
       </div>
     </div>
 
@@ -133,13 +135,15 @@
     <!-- 6. Payment history (read-only) -->
     <section class="admin-section">
       <h2>Payment History</h2>
-      <div class="admin-row">
-        <div class="admin-row-label">Collected</div>
-        <div class="admin-row-value" id="iv-collected">—</div>
-      </div>
-      <div class="admin-row">
-        <div class="admin-row-label">Balance Due</div>
-        <div class="admin-row-value" id="iv-balance-due">—</div>
+      <div class="admin-invoice-balance-summary">
+        <div class="admin-invoice-balance-stat">
+          <div class="admin-invoice-balance-stat-label">Collected</div>
+          <div class="admin-invoice-balance-stat-value" id="iv-collected">—</div>
+        </div>
+        <div class="admin-invoice-balance-stat admin-invoice-balance-stat-primary">
+          <div class="admin-invoice-balance-stat-label">Balance Due</div>
+          <div class="admin-invoice-balance-stat-value" id="iv-balance-due">—</div>
+        </div>
       </div>
       <div id="iv-payments-list" class="admin-charges-list"></div>
       <div class="admin-detail-actions admin-print-hide" style="margin-top:14px">
@@ -147,8 +151,8 @@
       </div>
     </section>
 
-    <section class="admin-detail-section admin-print-hide" id="iv-delivery-section" style="display:none">
-      <h2 class="admin-detail-section-title">Send History</h2>
+    <section class="admin-section admin-print-hide" id="iv-delivery-section" style="display:none">
+      <h2>Send History</h2>
       <div id="iv-delivery-list" class="admin-charges-list"></div>
     </section>
 

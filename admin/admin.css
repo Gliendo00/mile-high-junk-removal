@@ -1786,9 +1786,48 @@ body.admin-print-mode .admin-bottom-nav { display: none !important; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.admin-invoice-row-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.admin-invoice-row-badges { display: flex; gap: 6px; align-items: center; }
-.admin-invoice-row-amount { font-weight: 800; font-size: 14px; color: var(--color-text, #201e1d); }
+.admin-invoice-row-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.admin-invoice-row-badges { display: flex; gap: 6px; align-items: center; margin-bottom: 2px; }
+/* Balance Due is the number an admin scans this list for — bumped from the
+   original 14px to read as the row's second-most-prominent element after
+   the invoice number, with its own color language: neutral for a settled/
+   draft amount, amber once something is actually owed, red once it's also
+   overdue (never the reverse — a $0 balance is never colored as "due"
+   regardless of status). */
+.admin-invoice-row-amount { font-weight: 800; font-size: 17px; color: var(--color-text, #201e1d); line-height: 1.15; }
+.admin-invoice-row-amount.is-due { color: #b45309; }
+.admin-invoice-row-amount.is-overdue { color: #b91c1c; }
+.admin-invoice-row-amount-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-neutral-500, #a19786);
+  margin-bottom: 2px;
+}
+.admin-client-row-meta-text.is-overdue { color: #b91c1c; font-weight: 700; }
+
+/* New Invoice (/admin/invoice-new/) — job picker. Reuses .admin-booking-
+   card's exact shape/shadow (same card the Jobs list and Client Detail's
+   job list already use) as a <button> instead of an <a>, so a job here
+   looks identical to that same job everywhere else in the CRM; the
+   is-selected state borrows .admin-filter-pill.is-active's dark-fill
+   language rather than inventing a new "selected" treatment. */
+.admin-invoice-job-list { display: flex; flex-direction: column; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.admin-invoice-job-card {
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.admin-invoice-job-card.is-selected {
+  border-color: var(--color-accent-700, #2f6f13);
+  border-left-color: var(--color-accent-700, #2f6f13);
+  background: var(--color-accent-100, #eef6e8);
+  box-shadow: 0 0 0 1.5px var(--color-accent-700, #2f6f13);
+}
+.admin-invoice-job-pick-label { font-size: 12.5px; font-weight: 700; color: var(--color-accent-700, #2f6f13); }
+.admin-invoice-job-card.is-selected .admin-invoice-job-pick-label::before { content: '\2713\0020'; }
 
 /* Lead Detail / Estimate Detail action rows (Schedule Estimate / Book Job /
    Convert to Job / Mark Completed / etc.) — a simple wrapping flex row so
@@ -2280,6 +2319,56 @@ body.admin-print-mode .admin-bottom-nav { display: none !important; }
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 6px;
+}
+/* Invoice Detail — Void sits visually apart from Finalize/Send/Print (a
+   thin divider + reduced prominence) rather than in the same button row,
+   so the one destructive/irreversible-ish action never reads as just
+   another item in a wall of buttons. */
+.admin-detail-hero-actions-secondary {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-neutral-200, #eee7db);
+}
+.admin-detail-hero-actions-secondary .admin-btn { min-width: 140px; }
+
+/* Invoice Detail — Balance Due summary. Two stats side by side; the
+   Balance Due one is visually dominant (larger type, status-colored once
+   money is actually owed) since that's the single number an admin opens
+   this page to check. */
+.admin-invoice-balance-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.admin-invoice-balance-stat {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--color-neutral-100, #f9f4ed);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.admin-invoice-balance-stat-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-neutral-600, #82796a);
+  margin-bottom: 3px;
+}
+.admin-invoice-balance-stat-value { font-size: 17px; font-weight: 800; }
+.admin-invoice-balance-stat-primary {
+  background: var(--color-accent-100, #eef6e8);
+}
+.admin-invoice-balance-stat-primary .admin-invoice-balance-stat-value {
+  font-size: 24px;
+  color: var(--color-accent-700, #2f6f13);
+}
+.admin-invoice-balance-stat-primary .admin-invoice-balance-stat-value.is-due { color: #b45309; }
+.admin-invoice-balance-stat-primary .admin-invoice-balance-stat-value.is-overdue { color: #b91c1c; }
+@media (max-width: 420px) {
+  .admin-invoice-balance-summary { flex-direction: column; }
 }
 
 /* Save Changes / Cancel row — Edit Job. Equal-width, side by side, matching
