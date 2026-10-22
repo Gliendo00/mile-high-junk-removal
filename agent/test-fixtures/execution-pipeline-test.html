@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  Site Improvement Agent — Phase 14 execution-pipeline test fixture.
+
+  This is NOT a real site page. It is not a top-level file, is never
+  scanned as marketing content (agent/config.js's PAGE_GLOB_DIR only
+  reads top-level *.html), is never linked from anywhere, and is not
+  listed in sitemap.xml. It exists solely so agent/lib/execution-test-
+  fixture-audit.js has one harmless, isolated href to find and fix, to
+  test the Phase 14 execution engine (agent/lib/execute-proposal.js)
+  end-to-end through the real agent_proposals approve/execute pipeline.
+
+  The one link below is intentionally "broken" in a mechanically
+  fixable way (a placeholder path, never a real site route). Rewriting
+  it is this fixture's whole purpose — safe to delete this file, its
+  matching risk.js RULES entry, and execution-test-fixture-audit.js at
+  any time with zero effect on any real finding.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Site Improvement Agent — execution pipeline test fixture</title>
+  </head>
+  <body>
+    <p>
+      This is an internal test fixture for the Site Improvement Agent's
+      Phase 14 execution pipeline. It is not a real service page and
+      carries no business content.
+    </p>
+    <a href="/execution-test-placeholder">execution pipeline test link</a>
+  </body>
+</html>

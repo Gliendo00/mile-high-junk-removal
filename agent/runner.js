@@ -63,6 +63,7 @@ const { auditContentGaps } = require("./lib/content-gap-audit");
 const { auditCoverage } = require("./lib/coverage-audit");
 const { auditUx } = require("./lib/ux-audit");
 const { auditFactualConsistency } = require("./lib/factual-consistency-audit");
+const { auditExecutionTestFixture } = require("./lib/execution-test-fixture-audit");
 const { classifyAll } = require("./lib/risk");
 const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
@@ -111,6 +112,11 @@ function gatherFindings() {
     ...auditCoverage(pages),
     ...auditUx(pages),
     ...auditFactualConsistency(pages),
+    // Phase 14 — see execution-test-fixture-audit.js's own header: a
+    // dedicated, self-contained, self-expiring test-only finding, never
+    // derived from `pages` (it reads its own isolated fixture file
+    // directly) and with zero effect on any real finding.
+    ...auditExecutionTestFixture(),
   ];
   const classified = classifyAll(findings);
   const { findings: withResearch, warnings: researchWarnings } = attachResearch(classified);
