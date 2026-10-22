@@ -104,7 +104,14 @@ function makeFinding(overrides = {}) {
   };
 }
 
-function makeApprovedRow(overrides = {}) {
+// A legitimately-claimed row — the shape api/admin/bookings.js's
+// dashboard Execute action actually writes (atomic approved -> applying
+// claim: status "applying", execution.requestedAt/requestedBy set,
+// execution.startedAt still null) BEFORE it ever dispatches the GitHub
+// Actions workflow that calls executeProposal(). This is the row
+// executeProposal() now expects to see on the normal dispatched path —
+// see execute-proposal.js's own header on the state-machine hotfix.
+function makeClaimedRow(overrides = {}) {
   const f = makeFinding(overrides.finding || {});
   return {
     id: "prop-1",
@@ -116,8 +123,11 @@ function makeApprovedRow(overrides = {}) {
     research: f.research,
     pages: f.pages,
     proposed_fix: overrides.proposedFix !== undefined ? overrides.proposedFix : FIX,
-    status: overrides.status || "approved",
-    execution: {},
+    status: overrides.status || "applying",
+    updated_at: overrides.updatedAt || "2026-01-01T00:00:00.000Z",
+    execution: overrides.execution !== undefined
+      ? overrides.execution
+      : { requestedAt: "2026-01-01T00:00:00.000Z", requestedBy: "owner@milehighjunkremoval.net", startedAt: null },
     ...overrides.row,
   };
 }
@@ -153,8 +163,113 @@ function fakeGit(calls, { failOn } = {}) {
 }
 
 async function main() {
+  // --- State-machine regression tests (first real Phase 14 execution,
+  // proposal 0945f338-...) — see execute-proposal.js's own header on
+  // the hotfix. These five cover exactly the scenarios the fix is
+  // required to get right. ---------------------------------------------
+
+  await test("state machine: an 'approved' proposal, once legitimately claimed to 'applying' by the dashboard, is accepted by the executor", async () => {
+    // makeClaimedRow()'s default IS the dashboard's own claimed shape
+    // (status "applying", execution.requestedAt/requestedBy set,
+    // startedAt still null) — exactly what api/admin/bookings.js writes
+    // the instant Execute is clicked, before this ever runs. This is
+    // the normal, correct entry point now — proven fully end-to-end by
+    // the "happy path" test further below; this test isolates just the
+    // state-machine acceptance itself (the start-claim must succeed,
+    // startedAt must move from null to a real timestamp).
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: () => ({ passed: true, summary: "ok" }),
+        git: fakeGit([]),
+      });
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed");
+      assert.ok(db.agent_proposals[0].execution.startedAt, "startedAt must be set once the executor actually starts");
+      // The admin email that clicked Execute (the dashboard's OWN claim)
+      // must survive untouched — never overwritten by this run.
+      assert.strictEqual(db.agent_proposals[0].execution.requestedBy, "owner@milehighjunkremoval.net");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("state machine: a BARE 'approved' proposal (never claimed by the dashboard) is refused — this is the exact original bug", async () => {
+    const db = { agent_proposals: [makeClaimedRow({ status: "approved", execution: {} })] };
+    const client = makeFakeClient(db);
+    const result = await executeProposal("prop-1", { client });
+    assert.strictEqual(result.ok, false);
+    assert.ok(/freshly-claimed "applying" state/i.test(result.reason));
+    assert.ok(/status: "approved"/i.test(result.reason));
+    assert.strictEqual(db.agent_proposals[0].status, "approved", "must never move an unclaimed row");
+  });
+
+  await test("state machine: an 'applying' row with no execution metadata at all (stale/invalid claim) is refused", async () => {
+    const db = { agent_proposals: [makeClaimedRow({ execution: {} })] };
+    const client = makeFakeClient(db);
+    const result = await executeProposal("prop-1", { client });
+    assert.strictEqual(result.ok, false);
+    assert.ok(/stale or invalid row/i.test(result.reason));
+  });
+
+  await test("state machine: duplicate execution — an 'applying' row whose execution already has a startedAt is refused", async () => {
+    const db = {
+      agent_proposals: [
+        makeClaimedRow({
+          execution: { requestedAt: "2026-01-01T00:00:00.000Z", requestedBy: "owner@milehighjunkremoval.net", startedAt: "2026-01-01T00:00:05.000Z" },
+        }),
+      ],
+    };
+    const client = makeFakeClient(db);
+    const result = await executeProposal("prop-1", { client });
+    assert.strictEqual(result.ok, false);
+    assert.ok(/already has a startedAt/i.test(result.reason));
+    assert.ok(/prevent the same change being applied twice/i.test(result.reason));
+  });
+
+  await test("state machine: a concurrent execution attempt against the SAME claim (updated_at moves between load and start-claim) is refused by the optimistic lock", async () => {
+    // A genuine race can't be produced by mutating the row BEFORE calling
+    // executeProposal() — its own loadProposal() always reads whatever is
+    // current at that moment, so a pre-mutation would just be the fresh
+    // value, not a stale one. To exercise the actual race window (between
+    // THIS run's own loadProposal() and its own later start-claim), this
+    // client wraps the generic fake query builder and injects a
+    // concurrent writer's update (bumping updated_at, as a second
+    // process's own start-claim would) in between those two specific
+    // calls — the second `.from("agent_proposals")` call executeProposal()
+    // makes is always the start-claim (the first is loadProposal()).
+    const db = { agent_proposals: [makeClaimedRow({ updatedAt: "2026-01-01T00:00:00.000Z" })] };
+    let fromCallCount = 0;
+    const client = {
+      from(table) {
+        fromCallCount += 1;
+        const builder = new FakeQueryBuilder(table, db);
+        if (fromCallCount === 2) {
+          const originalResolve = builder._resolve.bind(builder);
+          builder._resolve = async () => {
+            db.agent_proposals[0].updated_at = "2026-01-01T00:00:01.000Z";
+            return originalResolve();
+          };
+        }
+        return builder;
+      },
+    };
+    const result = await executeProposal("prop-1", { client });
+    assert.strictEqual(result.ok, false);
+    assert.ok(/could not record that execution started/i.test(result.reason));
+    // The row itself must be untouched by this refused attempt (only the
+    // simulated concurrent writer's own updated_at bump, nothing else).
+    assert.strictEqual(db.agent_proposals[0].status, "applying");
+    assert.strictEqual(db.agent_proposals[0].execution.startedAt, null);
+  });
+
   await test("refuses a rejected proposal outright, with no DB write to the row", async () => {
-    const db = { agent_proposals: [makeApprovedRow({ status: "rejected" })] };
+    const db = { agent_proposals: [makeClaimedRow({ status: "rejected" })] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client });
     assert.strictEqual(result.ok, false);
@@ -162,28 +277,26 @@ async function main() {
     assert.strictEqual(db.agent_proposals[0].status, "rejected");
   });
 
-  await test("refuses a proposal that is not currently 'approved' (e.g. still 'proposed')", async () => {
-    const db = { agent_proposals: [makeApprovedRow({ status: "proposed" })] };
+  await test("refuses a proposal that is still merely 'proposed' (never even approved)", async () => {
+    const db = { agent_proposals: [makeClaimedRow({ status: "proposed", execution: {} })] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client });
     assert.strictEqual(result.ok, false);
-    assert.ok(/not currently "approved"/i.test(result.reason));
+    assert.ok(/freshly-claimed "applying" state/i.test(result.reason));
     assert.strictEqual(db.agent_proposals[0].status, "proposed");
   });
 
-  await test("prevents double-execution: a SECOND call on an already-claimed ('applying') row is refused", async () => {
-    const db = { agent_proposals: [makeApprovedRow()] };
+  await test("refuses an already-completed proposal (e.g. 'deployed') — un-re-executable", async () => {
+    const db = { agent_proposals: [makeClaimedRow({ status: "deployed" })] };
     const client = makeFakeClient(db);
-    // Manually simulate "already claimed by a first call" by setting
-    // status to applying before calling again.
-    db.agent_proposals[0].status = "applying";
     const result = await executeProposal("prop-1", { client });
     assert.strictEqual(result.ok, false);
-    assert.ok(/not currently "approved"/i.test(result.reason));
+    assert.ok(/freshly-claimed "applying" state/i.test(result.reason));
+    assert.ok(/status: "deployed"/i.test(result.reason));
   });
 
   await test("needs_review when no proposed_fix is recorded (every real finding type today)", async () => {
-    const db = { agent_proposals: [makeApprovedRow({ proposedFix: null })] };
+    const db = { agent_proposals: [makeClaimedRow({ proposedFix: null })] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client, isWorkingTreeClean: alwaysCleanTree, gatherFindings: queuedGatherFindings([makeFinding()]) });
     assert.strictEqual(result.status, "needs_review");
@@ -192,7 +305,7 @@ async function main() {
   });
 
   await test("needs_review when the fix kind is not one this engine supports", async () => {
-    const db = { agent_proposals: [makeApprovedRow({ proposedFix: { kind: "rewrite-content", file: FIXTURE_REL } })] };
+    const db = { agent_proposals: [makeClaimedRow({ proposedFix: { kind: "rewrite-content", file: FIXTURE_REL } })] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client, isWorkingTreeClean: alwaysCleanTree });
     assert.strictEqual(result.status, "needs_review");
@@ -200,7 +313,7 @@ async function main() {
   });
 
   await test("needs_review when the working tree is not clean", async () => {
-    const db = { agent_proposals: [makeApprovedRow()] };
+    const db = { agent_proposals: [makeClaimedRow()] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client, isWorkingTreeClean: () => false });
     assert.strictEqual(result.status, "needs_review");
@@ -208,7 +321,7 @@ async function main() {
   });
 
   await test("needs_review when the original finding no longer appears in a fresh scan", async () => {
-    const db = { agent_proposals: [makeApprovedRow()] };
+    const db = { agent_proposals: [makeClaimedRow()] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", { client, isWorkingTreeClean: alwaysCleanTree, gatherFindings: queuedGatherFindings([]) });
     assert.strictEqual(result.status, "needs_review");
@@ -216,7 +329,7 @@ async function main() {
   });
 
   await test("needs_review when the finding's decision has since moved off needing review (e.g. NO_CHANGE)", async () => {
-    const db = { agent_proposals: [makeApprovedRow()] };
+    const db = { agent_proposals: [makeClaimedRow()] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", {
       client,
@@ -228,7 +341,7 @@ async function main() {
   });
 
   await test("needs_review when the fresh finding's content has drifted from what was approved (summary changed)", async () => {
-    const db = { agent_proposals: [makeApprovedRow()] };
+    const db = { agent_proposals: [makeClaimedRow()] };
     const client = makeFakeClient(db);
     const result = await executeProposal("prop-1", {
       client,
@@ -242,7 +355,7 @@ async function main() {
   await test("needs_review when the exact fix text no longer appears exactly once in the file (zero occurrences)", async () => {
     writeFixture('<a href="/somewhere-else">Link</a>');
     try {
-      const db = { agent_proposals: [makeApprovedRow()] };
+      const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
       const result = await executeProposal("prop-1", { client, isWorkingTreeClean: alwaysCleanTree, gatherFindings: queuedGatherFindings([makeFinding()]) });
       assert.strictEqual(result.status, "needs_review");
@@ -255,12 +368,16 @@ async function main() {
   await test("happy path: applies the fix for real, re-validates, runs tests, commits, and pushes -> deployed", async () => {
     writeFixture('<a href="/old-url">Link</a>');
     try {
-      const db = { agent_proposals: [makeApprovedRow()] };
+      const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
       const gitCalls = [];
       const result = await executeProposal("prop-1", {
         client,
-        requestedBy: "owner@milehighjunkremoval.net",
+        // Deliberately passed but expected to have NO effect — see
+        // execute-proposal.js's own JSDoc: requestedBy is now read from
+        // the row's OWN already-claimed execution.requestedBy (asserted
+        // below), never from this option, on the normal dispatched path.
+        requestedBy: "someone-else@example.com",
         isWorkingTreeClean: alwaysCleanTree,
         gatherFindings: queuedGatherFindings(
           [makeFinding()], // pre-apply freshness check
@@ -299,7 +416,7 @@ async function main() {
   await test("validation failure (re-scan still shows the finding needing review) -> failed, reverted via git checkout, never committed", async () => {
     writeFixture('<a href="/old-url">Link</a>');
     try {
-      const db = { agent_proposals: [makeApprovedRow()] };
+      const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
       const gitCalls = [];
       const result = await executeProposal("prop-1", {
@@ -325,7 +442,7 @@ async function main() {
   await test("test-suite failure after a successful apply+validate -> failed, reverted, never committed", async () => {
     writeFixture('<a href="/old-url">Link</a>');
     try {
-      const db = { agent_proposals: [makeApprovedRow()] };
+      const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
       const gitCalls = [];
       const result = await executeProposal("prop-1", {
@@ -348,7 +465,7 @@ async function main() {
   await test("git push failure after a real commit -> failed, with the local commit SHA recorded but nothing marked deployed", async () => {
     writeFixture('<a href="/old-url">Link</a>');
     try {
-      const db = { agent_proposals: [makeApprovedRow()] };
+      const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
       const gitCalls = [];
       const result = await executeProposal("prop-1", {

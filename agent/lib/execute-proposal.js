@@ -28,11 +28,30 @@
 // deploying -> deployed, or any step may instead end at `failed` (ran,
 // did not succeed — reverted, nothing pushed) or `needs_review` (refused
 // to even attempt the change — reverted/untouched, a human must look at
-// it again). The `approved` -> `applying` transition is a CONDITIONAL
-// update (`.eq("status", "approved")`) — the atomic "claim" that makes a
+// it again).
+//
+// The `approved` -> `applying` transition itself happens in
+// api/admin/bookings.js's dashboard Execute action — a CONDITIONAL
+// update (`.eq("status", "approved")`), synchronously, BEFORE that
+// endpoint ever dispatches the GitHub Actions workflow that runs this
+// module. By the time executeProposal() below runs, the row is always
+// already "applying" — this module's own atomic step is therefore a
+// SECOND claim, re-confirming (via the row's own execution metadata,
+// never `status` alone) that it's looking at that SAME legitimate claim
+// before recording that THIS run is the one that actually started
+// (`execution.startedAt`). Together these two claims are what make a
 // second concurrent/duplicate Execute click a no-op (requirement: never
-// apply the same approved change twice) and that makes a rejected
-// proposal structurally unexecutable (its status is never "approved").
+// apply the same approved change twice) and make a rejected proposal
+// structurally unexecutable (its status is never "approved", so the
+// dashboard's own claim never succeeds for it in the first place).
+//
+// (First real Phase 14 execution, proposal 0945f338-...: the original
+// version of this module re-attempted the dashboard's OWN
+// approved -> applying claim here, which could never match — the row
+// was already "applying" by the time this ran — so every real
+// dispatched execution failed immediately with "not currently
+// approved". Fixed by having this module instead verify and re-claim
+// the EXISTING "applying" claim, as described above.)
 //
 // Every stage after the claim re-validates from scratch rather than
 // trusting what was true when the proposal was approved:
@@ -95,19 +114,28 @@ async function updateProposal(client, id, fields) {
 }
 
 // The atomic "claim" — only succeeds if the row is STILL in `fromStatus`
-// at the moment of the write (a real `WHERE status = fromStatus` on the
-// UPDATE, not a read-then-write race). Returns null (never throws) when
-// nothing matched, which the caller treats as "already claimed/moved by
-// something else" — this is what makes double-execution structurally
-// impossible rather than merely discouraged.
-async function claim(client, id, fromStatus, toStatus, extra = {}) {
-  const { data, error } = await client
+// (and, when given, still matches every `extraEq` column/value pair) at
+// the moment of the write (a real `WHERE status = fromStatus AND ...`
+// on the UPDATE, not a read-then-write race). Returns null (never
+// throws) when nothing matched, which the caller treats as "already
+// claimed/moved by something else" — this is what makes double-
+// execution structurally impossible rather than merely discouraged.
+//
+// `fromStatus` and `toStatus` may be the same value — see
+// executeProposal()'s own "start" claim below, which re-claims a row
+// that's already "applying" (optimistically locked via `extraEq`'s
+// `updated_at` check instead of a status change) rather than moving it
+// to a new status.
+async function claim(client, id, fromStatus, toStatus, extra = {}, extraEq = {}) {
+  let query = client
     .from("agent_proposals")
     .update({ status: toStatus, updated_at: new Date().toISOString(), ...extra })
     .eq("id", id)
-    .eq("status", fromStatus)
-    .select("*")
-    .maybeSingle();
+    .eq("status", fromStatus);
+  for (const [col, val] of Object.entries(extraEq)) {
+    query = query.eq(col, val);
+  }
+  const { data, error } = await query.select("*").maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -152,7 +180,17 @@ function revertFile(git, file) {
  * @param {string} id - agent_proposals row id
  * @param {object} [options]
  * @param {object} [options.client] - inject a fake Supabase client for tests
- * @param {string} [options.requestedBy] - the admin email that clicked Execute
+ * @param {string} [options.requestedBy] - UNUSED on the normal dispatched
+ *   path as of the state-machine hotfix above: the admin email that
+ *   clicked Execute is now read from the row's own, already-stored
+ *   `execution.requestedBy` (set by api/admin/bookings.js's claim), not
+ *   from this option, since that's the SAME claim this function
+ *   re-confirms rather than re-creates. Still accepted (and still
+ *   passed by agent/cli.js from EXECUTE_REQUESTED_BY) for backward
+ *   compatibility, but has no effect once a row already carries a
+ *   `requestedAt` — see the "stale or invalid row" check below for the
+ *   one case (no prior claim at all) where it would matter, which the
+ *   normal dispatched path never produces.
  * @param {Function} [options.runTests] - inject a fake test runner for tests;
  *   defaults to `npm test` via execFileSync
  * @param {Function} [options.gatherFindings] - inject a fake scan for tests;
@@ -179,23 +217,62 @@ async function executeProposal(id, options = {}) {
     return { ok: false, reason: "This proposal was rejected — rejected proposals can never be executed." };
   }
 
-  const execution = {
-    requestedAt: new Date().toISOString(),
-    requestedBy: options.requestedBy || null,
-    startedAt: new Date().toISOString(),
-  };
+  // Hotfix (first real Phase 14 execution, proposal 0945f338-...) — by
+  // the time this function runs, the row is ALREADY "applying":
+  // api/admin/bookings.js's dashboard Execute action performs the
+  // atomic approved -> applying claim itself, synchronously, before
+  // ever dispatching the GitHub Actions workflow that calls this
+  // function (see that endpoint's own header) — "approved" is never
+  // the live status by the time a normally-dispatched run gets here.
+  // The ORIGINAL code still tried to claim approved -> applying itself,
+  // which could never match (the row was already "applying"), so every
+  // real dispatched execution failed immediately with "not currently
+  // approved" — exactly the bug this fixes.
+  //
+  // This function's job is therefore not to repeat the dashboard's
+  // claim, but to verify the "applying" row in front of it really is
+  // the SAME legitimate claim the dashboard made — via its own
+  // execution metadata (requestedAt/startedAt), never by trusting
+  // `status` alone — rather than an unrelated, stale, or
+  // already-started one, then atomically record that THIS run is the
+  // one that actually started (requirement: never apply the same
+  // approved change twice, and never accept an arbitrary "applying"
+  // row without validating it first).
+  if (proposal.status !== "applying") {
+    const reason = `Proposal is not currently in a freshly-claimed "applying" state (status: "${proposal.status}") — the dashboard's Execute action always claims a proposal atomically (approved -> applying) before dispatching this workflow, so a normally-dispatched run should always see "applying" here. Refusing to execute. This also prevents the same change from being applied twice.`;
+    return { ok: false, reason };
+  }
+  const priorExecution = proposal.execution && typeof proposal.execution === "object" ? proposal.execution : {};
+  if (!priorExecution.requestedAt) {
+    const reason = `Proposal is "applying" but its execution record has no requestedAt — this does not look like a legitimate claim made by the dashboard's Execute action. Refusing to execute against what looks like a stale or invalid row.`;
+    return { ok: false, reason };
+  }
+  if (priorExecution.startedAt) {
+    const reason = `This proposal's execution already has a startedAt (${priorExecution.startedAt}) — a previous execution attempt already started against this exact claim. Refusing to execute again to prevent the same change being applied twice.`;
+    return { ok: false, reason };
+  }
 
-  // The atomic claim — also the single place double-execution is
-  // prevented: a proposal already "applying"/"validating"/"deploying"/
-  // "deployed"/"failed"/"needs_review" (or still merely "proposed") is
-  // NOT "approved" right now, so this matches zero rows and the whole
-  // run stops here, unchanged.
-  const claimed = await claim(client, id, "approved", "applying", { execution });
+  const execution = { ...priorExecution, startedAt: new Date().toISOString() };
+
+  // The atomic "start" claim — a self-transition ("applying" ->
+  // "applying"; the status itself never needs to change here, only
+  // `execution.startedAt`) additionally guarded by `updated_at` still
+  // matching the exact value just read in loadProposal() above
+  // (optimistic concurrency control): if anything else wrote to this
+  // row in between — most plausibly a second, genuinely concurrent
+  // execution attempt against this exact claim, e.g. someone manually
+  // re-running the same workflow dispatch — that write already moved
+  // `updated_at` forward, so THIS update matches zero rows here and is
+  // refused, the same way claim()'s `.eq("status", fromStatus)` guard
+  // already prevents double-claiming everywhere else in this module.
+  // In practice .github/workflows/execute-proposal.yml's own
+  // concurrency group additionally serializes every dispatched run
+  // repo-wide, so this is defense in depth, not the only thing
+  // standing between here and a double-apply.
+  const claimed = await claim(client, id, "applying", "applying", { execution }, { updated_at: proposal.updated_at });
   if (!claimed) {
-    return {
-      ok: false,
-      reason: `Proposal is not currently "approved" (status: "${proposal.status}") — refusing to execute. This also prevents the same change from being applied twice.`,
-    };
+    const reason = `Could not record that execution started — this proposal's row changed between being loaded and this run's own "start" claim (most likely a concurrent execution attempt against the same claim). Refusing to execute to prevent the same change being applied twice.`;
+    return { ok: false, reason };
   }
 
   try {

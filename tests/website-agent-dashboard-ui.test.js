@@ -117,6 +117,35 @@ test("visual redesign (2026-10): the dark terminal-console wrapper is gone — t
   assert.ok(/\.admin-wa-panel\s*\{[^}]*background:\s*#fff/.test(adminCss), "Website Agent panels should be white cards like .admin-home-card/.admin-proposal-card elsewhere, not dark");
 });
 
+// =======================================================================
+// Phase 14 hotfix — a proposal must never appear to vanish from this
+// dashboard merely because Execute was clicked. See
+// tests/agent-execute-proposal.test.js for the companion backend fix.
+// =======================================================================
+
+test("Phase 14 hotfix: the dashboard renders every execution-lifecycle status (applying/validating/deploying/deployed/failed/needs_review), not just 'proposed'", () => {
+  ["applying", "validating", "deploying", "deployed", "failed", "needs_review"].forEach((status) => {
+    assert.ok(waJs.includes(`${status}:`) || waJs.includes(`'${status}'`), `expected website-agent.js to reference status "${status}"`);
+  });
+  assert.ok(/EXECUTION_LIFECYCLE_STATUSES/.test(waJs), "expected a dedicated list of execution-lifecycle statuses, not an ad-hoc check");
+  assert.ok(/renderExecutionStatus/.test(waJs), "expected a dedicated render function for execution-lifecycle proposals");
+  assert.ok(/renderExecutionStatus\(\s*proposals\s*\)/.test(waJs), "renderExecutionStatus must be called with the FULL proposals list, not the 'proposed'-only filtered one");
+});
+
+test("Phase 14 hotfix: the execution-status section is hidden by default and only appears via JS when something is actually in progress — never a permanent empty panel", () => {
+  assert.ok(waHtml.includes('id="wa-execution-section" hidden'), "the section must start hidden in markup, not rely on CSS alone");
+  assert.ok(waHtml.includes('id="wa-execution-list"'));
+  assert.ok(/section\.hidden\s*=\s*true/.test(waJs) && /section\.hidden\s*=\s*false/.test(waJs), "must explicitly toggle hidden based on whether any proposal is in progress");
+});
+
+test("Phase 14 hotfix: the execution-status card is read-only here (no Approve/Reject/Execute actions duplicated on this page) and links back to the full proposals page", () => {
+  const fnMatch = waJs.match(/function buildExecutionCard[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "expected a buildExecutionCard function");
+  const fnBody = fnMatch[0];
+  assert.ok(!/addEventListener\('click'/.test(fnBody), "this card must not wire up its own action buttons — actions stay on /admin/agent-proposals/");
+  assert.ok(/\/admin\/agent-proposals\//.test(fnBody), "must link back to the full proposals page for whatever action comes next");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

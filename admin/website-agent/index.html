@@ -79,6 +79,20 @@
       <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
     </div>
 
+    <!-- Phase 14 hotfix — execution-in-progress / recently-executed
+         proposals (applying/validating/deploying/deployed/failed/
+         needs_review). Hidden entirely when empty; shown the instant a
+         proposal enters this lifecycle, so Execute never makes a
+         proposal appear to vanish. ------------------------------------ -->
+    <div id="wa-execution-section" hidden>
+      <div class="admin-wa-section-label">
+        Execution Status <span class="admin-wa-section-count" id="wa-execution-count"></span>
+      </div>
+      <div class="admin-wa-panel admin-wa-queue-panel">
+        <div id="wa-execution-list"></div>
+      </div>
+    </div>
+
     <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
          two numbers reflect the latest run / live queue, never a sum
          across history, so they can sit beside "NEEDS ATTENTION"

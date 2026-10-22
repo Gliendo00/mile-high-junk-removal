@@ -27,6 +27,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var actionInFlight = false;
 
+  // Phase 14 hotfix — this dashboard's own Approval Queue only ever
+  // showed status "proposed" (see renderQueue()/load() below), so the
+  // instant Execute moved a proposal to "applying" it simply vanished
+  // from this page with no execution status visible anywhere on it —
+  // even though the proposal was still fully alive and actionable at
+  // /admin/agent-proposals/, which already understands this whole
+  // lifecycle (same STATUS_LABELS there). A proposal must never appear
+  // to disappear just because Execute was clicked — same status labels
+  // reused here, not re-invented, so the two pages can never drift.
+  var EXECUTION_STATUS_LABELS = {
+    applying: 'Applying…',
+    validating: 'Validating…',
+    deploying: 'Deploying…',
+    deployed: 'Deployed',
+    failed: 'Failed',
+    needs_review: 'Needs review (execution stopped)',
+  };
+  var EXECUTION_LIFECYCLE_STATUSES = Object.keys(EXECUTION_STATUS_LABELS);
+
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
@@ -339,6 +358,51 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // Phase 14 hotfix — the execution-in-progress / recently-executed
+  // card: deliberately read-only (no Approve/Reject/Execute here — this
+  // page is not where those actions live) so a proposal moving through
+  // applying -> validating -> deploying -> deployed/failed/needs_review
+  // always stays VISIBLE on this dashboard, with a link to
+  // /admin/agent-proposals/ for whatever action (re-approve to retry,
+  // etc.) its status allows next.
+  function buildExecutionCard(proposal) {
+    var card = el('div', 'admin-proposal-card admin-wa-queue-card');
+    var top = el('div', 'admin-proposal-card-top');
+    top.appendChild(el('span', null, proposal.findingType));
+    top.appendChild(el('span', 'admin-status-badge admin-proposal-status-' + proposal.status, EXECUTION_STATUS_LABELS[proposal.status] || proposal.status));
+    card.appendChild(top);
+
+    card.appendChild(el('p', 'admin-proposal-card-summary', proposal.summary));
+
+    var exec = proposal.execution || {};
+    if (exec.failureReason) {
+      card.appendChild(el('p', 'admin-proposal-execution-failure', exec.failureReason));
+    }
+    if (exec.commitSha) {
+      card.appendChild(el('p', 'admin-proposal-card-meta', 'Commit: ' + exec.commitSha.slice(0, 12) + (exec.filesChanged ? ' (' + exec.filesChanged.join(', ') + ')' : '')));
+    }
+
+    var link = el('a', 'admin-wa-more-link', 'View / act on this in the full proposals list →');
+    link.href = '/admin/agent-proposals/';
+    card.appendChild(link);
+    return card;
+  }
+
+  function renderExecutionStatus(proposals) {
+    var section = document.getElementById('wa-execution-section');
+    var listEl = document.getElementById('wa-execution-list');
+    var countEl = document.getElementById('wa-execution-count');
+    clear(listEl);
+    var inProgress = (proposals || []).filter(function (p) { return EXECUTION_LIFECYCLE_STATUSES.indexOf(p.status) !== -1; });
+    if (!inProgress.length) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    countEl.textContent = '(' + inProgress.length + ')';
+    inProgress.forEach(function (p) { listEl.appendChild(buildExecutionCard(p)); });
+  }
+
   function reviewProposal(id, action, note, buttonsToDisable) {
     if (actionInFlight) return;
     actionInFlight = true;
@@ -521,6 +585,7 @@ document.addEventListener('DOMContentLoaded', function () {
         renderScheduleCard('wa-weekly-body', dash.weekly && dash.weekly.lastRun);
         renderLatestRun(dash.latestRun);
         renderQueue(proposed);
+        renderExecutionStatus(proposals);
         renderEvidencePanel('wa-evidence-gsc', 'SEARCH CONSOLE', dash.searchIntelligence && dash.searchIntelligence.searchConsole, gscRow);
         renderEvidencePanel('wa-evidence-ga4', 'GA4', dash.searchIntelligence && dash.searchIntelligence.ga4, ga4Row);
         renderActivity(dash.activity, proposals);
