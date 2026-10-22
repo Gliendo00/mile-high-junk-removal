@@ -4403,34 +4403,50 @@ async function handleRefundJobPayment(req, res, session) {
       return { ok: true, jobPayment: serializeJobPayment(existingRes.data) };
     };
 
-    let result;
-    if (original.invoice_id) {
-      const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", original.invoice_id).maybeSingle();
-      if (invoiceRes.error) throw invoiceRes.error;
-      if (!invoiceRes.data) {
-        // Stripe has already refunded the money at this point — recording
-        // the ledger row must not be skipped just because the invoice
-        // lookup is unexpectedly empty; fall back to an unlocked insert
-        // rather than silently losing a confirmed refund.
-        result = await doInsert();
+    // Everything from here on runs strictly AFTER a confirmed Stripe
+    // refund — any failure in this block is a bookkeeping gap, never a
+    // reason to imply to the admin that nothing happened. Given its own
+    // try/catch (distinct from the outer one below) so that EVERY failure
+    // here — not just the `!result.ok` shape doInsert() itself can return —
+    // is reported with refund.id and a "do not retry" message, instead of
+    // falling through to the generic, financially-misleading "Could not
+    // process this refund." This is what actually happened in production
+    // on 2026-10-21: doInsert()'s upsert threw (Postgres 42P10, a schema
+    // bug — see job_payments_stripe_refund_idx's fix migration), the thrown
+    // error skipped the `!result.ok` branch entirely and landed in the
+    // outer catch, and the admin was told the refund "could not be
+    // processed" when Stripe had already moved the money.
+    try {
+      let result;
+      if (original.invoice_id) {
+        const invoiceRes = await supabase.from("invoices").select(INVOICE_SELECT_COLS).eq("id", original.invoice_id).maybeSingle();
+        if (invoiceRes.error) throw invoiceRes.error;
+        if (!invoiceRes.data) {
+          // Stripe has already refunded the money at this point — recording
+          // the ledger row must not be skipped just because the invoice
+          // lookup is unexpectedly empty; fall back to an unlocked insert
+          // rather than silently losing a confirmed refund.
+          result = await doInsert();
+        } else {
+          const refundStripe = getStripeClient();
+          result = await withInvoicePaymentLock(supabase, refundStripe, mapInvoice(invoiceRes.data), { purpose: "balance_mutation" }, doInsert);
+        }
       } else {
-        const refundStripe = getStripeClient();
-        result = await withInvoicePaymentLock(supabase, refundStripe, mapInvoice(invoiceRes.data), { purpose: "balance_mutation" }, doInsert);
+        result = await doInsert();
       }
-    } else {
-      result = await doInsert();
-    }
 
-    if (!result.ok) {
-      // Stripe has already refunded the money — this is a bookkeeping
-      // failure, not a financial one. Reported distinctly so the admin
-      // knows to check Stripe/retry recording rather than retry the refund
-      // itself (retrying is safe either way, per this function's own
-      // idempotency, but the message should not imply nothing happened).
-      res.status(500).json({ error: "The refund succeeded at Stripe but could not be recorded: " + (result.error || "unknown error") + ". It is safe to retry." });
-      return;
+      if (!result.ok) {
+        res.status(500).json({ error: "The refund succeeded at Stripe (refund " + refund.id + ") but could not be recorded: " + (result.error || "unknown error") + ". Do not retry — this will be reconciled manually." });
+        return;
+      }
+      res.status(200).json(result);
+    } catch (postRefundErr) {
+      console.error(
+        "Admin refund job payment: Stripe refund " + refund.id + " for payment " + paymentId + " succeeded but recording it failed:",
+        postRefundErr && postRefundErr.stack ? postRefundErr.stack : postRefundErr
+      );
+      res.status(500).json({ error: "The refund succeeded at Stripe (refund " + refund.id + ") but could not be recorded locally. Do not retry this refund — contact support to reconcile it manually." });
     }
-    res.status(200).json(result);
   } catch (err) {
     console.error("Admin refund job payment failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not process this refund." });
