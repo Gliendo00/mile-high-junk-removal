@@ -4274,3 +4274,251 @@ narrow addition from the pre-push review above is entirely inside
 existing Denver LeafDrop research result/proposal was not touched,
 approved, or executed by this phase, and nothing in this phase
 special-cases it — the same rules apply to any equivalent finding.
+
+---
+
+# Phase 14 — Execution pipeline (Approved → Deployed)
+
+Closes the one real gap in the proposal workflow: approving a proposal
+(Phase 3) has only ever recorded a decision — nothing in this codebase
+has ever turned "approved" into an actual website change. This phase
+adds that, as a deliberately narrow, separately-gated action
+("Execute"), extending the EXISTING `agent_proposals` record/status
+system rather than building a second one.
+
+## Why GitHub Actions, not the Vercel function behind the dashboard
+
+The admin dashboard's Execute click calls the SAME `api/admin/
+bookings.js` Vercel function every other admin write already uses. That
+function cannot itself apply a fix, run tests, or commit/push — its
+filesystem is read-only (except `/tmp`), it ships with no git
+credentials, and even if it could write a file, there's no live git
+working tree to commit from (see §13's own Vercel-vs-scheduled-session
+comparison table above, which already established this exact
+limitation for a different reason). So the dashboard's PATCH
+`resource:"agent-proposal" action:"execute"` handler does only two
+things: (1) refuse outright if the request looks like it came from a
+mobile browser, (2) atomically claim the row (`approved` ->
+`applying`, a conditional `UPDATE ... WHERE status = 'approved'`) and
+ask GitHub's REST API to dispatch a NEW workflow,
+`.github/workflows/execute-proposal.yml` — a real GitHub Actions
+runner, full repo checkout, `permissions: contents: write`. That
+workflow runs `node agent/cli.js --execute-proposal=<id>`, which is
+where `agent/lib/execute-proposal.js`'s `executeProposal()` actually
+does the work. If the dispatch call itself fails (bad token, GitHub API
+error), the claim is rolled back to `approved` so the proposal is
+immediately retryable rather than stuck showing "Applying" with nothing
+running.
+
+Kept as its OWN workflow file, not folded into the existing
+`website-agent.yml`: that workflow's entire design intentionally keeps
+mutation OFF (no `--apply-safe`, a narrow agent-artifact-only commit
+allowlist via `safe-commit.js`) — this new workflow's entire purpose is
+the opposite (apply one specific, already-human-approved real site
+content change), so keeping them separate keeps `website-agent.yml`'s
+own "never writes real site content" invariant easy to verify by
+reading that file alone. Both share ONE `concurrency` group
+(`website-agent-runner`) so an execution can never race a daily/weekly
+persist, or another execution, for the same reason that group already
+existed.
+
+## What "execute" is allowed to mean
+
+Deliberately the narrowest thing that's still real: this engine can
+only ever apply a finding's own `.autoFix` — the SAME deterministic
+`{kind, file, from, to}` description the Phase 1/2 auto-apply whitelist
+already uses (`rewrite-href` is still the only implemented `kind`).
+`agent/lib/proposals-sync.js` now also copies that field onto the
+`agent_proposals` row as `proposed_fix` whenever a finding has one — a
+pure, additive wiring change (`finding.autoFix || null`), **not** a new
+decision-logic change. No real finding type produces both an `autoFix`
+AND a `PROPOSE_CHANGE` decision today (any finding with `autoFix` that
+is also low-risk and actionable-tier is `autoApplyEligible` and goes
+straight to `APPLY_SAFE_FIX`, never through this table at all — see
+`risk.js`/`decision.js`, unchanged by this phase). This phase does not
+add any new finding type to make one exist in production, per the
+brief's own "do not make broad SEO/content changes" instruction — it
+only wires the pipe so a FUTURE higher-risk mechanical fix (one that
+legitimately needs owner approval before applying, unlike the Phase 1/2
+whitelist) has somewhere real to go. Verification used a synthetic
+test-fixture proposal (unit tests only — see below), never a real
+finding type or a real site page. A proposal with no `proposed_fix`
+(every current real finding type) is correctly reported `needs_review`
+with an honest "requires manual implementation" reason — it is never
+guessed at.
+
+## Lifecycle
+
+`agent_proposals.status` gains five new values on top of the existing
+`proposed`/`approved`/`rejected` (and the never-actually-used
+`applied`/`validated`, left in place rather than removed as unrelated
+cleanup): `applying`, `validating`, `deploying`, `deployed`,
+`needs_review`. `approved` itself IS "Approved / Pending Execution" —
+no separate value needed for that; it's just how the dashboard labels
+it. `failed` is reused (previously dead) by this engine for an
+execution that ran and did not succeed.
+
+```
+approved --(claim)--> applying --> validating --> deploying --> deployed
+                          \            \              \
+                           needs_review  failed         failed
+```
+
+Every stage after the claim re-validates from scratch rather than
+trusting what was true at approval time:
+1. the proposal must carry a `proposed_fix` of a kind this engine
+   supports (today: only `rewrite-href`) — else `needs_review`.
+2. the working tree must be clean before anything is touched.
+3. the underlying finding (by its stable `key`) must still exist in a
+   FRESH scan, still need owner review, and have the IDENTICAL review
+   fingerprint (`proposals-sync.js`'s existing
+   `computeReviewContentFingerprint()`, now also covering the fix
+   itself) as what was approved — any drift (the site changed since
+   approval) -> `needs_review`, never a guess.
+4. the exact literal text named by the fix must still appear exactly
+   once in the target file (`rewrite-href.js`'s own existing
+   single-occurrence safety, unchanged) -> `needs_review` if not.
+5. after applying, a second fresh re-scan must show the original
+   finding resolved and no same-type regression on the same page ->
+   `failed` (and reverted via `git checkout -- <file>`, a byte-exact
+   undo) if not.
+6. the full test suite (`npm test` — see below) must pass -> `failed`
+   (and reverted) if not.
+Only after all six hold does this commit and push to `main`, triggering
+the site's existing Vercel GitHub-integration deployment — no separate
+Vercel API call of any kind, matching the brief's own "don't manually
+deploy if pushing main already handles it."
+
+Each stage writes a structured `execution` jsonb record (new column) —
+`requestedAt`/`requestedBy`, `startedAt`/`finishedAt`, `commitSha`,
+`filesChanged`, `validation`, `testResult`, `failureReason` — read by
+the dashboard in near-real-time (it just polls `?view=agent-
+proposals`; nothing pushes updates to it).
+
+## Preventing double-execution and keeping rejected proposals unexecutable
+
+Both come from the SAME mechanism: the `approved -> applying`
+transition is a single conditional `UPDATE ... WHERE id = $1 AND
+status = 'approved'`, both in the API handler (first claim attempt) and
+again in `execute-proposal.js` itself (defense in depth — the engine
+never trusts that whatever called it already enforced this). A second
+concurrent/duplicate Execute click matches zero rows and is refused. A
+`rejected` proposal's status is never `approved`, so it can never match
+either — structurally unexecutable, not just discouraged by a UI
+convention. A `failed`/`needs_review` proposal is NOT automatically
+retried — the dashboard lets the owner Approve it again (which simply
+sets `status` back to `approved`, clearing nothing else), making it
+eligible for a fresh Execute click; there is no silent auto-retry loop.
+
+## `npm test`
+
+This repo had no aggregate test command before this phase — every
+`tests/*.test.js` file is a self-contained script, historically run one
+at a time and tallied by hand for each phase's own README writeup.
+`scripts/run-tests.js` (+ `package.json`'s new `"test"` script)
+formalizes that into one command: runs every file in its own `node`
+process, prints PASS/FAIL per file, exits non-zero if anything failed.
+This is what `execute-proposal.js`'s step 6 above actually runs inside
+the GitHub Actions workflow (a real checkout, so the full suite is both
+fast enough and has everything it needs — unlike the Vercel function,
+which was never a candidate for this either).
+
+## Desktop-only execution
+
+Enforced server-side (authoritative), not just a hidden button: `api/
+admin/bookings.js`'s `action:"execute"` handler inspects the request's
+`User-Agent` and refuses (403) anything that looks like a mobile
+browser, BEFORE touching the database at all. The dashboard
+(`admin/agent-proposals.js`) additionally never even renders the
+Execute button under an 860px viewport (the same breakpoint
+`admin.css`'s `.admin-proposal-execute-btn` media query uses) — belt and
+suspenders, with the server check as the real gate. Mobile can still
+approve/reject and see every status/execution detail; it simply never
+gets an Execute control.
+
+## Files changed
+
+- `sql/2026-10-21_phase14-agent-proposal-execution.sql` (new) —
+  extends `agent_proposals`' `status` CHECK constraint and adds
+  `proposed_fix`/`execution` columns. **Not yet applied to the
+  production database** — same posture as every prior migration in
+  this repo (see Production Safety). The dashboard's existing
+  `?view=agent-proposals`/approve/reject path is unaffected either way
+  (it already selects a fixed column list, unchanged by this phase's
+  additions until the API's own `AGENT_PROPOSAL_SELECT` is read against
+  a database that actually has these columns).
+- `agent/lib/execute-proposal.js` (new) — the execution engine.
+- `agent/cli.js` — new `--execute-proposal=<id>` command.
+- `agent/lib/proposals-sync.js` — `updatableFields()` now also writes
+  `proposed_fix` (`finding.autoFix || null`); the review-content
+  fingerprint now also covers it.
+- `api/admin/bookings.js` — new `action:"execute"` on the existing
+  `resource:"agent-proposal"` PATCH; `AGENT_PROPOSAL_STATUSES`/
+  `AGENT_PROPOSAL_SELECT`/`mapAgentProposal()` extended for the new
+  statuses/columns.
+- `.github/workflows/execute-proposal.yml` (new) — the real execution
+  runner.
+- `admin/agent-proposals.js` / `admin/admin.css` / `admin/agent-
+  proposals/index.html` — Execute button (desktop-gated), execution
+  detail panel, new status labels/colors, Approve-again for
+  `failed`/`needs_review`.
+- `scripts/run-tests.js` (new) + `package.json` — the new `npm test`.
+- `tests/agent-migrations-review.test.js`,
+  `tests/phase3a-admin-status-write.test.js`,
+  `tests/phase3c-schedule.test.js` — updated write-audit/migration
+  accounting for the new columns/writes (pre-existing regression tests
+  this phase's own changes correctly tripped — see each file's own
+  comment for exactly what changed and why).
+
+## Tests
+
+New: `tests/agent-execute-proposal.test.js` (the execution engine —
+Supabase/`gatherFindings`/`isWorkingTreeClean`/`git`/test-runner all
+injected per the file's own header, except `rewrite-href.apply()`'s
+real file write, which runs for real against a disposable fixture — 15
+cases covering every refusal path, the happy path through to a real
+commit SHA, and three distinct revert-and-fail paths), `tests/agent-
+proposal-execute-api.test.js` (the API handler — mobile refusal, claim/
+rollback, the GitHub dispatch call itself mocked), `tests/github-
+actions-execute-proposal-workflow.test.js` (structural invariants on
+the new workflow YAML, same convention as the existing `website-agent.
+yml` test). Extended: `tests/agent-proposals-sync.test.js` (`proposed_
+fix` sync + fingerprint), `tests/agent-proposals-ui.test.js` (Execute
+button gating/wiring). Full suite: **141/150 pass** — the same 9
+pre-existing, unrelated failures as unmodified `main` (confirmed via
+`git stash`), none newly introduced by this phase.
+
+## Remaining risks / open questions (Phase 14)
+
+1. **Not yet exercised against a real GitHub Actions run or a real
+   Supabase database.** Every test here uses an injected fake Supabase
+   client and injected `git`/test-runner functions — the real
+   end-to-end path (a real `workflow_dispatch` REST call, a real
+   runner checkout, a real `git push`) has not been run even once. The
+   smallest safe way to prove it: a synthetic test-fixture finding/
+   proposal, not a real SEO finding, exactly as the brief asked for.
+2. **`GITHUB_EXECUTE_DISPATCH_TOKEN` is not provisioned anywhere.** The
+   Vercel function's dispatch call fails closed (a clear "not
+   configured" error, never a crash) until a GitHub PAT with
+   `repo`+`workflow` scope is created and added as a Vercel environment
+   variable — a credential/infra decision requiring Rocky's explicit
+   authorization, same as every other secret in this project.
+3. **The phase14 SQL migration is not yet applied in production.**
+   Until it is, `proposed_fix`/`execution` simply don't exist as
+   columns — the list/approve/reject paths are unaffected (they
+   already existed), but any `action:"execute"` call would fail with a
+   clean 500 (missing column), same graceful-failure posture as every
+   other not-yet-migrated table in this codebase.
+4. **No real finding type populates `proposed_fix` yet.** Every
+   PROPOSE_CHANGE finding today correctly resolves to `needs_review`
+   with "requires manual implementation" — this phase builds the pipe,
+   not a new category of auto-fixable finding. A future finding type
+   that legitimately needs a higher-risk/owner-approved mechanical
+   rewrite can use it without any further engine changes.
+5. **Mobile-blocking is a `User-Agent` string check**, not a
+   cryptographic guarantee — a sufficiently determined request could
+   spoof it. Judged acceptable for this project's threat model (a
+   single authenticated admin allowlist, not a multi-tenant system);
+   the real safety property this phase cares about is "the Approve/
+   Reject review step from Phase 3-4 is preserved and not weakened,"
+   which this does not touch.

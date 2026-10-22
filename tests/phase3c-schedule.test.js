@@ -971,6 +971,17 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls �
       // same reasoning as phase3a-admin-status-write.test.js's own copy
       // of this accounting. See tests/agent-proposals-api.test.js.
       "api/admin/bookings.js: .update(",
+      // Site Improvement Agent, Phase 14 added exactly two new updates,
+      // both inside handleExecuteAgentProposal()'s resource:"agent-
+      // proposal" action:"execute" PATCH (a sibling of the approve/
+      // reject PATCH above, never reachable from it): the atomic
+      // approved->applying claim, and the rollback-to-approved write if
+      // the GitHub Actions dispatch call itself fails. Neither ever
+      // applies/commits/pushes a website change from this Vercel
+      // function — see that handler's own header, and
+      // tests/agent-proposal-execute-api.test.js for full coverage.
+      "api/admin/bookings.js: .update(",
+      "api/admin/bookings.js: .update(",
       "api/admin/client.js: .insert(",
       // Batch 2D added exactly one new insert — writeCustomerAuditLog(),
       // shared by ?action=archive and ?action=restore. See

@@ -83,6 +83,44 @@ test("Phase 4 hardening: admin/agent-proposals.js states, right at the point of 
   assert.ok(/Approve\/Reject only records your decision here — it does not change the website\./.test(proposalsJs));
 });
 
+// --- Phase 14 (execution pipeline) ---
+
+test("Phase 14: Execute is only ever rendered for an 'approved' proposal, gated by an explicit desktop-viewport check (never unconditionally in the DOM)", () => {
+  const approvedBlockMatch = proposalsJs.match(/\} else if \(proposal\.status === 'approved'\) \{([\s\S]*?)\} else if \(IN_PROGRESS_STATUSES/);
+  assert.ok(approvedBlockMatch, "expected a dedicated 'approved' branch in buildCard()");
+  const body = approvedBlockMatch[1];
+  assert.ok(/isDesktopViewport\(\)/.test(body), "the Execute button must only be added to the DOM when isDesktopViewport() is true");
+  assert.ok(/admin-proposal-execute-btn/.test(body), "expected the CSS class that's hidden below the desktop breakpoint, as a second layer of gating");
+  assert.ok(/admin-proposal-mobile-execute-note/.test(body), "a mobile/narrow viewport must see an explanatory note instead of the button");
+});
+
+test("Phase 14: clicking Execute PATCHes resource:'agent-proposal' with action:'execute' (a distinct action from approve/reject)", () => {
+  assert.ok(/executeProposal\(proposal\.id,\s*\[executeBtn\]\)/.test(proposalsJs));
+  assert.ok(/action:\s*'execute'/.test(proposalsJs));
+});
+
+test("Phase 14: the desktop breakpoint used by the JS viewport check matches admin.css's .admin-proposal-execute-btn media query (860px)", () => {
+  assert.ok(/DESKTOP_MIN_WIDTH\s*=\s*860/.test(proposalsJs));
+  const cssPath = path.join(__dirname, "..", "admin", "admin.css");
+  const css = fs.readFileSync(cssPath, "utf8");
+  const ruleMatch = css.match(/@media \(min-width:\s*(\d+)px\)\s*\{\s*\.admin-proposal-execute-btn/);
+  assert.ok(ruleMatch, "expected a min-width media query specifically for .admin-proposal-execute-btn in admin.css");
+  assert.strictEqual(Number(ruleMatch[1]), 860);
+});
+
+test("Phase 14: STATUS_LABELS covers every new execution-lifecycle status (applying/validating/deploying/deployed/needs_review)", () => {
+  for (const status of ["applying", "validating", "deploying", "deployed", "needs_review"]) {
+    assert.ok(new RegExp(`${status}:\\s*'`).test(proposalsJs), `expected a STATUS_LABELS entry for "${status}"`);
+  }
+});
+
+test("Phase 14: a 'failed' or 'needs_review' proposal can still be re-approved/rejected (RETRYABLE_STATUSES includes them alongside 'proposed')", () => {
+  const retryableMatch = proposalsJs.match(/var RETRYABLE_STATUSES = \[([^\]]*)\];/);
+  assert.ok(retryableMatch);
+  const values = retryableMatch[1].split(",").map((s) => s.trim().replace(/^'|'$/g, ""));
+  assert.deepStrictEqual(values.sort(), ["failed", "needs_review", "proposed"].sort());
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

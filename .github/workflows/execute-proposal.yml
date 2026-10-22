@@ -1,0 +1,108 @@
+name: Website Agent — execute approved proposal
+
+# Phase 14 — the ONLY place in this repository that applies an approved
+# Site Improvement Agent proposal's change, validates it, and (only if
+# everything passes) commits and pushes it to `main`. Dispatched by
+# api/admin/bookings.js's resource:"agent-proposal" action:"execute" —
+# that endpoint itself never applies/commits/pushes anything (a Vercel
+# serverless function has a read-only filesystem and no git push
+# credentials — see agent/README.md's Vercel-vs-GitHub-Actions
+# comparison table); it only claims the proposal row (approved ->
+# applying) and asks THIS workflow to run. All of the actual work
+# (apply the deterministic fix, re-scan/validate, run the full test
+# suite, commit, push) happens in agent/lib/execute-proposal.js's
+# executeProposal(), invoked here via `node agent/cli.js
+# --execute-proposal=<id>` — see that module's own header for the full
+# lifecycle and safeguards (freshness/evidence re-check, single-
+# occurrence file match, auto-revert on a failed validation/test run,
+# atomic claim preventing double-execution).
+#
+# Deliberately its own workflow, not folded into website-agent.yml:
+# that workflow's whole design intentionally keeps mutation OFF (no
+# --apply-safe, a narrow agent-artifact-only commit allowlist via
+# safe-commit.js) — this workflow's entire purpose is the opposite
+# (apply ONE specific, already-human-approved real site content change),
+# so keeping them separate keeps website-agent.yml's own "never writes
+# real site content" invariant easy to verify by reading that file
+# alone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal_id:
+        description: "agent_proposals row id to execute (must currently be status='approved')"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+# Same reasoning as website-agent.yml's own concurrency block (see that
+# file's comment): every job that can push to `main` on behalf of the
+# Agent shares ONE group, so two GitHub-hosted runners (which have no
+# shared filesystem) can never race each other's push — whether that's
+# two executions dispatched back to back, or an execution landing while
+# a scheduled daily/weekly run is mid-persist. `cancel-in-progress:
+# false` queues rather than cancels, so a run already mid-apply/test is
+# never killed partway through (which could leave an uncommitted file
+# change sitting in that runner's throwaway checkout — harmless, but
+# the row would be stuck "applying" with nothing to show for it).
+concurrency:
+  group: website-agent-runner
+  cancel-in-progress: false
+
+jobs:
+  execute-proposal:
+    name: Execute proposal (${{ inputs.proposal_id }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify running on refs/heads/main
+        # Same defense-in-depth as website-agent.yml's own identical
+        # step — workflow_dispatch can in principle be manually
+        # re-targeted at a non-main ref from the Actions UI; this
+        # workflow pushes to main, so that must be structurally
+        # impossible. api/admin/bookings.js's dispatch call always
+        # passes ref:"main" itself, so this should never actually fire
+        # in the normal product flow — it exists purely as a guard
+        # against a manual/mistaken dispatch.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::This workflow is running against '${{ github.ref }}', not 'refs/heads/main'. Refusing to continue."
+          exit 1
+
+      - name: Verify required Supabase configuration
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_SECRET_KEY }}" ]; then
+            echo "::error::SUPABASE_URL and/or SUPABASE_SECRET_KEY repository/environment secrets are not configured — this workflow cannot load or update the proposal without them."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git identity
+        # Required before `git commit` can succeed on a fresh runner
+        # checkout (no ~/.gitconfig at all — same gap website-agent.yml's
+        # safe-commit.js already documents and fixes for its own commits).
+        run: |
+          git config user.name "Mile High Website Agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Execute proposal
+        id: execute
+        run: node agent/cli.js "--execute-proposal=${{ inputs.proposal_id }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          EXECUTE_REQUESTED_BY: "github-actions-dispatch"

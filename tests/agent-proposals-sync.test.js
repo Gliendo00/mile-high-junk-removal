@@ -344,6 +344,37 @@ async function main() {
     assert.strictEqual(table.rows[0].finding_key, finding.key, "finding_key itself must be stable/unchanged across re-syncs");
   });
 
+  await test("Phase 14: syncProposals copies a finding's .autoFix onto the row as proposed_fix when present (e.g. a medium-risk mechanical rewrite that stays PROPOSE_CHANGE rather than auto-applying)", async () => {
+    const table = new FakeProposalsTable();
+    const fix = { kind: "rewrite-href", file: "a.html", from: "/old-url", to: "/new-url.html" };
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }], autoFix: fix });
+    assert.strictEqual(finding.decision, "PROPOSE_CHANGE", "medium risk + autoFix must still require approval, not auto-apply");
+    await syncProposals([finding], "run-1", { client: table });
+    assert.deepStrictEqual(table.rows[0].proposed_fix, fix);
+  });
+
+  await test("Phase 14: syncProposals writes proposed_fix as null for every finding without an autoFix (every real finding type today)", async () => {
+    const table = new FakeProposalsTable();
+    const finding = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }] });
+    await syncProposals([finding], "run-1", { client: table });
+    assert.strictEqual(table.rows[0].proposed_fix, null);
+  });
+
+  await test("Phase 14: a reviewed proposal is reset back to 'proposed' if its proposed_fix changes, even when decision/summary/evidence stay identical", async () => {
+    const table = new FakeProposalsTable();
+    const fixA = { kind: "rewrite-href", file: "a.html", from: "/old-url", to: "/new-url-a.html" };
+    const fixB = { kind: "rewrite-href", file: "a.html", from: "/old-url", to: "/new-url-b.html" };
+    const findingA = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }], autoFix: fixA });
+    await syncProposals([findingA], "run-1", { client: table });
+    table.rows[0].status = "approved";
+    table.rows[0].reviewed_by = "owner@milehighjunkremoval.net";
+
+    const findingB = decidedFinding({ type: "missing-canonical", summary: "v1", pages: ["a.html"], evidence: [{ x: 1 }], autoFix: fixB });
+    await syncProposals([findingB], "run-2", { client: table, previousOwnerReviewKeys: new Set([findingA.key]) });
+    assert.strictEqual(table.rows[0].status, "proposed", "a changed proposed_fix is material and must reset a prior approval");
+    assert.deepStrictEqual(table.rows[0].proposed_fix, fixB);
+  });
+
   if (process.exitCode) process.exit(process.exitCode);
 }
 

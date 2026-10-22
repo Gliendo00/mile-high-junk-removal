@@ -104,6 +104,15 @@ function updatableFields(finding, runId) {
     summary: finding.summary,
     evidence: finding.evidence || [],
     research: finding.research || [],
+    // Phase 14 — the same deterministic {kind, file, from, to} fix
+    // description findings already carry as `.autoFix` (see
+    // agent/lib/findings.js), copied onto the proposal row so the
+    // execution engine (agent/lib/execute-proposal.js) has something
+    // concrete to act on instead of ever guessing one from prose. NULL
+    // for every finding type today (see that module's own header on
+    // why no current PROPOSE_CHANGE finding has one) — this is forward
+    // wiring, not a behavior change for any existing finding.
+    proposed_fix: finding.autoFix || null,
     last_run_id: runId,
     updated_at: new Date().toISOString(),
   };
@@ -155,6 +164,18 @@ function computeReviewContentFingerprint(finding) {
     summary: finding.summary,
     evidence,
     latestResearch: latestResearchSnapshot(finding.research),
+    // Phase 14 — the literal mechanical fix (see updatableFields()'s
+    // `proposed_fix` above) is exactly the kind of thing an owner's
+    // review is ABOUT once one exists: a finding that keeps the same
+    // summary/evidence/decision but silently changes WHAT WOULD BE
+    // WRITTEN (a different `to` value, say) must still count as
+    // material and reset a prior review — same reasoning as every
+    // other field in this fingerprint, see this file's header.
+    // `finding.autoFix` here is intentionally read under that name
+    // (not `proposedFix`) so this same function keeps working
+    // unmodified when called against a DB row shimmed to look like a
+    // finding (see execute-proposal.js's own caller).
+    proposedFix: finding.autoFix || null,
   });
 }
 

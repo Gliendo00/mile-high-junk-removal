@@ -40,6 +40,17 @@ const howdItGoSql = fs.readFileSync(
   path.join(__dirname, "..", "sql", "2026-10-12_phase3-agent-howd-it-go.sql"),
   "utf8"
 );
+// Phase 14 (execution pipeline) — additive migration that DROPs and
+// recreates agent_proposals' `status` CHECK constraint (superset of the
+// original) and re-issues GRANT UPDATE with two new columns
+// (proposed_fix, execution) added to the original column list. This is
+// now the AUTHORITATIVE/current source for both the status enum and the
+// grant column list — see the two tests below that read this file
+// instead of the original phase3 migration for exactly that reason.
+const phase14Sql = fs.readFileSync(
+  path.join(__dirname, "..", "sql", "2026-10-21_phase14-agent-proposal-execution.sql"),
+  "utf8"
+);
 
 function extractCheckInList(sql, column) {
   const re = new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`, "i");
@@ -96,8 +107,11 @@ test("agent_proposals.sql: decision CHECK constraint matches exactly decision.js
   assert.deepStrictEqual(sqlDecisions, appDecisions);
 });
 
-test("agent_proposals.sql: status CHECK constraint matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
-  const sqlStatuses = extractCheckInList(proposalsSql, "status").sort();
+test("agent_proposals.sql (as superseded by phase14): status CHECK constraint matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
+  // Phase 14's migration DROPs and recreates this constraint with a
+  // superset of values (see that file's own header) — it is now the
+  // authoritative current constraint, not the original phase3 one.
+  const sqlStatuses = extractCheckInList(phase14Sql, "status").sort();
   const bookingsJs = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "bookings.js"), "utf8");
   const m = bookingsJs.match(/const AGENT_PROPOSAL_STATUSES = \[([^\]]*)\];/);
   assert.ok(m, "expected AGENT_PROPOSAL_STATUSES in api/admin/bookings.js");
@@ -120,17 +134,52 @@ test("agent_proposals.sql: service_role grants are REVOKE-first (deterministic e
   }
 });
 
-test("agent_proposals.sql: the GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus the review-state columns the approve/reject PATCH writes", () => {
+test("agent_proposals.sql (as superseded by phase14): the GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus the review-state columns the approve/reject PATCH writes", () => {
   const { updatableFields } = require("../agent/lib/proposals-sync");
   const sampleFinding = { category: "A", riskLevel: "low", decision: "PROPOSE_CHANGE", reason: "x", summary: "x", evidence: [], research: [] };
   const syncColumns = Object.keys(updatableFields(sampleFinding, "run-1"));
   const reviewColumns = ["status", "reviewed_by", "reviewed_at", "review_note"];
+  // Phase 14 — `execution` is written only by the execution engine
+  // (agent/lib/execute-proposal.js), a third writer alongside sync and
+  // the approve/reject PATCH, so it's not produced by either of the
+  // two lists above.
+  const executionColumns = ["execution"];
 
-  const grantUpdateMatch = proposalsSql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  // Phase 14's migration re-issues this GRANT with the full current
+  // column list (original columns + proposed_fix/execution) — read
+  // THAT file, not the original phase3 one, as the authoritative
+  // current grant (see this file's phase14Sql comment above).
+  const grantUpdateMatch = phase14Sql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  assert.ok(grantUpdateMatch, "expected a GRANT UPDATE (...) ON public.agent_proposals statement in the phase14 migration");
   const sqlColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean).sort();
 
-  const expected = [...new Set([...syncColumns, ...reviewColumns])].sort();
+  const expected = [...new Set([...syncColumns, ...reviewColumns, ...executionColumns])].sort();
   assert.deepStrictEqual(sqlColumns, expected, "the SQL grant must cover exactly what the sync step's UPDATE and the approve/reject PATCH actually write — no more, no less");
+});
+
+test("phase14 migration: additive/idempotent only (ADD COLUMN IF NOT EXISTS, DROP CONSTRAINT IF EXISTS before recreating it — never DROP TABLE/TRUNCATE/DELETE)", () => {
+  const executable = stripSqlComments(phase14Sql);
+  assert.ok(!/\bDROP\s+TABLE\b/i.test(executable));
+  assert.ok(!/\bTRUNCATE\b/i.test(executable));
+  assert.ok(!/\bDELETE\s+FROM\b/i.test(executable));
+  assert.ok(!/\bDROP\s+COLUMN\b/i.test(executable));
+  assert.ok(/ADD COLUMN IF NOT EXISTS proposed_fix jsonb NULL/i.test(phase14Sql));
+  assert.ok(/ADD COLUMN IF NOT EXISTS execution jsonb NOT NULL DEFAULT '\{\}'::jsonb/i.test(phase14Sql));
+  assert.ok(/DROP CONSTRAINT IF EXISTS agent_proposals_status_check/i.test(phase14Sql), "the status CHECK constraint must be dropped-if-exists before being recreated, so this migration is safe to re-run");
+});
+
+test("phase14 migration: its re-issued GRANT UPDATE still excludes identity columns (finding_key/finding_type/pages/created_at/id)", () => {
+  const grantUpdateMatch = phase14Sql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  assert.ok(grantUpdateMatch);
+  const updatableColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean);
+  for (const protectedCol of ["finding_key", "finding_type", "pages", "created_at", "id"]) {
+    assert.ok(!updatableColumns.includes(protectedCol), `${protectedCol} must never be in the UPDATE grant's column list`);
+  }
+});
+
+test("phase14 migration: rollback section is commented out (reference-only), never part of the executable statement", () => {
+  const executable = stripSqlComments(phase14Sql);
+  assert.ok(!/DROP COLUMN IF EXISTS proposed_fix/i.test(executable) || phase14Sql.includes("-- ALTER TABLE public.agent_proposals DROP COLUMN IF EXISTS proposed_fix;"));
 });
 
 test("howd-it-go.sql: adds exactly one nullable column with no default, via ADD COLUMN IF NOT EXISTS (additive, idempotent, no backfill needed)", () => {

@@ -4178,6 +4178,20 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-proposal-status-validated { background: #1d4ed8; color: #fff; }
 .admin-proposal-status-failed { background: #6b7280; color: #fff; }
 
+/* Phase 14 (execution pipeline) — the in-progress execution stages read
+   as the SAME "something is actively happening" blue as applied/
+   validated above (never a new hue — this is one continuous lifecycle,
+   not a different kind of status); deployed gets its own distinct
+   green-blue so it reads as clearly DONE, separate from "approved"
+   (also green, but that means pending-execution, a very different
+   thing); needs_review deliberately reuses the SAME amber as
+   "proposed" — both mean "a human needs to look at this again." */
+.admin-proposal-status-applying,
+.admin-proposal-status-validating,
+.admin-proposal-status-deploying { background: #1d4ed8; color: #fff; }
+.admin-proposal-status-deployed { background: #0f766e; color: #fff; }
+.admin-proposal-status-needs_review { background: #b45309; color: #fff; }
+
 /* Pre-acceptance hardening (audit finding #4) — a deliberately NEUTRAL/
    outline pill (never a solid fill like the status badges above): this
    is a derived, read-time annotation about the underlying FINDING
@@ -4247,6 +4261,50 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   color: var(--color-neutral-600, #82796a);
   font-style: italic;
   margin: 0 0 6px;
+}
+
+/* Phase 14 (execution pipeline) — Execute is desktop-only (requirement:
+   mobile may approve/reject/view status, but must never be offered the
+   actual Execute action). Hidden below the SAME 860px breakpoint this
+   admin app already uses for its other desktop-only chrome (e.g. the
+   header's inline icon nav) — admin-proposals.js also checks
+   window.innerWidth before ever rendering this button at all, so a
+   narrow viewport never even gets the element into the DOM; this media
+   query is defense-in-depth for a window later resized wider without a
+   reload. The authoritative gate is server-side (bookings.js's
+   isLikelyMobileUserAgent()) — this is just the honest UI reflection of
+   it, not the enforcement. */
+.admin-proposal-execute-btn { display: none; }
+@media (min-width: 860px) {
+  .admin-proposal-execute-btn { display: inline-flex; }
+}
+
+.admin-proposal-mobile-execute-note {
+  font-size: 12px;
+  color: var(--color-neutral-600, #82796a);
+  font-style: italic;
+  margin: 0 0 6px;
+}
+@media (min-width: 860px) {
+  .admin-proposal-mobile-execute-note { display: none; }
+}
+
+.admin-proposal-execution-panel {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: var(--admin-radius-md, 8px);
+  background: var(--color-neutral-100, #f7f3ea);
+  border: 1px solid var(--color-neutral-200, #eee7db);
+}
+.admin-proposal-execution-panel p {
+  font-size: 12px;
+  color: var(--color-neutral-700, #4b4438);
+  margin: 0 0 4px;
+}
+.admin-proposal-execution-panel p:last-child { margin-bottom: 0; }
+.admin-proposal-execution-failure {
+  color: #b91c1c;
+  font-weight: 600;
 }
 
 /* Site Improvement Agent, Phase 5 — admin/agent-reports/. Mobile-first

@@ -214,6 +214,24 @@
 //     --refresh-lead-event-evidence/--refresh-local-source-evidence,
 //     BEFORE --weekly, same precedent as those steps.
 //
+//   node agent/cli.js --execute-proposal=<id>
+//     Phase 14 — the execution engine behind the dashboard's Approved /
+//     Pending Execution queue (see agent/lib/execute-proposal.js's own
+//     header for the full lifecycle/safeguards). Loads ONE
+//     agent_proposals row by id, applies ONLY its recorded deterministic
+//     fix (never prose, never a guess), re-validates and runs the full
+//     test suite, and — only if every check passes — commits and pushes
+//     to `main`. This is the ONLY place in this codebase that ever
+//     pushes a real website content change automatically; it is never
+//     run by --daily/--weekly, never by this unattended runner's own
+//     website-agent.yml workflow, and is NOT safe to run against a dirty
+//     working tree or outside the dedicated
+//     .github/workflows/execute-proposal.yml dispatch (which is what the
+//     admin dashboard's Execute button actually triggers — see
+//     api/admin/bookings.js's resource:"agent-proposal" action:"execute"
+//     — because a Vercel serverless function cannot itself commit to
+//     git; see agent/README.md's Vercel-vs-GitHub-Actions table).
+//
 //   node agent/cli.js --check-integrations
 //     CRM cleanup/verification audit (2026-10-21) — see agent/lib/
 //     integration-health.js's own header for the full why. Runs one
@@ -254,6 +272,7 @@ const { selectWeeklyLocalSourceCandidates, picksWithNoRelevantSource, needsFetch
 const { writeLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
 const { runSynthesis } = require("./lib/run-synthesis");
 const { checkIntegrationHealth, writeIntegrationHealth } = require("./lib/integration-health");
+const { executeProposal } = require("./lib/execute-proposal");
 
 // Phase 13a — see agent/lib/run-synthesis.js's header for the full
 // architecture. Deterministic/network-free: never runs the audits,
@@ -566,6 +585,29 @@ async function runRefreshLeadEventEvidence() {
   return outcomes;
 }
 
+function parseExecuteProposalArg(args) {
+  const prefixed = args.find((a) => a.startsWith("--execute-proposal="));
+  return prefixed ? prefixed.slice("--execute-proposal=".length) : null;
+}
+
+/**
+ * See this file's top-of-file comment on --execute-proposal= and
+ * agent/lib/execute-proposal.js's own header for the full lifecycle.
+ * Always exits non-zero when the result isn't a successful deploy —
+ * this is the one CLI command whose whole point is "did this actually
+ * ship," so a quiet success-looking exit on a `needs_review`/`failed`
+ * outcome would be the exact kind of silently-green run this codebase's
+ * other unattended paths deliberately refuse to produce.
+ */
+async function runExecuteProposal(id, options = {}) {
+  const result = await executeProposal(id, options);
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+  return result;
+}
+
 function parseFetchFirstPartyArg(args) {
   const prefixed = args.find((a) => a.startsWith("--fetch-firstparty="));
   return prefixed ? prefixed.slice("--fetch-firstparty=".length) : null;
@@ -789,6 +831,12 @@ async function main() {
     return;
   }
 
+  const executeProposalId = parseExecuteProposalArg(args);
+  if (executeProposalId) {
+    await runExecuteProposal(executeProposalId, { requestedBy: process.env.EXECUTE_REQUESTED_BY || null });
+    return;
+  }
+
   if (args.includes("--run-synthesis")) {
     runRunSynthesis();
     return;
@@ -858,6 +906,8 @@ module.exports = {
   runRefreshLeadEventEvidence,
   runRunSynthesis,
   runCheckIntegrations,
+  parseExecuteProposalArg,
+  runExecuteProposal,
 };
 
 // Guards against auto-running the CLI when this file is require()'d

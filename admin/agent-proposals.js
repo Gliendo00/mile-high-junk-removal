@@ -1,14 +1,30 @@
 // /admin/agent-proposals/ — Site Improvement Agent, Phase 3's detailed
 // review surface. Talks to api/admin/bookings.js's ?view=agent-proposals
-// (GET list) and resource:"agent-proposal" (PATCH approve/reject) — no
-// new Vercel function, same file that already hosts ?view=agent-activity.
+// (GET list) and resource:"agent-proposal" (PATCH approve/reject/
+// execute) — no new Vercel function, same file that already hosts
+// ?view=agent-activity.
 //
 // Deliberately minimal: no dashboard redesign, no raw research JSON dump
 // — each proposal shows its summary, the agent's own reason, which pages
-// it concerns, and (compactly) its evidence, with a Approve/Reject
+// it concerns, and (compactly) its evidence, with an Approve/Reject
 // action that only ever updates that ONE proposal's review state. It
 // never executes any website change by itself, approved or not — see
 // this page's own intro paragraph in admin/agent-proposals/index.html.
+//
+// Phase 14 — Execute is a DISTINCT, separately-gated action, only ever
+// offered for an 'approved' proposal, and only on desktop (requirement:
+// mobile may approve/reject/view status, but must never be offered
+// execution). This file enforces that client-side (both the CSS class
+// and an explicit window.innerWidth check below — never rendering the
+// button at all under the breakpoint, not just hiding it); the
+// authoritative enforcement is server-side (bookings.js's
+// isLikelyMobileUserAgent()) — see this file's own executeProposal().
+// Clicking Execute never itself applies/commits/pushes anything from
+// this page or from the Vercel function behind it — it asks that
+// endpoint to dispatch a GitHub Actions workflow, which is the only
+// place with a real git checkout; see agent/lib/execute-proposal.js's
+// header for the full lifecycle this card's status badge/execution
+// panel are reflecting.
 //
 // Every dynamic value is written with textContent (never innerHTML/
 // insertAdjacentHTML with a concatenated string), matching every other
@@ -16,12 +32,24 @@
 document.addEventListener('DOMContentLoaded', function () {
   var STATUS_LABELS = {
     proposed: 'Needs review',
-    approved: 'Approved',
+    approved: 'Approved / Pending execution',
     rejected: 'Rejected',
     applied: 'Applied',
     validated: 'Validated',
     failed: 'Failed',
+    applying: 'Applying…',
+    validating: 'Validating…',
+    deploying: 'Deploying…',
+    deployed: 'Deployed',
+    needs_review: 'Needs review (execution stopped)',
   };
+  // Same breakpoint admin.css's .admin-proposal-execute-btn media query
+  // uses — kept in one place here so the JS gate and the CSS gate never
+  // drift to different pixel values.
+  var DESKTOP_MIN_WIDTH = 860;
+  function isDesktopViewport() {
+    return typeof window !== 'undefined' && window.innerWidth >= DESKTOP_MIN_WIDTH;
+  }
 
   var errorBanner = document.getElementById('error-banner');
   var loadingEl = document.getElementById('proposals-loading');
@@ -137,7 +165,37 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }
 
-    if (proposal.status === 'proposed') {
+    // Phase 14 — execution details (commit/files/validation/test/
+    // failure reason), shown whenever ANY of it exists, regardless of
+    // which branch below is also showing — so a 'failed'/'needs_review'
+    // card explains WHY, and a 'deployed' one shows what actually
+    // shipped, without this panel's presence itself implying a status.
+    var exec = proposal.execution || {};
+    var hasExecutionDetail = exec.commitSha || exec.failureReason || exec.testResult || exec.validation;
+    if (hasExecutionDetail) {
+      var execPanel = el('div', 'admin-proposal-execution-panel');
+      if (exec.failureReason) {
+        execPanel.appendChild(el('p', 'admin-proposal-execution-failure', exec.failureReason));
+      }
+      if (exec.validation && exec.validation.status) {
+        execPanel.appendChild(el('p', null, 'Validation: ' + exec.validation.status));
+      }
+      if (exec.testResult) {
+        execPanel.appendChild(el('p', null, 'Tests: ' + (exec.testResult.passed ? 'passed' : 'FAILED')));
+      }
+      if (exec.commitSha) {
+        execPanel.appendChild(el('p', null, 'Commit: ' + exec.commitSha.slice(0, 12) + (exec.filesChanged ? ' (' + exec.filesChanged.join(', ') + ')' : '')));
+      }
+      if (exec.requestedBy) {
+        execPanel.appendChild(el('p', null, 'Requested by ' + exec.requestedBy + (exec.requestedAt ? ' on ' + formatDateTime(exec.requestedAt) : '')));
+      }
+      card.appendChild(execPanel);
+    }
+
+    var RETRYABLE_STATUSES = ['proposed', 'failed', 'needs_review'];
+    var IN_PROGRESS_STATUSES = ['applying', 'validating', 'deploying'];
+
+    if (RETRYABLE_STATUSES.indexOf(proposal.status) !== -1) {
       var noteInput = el('textarea', 'admin-proposal-card-note-input');
       noteInput.rows = 2;
       noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this)';
@@ -146,13 +204,18 @@ document.addEventListener('DOMContentLoaded', function () {
       // Phase 4 hardening — stated right at the point of action, not
       // just in the page's top intro paragraph, so it's truthful even
       // for someone who scrolled straight to a card: approving records
-      // a decision only. It does not publish, edit, or otherwise touch
-      // the website — only the narrow mechanical-fix whitelist
-      // (unrelated to this screen) ever writes to the site on its own.
-      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approve/Reject only records your decision here — it does not change the website.'));
+      // a decision only — execution is a separate, later, explicit
+      // step (Execute, below, once this becomes 'approved'). For a
+      // proposal retried after a failed/needs_review execution,
+      // approving again simply re-queues it for a fresh Execute click;
+      // it does not retry anything by itself.
+      var reviewNoteText = proposal.status === 'proposed'
+        ? 'Approve/Reject only records your decision here — it does not change the website.'
+        : 'Approve again to make this eligible for Execute once more. Reject to stop it for good.';
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', reviewNoteText));
 
       var actions = el('div', 'admin-proposal-card-actions');
-      var approveBtn = el('button', 'admin-btn admin-btn-primary', 'Approve');
+      var approveBtn = el('button', 'admin-btn admin-btn-primary', proposal.status === 'proposed' ? 'Approve' : 'Approve again');
       approveBtn.type = 'button';
       var rejectBtn = el('button', 'admin-btn admin-btn-danger', 'Reject');
       rejectBtn.type = 'button';
@@ -167,6 +230,30 @@ document.addEventListener('DOMContentLoaded', function () {
       actions.appendChild(approveBtn);
       actions.appendChild(rejectBtn);
       card.appendChild(actions);
+    } else if (proposal.status === 'approved') {
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approved — ready to execute.'));
+
+      // Desktop-only (requirement: execution must never be offered on
+      // mobile) — both an explicit viewport check (so the button is
+      // never even added to the DOM on a narrow screen) and the
+      // .admin-proposal-execute-btn CSS class (admin.css) as a second,
+      // redundant layer in case the viewport is resized wider later
+      // without a reload. The real enforcement is server-side — see
+      // this file's own top-of-file comment.
+      if (isDesktopViewport()) {
+        var executeBtn = el('button', 'admin-btn admin-btn-primary admin-proposal-execute-btn', 'Execute');
+        executeBtn.type = 'button';
+        executeBtn.addEventListener('click', function () {
+          executeProposal(proposal.id, [executeBtn]);
+        });
+        var executeActions = el('div', 'admin-proposal-card-actions');
+        executeActions.appendChild(executeBtn);
+        card.appendChild(executeActions);
+      } else {
+        card.appendChild(el('p', 'admin-proposal-mobile-execute-note', 'Execution can only be started from a desktop browser.'));
+      }
+    } else if (IN_PROGRESS_STATUSES.indexOf(proposal.status) !== -1) {
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Execution in progress — reload this page to check its result.'));
     } else {
       var reviewedLine = 'Reviewed';
       if (proposal.reviewedBy) reviewedLine += ' by ' + proposal.reviewedBy;
@@ -241,6 +328,40 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .catch(function (err) {
         showError(err && err.message ? err.message : 'Could not save this review.');
+        buttonsToDisable.forEach(function (b) { b.disabled = false; });
+      })
+      .finally(function () {
+        actionInFlight = false;
+      });
+  }
+
+  // Phase 14 — distinct from reviewProposal() above: this never itself
+  // changes the website. It asks api/admin/bookings.js to claim the
+  // proposal and dispatch the real execution workflow — see this file's
+  // own top-of-file comment and agent/lib/execute-proposal.js's header.
+  function executeProposal(id, buttonsToDisable) {
+    if (actionInFlight) return;
+    actionInFlight = true;
+    buttonsToDisable.forEach(function (b) { b.disabled = true; });
+
+    adminFetch('/api/admin/bookings?resource=agent-proposal', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resource: 'agent-proposal', id: id, action: 'execute' }),
+    })
+      .then(function (res) {
+        if (handleAuthRedirect(res)) return null;
+        return res.json().catch(function () { return null; }).then(function (body) {
+          if (!res.ok) throw new Error((body && body.error) || 'Could not start execution.');
+          return body;
+        });
+      })
+      .then(function (body) {
+        if (!body) return;
+        load();
+      })
+      .catch(function (err) {
+        showError(err && err.message ? err.message : 'Could not start execution.');
         buttonsToDisable.forEach(function (b) { b.disabled = false; });
       })
       .finally(function () {

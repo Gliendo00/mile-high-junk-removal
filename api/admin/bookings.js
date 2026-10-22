@@ -102,7 +102,18 @@ module.exports = async (req, res) => {
   if (req.method === "PATCH") {
     const patchResource = req.body && typeof req.body === "object" && typeof req.body.resource === "string" ? req.body.resource.trim() : "";
     if (patchResource === "other-revenue") return handleVoidOtherRevenue(req, res, session);
-    if (patchResource === "agent-proposal") return handleReviewAgentProposal(req, res, session);
+    if (patchResource === "agent-proposal") {
+      // Phase 14 — "execute" is a THIRD action on this same
+      // resource/PATCH, sitting alongside approve/reject. Checked first
+      // so it can never be swallowed by handleReviewAgentProposal()'s
+      // own action !== "approve"/"reject" 400 — see
+      // handleExecuteAgentProposal()'s own header for why this is a
+      // completely separate code path (it dispatches a GitHub Actions
+      // workflow; it never itself writes to git).
+      const patchAction = req.body && typeof req.body === "object" && typeof req.body.action === "string" ? req.body.action.trim() : "";
+      if (patchAction === "execute") return handleExecuteAgentProposal(req, res, session);
+      return handleReviewAgentProposal(req, res, session);
+    }
     return handlePatchExpense(req, res, session);
   }
 
@@ -1016,10 +1027,20 @@ function dashboardSearchIntelligence(sortedRuns, source) {
 // approved; only the existing narrow mechanical-fix whitelist is ever
 // auto-applied, by the unrelated --apply-safe runner path).
 // ---------------------------------------------------------------------
-const AGENT_PROPOSAL_STATUSES = ["proposed", "approved", "rejected", "applied", "validated", "failed"];
+// Phase 14 — five new values cover the execution lifecycle (see
+// agent/lib/execute-proposal.js's own header). 'approved' itself IS
+// "Approved / Pending Execution" in the dashboard's labeling — no
+// separate value needed for that. 'applied'/'validated' are unchanged,
+// still never written by any code path (see sql/2026-10-12_phase3-
+// agent-proposals.sql's own header) — left in place rather than removed
+// as unrelated cleanup. 'failed' is now reused by execute-proposal.js.
+const AGENT_PROPOSAL_STATUSES = [
+  "proposed", "approved", "rejected", "applied", "validated", "failed",
+  "applying", "validating", "deploying", "deployed", "needs_review"
+];
 const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
 const AGENT_PROPOSAL_SELECT =
-  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at";
+  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at, proposed_fix, execution";
 
 function mapAgentProposal(row, options = {}) {
   return {
@@ -1041,6 +1062,14 @@ function mapAgentProposal(row, options = {}) {
     lastRunId: row.last_run_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // Phase 14 — the deterministic fix description (null for every
+    // real finding type today) and the structured execution record
+    // (requestedAt/startedAt/finishedAt, commitSha, filesChanged,
+    // validation, testResult, failureReason — see execute-proposal.js's
+    // own header for the exact shape). `{}` rather than null when
+    // nothing has ever been attempted (the DB column's own default).
+    proposedFix: row.proposed_fix || null,
+    execution: row.execution || {},
     // Pre-acceptance hardening (audit finding #4, baseline 2bff317) —
     // see currentOwnerReviewKeys() below for exactly what this means and
     // why it's computed fresh at READ time rather than stored on the row
@@ -1188,6 +1217,137 @@ async function handleReviewAgentProposal(req, res, session) {
   } catch (err) {
     console.error("Admin agent-proposal review failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save this review." });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Site Improvement Agent, Phase 14 — resource:"agent-proposal"
+// action:"execute". This endpoint NEVER itself applies a fix, runs a
+// test, or commits/pushes anything — this Vercel function's filesystem
+// is read-only (except /tmp) and has no git credentials, so none of
+// that is even possible here (see agent/README.md's Vercel-vs-GitHub-
+// Actions comparison table, and agent/lib/execute-proposal.js's own
+// header, which is where all of that actually happens). All this
+// endpoint does is:
+//   1. refuse outright if the request looks like it came from a mobile
+//      browser (requirement: execution is desktop-only — mobile may
+//      approve/reject and view status, never trigger execution);
+//   2. atomically flip the proposal from "approved" to "applying" (a
+//      conditional UPDATE — the SAME claim pattern execute-proposal.js
+//      itself uses, so a double-click or a second tab racing this one
+//      can claim the row at most once; anything not currently
+//      "approved" — proposed, rejected, already applying/deployed/
+//      failed/needs_review — is refused, which is also exactly what
+//      makes a rejected proposal structurally unexecutable and a
+//      finished one un-re-executable);
+//   3. ask GitHub's REST API to dispatch
+//      .github/workflows/execute-proposal.yml with this proposal's id —
+//      that workflow (a real GitHub Actions runner, full repo checkout,
+//      git push credentials) is what actually does the work and moves
+//      the row through validating/deploying/deployed-or-failed/
+//      needs_review from there.
+// If the dispatch call itself fails (bad token, GitHub API error,
+// network), the claim is rolled back to "approved" so the proposal is
+// immediately retryable rather than stuck showing "Applying" forever
+// with nothing actually running.
+const GITHUB_REPO = "Gliendo00/mile-high-junk-removal";
+const GITHUB_EXECUTE_WORKFLOW = "execute-proposal.yml";
+
+function isLikelyMobileUserAgent(userAgent) {
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(String(userAgent || ""));
+}
+
+async function dispatchExecuteProposalWorkflow(proposalId) {
+  const token = process.env.GITHUB_EXECUTE_DISPATCH_TOKEN;
+  if (!token) {
+    return { ok: false, reason: "Execution dispatch is not configured (GITHUB_EXECUTE_DISPATCH_TOKEN is not set)." };
+  }
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_EXECUTE_WORKFLOW}/dispatches`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({ ref: "main", inputs: { proposal_id: proposalId } }),
+  });
+  if (response.status === 204) return { ok: true };
+  const text = await response.text().catch(() => "");
+  return { ok: false, reason: `GitHub workflow dispatch failed (${response.status}): ${text.slice(0, 300)}` };
+}
+
+// PATCH body: { resource: "agent-proposal", action: "execute", id }
+async function handleExecuteAgentProposal(req, res, session) {
+  if (isLikelyMobileUserAgent(req.headers && req.headers["user-agent"])) {
+    res.status(403).json({ error: "Execution can only be triggered from a desktop browser." });
+    return;
+  }
+
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin agent-proposal execute failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "A proposal id is required." });
+    return;
+  }
+
+  try {
+    const currentRes = await supabase.from("agent_proposals").select("id, status").eq("id", id).maybeSingle();
+    if (currentRes.error) throw currentRes.error;
+    if (!currentRes.data) {
+      res.status(404).json({ error: "Proposal not found." });
+      return;
+    }
+    if (currentRes.data.status === "rejected") {
+      res.status(400).json({ error: "This proposal was rejected — rejected proposals can never be executed." });
+      return;
+    }
+
+    // The atomic claim — see this function's own header. Only succeeds
+    // if the row is STILL "approved" right now.
+    const claimRes = await supabase
+      .from("agent_proposals")
+      .update({
+        status: "applying",
+        execution: { requestedAt: new Date().toISOString(), requestedBy: session.email, startedAt: null },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("status", "approved")
+      .select(AGENT_PROPOSAL_SELECT)
+      .maybeSingle();
+    if (claimRes.error) throw claimRes.error;
+    if (!claimRes.data) {
+      res.status(409).json({ error: `This proposal is not currently "approved" (it may already be executing, already finished, or not yet approved) — refusing to execute.` });
+      return;
+    }
+
+    const dispatch = await dispatchExecuteProposalWorkflow(id);
+    if (!dispatch.ok) {
+      // Roll the claim back so this is immediately retryable instead of
+      // stuck showing "Applying" with nothing actually running.
+      await supabase
+        .from("agent_proposals")
+        .update({ status: "approved", execution: {}, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("status", "applying");
+      console.error("Admin agent-proposal execute failed to dispatch workflow:", dispatch.reason);
+      res.status(500).json({ error: "Could not start execution. Nothing was changed." });
+      return;
+    }
+
+    res.status(200).json({ ok: true, proposal: mapAgentProposal(claimRes.data) });
+  } catch (err) {
+    console.error("Admin agent-proposal execute failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not start execution." });
   }
 }
 
