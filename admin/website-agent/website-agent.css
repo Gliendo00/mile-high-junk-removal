@@ -1,0 +1,163 @@
+/* Website Agent presentation. Scoped to this dashboard; no shared CRM overrides. */
+.admin-wa-main {
+  --wa-ink: #143829;
+  --wa-muted: #486052;
+  --wa-line: #cdddcf;
+  color: var(--wa-ink);
+}
+.admin-wa-main .admin-wa-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 28px 30px 22px;
+  border: 1px solid #244d35;
+  border-radius: 20px;
+  background: radial-gradient(ellipse at 85% 0%, #35652c 0, transparent 56%), #102c20;
+  box-shadow: 0 10px 26px #163b2414;
+  border-bottom: 4px solid #9cf13b;
+}
+.admin-wa-main .admin-wa-heading { position: relative; margin-bottom: 24px; gap: 20px; }
+.admin-wa-main .admin-wa-heading h1 {
+  display: flex; align-items: center; gap: 18px;
+  color: #fff; font-size: 36px !important; line-height: 1.15; margin: 8px 0;
+}
+.admin-wa-title-mark {
+  display: inline-grid; place-items: center; width: 38px; height: 38px;
+  border: 1px solid #9cf13b80; border-radius: 10px; color: #b4fa65;
+  font-family: var(--font-body); font-style: normal; font-size: 26px;
+}
+.admin-wa-main .admin-wa-eyebrow { color: #b4fa65; font-size: 11px; letter-spacing: .14em; }
+.admin-wa-intro { margin: 0; font-size: 14px; color: #d2e3d5; }
+.admin-wa-main .admin-wa-status-pill { padding: 8px 12px; background: #ecf9df; color: #204329; border-color: #b6db8d; }
+.admin-wa-main .admin-wa-status-pill-needs-attention { color: #713606; background: #ffedca; border-color: #efbb69; }
+.admin-wa-main .admin-wa-status-pill-failed { color: #841f25; background: #ffe5e6; border-color: #efa5a9; }
+.admin-wa-main .admin-wa-status-pill-research-pending { color: #1e407c; background: #e6efff; border-color: #a2bcea; }
+.admin-wa-main .admin-wa-status-reason { color: #e3eddd; font-size: 13px; }
+.admin-wa-main .admin-wa-integrations { margin: 0; gap: 8px; padding-top: 18px; border-top: 1px solid #ffffff24; }
+.admin-wa-main .admin-wa-integration-chip { padding: 6px 10px; background: #fff; font-size: 10px; }
+.admin-wa-main .admin-wa-integration-chip.is-connected { background: #203f2d; color: #c7f49d; border-color: #527b45; }
+.admin-wa-main .is-connected .admin-wa-integration-dot { background: #a6f345; }
+.admin-wa-main .admin-wa-section-label { color: #34563e; margin-top: 26px; padding-bottom: 9px; border-color: #c5d7c8; letter-spacing: .1em; }
+.admin-wa-main .admin-wa-section-label::before { content: ''; width: 5px; height: 14px; border-radius: 3px; background: #428422; flex: none; }
+.admin-wa-main .admin-wa-section-label { justify-content: flex-start; }
+.admin-wa-main .admin-wa-section-label > a { margin-left: auto; }
+.admin-wa-main .admin-wa-panel,
+.admin-wa-main .admin-wa-metric-card { border: 1px solid var(--wa-line); box-shadow: 0 3px 0 #163b2406; border-radius: 15px; }
+.admin-wa-main .admin-wa-panel { padding: 20px; }
+.admin-wa-main .admin-wa-queue-panel.admin-wa-panel-priority { background: #fff8eb; border: 1px solid #eacb96; border-left: 5px solid #d57b0b; padding: 18px 20px; }
+.admin-wa-main .admin-wa-empty-note { background: transparent; border: 0; padding: 8px 0 12px; text-align: left; color: #63491e; font-weight: 600; }
+.admin-wa-main .admin-wa-more-link { color: #285c19; min-height: 32px; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.admin-wa-main .admin-wa-more-link:focus-visible { outline: 3px solid #559a28; outline-offset: 4px; border-radius: 3px; }
+.admin-wa-main .admin-wa-metrics { gap: 14px; }
+.admin-wa-main .admin-wa-metric-card { padding: 20px 22px; position: relative; overflow: hidden; }
+.admin-wa-main .admin-wa-metric-value { color: #173c28; font-size: 38px; font-variant-numeric: tabular-nums; }
+.admin-wa-main .admin-wa-metric-label { color: var(--wa-muted); font-size: 11px; margin-top: 8px; }
+.admin-wa-main .admin-wa-metrics-current .admin-wa-metric-card:first-child { background: #dff4c6; border-color: #b0d48b; }
+.admin-wa-main .admin-wa-metrics-current .admin-wa-metric-card::after { content: ''; position: absolute; right: 22px; top: 24px; width: 28px; height: 28px; border: 7px solid #87bc5470; border-radius: 50%; }
+.admin-wa-main .admin-wa-metrics-current .admin-wa-metric-card:last-child { border-top: 4px solid #dc9b35; }
+.admin-wa-main #wa-latest-run { border-top: 4px solid #6fae36; }
+.admin-wa-main .admin-wa-latest-run-stats { margin: 18px 0 8px; gap: 0; border: 1px solid #dbe5d6; border-radius: 10px; background: #f3f8ed; padding: 16px 0; }
+.admin-wa-main .admin-wa-latest-run-stat { padding: 0 8px; border-right: 1px solid #d4e2cd; }
+.admin-wa-main .admin-wa-latest-run-stat:last-child { border: 0; }
+.admin-wa-main .admin-wa-latest-run-stat-value { font-size: 27px; color: #193e27; }
+.admin-wa-main .admin-wa-latest-run-stat-label { color: #48603f; }
+.admin-wa-main .admin-wa-latest-run-time,
+.admin-wa-main .admin-wa-muted,
+.admin-wa-main .admin-wa-evidence-meta,
+.admin-wa-main .admin-wa-evidence-limitations,
+.admin-wa-main .admin-wa-activity-time { color: var(--wa-muted); }
+.admin-wa-main .admin-wa-panel-title { font-size: 15px; color: #20462e; }
+.admin-wa-main .admin-wa-schedule-grid { gap: 14px; }
+.admin-wa-main .admin-wa-schedule-card { border-top: 3px solid #488226; }
+.admin-wa-main .admin-wa-schedule-card:nth-child(2) { border-top-color: #346e81; }
+.admin-wa-main .admin-wa-schedule-next { background: #f1f6ee; color: #4c6146; border: 1px solid #d5e0ce; border-radius: 6px; }
+.admin-wa-main .admin-wa-activity-row { border-left-color: #aed585; padding: 8px 12px; background: #f6f9f3; border-radius: 0 8px 8px 0; }
+.admin-wa-main .admin-wa-activity-label { color: #2f5138; }
+@media (max-width: 700px) {
+  .admin-wa-main .admin-wa-hero { padding: 22px 20px 18px; }
+  .admin-wa-main .admin-wa-heading { flex-direction: column; align-items: flex-start; }
+  .admin-wa-main .admin-wa-heading > div { max-width: 100%; min-width: 0; }
+  .admin-wa-main .admin-wa-heading h1 { font-size: 30px !important; }
+  .admin-wa-main .admin-wa-status-wrap { align-items: flex-start; }
+  .admin-wa-main .admin-wa-status-reason { text-align: left; overflow-wrap: anywhere; }
+  .admin-wa-main .admin-wa-metric-card { padding: 18px 15px; }
+  .admin-wa-main .admin-wa-metrics-current .admin-wa-metric-card::after { right: 14px; width: 18px; height: 18px; border-width: 5px; }
+  .admin-wa-main .admin-wa-latest-run-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 18px; }
+  .admin-wa-main .admin-wa-latest-run-stat:nth-child(3) { border-right: 0; }
+  .admin-wa-main .admin-wa-section-label { flex-wrap: wrap; }
+}
+@media (max-width: 380px) {
+  .admin-wa-main .admin-wa-heading h1 { font-size: 26px !important; gap: 10px; }
+  .admin-wa-title-mark { width: 30px; height: 30px; }
+  .admin-wa-main .admin-wa-evidence-grid,
+  .admin-wa-main .admin-wa-schedule-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Mission-control details: decorative instrumentation, never simulated live data. */
+.admin-wa-main { counter-reset: wa-section; }
+.admin-wa-main .admin-wa-hero {
+  background:
+    linear-gradient(#a6f34508 1px, transparent 1px),
+    linear-gradient(90deg, #a6f34508 1px, transparent 1px),
+    radial-gradient(ellipse at 85% 0%, #35652c 0, transparent 56%), #102c20;
+  background-size: 28px 28px, 28px 28px, auto, auto;
+  border-radius: 16px 16px 6px 6px;
+}
+.admin-wa-instrument-bar, .admin-wa-instrument-footer {
+  position: relative; z-index: 1; display: flex; align-items: center;
+  gap: 12px; font: 10px/1.5 'Courier New', monospace; letter-spacing: .06em;
+}
+.admin-wa-instrument-bar {
+  margin: -28px -30px 24px; padding: 11px 20px;
+  color: #c8dfc8; background: #081b16b3; border-bottom: 1px solid #a5ee4233;
+}
+.admin-wa-instrument-lights { display: flex; gap: 5px; }
+.admin-wa-instrument-lights i { width: 6px; height: 6px; border-radius: 50%; background: #a6f345; }
+.admin-wa-instrument-lights i:nth-child(2) { background: #d9b24f; }
+.admin-wa-instrument-lights i:nth-child(3) { background: #5da79e; }
+.admin-wa-instrument-mode { margin-left: auto; color: #a6f345; font-size: 9px; }
+.admin-wa-instrument-footer { justify-content: space-between; margin-top: 15px; color: #afd49d; font-size: 9px; }
+.admin-wa-radar {
+  position: absolute; width: 240px; height: 240px; right: 21%; top: 25px;
+  stroke: #a5ee42; stroke-width: 1; opacity: .14; pointer-events: none;
+}
+.admin-wa-radar-sector { fill: #a5ee42; opacity: .3; }
+.admin-wa-radar-point { fill: #ceff9a; stroke-width: 5px; stroke: #a5ee4240; }
+.admin-wa-main .admin-wa-integrations { position: relative; }
+.admin-wa-main .admin-wa-title-mark { font: 700 18px/1 'Courier New', monospace; box-shadow: inset 0 0 16px #a6f34516; }
+.admin-wa-main .admin-wa-section-label { counter-increment: wa-section; }
+.admin-wa-main .admin-wa-section-label::before {
+  content: '0' counter(wa-section); width: 25px; height: 22px;
+  display: grid; place-items: center; color: #e5ffc9; background: #224832;
+  border: 1px solid #416443; border-radius: 4px; font-size: 10px; letter-spacing: 0;
+}
+.admin-wa-main .admin-wa-metric-value,
+.admin-wa-main .admin-wa-latest-run-stat-value {
+  font-family: 'Courier New', monospace; font-style: normal; font-weight: 700; letter-spacing: -.06em;
+}
+.admin-wa-main .admin-wa-metrics-current .admin-wa-metric-card::after {
+  border-width: 2px; border-color: #659b43; border-radius: 3px;
+  background: repeating-linear-gradient(0deg, transparent 0 5px, #659b4340 5px 6px);
+  box-shadow: 4px -4px 0 -2px #dff4c6, 4px -4px 0 0 #659b4350;
+}
+.admin-wa-main .admin-wa-latest-run-stats {
+  background: #132e23; border-color: #35523b; box-shadow: inset 0 1px 0 #bbf57720;
+  border-radius: 8px;
+}
+.admin-wa-main .admin-wa-latest-run-stat { border-color: #a6f34526; }
+.admin-wa-main .admin-wa-latest-run-stat-value { color: #b4fa65; }
+.admin-wa-main .admin-wa-latest-run-stat-label { color: #c2d7bb; font: 700 10px/1.5 'Courier New', monospace; }
+.admin-wa-main .admin-wa-more-link { font-family: 'Courier New', monospace; font-size: 12px; }
+.admin-wa-main .admin-wa-more-link:hover { color: #183f10; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.admin-wa-main .admin-wa-schedule-card { position: relative; }
+.admin-wa-main .admin-wa-schedule-card::after {
+  content: 'D / 01'; position: absolute; right: 18px; top: 20px;
+  color: #55784b; font: 10px/1.5 'Courier New', monospace;
+}
+.admin-wa-main .admin-wa-schedule-card:nth-child(2)::after { content: 'W / 02'; color: #346e81; }
+.admin-wa-main .admin-wa-schedule-card .admin-wa-panel-title { padding-right: 55px; }
+@media (max-width: 700px) {
+  .admin-wa-instrument-bar { margin: -22px -20px 20px; padding: 10px 14px; gap: 8px; font-size: 9px; }
+  .admin-wa-instrument-mode { display: none; }
+  .admin-wa-radar { right: -95px; top: 55px; width: 260px; height: 260px; opacity: .1; }
+  .admin-wa-instrument-footer { gap: 10px; font-size: 8px; flex-wrap: wrap; }
+}

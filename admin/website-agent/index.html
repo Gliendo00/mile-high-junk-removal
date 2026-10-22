@@ -11,6 +11,7 @@
 <link rel="icon" href="../../images/favicon.png" type="image/png">
 <link rel="stylesheet" href="../../styles.css">
 <link rel="stylesheet" href="../admin.css">
+<link rel="stylesheet" href="./website-agent.css">
 </head>
 <body class="admin-body">
 
@@ -19,32 +20,7 @@
 <main class="admin-main admin-wa-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-  <!-- Website Agent command-center dashboard. A UI-organization pass
-       around the EXISTING Site Improvement Agent (agent/lib/*, Phases
-       1-6) — every number on this page is read from
-       GET /api/admin/bookings?view=agent-dashboard (new, but on the
-       SAME existing Vercel function as every other agent-* view — no new
-       serverless function) and GET ?view=agent-proposals (existing,
-       Supabase-backed). Nothing here changes Agent decision logic, and
-       Approve/Reject still only ever records a decision via the existing
-       PATCH resource:"agent-proposal" endpoint — see
-       admin/agent-proposals.js's own header for that contract, duplicated
-       here rather than shared/imported (same per-page-duplication
-       convention this project already follows throughout admin/*.js).
-
-       Visual redesign pass (2026-10): dropped the dark terminal-console
-       chrome (.admin-wa-console, the black bordered hero, the all-neon-
-       green/monospace treatment) in favor of the SAME light-card look
-       every other admin page already uses (.admin-list-heading page
-       title, white .admin-wa-panel/.admin-wa-metric-card cards, the
-       existing .admin-status-badge/.admin-report-row-outcome-* color
-       tokens) — this page should read as a native CRM page, not an
-       embedded app. Every element id below is unchanged from before this
-       pass (website-agent.js still targets the exact same ids via
-       getElementById), and only three sections moved position in the
-       markup (Needs Your Review now comes right after the header,
-       ahead of the KPIs, per "needs attention" visual-priority feedback);
-       nothing was removed, and no JS/data logic changed. -->
+  <!-- Presentation only; all dashboard IDs and agent actions are preserved. -->
   <div id="wa-loading" class="admin-loading">Loading Website Agent…</div>
   <div id="wa-not-connected" class="admin-empty" style="display:none">
     The Website Agent hasn't logged a run yet. Once it runs for the first time, its status, metrics, and activity will appear here.
@@ -52,11 +28,25 @@
 
   <div id="wa-body" style="display:none">
 
-    <!-- Header / status ------------------------------------------------ -->
+    <div class="admin-wa-hero">
+    <div class="admin-wa-instrument-bar" aria-hidden="true">
+      <span class="admin-wa-instrument-lights"><i></i><i></i><i></i></span>
+      <span>milehigh / website-agent</span>
+      <span class="admin-wa-instrument-mode">MISSION CONTROL</span>
+    </div>
+    <svg class="admin-wa-radar" viewBox="0 0 240 240" fill="none" aria-hidden="true">
+      <circle cx="120" cy="120" r="104"/><circle cx="120" cy="120" r="72"/>
+      <circle cx="120" cy="120" r="38"/>
+      <path d="M120 8v224M8 120h224M120 120l74-74"/>
+      <path class="admin-wa-radar-sector" d="M120 120V16a104 104 0 0 1 74 30Z"/>
+      <circle class="admin-wa-radar-point" cx="165" cy="75" r="4"/>
+      <circle class="admin-wa-radar-point" cx="74" cy="143" r="3"/>
+    </svg>
     <div class="admin-list-heading admin-wa-heading">
       <div>
         <div class="admin-wa-eyebrow">Site Intelligence &amp; Monitoring</div>
-        <h1>Website Agent</h1>
+        <h1>Website Agent<span class="admin-wa-title-mark" aria-hidden="true">&gt;_</span></h1>
+        <p class="admin-wa-intro">Your website. A little sharper, every day.</p>
       </div>
       <div class="admin-wa-status-wrap">
         <div class="admin-wa-status-pill" id="wa-status-pill">
@@ -74,6 +64,8 @@
     <!-- Connection status — system health signals, kept small/subtle so
          they never compete with Needs Your Review or the KPIs below. -->
     <div class="admin-wa-integrations" id="wa-integrations"></div>
+    <div class="admin-wa-instrument-footer" aria-hidden="true"><span>// observe · analyze · improve</span><span>MHJR / SITE OPS</span></div>
+    </div>
 
     <!-- Approval queue — moved directly under the header (was previously
          near the bottom of the page): this is the one thing on the page
