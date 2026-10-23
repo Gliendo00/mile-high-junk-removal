@@ -413,6 +413,35 @@ async function main() {
     }
   });
 
+  await test("freshness hotfix (proposals 0945f338-.../6ad71748-...): a stored row whose proposed_fix/evidence came back with REORDERED keys (simulating a real Postgres jsonb round-trip) still passes freshness and reaches 'deployed' — it is NOT a false needs_review", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      // The exact same semantic fix/evidence as FIX/makeFinding() above,
+      // but with every object's keys in a DIFFERENT order — exactly what
+      // a real jsonb column can hand back for byte-identical content
+      // (jsonb does not preserve object key insertion order). Before the
+      // canonicalizeForFingerprint() hotfix, this alone made the
+      // freshness check see a "material change" that was never real.
+      const reorderedFix = { to: FIX.to, from: FIX.from, file: FIX.file, kind: FIX.kind };
+      const reorderedEvidence = [{ value: "/old-url", field: "href" }];
+      const db = { agent_proposals: [makeClaimedRow({ proposedFix: reorderedFix, finding: { evidence: reorderedEvidence } })] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: () => ({ passed: true, summary: "ok" }),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed", `expected a key-order-only difference to never fail freshness, got: ${result.reason}`);
+    } finally {
+      cleanupFixture();
+    }
+  });
+
   await test("validation failure (re-scan still shows the finding needing review) -> failed, reverted via git checkout, never committed", async () => {
     writeFixture('<a href="/old-url">Link</a>');
     try {

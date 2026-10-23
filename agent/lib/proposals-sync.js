@@ -150,14 +150,50 @@ function latestResearchSnapshot(research) {
   };
 }
 
+// Hotfix (second controlled Phase 14 execution test, proposal
+// 6ad71748-...) — Postgres's `jsonb` type does NOT preserve object key
+// insertion order on storage/retrieval (documented Postgres behavior,
+// not a bug in any driver): a plain JS object written to a jsonb column
+// can come back out with its keys in a different order, even though
+// every key/value pair is byte-identical. `JSON.stringify()` serializes
+// an object's keys in whatever order they currently exist in memory, so
+// two semantically-identical objects with different key order produce
+// two different strings. This is invisible to any test that never
+// round-trips through a real jsonb column (which is exactly why the
+// in-process scan -> sync -> execute simulation used while diagnosing
+// this matched perfectly, while the SAME data, having gone through
+// Supabase for real, did not) — proven directly in
+// tests/agent-proposals-sync.test.js's "JSON key ordering alone never
+// causes a false freshness mismatch" test.
+//
+// Recursively sorts every object's own keys (never array ORDER, which
+// is semantically meaningful) so computeReviewContentFingerprint()
+// below is insensitive to this — the one canonicalization step that was
+// missing for `proposedFix` (evidence's own VALUES go through this too,
+// defensively, even though every current evidence value happens to be
+// a primitive).
+function canonicalizeForFingerprint(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeForFingerprint);
+  if (value && typeof value === "object") {
+    const sorted = {};
+    for (const key of Object.keys(value).sort()) {
+      sorted[key] = canonicalizeForFingerprint(value[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
 // Pre-acceptance hardening (audit finding #3) — see this file's header
 // for the full rationale. A small, deterministic, ORDER-INSENSITIVE
-// (evidence is sorted) summary of exactly the material facts a reviewed
-// proposal was reviewed ON — used to decide whether a reviewed decision
-// may still carry forward, never persisted anywhere itself.
+// (evidence is sorted, and — see canonicalizeForFingerprint() above —
+// immune to a jsonb round-trip reordering any object's keys) summary of
+// exactly the material facts a reviewed proposal was reviewed ON — used
+// to decide whether a reviewed decision may still carry forward, never
+// persisted anywhere itself.
 function computeReviewContentFingerprint(finding) {
   const evidence = (Array.isArray(finding.evidence) ? finding.evidence : [])
-    .map((e) => `${e && e.field}=${JSON.stringify(e && e.value)}`)
+    .map((e) => `${e && e.field}=${JSON.stringify(canonicalizeForFingerprint(e && e.value))}`)
     .sort();
   return JSON.stringify({
     decision: finding.decision,
@@ -174,8 +210,11 @@ function computeReviewContentFingerprint(finding) {
     // `finding.autoFix` here is intentionally read under that name
     // (not `proposedFix`) so this same function keeps working
     // unmodified when called against a DB row shimmed to look like a
-    // finding (see execute-proposal.js's own caller).
-    proposedFix: finding.autoFix || null,
+    // finding (see execute-proposal.js's own caller). Canonicalized
+    // (see canonicalizeForFingerprint() above) so a jsonb round-trip's
+    // key reordering of this object can never falsely look like a
+    // material change.
+    proposedFix: canonicalizeForFingerprint(finding.autoFix || null),
   });
 }
 
@@ -257,4 +296,4 @@ async function syncProposals(findings, runId, options = {}) {
   return { skipped: false, synced, total: toSync.length, errors, statusByKey };
 }
 
-module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot };
+module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot, canonicalizeForFingerprint };
