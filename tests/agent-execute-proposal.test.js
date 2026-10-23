@@ -830,13 +830,38 @@ async function main() {
   });
 
   await test("returns a clear 'not configured' result (never throws) when no Supabase client is available", async () => {
-    // Deliberately no `client` option AND no SUPABASE_URL/SUPABASE_SECRET_KEY
-    // in this test file's own process env (this file never sets them,
-    // unlike tests/agent-proposals-api.test.js's own process) — exercises
-    // the real getServiceClient() returning null.
-    const result = await executeProposal("prop-1", {});
-    assert.strictEqual(result.ok, false);
-    assert.ok(/Supabase not configured/i.test(result.reason));
+    // Process-lifecycle hotfix (diagnosing the GitHub Actions hang on
+    // proposal 6ad71748-...): this test used to just ASSUME
+    // SUPABASE_URL/SUPABASE_SECRET_KEY were absent from this file's own
+    // process env, deliberately no `client` option, to exercise the
+    // real getServiceClient() returning null. That assumption is FALSE
+    // inside the real execute-proposal.yml workflow -- this file is the
+    // ONLY one in the whole 151-file suite that ever calls
+    // getServiceClient() (confirmed by grep across every test file),
+    // and `npm test` there inherits the EXECUTOR's own real
+    // SUPABASE_URL/SUPABASE_SECRET_KEY (no `env:` override anywhere in
+    // the execFileSync -> npm -> scripts/run-tests.js -> spawnSync
+    // chain). Without this explicit save/clear/restore, this exact
+    // test would construct a REAL, LIVE Supabase client pointed at
+    // PRODUCTION and make a genuine network call (loadProposal's
+    // `.from("agent_proposals")...eq("id","prop-1")`) during `npm
+    // test`, inside the one workflow that actually has those
+    // credentials -- a real safety issue independent of whether it was
+    // the specific thing that hung.
+    const savedUrl = process.env.SUPABASE_URL;
+    const savedKey = process.env.SUPABASE_SECRET_KEY;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SECRET_KEY;
+    try {
+      const result = await executeProposal("prop-1", {});
+      assert.strictEqual(result.ok, false);
+      assert.ok(/Supabase not configured/i.test(result.reason));
+    } finally {
+      if (savedUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.SUPABASE_SECRET_KEY;
+      else process.env.SUPABASE_SECRET_KEY = savedKey;
+    }
   });
 
   if (process.exitCode) {
