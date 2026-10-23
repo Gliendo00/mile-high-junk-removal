@@ -20,7 +20,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const config = require("../agent/config");
-const { executeProposal } = require("../agent/lib/execute-proposal");
+const { executeProposal, parseFailedFiles, diffNewFailures } = require("../agent/lib/execute-proposal");
 
 function test(name, fn) {
   return Promise.resolve()
@@ -151,6 +151,21 @@ function alwaysCleanTree() {
   return true;
 }
 
+// A runTests fake that returns a DIFFERENT result on each successive
+// call — executeProposal() now calls it TWICE on the happy path: once
+// for the pre-apply baseline, once for the after-apply comparison (see
+// execute-proposal.js's baseline-aware test gate). Same "repeat the
+// last entry forever once exhausted" convention as queuedGatherFindings
+// above.
+function queuedRunTests(...resultsInOrder) {
+  let i = 0;
+  return () => {
+    const result = resultsInOrder[Math.min(i, resultsInOrder.length - 1)];
+    i += 1;
+    return result;
+  };
+}
+
 function fakeGit(calls, { failOn } = {}) {
   let n = 0;
   return (args) => {
@@ -163,6 +178,40 @@ function fakeGit(calls, { failOn } = {}) {
 }
 
 async function main() {
+  // --- Pure-function unit tests for the baseline-aware test gate's two
+  // helpers (hotfix, proposal 6ad71748-...) -------------------------------
+
+  await test("parseFailedFiles() extracts the exact file list from scripts/run-tests.js's own 'Failed: ...' line", () => {
+    const summary = "PASS - a.test.js\nFAIL - b.test.js\n\n1/2 test files passed.\nFailed: b.test.js, c.test.js";
+    assert.deepStrictEqual(parseFailedFiles(summary), ["b.test.js", "c.test.js"]);
+  });
+
+  await test("parseFailedFiles() returns [] when every file passed (no 'Failed:' line at all)", () => {
+    assert.deepStrictEqual(parseFailedFiles("PASS - a.test.js\n\n2/2 test files passed."), []);
+  });
+
+  await test("parseFailedFiles() returns null (NOT []) when run-tests.js's own completion marker is missing — npm/node errored before it could even print that, discovered as a real Windows execFileSync quirk while verifying this hotfix: an empty [] here would let diffNewFailures() silently treat 'the test runner never actually ran' as 'zero failures, safe to deploy'", () => {
+    assert.strictEqual(parseFailedFiles(""), null);
+    assert.strictEqual(parseFailedFiles("Error: Cannot find module 'something'\n    at ..."), null);
+  });
+
+  await test("diffNewFailures() returns only the files NOT present in the baseline", () => {
+    const baseline = { failedFiles: ["a.test.js", "b.test.js"] };
+    const after = { failedFiles: ["b.test.js", "c.test.js"] };
+    assert.deepStrictEqual(diffNewFailures(baseline, after), ["c.test.js"]);
+  });
+
+  await test("diffNewFailures() returns [] when the after-apply failures are an exact subset of (or equal to) the baseline", () => {
+    assert.deepStrictEqual(diffNewFailures({ failedFiles: ["a.test.js", "b.test.js"] }, { failedFiles: ["a.test.js"] }), []);
+    assert.deepStrictEqual(diffNewFailures({ failedFiles: ["a.test.js"] }, { failedFiles: ["a.test.js"] }), []);
+  });
+
+  await test("diffNewFailures() returns null (not []) when either side lacks a failedFiles array — the caller must fall back to .passed, never silently treat this as 'no new failures'", () => {
+    assert.strictEqual(diffNewFailures({ passed: false }, { failedFiles: ["x.test.js"] }), null);
+    assert.strictEqual(diffNewFailures({ failedFiles: ["x.test.js"] }, { passed: false }), null);
+    assert.strictEqual(diffNewFailures({}, {}), null);
+  });
+
   // --- State-machine regression tests (first real Phase 14 execution,
   // proposal 0945f338-...) — see execute-proposal.js's own header on
   // the hotfix. These five cover exactly the scenarios the fix is
@@ -486,6 +535,141 @@ async function main() {
       assert.ok(/automated tests failed/i.test(result.reason));
       assert.strictEqual(db.agent_proposals[0].execution.testResult.passed, false);
       assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]]);
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Baseline-aware test gate (hotfix, proposal 6ad71748-...): this repo
+  // can carry pre-existing, unrelated test failures (env/DB-dependent),
+  // which used to fail EVERY execution outright at this step regardless
+  // of whether the proposal's own change broke anything — see
+  // execute-proposal.js's own header for the full story.
+  // -----------------------------------------------------------------------
+
+  await test("baseline-aware test gate: the SAME pre-existing failures present before AND after the apply do not block deployment -> deployed", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const preExisting = { passed: false, summary: "Failed: unrelated-a.test.js, unrelated-b.test.js", failedFiles: ["unrelated-a.test.js", "unrelated-b.test.js"] };
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: queuedRunTests(preExisting, preExisting), // identical baseline and after-apply result
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed", `expected unchanged pre-existing failures to never block deployment, got: ${result.reason}`);
+      assert.deepStrictEqual(db.agent_proposals[0].execution.testResult.baselineFailedFiles, ["unrelated-a.test.js", "unrelated-b.test.js"]);
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("baseline-aware test gate: a genuinely NEW failure introduced by the change still blocks deployment -> failed, reverted, naming the new failure", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: queuedRunTests(
+          { passed: false, summary: "Failed: unrelated-a.test.js", failedFiles: ["unrelated-a.test.js"] }, // baseline
+          { passed: false, summary: "Failed: unrelated-a.test.js, newly-broken.test.js", failedFiles: ["unrelated-a.test.js", "newly-broken.test.js"] } // after apply
+        ),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.status, "failed");
+      assert.ok(result.reason.includes("newly-broken.test.js"), `expected the new failure to be named in the reason, got: ${result.reason}`);
+      assert.ok(!result.reason.includes("unrelated-a.test.js"), "the pre-existing baseline failure must not be named as if it were new");
+      assert.deepStrictEqual(db.agent_proposals[0].execution.testResult.newFailures, ["newly-broken.test.js"]);
+      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]], "must revert via git checkout and never reach add/commit/push");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("baseline-aware test gate: a previously-failing file that now PASSES is fine -> deployed", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: queuedRunTests(
+          { passed: false, summary: "Failed: flaky.test.js", failedFiles: ["flaky.test.js"] }, // baseline
+          { passed: true, summary: "All test files passed.", failedFiles: [] } // after apply
+        ),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("baseline-aware test gate: backward-compatible fallback to the plain .passed flag when a runTests double doesn't carry failedFiles at all", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      // Neither call carries `failedFiles` — diffNewFailures() must return
+      // null, and the caller must fall back to testResult.passed exactly
+      // as it did before this hotfix existed.
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: () => ({ passed: true, summary: "ok, no failedFiles field at all" }),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("baseline-aware test gate: if the test runner itself fails to produce ANY trustworthy result on BOTH calls (e.g. npm failing to even launch), that must still block deployment — never silently 'no new failures' just because both sides are equally broken", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      // What defaultRunTests() itself now produces when npm/execFileSync
+      // fails to even spawn (discovered for real on a Windows dev machine
+      // while verifying this hotfix): passed:false, failedFiles:null
+      // (NOT []) because parseFailedFiles() never saw run-tests.js's own
+      // "N/M test files passed." completion marker.
+      const brokenRunnerResult = { passed: false, summary: "", failedFiles: null };
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: queuedRunTests(brokenRunnerResult, brokenRunnerResult),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.status, "failed", "a test-infrastructure failure on both runs must never be treated as 'safe to deploy'");
+      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]], "must still revert, never reach commit/push");
     } finally {
       cleanupFixture();
     }

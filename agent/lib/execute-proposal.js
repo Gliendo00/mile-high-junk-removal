@@ -66,8 +66,18 @@
 //   3. after applying, a fresh re-scan must show the original finding
 //      resolved and no same-type regression on the same page -> failed
 //      (and reverted) if not.
-//   4. the full test suite (`npm test`) must pass -> failed (and
-//      reverted) if not.
+//   4. the full test suite (`npm test`) must introduce NO NEW failing
+//      test file relative to a baseline measured on this SAME checkout
+//      immediately before applying the change (see diffNewFailures()
+//      below) -> failed (and reverted) if it does. Deliberately NOT "the
+//      full suite must be 100% green" — this repo can carry pre-
+//      existing, unrelated failures (env/DB-dependent, nothing to do
+//      with any one proposal) that would otherwise block EVERY
+//      execution outright regardless of whether the proposal's own
+//      change broke anything (exactly what happened to proposal
+//      6ad71748-...). A previously-failing file that now passes is
+//      fine; a file that starts failing ONLY after the apply still
+//      blocks deployment exactly as strictly as before.
 // Only after all four hold does this commit and push to `main`.
 
 const { execFileSync } = require("child_process");
@@ -305,6 +315,20 @@ async function executeProposal(id, options = {}) {
       return { ok: false, status: "needs_review", reason };
     }
 
+    // --- Baseline test run (hotfix, proposal 6ad71748-...) — captured on
+    // THIS clean, still-unapplied checkout, before rewriteHref.apply()
+    // below touches anything. This repo currently carries pre-existing,
+    // unrelated test failures (env/DB-dependent, nothing to do with any
+    // one proposal); `npm test` returning non-zero for those alone used
+    // to fail EVERY execution outright, regardless of whether the
+    // proposal's own change broke anything. See the after-apply
+    // comparison further down for how this baseline is actually used —
+    // never as a static ignorelist (which would risk silently masking a
+    // real regression if the baseline ever drifted stale), but measured
+    // fresh, in this same run, every time.
+    const runTests = options.runTests || defaultRunTests;
+    const baselineTestResult = runTests();
+
     // --- Apply (single-occurrence-safe — rewrite-href.apply() refuses otherwise) ---
     const applyResult = rewriteHref.apply(fix);
     if (!applyResult.changed) {
@@ -333,15 +357,31 @@ async function executeProposal(id, options = {}) {
       return { ok: false, status: "failed", reason };
     }
 
-    // --- Run the test suite — never push a change the suite doesn't pass. ---
-    const runTests = options.runTests || defaultRunTests;
+    // --- Run the test suite again, AFTER the change, and gate on NEW ---
+    // --- failures only — never on the pre-existing baseline above.   ---
+    // A file that was already failing before this proposal was applied
+    // (the baseline) is never blamed on it; a file that starts failing
+    // ONLY after the apply IS blamed on it, exactly as strictly as
+    // before. A previously-failing file that now passes is fine — never
+    // treated as a problem. Identity is preserved at the same file-level
+    // granularity scripts/run-tests.js already reports at (this repo has
+    // no finer-grained, per-assertion test identity to compare).
     const testResult = runTests();
-    if (!testResult.passed) {
+    const newFailures = diffNewFailures(baselineTestResult, testResult);
+    const testsPassed = newFailures === null ? testResult.passed : newFailures.length === 0;
+    if (!testsPassed) {
       revertFile(git, fix.file);
-      const reason = "Automated tests failed after applying the change — reverted, nothing committed or pushed.";
+      const reason = newFailures && newFailures.length
+        ? `New test failures introduced by this change (not present on the baseline measured before applying it): ${newFailures.join(", ")} — reverted, nothing committed or pushed.`
+        : "Automated tests failed after applying the change — reverted, nothing committed or pushed.";
       await markFailed(client, id, execution, reason, {
         validation: { status: "confirmed-resolved" },
-        testResult: { passed: false, summary: truncate(testResult.summary) },
+        testResult: {
+          passed: false,
+          summary: truncate(testResult.summary),
+          baselineFailedFiles: baselineTestResult.failedFiles || null,
+          newFailures: newFailures || null,
+        },
       });
       return { ok: false, status: "failed", reason };
     }
@@ -352,7 +392,11 @@ async function executeProposal(id, options = {}) {
         ...execution,
         appliedAt: new Date().toISOString(),
         validation: { status: "confirmed-resolved" },
-        testResult: { passed: true, summary: truncate(testResult.summary) },
+        testResult: {
+          passed: true,
+          summary: truncate(testResult.summary),
+          baselineFailedFiles: baselineTestResult.failedFiles || null,
+        },
       },
     });
 
@@ -375,7 +419,7 @@ async function executeProposal(id, options = {}) {
       appliedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString(),
       validation: { status: "confirmed-resolved" },
-      testResult: { passed: true, summary: truncate(testResult.summary) },
+      testResult: { passed: true, summary: truncate(testResult.summary), baselineFailedFiles: baselineTestResult.failedFiles || null },
       commitSha,
       filesChanged: [fix.file],
       note: "Pushed to main — Vercel's existing GitHub integration deployment was triggered by this push.",
@@ -399,13 +443,78 @@ async function executeProposal(id, options = {}) {
   }
 }
 
+// scripts/run-tests.js's own main() ALWAYS prints "N/M test files
+// passed." — success or failure — immediately before an optional
+// "Failed: file1, file2, ..." line. The "N/M..." line is the one
+// unambiguous signal that the test runner itself actually ran to
+// completion, as opposed to npm/node crashing before run-tests.js ever
+// got that far (npm itself failing to launch, a missing dependency, a
+// syntax error, etc.). Hardening found during this hotfix's own
+// verification: on at least one real machine, `execFileSync("npm", ...)`
+// can fail to spawn npm at all and throw with EMPTY stdout/stderr —
+// without this check, that would parse as `failedFiles: []` ("zero
+// failures") on BOTH the baseline and after-apply calls, and
+// diffNewFailures() below would see `[] vs []` and call it "no new
+// failures" — silently treating "the test runner never actually ran,
+// twice" as "safe to deploy," which is the opposite of what a test
+// gate is for. Returns `null` whenever that marker line is missing, so
+// defaultRunTests() can report "untrusted" (no failedFiles at all)
+// rather than a misleadingly-empty list.
+function testRunnerActuallyRan(summaryText) {
+  return /\d+\/\d+ test files passed\./.test(summaryText || "");
+}
+
+// scripts/run-tests.js prints exactly one "Failed: file1, file2, ..."
+// line (see that script's own main()) whenever anything failed, and
+// nothing matching that shape otherwise — this is the one stable,
+// already-existing, machine-parseable fact in its output, at exactly
+// the file-level granularity that script's own per-file process
+// isolation actually provides. Returns [] when every file genuinely
+// passed (the runner ran to completion, no "Failed:" line), or `null`
+// when the runner's own completion marker is missing entirely — see
+// testRunnerActuallyRan() above for why that distinction has to exist.
+function parseFailedFiles(summaryText) {
+  if (!testRunnerActuallyRan(summaryText)) return null;
+  const match = /^Failed: (.+)$/m.exec(summaryText || "");
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function defaultRunTests() {
   try {
     const output = execFileSync("npm", ["test"], { cwd: config.SITE_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 20 * 1024 * 1024 });
-    return { passed: true, summary: output };
+    return { passed: true, summary: output, failedFiles: [] };
   } catch (e) {
-    return { passed: false, summary: `${e && e.stdout ? e.stdout : ""}\n${e && e.stderr ? e.stderr : ""}` };
+    const summary = `${e && e.stdout ? e.stdout : ""}\n${e && e.stderr ? e.stderr : ""}`;
+    // parseFailedFiles() correctly returns `null` here (not []) when
+    // npm/node errored before run-tests.js could even print its own
+    // completion marker — diffNewFailures() then falls back to the
+    // plain `.passed` flag (false), so a test infrastructure failure on
+    // EITHER run still blocks deployment, rather than ever being
+    // silently excused as "probably baseline."
+    return { passed: false, summary, failedFiles: parseFailedFiles(summary) };
   }
 }
 
-module.exports = { executeProposal, proposalAsFindingShape, SUPPORTED_FIX_KINDS };
+// Baseline-aware test gate (hotfix, proposal 6ad71748-...) — compares
+// the AFTER-apply run's failing files against the BEFORE-apply
+// baseline's, so a pre-existing, unrelated failure already on `main`
+// can never be blamed on this one proposal, while a file that starts
+// failing ONLY after the apply still blocks deployment exactly as
+// strictly as before. Returns `null` (not an array) when either side
+// didn't carry a `failedFiles` list at all (e.g. a test's injected
+// `options.runTests` double that only returns the simpler
+// `{passed, summary}` shape pre-dating this hotfix) — the caller then
+// falls back to the plain `.passed` flag, so every existing test that
+// never opted into baseline-awareness keeps working unmodified.
+function diffNewFailures(baselineResult, afterResult) {
+  if (!Array.isArray(baselineResult.failedFiles) || !Array.isArray(afterResult.failedFiles)) {
+    return null;
+  }
+  return afterResult.failedFiles.filter((f) => !baselineResult.failedFiles.includes(f));
+}
+
+module.exports = { executeProposal, proposalAsFindingShape, SUPPORTED_FIX_KINDS, parseFailedFiles, diffNewFailures };
