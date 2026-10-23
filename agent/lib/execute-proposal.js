@@ -95,6 +95,40 @@ function truncate(text, max = MAX_STORED_OUTPUT) {
   return s.length > max ? `${s.slice(0, max)}\n…(truncated)` : s;
 }
 
+// Minimal execution logging (hotfix, proposal 6ad71748-...: the second
+// real execution attempt was cancelled by GitHub Actions' own job-level
+// timeout with no visibility at all into WHERE it was stuck — see
+// RUN_TESTS_TIMEOUT_MS's own header). Plain console.log/console.error
+// lines, visible directly in the GitHub Actions step log for
+// `node agent/cli.js --execute-proposal=...` — deliberately just phase
+// name + timing + pass/fail counts, NEVER the full npm test output
+// (that's already captured separately, truncated, in the DB's
+// execution.testResult.summary) and NEVER anything secret-shaped (no
+// env vars, no credentials — there is nothing secret to log here in
+// the first place).
+function logPhase(message) {
+  console.log(`[execute-proposal] ${message}`);
+}
+
+// Wraps one `runTests()` call with start/complete-or-timeout logging.
+// `label` names the phase ("Baseline test suite" / "Post-apply test
+// suite") so a timeout's log line says exactly WHICH of the two runs
+// got stuck, rather than leaving that to be inferred from step timing
+// alone.
+function runTimedTestPhase(label, runTests) {
+  logPhase(`${label}: starting…`);
+  const start = Date.now();
+  const result = runTests();
+  const elapsedS = ((Date.now() - start) / 1000).toFixed(1);
+  if (result && result.timedOut) {
+    logPhase(`${label}: TIMED OUT after ${elapsedS}s — treated as an untrustworthy/failed run (see RUN_TESTS_TIMEOUT_MS).`);
+  } else {
+    const failedCount = Array.isArray(result && result.failedFiles) ? result.failedFiles.length : "unknown";
+    logPhase(`${label}: completed in ${elapsedS}s (passed: ${result && result.passed}, failedFiles: ${failedCount}).`);
+  }
+  return result;
+}
+
 // The real implementation — shells out to the actual `git` binary
 // against the real repo checkout. Tests inject `options.git` (a plain
 // function with this same signature) instead, so executeProposal()'s
@@ -327,9 +361,10 @@ async function executeProposal(id, options = {}) {
     // real regression if the baseline ever drifted stale), but measured
     // fresh, in this same run, every time.
     const runTests = options.runTests || defaultRunTests;
-    const baselineTestResult = runTests();
+    const baselineTestResult = runTimedTestPhase("Baseline test suite", runTests);
 
     // --- Apply (single-occurrence-safe — rewrite-href.apply() refuses otherwise) ---
+    logPhase(`Applying proposed fix to ${fix.file}…`);
     const applyResult = rewriteHref.apply(fix);
     if (!applyResult.changed) {
       const reason = `Could not apply the approved fix: ${applyResult.reason}`;
@@ -366,7 +401,7 @@ async function executeProposal(id, options = {}) {
     // treated as a problem. Identity is preserved at the same file-level
     // granularity scripts/run-tests.js already reports at (this repo has
     // no finer-grained, per-assertion test identity to compare).
-    const testResult = runTests();
+    const testResult = runTimedTestPhase("Post-apply test suite", runTests);
     const newFailures = diffNewFailures(baselineTestResult, testResult);
     const testsPassed = newFailures === null ? testResult.passed : newFailures.length === 0;
     if (!testsPassed) {
@@ -483,19 +518,85 @@ function parseFailedFiles(summaryText) {
     .filter(Boolean);
 }
 
-function defaultRunTests() {
+// Process-lifecycle hardening (proposal 6ad71748-..., second real
+// execution attempt: the GitHub Actions step itself was cancelled —
+// "Error: The operation was canceled." — with the post-job cleanup
+// reporting a large number of orphaned npm test/sh/Node processes).
+// .github/workflows/execute-proposal.yml's job has `timeout-minutes:
+// 20` and no step-level timeout of its own — that message is GitHub
+// Actions' standard wording for a job-level timeout (concurrency's
+// `cancel-in-progress: false` rules out a concurrency-triggered
+// cancellation; see that workflow's own comment). Running the suite
+// TWICE (the baseline-aware gate's own, deliberate behavior) measures
+// at ~65s per full run locally — comfortably within budget even
+// doubled — so a HANG somewhere inside one of the two `npm test`
+// invocations (rather than the doubling itself) is the far more likely
+// explanation for consuming the entire 20-minute ceiling and leaving
+// an accumulated pile of still-running descendants for the runner to
+// clean up. Without a bound, `execFileSync` here waits indefinitely —
+// an external SIGKILL from the job timeout is the ONLY thing that was
+// ever going to stop it, and that's a forced kill of the whole process
+// GROUP, not a clean per-process exit, which is consistent with
+// "orphaned" descendants needing cleanup rather than a graceful one.
+//
+// A bounded `timeout` turns an indefinite hang into a clean, fast,
+// CORRECTLY-GATED failure instead: `execFileSync` sends `killSignal`
+// to the child once this elapses, throws, and the catch branch below
+// already handles that exactly like any other crash — a killed run
+// almost certainly never printed run-tests.js's own "N/M test files
+// passed." completion marker, so parseFailedFiles() already (as of the
+// prior hotfix) returns `null` rather than `[]`, and the baseline-aware
+// gate already treats that as untrustworthy and fails closed. This is
+// defense in depth, not a new safety mechanism — it does not change
+// what counts as a failure, only how long a single run is allowed to
+// hang before being treated as one.
+//
+// 6 minutes is deliberately generous — this repo's real local full-
+// suite runtime is ~65s, and a CI runner that's several times slower
+// still has ample headroom under it — while still leaving comfortable
+// room for the OTHER run (baseline or after-apply, whichever ran
+// first) plus checkout/npm ci/git steps inside the job's own 20-minute
+// ceiling, even in the worst case where both runs each take the full
+// allowance.
+const RUN_TESTS_TIMEOUT_MS = 6 * 60 * 1000;
+
+// `timeoutMs` is a parameter (defaulting to the real constant above)
+// purely so tests can prove the actual kill mechanism works end-to-end
+// against the real `npm test` — without needing to wait out the real
+// 6-minute allowance (see tests/agent-execute-proposal.test.js's own
+// "process-lifecycle hardening" test).
+function defaultRunTests(timeoutMs = RUN_TESTS_TIMEOUT_MS) {
   try {
-    const output = execFileSync("npm", ["test"], { cwd: config.SITE_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 20 * 1024 * 1024 });
+    const output = execFileSync("npm", ["test"], {
+      cwd: config.SITE_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: timeoutMs,
+      killSignal: "SIGTERM",
+    });
     return { passed: true, summary: output, failedFiles: [] };
   } catch (e) {
     const summary = `${e && e.stdout ? e.stdout : ""}\n${e && e.stderr ? e.stderr : ""}`;
     // parseFailedFiles() correctly returns `null` here (not []) when
-    // npm/node errored before run-tests.js could even print its own
-    // completion marker — diffNewFailures() then falls back to the
-    // plain `.passed` flag (false), so a test infrastructure failure on
+    // npm/node errored — or was killed for running past `timeoutMs`
+    // above — before run-tests.js could even print its own completion
+    // marker. diffNewFailures() then falls back to the plain `.passed`
+    // flag (false), so a test infrastructure failure OR a timeout on
     // EITHER run still blocks deployment, rather than ever being
     // silently excused as "probably baseline."
-    return { passed: false, summary, failedFiles: parseFailedFiles(summary) };
+    // Node's execFileSync does NOT reliably set `error.killed` for a
+    // timeout kill (confirmed empirically while building this fix:
+    // `error.killed` is `undefined` even though the child genuinely
+    // was killed) — `error.code === "ETIMEDOUT"` is the actual,
+    // reliable signal, alongside `error.signal` naming which signal
+    // was sent. Exposed as a dedicated `timedOut` boolean (not just
+    // folded into the free-text `summary` string) so a caller like
+    // runTimedTestPhase() below can log/branch on it reliably, without
+    // needing to regex-match human-readable text that could drift.
+    const timedOut = Boolean(e && e.code === "ETIMEDOUT");
+    const reason = timedOut ? ` (killed: timed out after ${Math.round(timeoutMs / 1000)}s, signal ${e.signal || "?"})` : "";
+    return { passed: false, summary: summary + reason, failedFiles: parseFailedFiles(summary), timedOut };
   }
 }
 
@@ -517,4 +618,4 @@ function diffNewFailures(baselineResult, afterResult) {
   return afterResult.failedFiles.filter((f) => !baselineResult.failedFiles.includes(f));
 }
 
-module.exports = { executeProposal, proposalAsFindingShape, SUPPORTED_FIX_KINDS, parseFailedFiles, diffNewFailures };
+module.exports = { executeProposal, proposalAsFindingShape, SUPPORTED_FIX_KINDS, parseFailedFiles, diffNewFailures, defaultRunTests, RUN_TESTS_TIMEOUT_MS };

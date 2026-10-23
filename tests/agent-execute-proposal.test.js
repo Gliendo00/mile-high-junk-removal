@@ -20,7 +20,8 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const config = require("../agent/config");
-const { executeProposal, parseFailedFiles, diffNewFailures } = require("../agent/lib/execute-proposal");
+const { executeProposal, parseFailedFiles, diffNewFailures, RUN_TESTS_TIMEOUT_MS } = require("../agent/lib/execute-proposal");
+const { execFileSync } = require("child_process");
 
 function test(name, fn) {
   return Promise.resolve()
@@ -210,6 +211,135 @@ async function main() {
     assert.strictEqual(diffNewFailures({ passed: false }, { failedFiles: ["x.test.js"] }), null);
     assert.strictEqual(diffNewFailures({ failedFiles: ["x.test.js"] }, { passed: false }), null);
     assert.strictEqual(diffNewFailures({}, {}), null);
+  });
+
+  // -----------------------------------------------------------------------
+  // Process-lifecycle hardening (second real execution attempt on proposal
+  // 6ad71748-...: the GitHub Actions step itself was cancelled — job-level
+  // timeout-minutes exceeded, with a pile of orphaned npm test/sh/Node
+  // processes left for cleanup — not a normal executor result at all).
+  // defaultRunTests() now bounds its `npm test` invocation with an
+  // explicit `timeout`/`killSignal`, so a hang is converted into a clean,
+  // fast, correctly-gated failure instead of consuming the whole job.
+  //
+  // This can't be proven against the real `npm` command in THIS
+  // environment specifically — a separate, unrelated quirk on this
+  // machine makes `execFileSync("npm", ...)` fail to even spawn npm at
+  // all (confirmed while diagnosing this exact issue) — so this proves
+  // the underlying Node.js timeout/killSignal mechanism directly,
+  // against a plain `node` child (portable, works identically on every
+  // platform this repo's CI actually runs on), which is the same
+  // mechanism defaultRunTests() relies on for the real `npm test` call.
+  // -----------------------------------------------------------------------
+
+  await test("process-lifecycle hardening: execFileSync's timeout+killSignal genuinely terminates a hanging child within the configured window (the same mechanism defaultRunTests() now relies on)", () => {
+    const start = Date.now();
+    let caught = null;
+    try {
+      execFileSync(process.execPath, ["-e", "setTimeout(function(){}, 999999)"], {
+        encoding: "utf8",
+        timeout: 300,
+        killSignal: "SIGTERM",
+      });
+    } catch (e) {
+      caught = e;
+    }
+    const elapsedMs = Date.now() - start;
+    assert.ok(caught, "expected the hanging child to be killed and execFileSync to throw");
+    // Node does NOT reliably set error.killed for an execFileSync
+    // timeout kill (confirmed empirically — it was `undefined` here
+    // even though the child genuinely was terminated within the
+    // configured window) — error.code === "ETIMEDOUT" is the actual
+    // reliable signal, which is what defaultRunTests() itself checks.
+    assert.strictEqual(caught.code, "ETIMEDOUT", "expected the error to report code: ETIMEDOUT");
+    assert.strictEqual(caught.signal, "SIGTERM", "expected the configured killSignal to have been used");
+    assert.ok(elapsedMs < 5000, `expected the kill to happen close to the 300ms timeout, took ${elapsedMs}ms`);
+  });
+
+  await test("process-lifecycle hardening: RUN_TESTS_TIMEOUT_MS is generous relative to this repo's real measured full-suite runtime (~65s locally) but still bounded (not Infinity / not absurdly large)", () => {
+    assert.ok(RUN_TESTS_TIMEOUT_MS >= 3 * 60 * 1000, "must leave ample headroom above a slower CI runner's likely runtime");
+    assert.ok(RUN_TESTS_TIMEOUT_MS <= 10 * 60 * 1000, "must still leave room for the OTHER run (baseline or after-apply) plus checkout/npm ci inside the 20-minute job ceiling");
+  });
+
+  // --- Minimal execution logging (hotfix, proposal 6ad71748-...: the
+  // second cancellation left zero visibility into where the job was
+  // actually stuck) — these capture real console.log output through the
+  // REAL executeProposal() call, not a reimplementation, so a drift
+  // between the log-wiring and the actual code can't hide. --------------
+
+  function captureConsoleLog(fn) {
+    const lines = [];
+    const original = console.log;
+    console.log = (msg) => lines.push(String(msg));
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        console.log = original;
+      })
+      .then((result) => ({ result, lines }));
+  }
+
+  await test("execution logging: a normal run logs baseline start/complete, apply start, and post-apply start/complete, in order, with no secrets and no raw per-test output", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const { lines } = await captureConsoleLog(() =>
+        executeProposal("prop-1", {
+          client,
+          isWorkingTreeClean: alwaysCleanTree,
+          gatherFindings: queuedGatherFindings([makeFinding()], []),
+          runTests: queuedRunTests(
+            { passed: false, summary: "Failed: unrelated.test.js", failedFiles: ["unrelated.test.js"] },
+            { passed: false, summary: "Failed: unrelated.test.js", failedFiles: ["unrelated.test.js"] }
+          ),
+          git: fakeGit([]),
+        })
+      );
+
+      const joined = lines.join("\n");
+      const baselineStart = lines.findIndex((l) => /Baseline test suite: starting/.test(l));
+      const baselineDone = lines.findIndex((l) => /Baseline test suite: completed in [\d.]+s \(passed: false, failedFiles: 1\)/.test(l));
+      const applyStart = lines.findIndex((l) => /Applying proposed fix to .*execute-proposal-fixture\.html/.test(l));
+      const postStart = lines.findIndex((l) => /Post-apply test suite: starting/.test(l));
+      const postDone = lines.findIndex((l) => /Post-apply test suite: completed in [\d.]+s \(passed: false, failedFiles: 1\)/.test(l));
+
+      assert.ok(baselineStart !== -1, `missing baseline-start log line in:\n${joined}`);
+      assert.ok(baselineDone !== -1, `missing baseline-complete log line in:\n${joined}`);
+      assert.ok(applyStart !== -1, `missing apply-start log line in:\n${joined}`);
+      assert.ok(postStart !== -1, `missing post-apply-start log line in:\n${joined}`);
+      assert.ok(postDone !== -1, `missing post-apply-complete log line in:\n${joined}`);
+      assert.ok(baselineStart < baselineDone && baselineDone < applyStart && applyStart < postStart && postStart < postDone, `expected strict phase order, got:\n${joined}`);
+
+      // Nothing secret-shaped, and no raw per-test-file PASS/FAIL dump —
+      // only the phase summary lines this module itself constructs.
+      assert.ok(!/SUPABASE_SECRET_KEY|secret|token/i.test(joined), `log output must never resemble a credential:\n${joined}`);
+      assert.ok(!/^PASS - |^FAIL - /m.test(joined), "must not dump raw per-test-file npm-test output into the log");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("execution logging: a timed-out phase is logged as TIMED OUT, labeled with the correct phase name", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const timedOutResult = { passed: false, summary: " (killed: timed out after 360s, signal SIGTERM)", failedFiles: null, timedOut: true };
+      const { lines } = await captureConsoleLog(() =>
+        executeProposal("prop-1", {
+          client,
+          isWorkingTreeClean: alwaysCleanTree,
+          gatherFindings: queuedGatherFindings([makeFinding()], []),
+          runTests: queuedRunTests(timedOutResult, timedOutResult),
+          git: fakeGit([]),
+        })
+      );
+      const joined = lines.join("\n");
+      assert.ok(/Baseline test suite: TIMED OUT after [\d.]+s/.test(joined), `expected a labeled baseline timeout line, got:\n${joined}`);
+    } finally {
+      cleanupFixture();
+    }
   });
 
   // --- State-machine regression tests (first real Phase 14 execution,
