@@ -130,6 +130,13 @@ function auditSeo(pages) {
       // before treating a difference as a mismatch.
       const cleanUrl = cleanUrlMap.get(page.file);
       const expectedUrl = cleanUrl ? config.SITE_ORIGIN + "/" + cleanUrl : page.url;
+      // Phase 14B — the first real (non-test-fixture) finding to carry a
+      // mechanical fix: `from`/`to` below are the exact same two strings
+      // already compared on the line above, never recomputed or
+      // re-derived. Still riskLevel "medium" in risk.js (unchanged by
+      // this), so it never becomes auto-apply-eligible — it reaches
+      // PROPOSE_CHANGE and requires owner Approve + Execute like any
+      // other category-A proposal.
       if (page.canonical.replace(/\/$/, "") !== expectedUrl.replace(/\/$/, "")) {
         findings.push(
           makeFinding({
@@ -141,6 +148,12 @@ function auditSeo(pages) {
               { file: page.file, field: "expectedUrl", value: expectedUrl },
             ],
             recommendation: `Confirm whether this mismatch is intentional; if not, correct the canonical tag.`,
+            autoFix: {
+              kind: "rewrite-href",
+              file: page.file,
+              from: page.canonical,
+              to: expectedUrl,
+            },
           })
         );
       }

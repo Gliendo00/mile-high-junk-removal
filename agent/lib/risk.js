@@ -70,6 +70,11 @@ const RULES = {
   "duplicate-title": { category: "D", riskLevel: "high", tier: "actionable" },
   "duplicate-meta-description": { category: "C", riskLevel: "medium", tier: "opportunity" },
   "missing-canonical": { category: "A", riskLevel: "medium", tier: "actionable" },
+  // Phase 14B — the first real finding type with an autoFix (see
+  // seo-audit.js's auditSeo()). Deliberately stays "medium", not "low":
+  // classify() below requires riskLevel "low" for autoApplyEligible, so
+  // this always reaches PROPOSE_CHANGE and needs owner Approve + Execute
+  // — never silently auto-applied, even though a mechanical fix exists.
   "canonical-mismatch": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-json-ld": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-h1": { category: "A", riskLevel: "medium", tier: "actionable" },
@@ -89,17 +94,6 @@ const RULES = {
   "inconsistent-contact-info": { category: "A", riskLevel: "medium", tier: "actionable" },
   "no-next-action": { category: "B", riskLevel: "low", tier: "observation" },
   "factual-contradiction": { category: "D", riskLevel: "high", tier: "actionable" },
-
-  // Phase 14 — a dedicated, self-contained TEST-ONLY finding type (see
-  // agent/lib/execution-test-fixture-audit.js's header). Deliberately
-  // riskLevel "medium" (not "low") despite carrying an autoFix, so
-  // classify() below never marks it autoApplyEligible — it always
-  // reaches decision PROPOSE_CHANGE and is synced to agent_proposals
-  // like a real human-reviewed proposal, which is the entire point: no
-  // REAL rewrite-href-capable finding type can do that today (every one
-  // of them is low/actionable, which short-circuits straight to
-  // APPLY_SAFE_FIX — see that module's header for the full explanation).
-  "execution-pipeline-test-fixture": { category: "A", riskLevel: "medium", tier: "actionable" },
 };
 
 function classify(finding) {

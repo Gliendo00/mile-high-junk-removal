@@ -99,40 +99,51 @@ test("first-party evidence has no field that could represent 'create this page' 
   assert.strictEqual(typeof evidence.scope.value, "string");
 });
 
-test("the auto-apply whitelist is unchanged by Phase 6 — `autoFix` is still only ever attached by link-audit.js, to the same two finding types, and autoApplyEligible still requires riskLevel low + tier actionable on top of that", () => {
+test("the auto-apply whitelist is unchanged by Phase 6 — link-audit.js still attaches `autoFix` to exactly the same two finding types, and autoApplyEligible still requires riskLevel low + tier actionable on top of that", () => {
   const fs = require("fs");
   const path = require("path");
   // autoApplyEligible = Boolean(finding.autoFix) && riskLevel==="low" && tier==="actionable"
   // (risk.js) — riskLevel/tier alone (several finding types share that
   // combination) is NOT sufficient; only a finding that ALSO carries a
-  // mechanical `autoFix` descriptor can ever reach APPLY_SAFE_FIX. Only
-  // agent/lib/link-audit.js attaches `autoFix:` anywhere in this codebase
-  // — confirm that stays true and stays scoped to exactly these two
-  // finding types, so Phase 6 could not have silently widened it.
-  //
-  // Phase 14 — execution-test-fixture-audit.js is a deliberate, narrow
-  // exception (see that file's own header): it attaches `autoFix:` to
-  // exactly one brand-new, test-only finding type so the Phase 14
-  // execution engine has something real to be tested against. It is
-  // allowlisted here BY NAME (not just by count) so this test still
-  // fails if a THIRD file — or a different type within either of these
-  // two files — ever attaches `autoFix:` unnoticed, and the assertion
-  // below additionally confirms that test-only type stays permanently
-  // ineligible for auto-apply (riskLevel medium, not low).
+  // mechanical `autoFix` descriptor can ever reach APPLY_SAFE_FIX. The
+  // COMPLETE list of files allowed to attach `autoFix:` at all is
+  // asserted by the Phase 14B test below (now two files, not one); this
+  // test's own job is narrower — confirm link-audit.js itself still
+  // attaches it to exactly these same two finding types, unwidened.
+  const libDir = path.join(__dirname, "..", "agent", "lib");
+  const linkAuditSource = fs.readFileSync(path.join(libDir, "link-audit.js"), "utf8");
+  const typesWithAutoFix = [...linkAuditSource.matchAll(/type:\s*"([a-z-]+)"[\s\S]{0,800}?autoFix:\s*\{/g)].map((m) => m[1]);
+  assert.deepStrictEqual(new Set(typesWithAutoFix), new Set(["redirect-hop-internal-link", "broken-internal-link-fixable"]));
+});
+
+test("Phase 14B — seo-audit.js is a deliberate, narrow SECOND file allowed to attach `autoFix`, to exactly one REAL finding type (canonical-mismatch), and that type must stay permanently ineligible for auto-apply", () => {
+  const fs = require("fs");
+  const path = require("path");
+  // Named explicitly (not just by count) — this is now the ONE place
+  // asserting the complete file list, so this test fails if a THIRD
+  // file, or a different type within either file, ever attaches
+  // `autoFix:` unnoticed.
   const libDir = path.join(__dirname, "..", "agent", "lib");
   const filesWithAutoFix = fs.readdirSync(libDir).filter((f) => {
     if (!f.endsWith(".js")) return false;
     const src = fs.readFileSync(path.join(libDir, f), "utf8");
     return /autoFix:\s*\{/.test(src);
   });
-  assert.deepStrictEqual([...filesWithAutoFix].sort(), ["execution-test-fixture-audit.js", "link-audit.js"]);
+  assert.deepStrictEqual([...filesWithAutoFix].sort(), ["link-audit.js", "seo-audit.js"]);
 
-  const linkAuditSource = fs.readFileSync(path.join(libDir, "link-audit.js"), "utf8");
-  const typesWithAutoFix = [...linkAuditSource.matchAll(/type:\s*"([a-z-]+)"[\s\S]{0,800}?autoFix:\s*\{/g)].map((m) => m[1]);
-  assert.deepStrictEqual(new Set(typesWithAutoFix), new Set(["redirect-hop-internal-link", "broken-internal-link-fixable"]));
+  const seoAuditSource = fs.readFileSync(path.join(libDir, "seo-audit.js"), "utf8");
+  const typesWithAutoFix = [...seoAuditSource.matchAll(/type:\s*"([a-z-]+)"[\s\S]{0,800}?autoFix:\s*\{/g)].map((m) => m[1]);
+  assert.deepStrictEqual(new Set(typesWithAutoFix), new Set(["canonical-mismatch"]));
 
   const { RULES } = require("../agent/lib/risk");
-  assert.strictEqual(RULES["execution-pipeline-test-fixture"].riskLevel, "medium", "the Phase 14 test-only finding type must never be riskLevel \"low\", or it would become autoApplyEligible");
+  assert.strictEqual(RULES["canonical-mismatch"].riskLevel, "medium", "canonical-mismatch must never be riskLevel \"low\", or it would become autoApplyEligible");
+
+  const { classify } = require("../agent/lib/risk");
+  const classified = classify({
+    type: "canonical-mismatch",
+    autoFix: { kind: "rewrite-href", file: "sample.html", from: "https://www.milehighjunkremoval.net/wrong.html", to: "https://www.milehighjunkremoval.net/sample.html" },
+  });
+  assert.strictEqual(classified.autoApplyEligible, false, "canonical-mismatch must never be autoApplyEligible even though it now carries a real autoFix");
 });
 
 // -----------------------------------------------------------------------
