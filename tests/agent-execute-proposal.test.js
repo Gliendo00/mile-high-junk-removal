@@ -1111,6 +1111,164 @@ async function main() {
     }
   });
 
+  // -----------------------------------------------------------------------
+  // Phase 14B — canonical-mismatch regression coverage. The executor
+  // itself needed ZERO changes for this (SUPPORTED_FIX_KINDS is still
+  // just ["rewrite-href"], and rewrite-href.js's apply() already does a
+  // literal, single-occurrence href="X" -> href="Y" replace regardless
+  // of which tag that href belongs to) — these tests prove that reuse is
+  // actually safe against a <link rel="canonical"> tag, not just an <a>,
+  // using a synthetic canonical-mismatch-shaped proposal, exactly as the
+  // real seo-audit.js/risk.js wiring (tests/agent-seo-and-consistency-
+  // audit.test.js, tests/agent-firstparty-safety.test.js) now produces.
+  // -----------------------------------------------------------------------
+
+  const CANONICAL_FIX = {
+    kind: "rewrite-href",
+    file: FIXTURE_REL,
+    from: "https://www.milehighjunkremoval.net/wrong-canonical.html",
+    to: "https://www.milehighjunkremoval.net/execute-proposal-fixture.html",
+  };
+
+  function makeCanonicalFinding(overrides = {}) {
+    return {
+      key: `canonical-mismatch::${FIXTURE_REL}`,
+      type: "canonical-mismatch",
+      decision: "PROPOSE_CHANGE",
+      summary: `${FIXTURE_REL}'s canonical tag (${CANONICAL_FIX.from}) does not match its expected URL (${CANONICAL_FIX.to}).`,
+      evidence: [
+        { file: FIXTURE_REL, field: "canonical", value: CANONICAL_FIX.from },
+        { file: FIXTURE_REL, field: "expectedUrl", value: CANONICAL_FIX.to },
+      ],
+      research: [],
+      pages: [FIXTURE_REL],
+      autoFix: CANONICAL_FIX,
+      ...overrides,
+    };
+  }
+
+  function makeCanonicalClaimedRow(overrides = {}) {
+    const f = makeCanonicalFinding(overrides.finding || {});
+    return {
+      id: "prop-1",
+      finding_key: f.key,
+      finding_type: f.type,
+      decision: f.decision,
+      summary: f.summary,
+      evidence: f.evidence,
+      research: f.research,
+      pages: f.pages,
+      proposed_fix: overrides.proposedFix !== undefined ? overrides.proposedFix : CANONICAL_FIX,
+      status: overrides.status || "applying",
+      updated_at: overrides.updatedAt || "2026-01-01T00:00:00.000Z",
+      execution: overrides.execution !== undefined
+        ? overrides.execution
+        : { requestedAt: "2026-01-01T00:00:00.000Z", requestedBy: "owner@milehighjunkremoval.net", startedAt: null },
+      ...overrides.row,
+    };
+  }
+
+  await test("canonical-mismatch: successful replacement of the single canonical href -> deployed, with unrelated markup byte-for-byte unchanged and the re-scan confirming the finding is resolved", async () => {
+    const before = '<html><head><title>Fixture</title><link rel="canonical" href="https://www.milehighjunkremoval.net/wrong-canonical.html"><meta name="description" content="unrelated content that must not change"></head><body><p>unrelated body content, untouched</p></body></html>';
+    writeFixture(before);
+    try {
+      const db = { agent_proposals: [makeCanonicalClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings(
+          [makeCanonicalFinding()], // pre-apply freshness check
+          [] // post-apply re-scan: the mismatch is gone -> "confirmed-resolved"
+        ),
+        runTests: () => ({ passed: true, summary: "147/147 test files passed." }),
+        git: fakeGit(gitCalls),
+      });
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed");
+
+      const updated = fs.readFileSync(FIXTURE_ABS, "utf8");
+      assert.ok(updated.includes(`href="${CANONICAL_FIX.to}"`), "the canonical href must have been rewritten to the expected URL");
+      assert.ok(!updated.includes(CANONICAL_FIX.from), "the wrong canonical URL must no longer appear anywhere");
+      // Every other byte on the page is untouched — the ONLY difference
+      // from `before` is the one href value itself.
+      assert.strictEqual(updated, before.replace(CANONICAL_FIX.from, CANONICAL_FIX.to));
+
+      const row = db.agent_proposals[0];
+      assert.strictEqual(row.status, "deployed");
+      assert.strictEqual(row.execution.validation.status, "confirmed-resolved");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("canonical-mismatch: the wrong canonical href is already gone from the file (zero occurrences) -> refuses, needs_review, nothing written", async () => {
+    // The approved fix's `from` string simply isn't in the file anymore
+    // (e.g. hand-edited since approval) — same pattern as the existing
+    // "zero occurrences" link-href test above, now proven for a
+    // canonical tag.
+    writeFixture('<link rel="canonical" href="https://www.milehighjunkremoval.net/already-correct.html">');
+    try {
+      const db = { agent_proposals: [makeCanonicalClaimedRow()] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeCanonicalFinding()]),
+        runTests: () => ({ passed: true, summary: "ok" }),
+      });
+      assert.strictEqual(result.status, "needs_review");
+      assert.ok(/could not apply the approved fix/i.test(result.reason));
+      assert.strictEqual(fs.readFileSync(FIXTURE_ABS, "utf8"), '<link rel="canonical" href="https://www.milehighjunkremoval.net/already-correct.html">', "the file must be completely untouched when the fix refuses");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("canonical-mismatch: the wrong canonical href appears MORE THAN ONCE in the file -> refuses rather than guessing which to rewrite, nothing written", async () => {
+    const duplicated = `<link rel="canonical" href="${CANONICAL_FIX.from}"><link rel="alternate" href="${CANONICAL_FIX.from}">`;
+    writeFixture(duplicated);
+    try {
+      const db = { agent_proposals: [makeCanonicalClaimedRow()] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeCanonicalFinding()]),
+        runTests: () => ({ passed: true, summary: "ok" }),
+      });
+      assert.strictEqual(result.status, "needs_review");
+      assert.ok(/could not apply the approved fix/i.test(result.reason));
+      assert.strictEqual(fs.readFileSync(FIXTURE_ABS, "utf8"), duplicated, "the file must be completely untouched when the fix refuses to guess between duplicate matches");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("canonical-mismatch: a fresh re-scan shows the finding has drifted (expectedUrl changed) since approval -> refuses as stale, nothing written", async () => {
+    writeFixture(`<link rel="canonical" href="${CANONICAL_FIX.from}">`);
+    try {
+      const db = { agent_proposals: [makeCanonicalClaimedRow()] };
+      const client = makeFakeClient(db);
+      const drifted = makeCanonicalFinding({
+        summary: `${FIXTURE_REL}'s canonical tag (${CANONICAL_FIX.from}) does not match its expected URL (https://www.milehighjunkremoval.net/a-completely-different-expected-url.html).`,
+      });
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([drifted]),
+        runTests: () => ({ passed: true, summary: "ok" }),
+      });
+      assert.strictEqual(result.status, "needs_review");
+      assert.ok(/site has changed since this proposal was approved/i.test(result.reason));
+      assert.strictEqual(fs.readFileSync(FIXTURE_ABS, "utf8"), `<link rel="canonical" href="${CANONICAL_FIX.from}">`, "the file must be completely untouched on a freshness refusal");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
   if (process.exitCode) {
     process.exit(process.exitCode);
   }

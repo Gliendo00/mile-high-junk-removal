@@ -98,6 +98,61 @@ test("canonical mismatch is flagged when it points at a different URL", () => {
   assert.ok(findings.some((f) => f.type === "canonical-mismatch"));
 });
 
+test("Phase 14B: an ordinary canonical mismatch carries an autoFix whose `from`/`to` are the EXACT strings already in the finding's own evidence — never recomputed or re-derived", () => {
+  const findings = auditSeo([
+    page({ file: "sample.html", url: "https://www.milehighjunkremoval.net/sample.html", canonical: "https://www.milehighjunkremoval.net/other.html" }),
+  ]);
+  const finding = findings.find((f) => f.type === "canonical-mismatch");
+  assert.ok(finding, "expected a canonical-mismatch finding");
+  const canonicalEvidence = finding.evidence.find((e) => e.field === "canonical");
+  const expectedUrlEvidence = finding.evidence.find((e) => e.field === "expectedUrl");
+  assert.ok(finding.autoFix, "expected an autoFix on the canonical-mismatch finding");
+  assert.strictEqual(finding.autoFix.kind, "rewrite-href");
+  assert.strictEqual(finding.autoFix.file, "sample.html");
+  // autoFix.from must exactly equal the canonical actually found in the page.
+  assert.strictEqual(finding.autoFix.from, canonicalEvidence.value);
+  assert.strictEqual(finding.autoFix.from, "https://www.milehighjunkremoval.net/other.html");
+  // autoFix.to must exactly equal the audit's own computed expectedUrl.
+  assert.strictEqual(finding.autoFix.to, expectedUrlEvidence.value);
+  assert.strictEqual(finding.autoFix.to, "https://www.milehighjunkremoval.net/sample.html");
+});
+
+test("Phase 14B: canonical mismatch against a clean-URL (vercel.json rewrite) page computes the autoFix target from the REAL rewrite map, not the page's own .html filename", () => {
+  // privacy-policy.html -> /privacy-policy is a real rewrite in this
+  // repo's own vercel.json (see link-audit.js's buildRewriteCleanUrlMap
+  // header) — using the real file exercises the real map, not a fixture
+  // of one.
+  const findings = auditSeo([
+    page({
+      file: "privacy-policy.html",
+      url: "https://www.milehighjunkremoval.net/privacy-policy.html",
+      canonical: "https://www.milehighjunkremoval.net/privacy-policy.html", // wrong: should be the clean URL
+    }),
+  ]);
+  const finding = findings.find((f) => f.type === "canonical-mismatch");
+  assert.ok(finding, "expected a canonical-mismatch finding for the clean-URL case");
+  assert.strictEqual(finding.autoFix.from, "https://www.milehighjunkremoval.net/privacy-policy.html");
+  assert.strictEqual(finding.autoFix.to, "https://www.milehighjunkremoval.net/privacy-policy");
+  const expectedUrlEvidence = finding.evidence.find((e) => e.field === "expectedUrl");
+  assert.strictEqual(finding.autoFix.to, expectedUrlEvidence.value);
+});
+
+test("Phase 14B: a correct canonical (including the clean-URL case) produces NO canonical-mismatch finding at all", () => {
+  const ordinary = auditSeo([
+    page({ file: "sample.html", url: "https://www.milehighjunkremoval.net/sample.html", canonical: "https://www.milehighjunkremoval.net/sample.html" }),
+  ]);
+  assert.ok(!ordinary.some((f) => f.type === "canonical-mismatch"));
+
+  const cleanUrlCorrect = auditSeo([
+    page({
+      file: "privacy-policy.html",
+      url: "https://www.milehighjunkremoval.net/privacy-policy.html",
+      canonical: "https://www.milehighjunkremoval.net/privacy-policy", // correct: the clean URL
+    }),
+  ]);
+  assert.ok(!cleanUrlCorrect.some((f) => f.type === "canonical-mismatch"));
+});
+
 test("multiple h1s are flagged", () => {
   const findings = auditSeo([page({ h1s: ["One", "Two"] })]);
   assert.ok(findings.some((f) => f.type === "multiple-h1"));

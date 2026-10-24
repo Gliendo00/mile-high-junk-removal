@@ -70,6 +70,11 @@ const RULES = {
   "duplicate-title": { category: "D", riskLevel: "high", tier: "actionable" },
   "duplicate-meta-description": { category: "C", riskLevel: "medium", tier: "opportunity" },
   "missing-canonical": { category: "A", riskLevel: "medium", tier: "actionable" },
+  // Phase 14B — the first real finding type with an autoFix (see
+  // seo-audit.js's auditSeo()). Deliberately stays "medium", not "low":
+  // classify() below requires riskLevel "low" for autoApplyEligible, so
+  // this always reaches PROPOSE_CHANGE and needs owner Approve + Execute
+  // — never silently auto-applied, even though a mechanical fix exists.
   "canonical-mismatch": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-json-ld": { category: "A", riskLevel: "medium", tier: "actionable" },
   "missing-h1": { category: "A", riskLevel: "medium", tier: "actionable" },
