@@ -20,8 +20,40 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const config = require("../agent/config");
-const { executeProposal, parseFailedFiles, diffNewFailures, RUN_TESTS_TIMEOUT_MS, classifyPorcelainStatus } = require("../agent/lib/execute-proposal");
-const { execFileSync } = require("child_process");
+const childProcess = require("child_process");
+// The ORIGINAL, unpatched execFileSync — this file's own "process-
+// lifecycle hardening" tests below call this directly (against a plain
+// `node` child, never "npm") to exercise the raw timeout/killSignal
+// mechanism, and must keep doing so unguarded.
+const execFileSync = childProcess.execFileSync;
+
+// Recursion-safety net (hotfix: a test below used to omit its own
+// `runTests` stub while still reaching the baseline test phase — see
+// that test's own comment for the full story). Patches the SHARED
+// child_process module's execFileSync BEFORE requiring agent/lib/
+// execute-proposal.js below, so THAT module's own `const { execFileSync }
+// = require("child_process")` binds to this guarded version instead of
+// the real one. If any executor unit test in this file ever reaches
+// defaultRunTests() without an injected `runTests` stub, it would shell
+// out to a REAL `execFileSync("npm", ["test"], ...)` — on Ubuntu CI
+// (unlike this Windows dev machine, where that spawn simply fails to
+// launch) that recursively re-launches the ENTIRE suite, including this
+// very file, from inside its own already-running test process. This
+// makes that fail loudly and immediately instead of silently recursing;
+// see the dedicated regression test further down that proves it fires.
+// Never affects production: agent/lib/execute-proposal.js itself is
+// completely unchanged — this patches only this test process's own
+// child_process module instance.
+childProcess.execFileSync = function guardedExecFileSync(file, args) {
+  if (file === "npm" && Array.isArray(args) && args[0] === "test") {
+    throw new Error(
+      "SAFETY NET (tests/agent-execute-proposal.test.js): a test reached execute-proposal.js's defaultRunTests() without an injected `runTests` stub, which would have shelled out to a REAL `npm test` -- recursively re-running the entire suite from inside this already-running test file. Every executor unit test here must inject an explicit `runTests` stub if it reaches the baseline test phase."
+    );
+  }
+  return execFileSync.apply(this, arguments);
+};
+
+const { executeProposal, parseFailedFiles, diffNewFailures, RUN_TESTS_TIMEOUT_MS, classifyPorcelainStatus, defaultRunTests } = require("../agent/lib/execute-proposal");
 
 function test(name, fn) {
   return Promise.resolve()
@@ -688,12 +720,63 @@ async function main() {
     assert.ok(/site has changed since this proposal was approved/i.test(result.reason));
   });
 
+  await test("safety net: the guard patched onto child_process.execFileSync at the top of this file throws immediately for an `npm test` invocation, before any real process is ever spawned", () => {
+    assert.throws(() => childProcess.execFileSync("npm", ["test"]), /SAFETY NET/, "expected the guard to intercept this exact {file, args} shape, which is precisely what defaultRunTests() itself calls");
+    // The guard is narrowly scoped to "npm"+"test" only — anything else
+    // (a different command, or different args) must fall straight
+    // through to the real, original execFileSync, unguarded. Proven
+    // against a plain `node` child (never "npm" — see this file's own
+    // "process-lifecycle hardening" tests for why `npm` itself can't be
+    // relied on to spawn in every environment, e.g. a real, pre-existing
+    // quirk on this Windows dev machine).
+    const output = childProcess.execFileSync(process.execPath, ["-e", "console.log('unguarded-passthrough')"], { encoding: "utf8" });
+    assert.strictEqual(output.trim(), "unguarded-passthrough");
+  });
+
+  await test("safety net: defaultRunTests() itself (the exact function execute-proposal.js calls when no `runTests` stub is injected) is wired to the SAME guarded execFileSync — it never throws, hangs, or recurses; it reports a normal caught-failure result instead, exactly like any other npm/execFileSync error it already handles", () => {
+    // A direct unit test of defaultRunTests() itself (bypassing
+    // executeProposal() entirely — no fixture, no git, no DB fake
+    // needed) proves the guard registered at the top of this file
+    // (patching child_process.execFileSync BEFORE execute-proposal.js
+    // was ever required) actually intercepts the SAME execFileSync
+    // binding execute-proposal.js's own module captured internally —
+    // not merely a separate reference this test file happens to hold.
+    // If this ever regressed (the require order changed, or the patch
+    // were removed), this call would instead actually shell out to a
+    // real, recursive `npm test` and this assertion would time out /
+    // never return quickly — the short 5s timeoutMs here is purely a
+    // safety margin for THAT failure mode, not something the guarded
+    // path is ever expected to need.
+    const result = defaultRunTests(5000);
+    assert.strictEqual(result.passed, false);
+  });
+
   await test("needs_review when the exact fix text no longer appears exactly once in the file (zero occurrences)", async () => {
     writeFixture('<a href="/somewhere-else">Link</a>');
     try {
       const db = { agent_proposals: [makeClaimedRow()] };
       const client = makeFakeClient(db);
-      const result = await executeProposal("prop-1", { client, isWorkingTreeClean: alwaysCleanTree, gatherFindings: queuedGatherFindings([makeFinding()]) });
+      // Recursion-safety hotfix: this proposal's freshness/fingerprint
+      // checks legitimately pass (makeFinding() matches the claimed row),
+      // so execution genuinely reaches the baseline test phase BEFORE
+      // rewriteHref.apply() ever runs and fails on the zero-occurrences
+      // fixture below — this test was missing an injected `runTests`,
+      // which meant it silently fell through to the REAL defaultRunTests()
+      // (a real `execFileSync("npm", ["test"], ...)`). On this Windows dev
+      // machine that spawn fails near-instantly (a known quirk — see
+      // defaultRunTests()'s own header), which masked it, but on Ubuntu
+      // CI `npm` spawns fine, so this one test — itself already running as
+      // a child of the real `npm test` -> scripts/run-tests.js suite —
+      // would recursively re-launch the ENTIRE suite (itself included)
+      // from inside its own process. See the regression test below
+      // ("no executor unit test ever falls through...") that asserts this
+      // can never silently recur.
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeFinding()]),
+        runTests: () => ({ passed: true, summary: "ok" }),
+      });
       assert.strictEqual(result.status, "needs_review");
       assert.ok(/could not apply the approved fix/i.test(result.reason));
     } finally {
