@@ -363,6 +363,34 @@ async function executeProposal(id, options = {}) {
     const runTests = options.runTests || defaultRunTests;
     const baselineTestResult = runTimedTestPhase("Baseline test suite", runTests);
 
+    // --- Post-baseline cleanliness re-check (hotfix, proposal 6ad71748-...,
+    // second diagnosis pass) — the earlier isWorkingTreeClean() check
+    // above only proves the checkout was clean BEFORE the baseline test
+    // run started. Some tests under tests/*.test.js temporarily rename
+    // real, git-tracked files aside for the duration of one test and
+    // restore them afterward (e.g. agent-runner-resume.test.js's
+    // withResearchResultsCleared()) — a real, now-fixed CI-only bug
+    // where a SIGTERM-killed slow test file left that restoration
+    // incomplete, permanently stranding real repo files and corrupting
+    // every later comparison against this checkout. The test suite's
+    // own crash-safety is now hardened against exactly that, but this
+    // check is the orchestrator's own backstop: if baseline testing
+    // leaves ANY unexpected diff behind — from this or any future test,
+    // known or not — the checkout this run is about to apply the fix
+    // onto, and about to compare the post-apply suite against, is no
+    // longer the trustworthy starting point the whole baseline-aware
+    // gate assumes. Abort here, before ever touching the proposal's
+    // file, rather than risk either a false regression (a test now
+    // fails only because of leftover baseline pollution, not this
+    // proposal's change) or a false pass. Nothing has been applied yet,
+    // so there is nothing to revert — this fails exactly like the
+    // earlier working-tree check, never weakening it.
+    if (!isWorkingTreeClean()) {
+      const reason = "The working tree is no longer clean after the baseline test run (something under tests/ mutated real, git-tracked files during testing and did not fully restore them) — refusing to apply the proposal onto an untrustworthy baseline. Nothing applied.";
+      await markNeedsReview(client, id, execution, reason);
+      return { ok: false, status: "needs_review", reason };
+    }
+
     // --- Apply (single-occurrence-safe — rewrite-href.apply() refuses otherwise) ---
     logPhase(`Applying proposed fix to ${fix.file}…`);
     const applyResult = rewriteHref.apply(fix);

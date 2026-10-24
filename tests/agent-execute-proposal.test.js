@@ -152,6 +152,21 @@ function alwaysCleanTree() {
   return true;
 }
 
+// A isWorkingTreeClean fake that returns a DIFFERENT result on each
+// successive call — executeProposal() now calls it TWICE on the happy
+// path: once before the baseline test run, once after it (see the
+// post-baseline cleanliness re-check hotfix). Same "repeat the last
+// entry forever once exhausted" convention as queuedGatherFindings/
+// queuedRunTests above.
+function queuedIsWorkingTreeClean(...resultsInOrder) {
+  let i = 0;
+  return () => {
+    const result = resultsInOrder[Math.min(i, resultsInOrder.length - 1)];
+    i += 1;
+    return result;
+  };
+}
+
 // A runTests fake that returns a DIFFERENT result on each successive
 // call — executeProposal() now calls it TWICE on the happy path: once
 // for the pre-apply baseline, once for the after-apply comparison (see
@@ -497,6 +512,61 @@ async function main() {
     const result = await executeProposal("prop-1", { client, isWorkingTreeClean: () => false });
     assert.strictEqual(result.status, "needs_review");
     assert.ok(/working tree is not clean/i.test(result.reason));
+  });
+
+  // -----------------------------------------------------------------------
+  // Post-baseline cleanliness re-check (defense-in-depth hotfix,
+  // diagnosing the SAME CI-only divergence the test-suite crash-safety
+  // fix in agent-runner-resume.test.js/agent-runner-rotation-evidence.
+  // test.js closes at its source): if the baseline `npm test` run itself
+  // leaves the checkout dirty — a test's own crash-safety gap, or any
+  // future one — this orchestrator must refuse to proceed, rather than
+  // apply the fix and run a post-apply comparison against an
+  // untrustworthy starting point.
+  // -----------------------------------------------------------------------
+
+  await test("needs_review when the working tree is clean BEFORE the baseline run but dirty AFTER it (baseline testing itself mutated the checkout)", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: queuedIsWorkingTreeClean(true, false),
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: () => ({ passed: true, summary: "ok" }),
+        git: fakeGit(gitCalls),
+      });
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.status, "needs_review");
+      assert.ok(/no longer clean after the baseline test run/i.test(result.reason), `expected a baseline-specific reason, got: ${result.reason}`);
+      assert.strictEqual(db.agent_proposals[0].status, "needs_review");
+      // Nothing was ever applied — the fixture file and git must both be untouched.
+      assert.strictEqual(fs.readFileSync(FIXTURE_ABS, "utf8"), '<a href="/old-url">Link</a>');
+      assert.deepStrictEqual(gitCalls, [], "must never apply, revert, or touch git when aborting before the apply step");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("a clean tree both before AND after the baseline run proceeds normally -> deployed (the re-check is not a false positive on the happy path)", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: queuedIsWorkingTreeClean(true, true),
+        gatherFindings: queuedGatherFindings([makeFinding()], []),
+        runTests: () => ({ passed: true, summary: "ok" }),
+        git: fakeGit([]),
+      });
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.status, "deployed");
+    } finally {
+      cleanupFixture();
+    }
   });
 
   await test("needs_review when the original finding no longer appears in a fresh scan", async () => {
