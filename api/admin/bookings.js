@@ -160,9 +160,8 @@ module.exports = async (req, res) => {
   // configured-flags, cumulative telemetry counters, the latest/daily/
   // weekly run summaries, a flattened recent-activity feed, and whatever
   // real first-party search evidence the agent has actually gathered (see
-  // handleAgentDashboard()'s own header below). Same "never touches
-  // Supabase for a query, only checks whether it's configured" posture as
-  // the CRM DATA/PROPOSAL SYNC indicators need — no new Vercel function,
+  // handleAgentDashboard()'s own header below). Stored search snapshots
+  // are read from Supabase after admin authentication — no new Vercel function,
   // same file that already hosts every other agent-* view.
   if (req.query.view === "agent-dashboard") {
     return handleAgentDashboard(req, res);
@@ -725,45 +724,8 @@ function handleGetAgentReport(req, res) {
 }
 
 // ---------------------------------------------------------------------
-// Website Agent dashboard — ?view=agent-dashboard
-//
-// A UI-consolidation endpoint, not a new subsystem: everything below is
-// read straight from agent/history/log.ndjson (same file/require path as
-// agent-activity/agent-reports above) or is a pure env-var "is this
-// integration configured" check (no network call, no secret ever
-// returned) — see agent/lib/search-console-client.js's/
-// agent/lib/ga4-client.js's own isXConfigured(). Nothing here changes
-// Agent decision logic, and nothing here queries Supabase (the one
-// Supabase-backed number this page needs — live "needs review" proposal
-// count — is read client-side from the existing ?view=agent-proposals
-// response, not duplicated here).
-//
-// `metrics` are cumulative counters over the ENTIRE persisted run history
-// (deduped by runId — see history.latestByRunId()), i.e. real totals this
-// agent has actually recorded, never an invented score. `pagesMonitored`
-// is the one exception: a snapshot of the MOST RECENT run's page count,
-// since "pages monitored" doesn't make sense as a running sum.
-// Audit fix — GSC/GA4's status used to be isSearchConsoleConfigured()/
-// isGa4Configured() (plain env-var presence) evaluated HERE, inside this
-// Vercel function. But those five env vars are, by this project's own
-// documented design, never provisioned to Vercel — only to the GitHub
-// Actions runner that actually runs the Agent CLI (see agent/README.md's
-// "Vercel / DB impact" section) — so that check could never render
-// anything but NOT CONFIGURED here, regardless of whether the real
-// GitHub Actions -> WIF -> Google API path is actually working, and a
-// credential that's present but broken would misleadingly render as
-// CONNECTED (presence-only, no API call). This now reads
-// agent/history/integration-health.json instead — a REAL probe result
-// the GitHub Actions runner's new `--check-integrations` step writes
-// (see agent/lib/integration-health.js's header) — the same cross-
-// process-boundary pattern this dashboard already uses for every other
-// number on this page (agent/history/log.ndjson).
-//
-// STALE_AFTER_MS: the daily scheduled run (plus weekly) refreshes this
-// file roughly once a day; 36h gives one day's slack before a GOOD
-// LAST READING stops being trusted as still-current — distinct from
-// ERROR, which is never time-gated (a recorded failure is a failure
-// regardless of how long ago it was recorded).
+// Website Agent dashboard: run history plus service-only Supabase snapshots.
+// Google calls occur only in the separate scheduled collector.
 const INTEGRATION_HEALTH_STALE_AFTER_MS = 36 * 60 * 60 * 1000;
 
 function classifyIntegrationHealth(entry, checkedAt, now) {
@@ -773,7 +735,21 @@ function classifyIntegrationHealth(entry, checkedAt, now) {
   return { state: isStale ? "stale" : "connected", reason: null, checkedAt: checkedAt || null };
 }
 
-function handleAgentDashboard(req, res) {
+// Defensive by construction, same posture as the rest of this function below:
+// a bad require() (missing bundle file, broken module) or a rejected promise
+// here must degrade to an honest storage_error, never a 500 for the whole
+// Website Agent dashboard just because one evidence subsystem is unhappy.
+async function safeLatestSearchSnapshots() {
+  try {
+    return await require("../../agent/lib/search-snapshots").latestSnapshots();
+  } catch (e) {
+    console.error("Admin agent-dashboard failed to load search intelligence snapshots", e);
+    return { searchConsole: { available: false, state: "storage_error" }, ga4: { available: false, state: "storage_error" } };
+  }
+}
+
+async function handleAgentDashboard(req, res) {
+  const searchSnapshots = await safeLatestSearchSnapshots();
   const history = loadAgentHistoryModule(res);
   if (!history) return;
 
@@ -786,15 +762,7 @@ function handleAgentDashboard(req, res) {
   const now = new Date();
   const searchConsoleStatus = classifyIntegrationHealth(integrationHealth && integrationHealth.gsc, integrationHealth && integrationHealth.at, now);
   const ga4Status = classifyIntegrationHealth(integrationHealth && integrationHealth.ga4, integrationHealth && integrationHealth.at, now);
-  // Plain env-var presence check — deliberately NOT getServiceClient()
-  // (which constructs a real @supabase/supabase-js client): this view
-  // must never touch Supabase at all, same hard rule as agent-activity/
-  // agent-reports above (see this function's header) — CRM DATA/PROPOSAL
-  // SYNC both ultimately depend on these same two credentials being
-  // configured, so one shared check is the honest answer for both. Unlike
-  // GSC/GA4 above, these ARE read directly by this Vercel function every
-  // other time it touches Supabase, so a presence check here is genuinely
-  // informative, not a check against a credential this process never sees.
+  // Integration badges use runner probes; snapshot evidence reads Supabase independently.
   const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
 
   try {
@@ -810,7 +778,7 @@ function handleAgentDashboard(req, res) {
         daily: { lastRun: null },
         weekly: { lastRun: null },
         activity: [],
-        searchIntelligence: { searchConsole: { available: false }, ga4: { available: false } },
+        searchIntelligence: searchSnapshots,
       });
       return;
     }
@@ -852,10 +820,7 @@ function handleAgentDashboard(req, res) {
       daily: { lastRun: dashboardRunSummary(latestDaily) },
       weekly: { lastRun: dashboardRunSummary(latestWeekly) },
       activity: dashboardActivityFeed(sorted),
-      searchIntelligence: {
-        searchConsole: dashboardSearchIntelligence(sorted, "search-console-search-analytics"),
-        ga4: dashboardSearchIntelligence(sorted, "ga4"),
-      },
+      searchIntelligence: searchSnapshots,
     });
   } catch (e) {
     console.error("Admin agent-dashboard failed to read/summarize agent/history/log.ndjson", e);
@@ -869,7 +834,7 @@ function handleAgentDashboard(req, res) {
       daily: { lastRun: null },
       weekly: { lastRun: null },
       activity: [],
-      searchIntelligence: { searchConsole: { available: false }, ga4: { available: false } },
+      searchIntelligence: searchSnapshots,
     });
   }
 }
@@ -969,40 +934,6 @@ const ACTIVITY_TYPE_BY_ICON = {
   reject: "rejected",
   observation: "observation",
 };
-
-// Most recent real, persisted first-party evidence entry of the given
-// source found anywhere in a finding's `.firstPartyEvidence[]` (attached
-// by agent/lib/firstparty-intake.js — see that file's header), scanning
-// the most recent runs only (never a full-history crawl). Returns an
-// honest {available:false} when nothing has ever been gathered — never a
-// fabricated chart.
-const DASHBOARD_EVIDENCE_SCAN_RUN_LIMIT = 20;
-function dashboardSearchIntelligence(sortedRuns, source) {
-  const { computeFirstPartyFreshness } = require("../../agent/lib/firstparty-evidence");
-  for (const run of sortedRuns.slice(0, DASHBOARD_EVIDENCE_SCAN_RUN_LIMIT)) {
-    const findings = Array.isArray(run.findings) ? run.findings : [];
-    for (const f of findings) {
-      const entries = Array.isArray(f.firstPartyEvidence) ? f.firstPartyEvidence : [];
-      const match = entries.find((e) => e.source === source);
-      if (match) {
-        return {
-          available: true,
-          runId: run.runId,
-          gatheredAt: match.fetchedAt,
-          freshness: computeFirstPartyFreshness(match, new Date()).status,
-          metric: match.metric,
-          dimension: match.dimension,
-          scope: match.scope,
-          window: match.window,
-          context: match.context,
-          limitations: match.limitations,
-          rows: match.observed && Array.isArray(match.observed.topRows) ? match.observed.topRows : [],
-        };
-      }
-    }
-  }
-  return { available: false };
-}
 
 // ---------------------------------------------------------------------
 // Site Improvement Agent, Phase 3 — ?view=agent-proposals (list) and

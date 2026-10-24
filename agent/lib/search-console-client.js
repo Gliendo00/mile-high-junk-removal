@@ -38,7 +38,7 @@ function isSearchConsoleConfigured() {
  * @param {number} [args.rowLimit]
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function querySearchAnalytics({ startDate, endDate, dimensions, dimensionFilterGroups, rowLimit, fetchImpl } = {}) {
+async function querySearchAnalytics({ startDate, endDate, dimensions, dimensionFilterGroups, rowLimit, startRow = 0, dataState, aggregationType, fetchImpl } = {}) {
   const siteUrl = process.env.GSC_SITE_URL;
   if (!siteUrl) {
     return { skipped: true, reason: "GSC_SITE_URL not configured — Search Console evidence not available" };
@@ -50,8 +50,11 @@ async function querySearchAnalytics({ startDate, endDate, dimensions, dimensionF
   const body = {
     startDate,
     endDate,
-    dimensions: dimensions && dimensions.length ? dimensions : ["query"],
+    dimensions: dimensions || ["query"],
     rowLimit: rowLimit || 25,
+    startRow,
+    ...(dataState ? { dataState } : {}),
+    ...(aggregationType ? { aggregationType } : {}),
     ...(dimensionFilterGroups ? { dimensionFilterGroups } : {}),
   };
 
@@ -64,7 +67,7 @@ async function querySearchAnalytics({ startDate, endDate, dimensions, dimensionF
     });
     const json = await res.json();
     if (!res.ok) {
-      return { skipped: true, reason: `Search Analytics API error: ${(json && json.error && json.error.message) || res.status}` };
+      return { skipped: true, status: res.status, reason: `Search Analytics API error: ${(json && json.error && json.error.message) || res.status}` };
     }
     return { skipped: false, rows: (json && json.rows) || [] };
   } catch (e) {

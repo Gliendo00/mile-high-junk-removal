@@ -384,6 +384,17 @@ jobs:
           GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
           GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
 
+      - name: Collect Search Intelligence snapshots (daily and weekly)
+        if: env.RUN_TYPE == 'daily' || env.RUN_TYPE == 'weekly'
+        continue-on-error: true
+        run: node agent/scripts/collect-search-snapshots.js
+        env:
+          GOOGLE_IMPERSONATE_SERVICE_ACCOUNT: ${{ vars.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+
       - name: Refresh completed-job evidence (weekly only)
         # Pre-acceptance hardening (audit finding #1, baseline 2bff317) —
         # this step previously existed only as agent/cli.js's
