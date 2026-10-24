@@ -109,30 +109,17 @@ test("the auto-apply whitelist is unchanged by Phase 6 — `autoFix` is still on
   // agent/lib/link-audit.js attaches `autoFix:` anywhere in this codebase
   // — confirm that stays true and stays scoped to exactly these two
   // finding types, so Phase 6 could not have silently widened it.
-  //
-  // Phase 14 — execution-test-fixture-audit.js is a deliberate, narrow
-  // exception (see that file's own header): it attaches `autoFix:` to
-  // exactly one brand-new, test-only finding type so the Phase 14
-  // execution engine has something real to be tested against. It is
-  // allowlisted here BY NAME (not just by count) so this test still
-  // fails if a THIRD file — or a different type within either of these
-  // two files — ever attaches `autoFix:` unnoticed, and the assertion
-  // below additionally confirms that test-only type stays permanently
-  // ineligible for auto-apply (riskLevel medium, not low).
   const libDir = path.join(__dirname, "..", "agent", "lib");
   const filesWithAutoFix = fs.readdirSync(libDir).filter((f) => {
     if (!f.endsWith(".js")) return false;
     const src = fs.readFileSync(path.join(libDir, f), "utf8");
     return /autoFix:\s*\{/.test(src);
   });
-  assert.deepStrictEqual([...filesWithAutoFix].sort(), ["execution-test-fixture-audit.js", "link-audit.js"]);
+  assert.deepStrictEqual([...filesWithAutoFix].sort(), ["link-audit.js"]);
 
   const linkAuditSource = fs.readFileSync(path.join(libDir, "link-audit.js"), "utf8");
   const typesWithAutoFix = [...linkAuditSource.matchAll(/type:\s*"([a-z-]+)"[\s\S]{0,800}?autoFix:\s*\{/g)].map((m) => m[1]);
   assert.deepStrictEqual(new Set(typesWithAutoFix), new Set(["redirect-hop-internal-link", "broken-internal-link-fixable"]));
-
-  const { RULES } = require("../agent/lib/risk");
-  assert.strictEqual(RULES["execution-pipeline-test-fixture"].riskLevel, "medium", "the Phase 14 test-only finding type must never be riskLevel \"low\", or it would become autoApplyEligible");
 });
 
 // -----------------------------------------------------------------------

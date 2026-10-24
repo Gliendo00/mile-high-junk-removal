@@ -37,13 +37,13 @@ function test(name, fn) {
   }
 }
 
-const AUTO_FIX = { kind: "rewrite-href", file: "agent/test-fixtures/execution-pipeline-test-2.html", from: "/execution-test-placeholder", to: "/execution-test-placeholder-fixed" };
+const AUTO_FIX = { kind: "rewrite-href", file: "blog/example-page.html", from: "/old-link", to: "/new-link" };
 
 function baseFinding(overrides = {}) {
   return {
     decision: "PROPOSE_CHANGE",
-    summary: "Test fixture agent/test-fixtures/execution-pipeline-test-2.html still contains its placeholder link.",
-    evidence: [{ file: "agent/test-fixtures/execution-pipeline-test-2.html", field: "testSentinelHref", value: "/execution-test-placeholder" }],
+    summary: "blog/example-page.html still contains a broken internal link.",
+    evidence: [{ file: "blog/example-page.html", field: "href", value: "/old-link" }],
     research: [],
     autoFix: AUTO_FIX,
     ...overrides,
@@ -69,7 +69,7 @@ test("a freshly generated, immediately approved, unchanged proposal passes fresh
 
 test("a real evidence VALUE change fails freshness", () => {
   const fresh = baseFinding();
-  const stored = baseFinding({ evidence: [{ file: fresh.evidence[0].file, field: "testSentinelHref", value: "/some-other-value" }] });
+  const stored = baseFinding({ evidence: [{ file: fresh.evidence[0].file, field: "href", value: "/some-other-value" }] });
   assert.notStrictEqual(computeReviewContentFingerprint(fresh), computeReviewContentFingerprint(stored));
 });
 
