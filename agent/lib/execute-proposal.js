@@ -115,6 +115,61 @@ function logPhase(message) {
 // suite") so a timeout's log line says exactly WHICH of the two runs
 // got stuck, rather than leaving that to be inferred from step timing
 // alone.
+// Diagnostic capture (hotfix, proposal 6ad71748-..., third diagnosis
+// pass: the post-baseline cleanliness gate above now correctly catches
+// a dirty checkout and refuses — proof the gate itself works — but a
+// real Ubuntu run gave no visibility into WHICH path(s) were actually
+// left dirty, only that some were). Parses `git status --porcelain`
+// into modified/deleted/untracked buckets — paths and git's own
+// one/two-letter status codes only, never file CONTENTS, so this can
+// never log anything secret-shaped. A rename ("R  old -> new") logs
+// only the destination path.
+function classifyPorcelainStatus(porcelain) {
+  const modified = [];
+  const deleted = [];
+  const untracked = [];
+  for (const rawLine of String(porcelain || "").split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line) continue;
+    const code = line.slice(0, 2);
+    const rest = line.slice(3);
+    const filePath = rest.includes(" -> ") ? rest.split(" -> ")[1] : rest;
+    if (code === "??") untracked.push(filePath);
+    else if (code.includes("D")) deleted.push(filePath);
+    else modified.push(filePath);
+  }
+  return { modified, deleted, untracked };
+}
+
+// Logs the exact dirty paths (never contents) immediately after the
+// baseline test phase, BEFORE the cleanliness decision below is made —
+// so the next real CI run that trips the gate names exactly what
+// changed, whether it ends up clean or dirty. Uses the same injectable
+// `git` the rest of this module already uses (so tests can exercise
+// this with `fakeGit`), and never throws: a `git` failure here is
+// itself logged and treated as "nothing captured," never allowed to
+// mask or alter the actual isWorkingTreeClean() decision that follows.
+function logWorkingTreeDiagnostics(git) {
+  let porcelain = "";
+  let nameStatus = "";
+  try {
+    porcelain = git(["status", "--porcelain"]);
+  } catch (e) {
+    logPhase(`Post-baseline diagnostic: "git status --porcelain" failed: ${e && e.message ? e.message : String(e)}`);
+  }
+  try {
+    nameStatus = git(["diff", "--name-status"]);
+  } catch (e) {
+    logPhase(`Post-baseline diagnostic: "git diff --name-status" failed: ${e && e.message ? e.message : String(e)}`);
+  }
+  const { modified, deleted, untracked } = classifyPorcelainStatus(porcelain);
+  logPhase(
+    `Post-baseline diagnostic: modified=[${modified.join(", ") || "none"}] deleted=[${deleted.join(", ") || "none"}] untracked=[${untracked.join(", ") || "none"}]`
+  );
+  const nameStatusLine = String(nameStatus || "").trim().replace(/\n/g, "; ");
+  logPhase(`Post-baseline diagnostic: git diff --name-status -> ${nameStatusLine || "(empty)"}`);
+}
+
 function runTimedTestPhase(label, runTests) {
   logPhase(`${label}: starting…`);
   const start = Date.now();
@@ -362,6 +417,12 @@ async function executeProposal(id, options = {}) {
     // fresh, in this same run, every time.
     const runTests = options.runTests || defaultRunTests;
     const baselineTestResult = runTimedTestPhase("Baseline test suite", runTests);
+
+    // Diagnostic capture, BEFORE the cleanliness decision — see
+    // logWorkingTreeDiagnostics()'s own header. Always logged (clean or
+    // dirty) so a clean run's log line is itself proof nothing leaked,
+    // not just silence.
+    logWorkingTreeDiagnostics(git);
 
     // --- Post-baseline cleanliness re-check (hotfix, proposal 6ad71748-...,
     // second diagnosis pass) — the earlier isWorkingTreeClean() check
@@ -646,4 +707,13 @@ function diffNewFailures(baselineResult, afterResult) {
   return afterResult.failedFiles.filter((f) => !baselineResult.failedFiles.includes(f));
 }
 
-module.exports = { executeProposal, proposalAsFindingShape, SUPPORTED_FIX_KINDS, parseFailedFiles, diffNewFailures, defaultRunTests, RUN_TESTS_TIMEOUT_MS };
+module.exports = {
+  executeProposal,
+  proposalAsFindingShape,
+  SUPPORTED_FIX_KINDS,
+  parseFailedFiles,
+  diffNewFailures,
+  defaultRunTests,
+  RUN_TESTS_TIMEOUT_MS,
+  classifyPorcelainStatus,
+};

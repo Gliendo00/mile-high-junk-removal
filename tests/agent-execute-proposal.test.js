@@ -20,7 +20,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const config = require("../agent/config");
-const { executeProposal, parseFailedFiles, diffNewFailures, RUN_TESTS_TIMEOUT_MS } = require("../agent/lib/execute-proposal");
+const { executeProposal, parseFailedFiles, diffNewFailures, RUN_TESTS_TIMEOUT_MS, classifyPorcelainStatus } = require("../agent/lib/execute-proposal");
 const { execFileSync } = require("child_process");
 
 function test(name, fn) {
@@ -544,7 +544,94 @@ async function main() {
       assert.strictEqual(db.agent_proposals[0].status, "needs_review");
       // Nothing was ever applied — the fixture file and git must both be untouched.
       assert.strictEqual(fs.readFileSync(FIXTURE_ABS, "utf8"), '<a href="/old-url">Link</a>');
-      assert.deepStrictEqual(gitCalls, [], "must never apply, revert, or touch git when aborting before the apply step");
+      // The only git calls are the two read-only diagnostic ones (status/
+      // diff) made just before the decision — nothing ever mutates git
+      // (no checkout/add/commit/push) when aborting before the apply step.
+      assert.deepStrictEqual(gitCalls, [["status", "--porcelain"], ["diff", "--name-status"]], "only the read-only diagnostic calls happen — nothing mutates git when aborting before the apply step");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("classifyPorcelainStatus() sorts porcelain lines into modified/deleted/untracked, using the destination path for a rename", () => {
+    const porcelain = [
+      " M agent/research/firstparty/a.json",
+      " D agent/research/results/b.json",
+      "?? agent/research/firstparty/c.json",
+      "R  agent/research/firstparty/old.json -> agent/research/firstparty/new.json",
+      "",
+    ].join("\n");
+    const { modified, deleted, untracked } = classifyPorcelainStatus(porcelain);
+    assert.deepStrictEqual(modified, ["agent/research/firstparty/a.json", "agent/research/firstparty/new.json"]);
+    assert.deepStrictEqual(deleted, ["agent/research/results/b.json"]);
+    assert.deepStrictEqual(untracked, ["agent/research/firstparty/c.json"]);
+  });
+
+  await test("classifyPorcelainStatus() returns empty buckets for an empty/clean porcelain output", () => {
+    assert.deepStrictEqual(classifyPorcelainStatus(""), { modified: [], deleted: [], untracked: [] });
+  });
+
+  await test("post-baseline diagnostic: a dirty checkout logs exactly which paths are modified/deleted/untracked, and the raw diff name-status, BEFORE the needs_review decision — with no file contents or secrets", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const dirtyGit = (args) => {
+        if (args[0] === "status" && args[1] === "--porcelain") {
+          return [
+            " M agent/research/firstparty/zzz-leaked-evidence.json",
+            " D agent/research/results/content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop.json",
+            "?? agent/research/firstparty/zzz-new-leak.json",
+            "",
+          ].join("\n");
+        }
+        if (args[0] === "diff" && args[1] === "--name-status") {
+          return "M\tagent/research/firstparty/zzz-leaked-evidence.json\nD\tagent/research/results/content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop.json\n";
+        }
+        return "";
+      };
+      const { lines } = await captureConsoleLog(() =>
+        executeProposal("prop-1", {
+          client,
+          isWorkingTreeClean: queuedIsWorkingTreeClean(true, false),
+          gatherFindings: queuedGatherFindings([makeFinding()], []),
+          runTests: () => ({ passed: true, summary: "ok" }),
+          git: dirtyGit,
+        })
+      );
+      const joined = lines.join("\n");
+      assert.ok(/Post-baseline diagnostic: modified=\[agent\/research\/firstparty\/zzz-leaked-evidence\.json\]/.test(joined), `expected the modified path logged, got:\n${joined}`);
+      assert.ok(/deleted=\[agent\/research\/results\/content-gap__blog-seasonal-cleanout-guide-2-denver-leafdrop\.json\]/.test(joined), `expected the deleted path logged, got:\n${joined}`);
+      assert.ok(/untracked=\[agent\/research\/firstparty\/zzz-new-leak\.json\]/.test(joined), `expected the untracked path logged, got:\n${joined}`);
+      assert.ok(/git diff --name-status -> M\tagent\/research\/firstparty\/zzz-leaked-evidence\.json/.test(joined), `expected the raw diff --name-status logged, got:\n${joined}`);
+
+      const diagIndex = lines.findIndex((l) => /Post-baseline diagnostic: modified=/.test(l));
+      const applyIndex = lines.findIndex((l) => /Applying proposed fix/.test(l));
+      assert.ok(diagIndex !== -1, "expected the diagnostic to be logged at all");
+      assert.strictEqual(applyIndex, -1, "must never reach the apply step once the baseline leaves the tree dirty");
+      assert.ok(!/SUPABASE_SECRET_KEY|secret|token/i.test(joined), `diagnostic output must never resemble a credential:\n${joined}`);
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("post-baseline diagnostic: a clean checkout logs empty modified/deleted/untracked buckets (the diagnostic itself proves nothing leaked, not just silence)", async () => {
+    writeFixture('<a href="/old-url">Link</a>');
+    try {
+      const db = { agent_proposals: [makeClaimedRow()] };
+      const client = makeFakeClient(db);
+      const gitCalls = [];
+      const { lines } = await captureConsoleLog(() =>
+        executeProposal("prop-1", {
+          client,
+          isWorkingTreeClean: alwaysCleanTree,
+          gatherFindings: queuedGatherFindings([makeFinding()], []),
+          runTests: () => ({ passed: true, summary: "ok" }),
+          git: fakeGit(gitCalls),
+        })
+      );
+      const joined = lines.join("\n");
+      assert.ok(/Post-baseline diagnostic: modified=\[none\] deleted=\[none\] untracked=\[none\]/.test(joined), `expected an explicit empty-buckets line on a clean baseline, got:\n${joined}`);
     } finally {
       cleanupFixture();
     }
@@ -653,10 +740,14 @@ async function main() {
       assert.strictEqual(row.execution.validation.status, "confirmed-resolved");
       assert.strictEqual(row.execution.testResult.passed, true);
 
-      assert.deepStrictEqual(gitCalls[0], ["add", "--", FIXTURE_REL]);
-      assert.strictEqual(gitCalls[1][0], "commit");
-      assert.deepStrictEqual(gitCalls[2], ["rev-parse", "HEAD"]);
-      assert.deepStrictEqual(gitCalls[3], ["push", "origin", "HEAD:main"]);
+      // gitCalls[0]/[1] are the post-baseline diagnostic's own read-only
+      // "git status --porcelain"/"git diff --name-status" calls (see the
+      // post-baseline cleanliness gate tests above) — the mutating
+      // sequence (add/commit/rev-parse/push) starts at index 2.
+      assert.deepStrictEqual(gitCalls[2], ["add", "--", FIXTURE_REL]);
+      assert.strictEqual(gitCalls[3][0], "commit");
+      assert.deepStrictEqual(gitCalls[4], ["rev-parse", "HEAD"]);
+      assert.deepStrictEqual(gitCalls[5], ["push", "origin", "HEAD:main"]);
     } finally {
       cleanupFixture();
     }
@@ -711,7 +802,10 @@ async function main() {
       assert.strictEqual(result.status, "failed");
       assert.ok(/did not resolve it as expected/i.test(result.reason));
       assert.strictEqual(db.agent_proposals[0].status, "failed");
-      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]], "must revert via git checkout and never reach add/commit/push");
+      // gitCalls[0]/[1] are the post-baseline diagnostic's own read-only
+      // status/diff calls, made before apply ever runs — the only
+      // mutating call is the checkout revert.
+      assert.deepStrictEqual(gitCalls, [["status", "--porcelain"], ["diff", "--name-status"], ["checkout", "--", FIXTURE_REL]], "must revert via git checkout and never reach add/commit/push");
     } finally {
       cleanupFixture();
     }
@@ -734,7 +828,7 @@ async function main() {
       assert.strictEqual(result.status, "failed");
       assert.ok(/automated tests failed/i.test(result.reason));
       assert.strictEqual(db.agent_proposals[0].execution.testResult.passed, false);
-      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]]);
+      assert.deepStrictEqual(gitCalls, [["status", "--porcelain"], ["diff", "--name-status"], ["checkout", "--", FIXTURE_REL]]);
     } finally {
       cleanupFixture();
     }
@@ -793,7 +887,7 @@ async function main() {
       assert.ok(result.reason.includes("newly-broken.test.js"), `expected the new failure to be named in the reason, got: ${result.reason}`);
       assert.ok(!result.reason.includes("unrelated-a.test.js"), "the pre-existing baseline failure must not be named as if it were new");
       assert.deepStrictEqual(db.agent_proposals[0].execution.testResult.newFailures, ["newly-broken.test.js"]);
-      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]], "must revert via git checkout and never reach add/commit/push");
+      assert.deepStrictEqual(gitCalls, [["status", "--porcelain"], ["diff", "--name-status"], ["checkout", "--", FIXTURE_REL]], "must revert via git checkout and never reach add/commit/push");
     } finally {
       cleanupFixture();
     }
@@ -869,7 +963,7 @@ async function main() {
 
       assert.strictEqual(result.ok, false);
       assert.strictEqual(result.status, "failed", "a test-infrastructure failure on both runs must never be treated as 'safe to deploy'");
-      assert.deepStrictEqual(gitCalls, [["checkout", "--", FIXTURE_REL]], "must still revert, never reach commit/push");
+      assert.deepStrictEqual(gitCalls, [["status", "--porcelain"], ["diff", "--name-status"], ["checkout", "--", FIXTURE_REL]], "must still revert, never reach commit/push");
     } finally {
       cleanupFixture();
     }
