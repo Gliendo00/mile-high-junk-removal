@@ -22,5 +22,41 @@
     "city": "wheat ridge",
     "accessNotes": "Client had everything in the garage ready to go, also needed a hand moving a super heavy chiropractor chair. Got her taken care of and stress free.",
     "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "junk_removal",
+    "city": "Highlands Ranch",
+    "accessNotes": "Return client had a small pickup. random wood. and a cabinet",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "junk_removal",
+    "city": "Centennial",
+    "accessNotes": "Retirement Home",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "dumpster_rental",
+    "city": "Brighton",
+    "accessNotes": "Client got rid of a bunch of items at a great rate. She had her granson load the dumpster for her. They had paint that i had to remove from the dumpster as it wasnt allowed.",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "junk_removal",
+    "city": "Parker",
+    "accessNotes": "Heavy sleeper (Removed legs & put them.back)\nRemoved baby gate",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "junk_removal",
+    "city": "Morrison",
+    "accessNotes": "Client was clearing his garage out and needing a dump run. also had some old mattresses. accessibility was difficult.",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "dumpster_rental",
+    "city": "Broomfield",
+    "accessNotes": "Client needed a dumpster for renovation debris for their fix and flip home",
+    "outcomeTag": "completed"
   }
 ]
