@@ -234,3 +234,47 @@
 
 .admin-wa-kw-action { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--color-text, #201e1d); }
 .admin-wa-kw-reasons { margin: 8px 0 0; padding: 8px 0 0 18px; border-top: 1px dashed var(--color-neutral-200, #eee7db); font-size: 11.5px; color: var(--color-neutral-600, #82796a); line-height: 1.6; }
+/* Branded mission control: forest structure, lime telemetry, light CRM surfaces. */
+.admin-wa-main { --wa-ink: var(--color-text); --wa-muted: #486052; --wa-line: var(--color-neutral-300); }
+.admin-wa-main .admin-wa-hero { background: linear-gradient(#9cf13b08 1px, transparent 1px), linear-gradient(90deg, #9cf13b08 1px, transparent 1px), radial-gradient(ellipse at 85% 0%, #35652c 0, transparent 56%), #153320; background-size: 26px 26px, 26px 26px, auto, auto; border-radius: var(--radius-lg); }
+.admin-wa-main .admin-wa-instrument-bar, .admin-wa-main .admin-wa-instrument-footer,
+.admin-wa-main .admin-wa-section-label, .admin-wa-main .admin-wa-eyebrow,
+.admin-wa-main .admin-wa-search-label, .admin-wa-main .admin-wa-search-value,
+.admin-wa-main .admin-wa-bar-number, .admin-wa-main .admin-wa-kw-filter,
+.admin-wa-main .admin-wa-title-mark { font-family: Consolas, 'Courier New', monospace; }
+.admin-wa-main .admin-wa-title-mark { border-radius: 8px; text-shadow: 0 0 12px #9cf13b60; }
+.admin-wa-main .admin-wa-section-label::before { content: '//'; width: auto; height: auto; background: none; color: #3d7426; font-size: 12px; }
+.admin-wa-main .admin-wa-section-hint { margin-left: auto; font: 11px var(--font-body); color: var(--wa-muted); text-transform: none; letter-spacing: normal; }
+.admin-wa-main .admin-wa-evidence-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 18px; }
+.admin-wa-main .admin-wa-panel, .admin-wa-main .admin-wa-metric-card { min-width: 0; background-color: var(--color-surface); border-radius: var(--radius-md); }
+.admin-wa-main .admin-wa-evidence-grid > .admin-wa-panel { border-top: 3px solid var(--color-accent); }
+.admin-wa-main .admin-wa-panel-title { font-family: var(--font-heading); font-style: normal; }
+.admin-wa-main .admin-wa-search-metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 18px 0; }
+.admin-wa-main .admin-wa-search-stat { display: flex; flex-direction: column; padding: 15px; background: var(--color-neutral-100); border: 1px solid var(--color-neutral-200); border-radius: 10px; border-left: 3px solid var(--color-accent); min-width: 0; }
+.admin-wa-main .admin-wa-search-value { color: #153320; font-size: 29px; letter-spacing: -1px; line-height: 1.3; overflow-wrap: anywhere; }
+.admin-wa-main .admin-wa-search-label { color: var(--wa-muted); font-size: 11px; margin-top: 5px; }
+.admin-wa-main .admin-wa-bar-chart { padding: 18px; border: 1px solid #31583d; border-radius: 12px; background: linear-gradient(#9cf13b08 1px, transparent 1px), #153320; background-size: 100% 24px; color: #eef6f1; margin: 16px 0; }
+.admin-wa-main .admin-wa-chart-title { color: #c7f49d; font-weight: 700; font-size: 14px; }
+.admin-wa-main .admin-wa-bar-chart .admin-wa-muted { color: #bfd2c1; font-size: 11px; margin-top: 4px; }
+.admin-wa-main .admin-wa-bar-row { margin-top: 16px; }
+.admin-wa-main .admin-wa-bar-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12px; margin-bottom: 7px; }
+.admin-wa-main .admin-wa-bar-name { overflow-wrap: anywhere; min-width: 0; }
+.admin-wa-main .admin-wa-bar-number { color: #b4fa65; flex-shrink: 0; }
+.admin-wa-main .admin-wa-bar-track { height: 7px; background: #ffffff15; border-radius: 20px; overflow: hidden; }
+.admin-wa-main .admin-wa-bar-fill { height: 100%; background: linear-gradient(90deg, #5fb52a, #b4fa65); border-radius: 20px; box-shadow: 0 0 12px #9cf13b35; }
+.admin-wa-main .admin-wa-raw-evidence { margin: 16px 0; border-top: 1px solid var(--wa-line); padding-top: 12px; }
+.admin-wa-main .admin-wa-raw-evidence summary { cursor: pointer; color: #285c19; font-size: 12px; font-weight: 600; padding: 8px 0; min-height: 40px; }
+.admin-wa-main .admin-wa-kw-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 22px; }
+.admin-wa-main .admin-wa-kw-filter { font-size: 11px; color: #34563e; background: #f3f8ed; border: 1px solid #cdddcf; border-radius: var(--pill-radius); padding: 10px 13px; min-height: 44px; cursor: pointer; }
+.admin-wa-main .admin-wa-kw-filter[aria-pressed="true"] { color: #c7f49d; background: #153320; border-color: #31583d; }
+.admin-wa-main .admin-wa-kw-filter:hover { border-color: #5fb52a; }
+.admin-wa-main .admin-wa-kw-filter:focus-visible, .admin-wa-main summary:focus-visible { outline: 3px solid #5fb52a; outline-offset: 3px; }
+.admin-wa-main .admin-wa-kw-card { border-radius: 12px; background: #f8fbf6; min-width: 0; }
+.admin-wa-main .admin-wa-kw-query { overflow-wrap: anywhere; font-family: Consolas, 'Courier New', monospace; }
+.admin-wa-main .admin-wa-kw-group[hidden] { display: none; }
+.admin-wa-main .admin-wa-snapshot-totals { font-size: 12px; color: #486052; }
+@media(max-width:900px) { .admin-wa-main .admin-wa-evidence-grid { grid-template-columns: minmax(0,1fr); } }
+@media(max-width:600px) { .admin-wa-main .admin-wa-section-hint { width: 100%; margin-left: 0; } .admin-wa-main .admin-wa-search-stat { padding: 12px; } .admin-wa-main .admin-wa-search-value { font-size: 26px; } .admin-wa-main .admin-wa-bar-chart { padding: 15px; } }
+
+.admin-wa-main .admin-wa-section-label::before { border: 0; border-radius: 0; }
+.admin-wa-main .admin-wa-bar-page { display: block; font: 10px/1.4 var(--font-body); color: #bfd2c1; margin: -2px 0 7px; overflow-wrap: anywhere; }

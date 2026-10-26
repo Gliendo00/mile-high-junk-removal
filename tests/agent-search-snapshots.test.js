@@ -123,8 +123,8 @@ async function main() {
   const sql=fs.readFileSync('sql/2026-10-22_search-intelligence-snapshots.sql','utf8'); assert(sql.includes('UNIQUE(source,property,period_start,period_end)')); assert(sql.includes('ON CONFLICT(source,property,period_start,period_end) DO UPDATE')); assert(sql.includes('REVOKE ALL ON FUNCTION'));
   // Execute the actual UI renderer with a minimal DOM. No source-string assertions for rendering behavior.
   const script=fs.readFileSync('admin/website-agent.js','utf8');
-  const start=script.indexOf('  function renderSnapshot('),end=script.indexOf('  function buildActivityRow(');
-  function el(tag,cls,text) { return {tag,cls,text:text==null?'':String(text),children:[],appendChild(n){this.children.push(n);} }; }
+  const start=script.indexOf('  function renderSnapshotVisuals('),end=script.indexOf('  function buildActivityRow(');
+  function el(tag,cls,text) { return {tag,cls,text:text==null?'':String(text),children:[],style:{},attributes:{},setAttribute(k,v){this.attributes[k]=v;},appendChild(n){this.children.push(n);} }; }
   const context={ el,Date,Number,String }; vm.createContext(context); vm.runInContext(script.slice(start,end)+';this.render=renderSnapshot;',context);
   const text=n=>n.text+' '+n.children.map(text).join(' ');
   const panel=el('div'); context.render(panel,latest.searchConsole,false); assert(text(panel).includes('Ranking landing page')); assert(text(panel).includes('4 clicks')); assert(text(panel).includes('junk'));
@@ -132,6 +132,16 @@ async function main() {
   const emptyPanel=el('div');context.render(emptyPanel,{available:false,state:'failed',attempt:{error_category:'authentication_failure'}},true);assert(!text(emptyPanel).includes('zero rows'));assert(text(emptyPanel).includes('authentication_failure'));
   const noGscPanel=el('div');context.render(noGscPanel,{available:false,state:'property_not_configured'},false);assert(text(noGscPanel).includes('GSC_SITE_URL'));
   const noGa4Panel=el('div');context.render(noGa4Panel,{available:false,state:'property_not_configured'},true);assert(text(noGa4Panel).includes('GA4_PROPERTY_ID'));
+  // Charts must use stored row counts and must disappear without evidence.
+  const chart=panel.children.find(n=>n.cls==='admin-wa-bar-chart'); assert(chart);
+  assert.equal(chart.children.length, 2 + Math.min(5, latest.searchConsole.rows.length));
+  assert(!emptyPanel.children.some(n=>n.cls==='admin-wa-bar-chart'));
+  const manyRows=Array.from({length:8},(_,i)=>({query:'query '+i,landing_page:'/page-'+i,clicks:i,impressions:20,ctr:0,position:2}));
+  const chartPanel=el('div');context.render(chartPanel,{available:true,snapshot:latest.searchConsole.snapshot,rows:manyRows},false);
+  const ranked=chartPanel.children.find(n=>n.cls==='admin-wa-bar-chart');assert.equal(ranked.children.length,7);assert(text(ranked).includes('query 7'));assert(!text(ranked).includes('query 0'));
+  assert.equal(ranked.children[2].children[2].children[0].style.width,'100%');
+  const zeroPanel=el('div');context.render(zeroPanel,{available:true,snapshot:latest.searchConsole.snapshot,rows:[{...manyRows[0],clicks:0}]},false);
+  assert.equal(zeroPanel.children.find(n=>n.cls==='admin-wa-bar-chart').children[2].children[2].children[0].style.width,'0%');
   console.log('PASS: normalization, periods, totals, idempotent storage contract, failure vs zero, latest success, partial failure, property scoping, stale publication, actual DOM rendering and SQL guards');
 }
 main().catch(e=>{ console.error(e);process.exitCode=1; });

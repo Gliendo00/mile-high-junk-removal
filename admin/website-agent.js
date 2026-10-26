@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var loadingEl = document.getElementById('wa-loading');
   var notConnectedEl = document.getElementById('wa-not-connected');
   var bodyEl = document.getElementById('wa-body');
+  var operationsEl = document.getElementById('wa-operations');
 
   var actionInFlight = false;
 
@@ -447,6 +448,49 @@ document.addEventListener('DOMContentLoaded', function () {
     panel.appendChild(el('div', 'admin-wa-panel-title', title));
     renderSnapshot(panel, evidence || { available: false, state: 'storage_error' }, title === 'GA4');
   }
+  // Charts summarize only the rows in this stored snapshot, not a time series.
+  function renderSnapshotVisuals(panel, evidence, isGa4) {
+    var totals = evidence.snapshot.totals;
+    var metrics = isGa4
+      ? [['Organic users', totals.organic_users], ['Organic sessions', totals.organic_sessions], ['Engaged sessions', totals.engaged_sessions], ['Property key events', totals.key_events]]
+      : [['Search clicks', totals.clicks], ['Impressions', totals.impressions], ['Click-through rate', (Number(totals.ctr || 0) * 100).toFixed(2) + '%'], ['Average position', Number(totals.position || 0).toFixed(1)]];
+    var cards = el('div', 'admin-wa-search-metrics');
+    metrics.forEach(function (metric) {
+      var card = el('div', 'admin-wa-search-stat');
+      card.appendChild(el('span', 'admin-wa-search-value', metric[1] === undefined || metric[1] === null ? '—' : String(metric[1])));
+      card.appendChild(el('span', 'admin-wa-search-label', metric[0]));
+      cards.appendChild(card);
+    });
+    panel.appendChild(cards);
+    var field = isGa4 ? 'organic_sessions' : 'clicks';
+    var rows = (evidence.rows || []).filter(function (row) { return Number.isFinite(Number(row[field])) && Number(row[field]) >= 0; })
+      .slice().sort(function (a, b) { return Number(b[field]) - Number(a[field]); }).slice(0, 5);
+    if (!rows.length) return;
+    var chart = el('div', 'admin-wa-bar-chart');
+    chart.setAttribute('role', 'figure');
+    chart.setAttribute('aria-label', isGa4 ? 'Top stored landing pages by organic sessions' : 'Top stored query and landing-page rows by clicks');
+    chart.appendChild(el('div', 'admin-wa-chart-title', isGa4 ? 'Landing-page sessions' : 'Query clicks'));
+    chart.appendChild(el('p', 'admin-wa-muted', 'Top 5 stored rows · selected snapshot period'));
+    var max = Math.max.apply(null, rows.map(function (row) { return Number(row[field]); }));
+    rows.forEach(function (row) {
+      var label = isGa4 ? row.landing_page : row.query;
+      var entry = el('div', 'admin-wa-bar-row');
+      var heading = el('div', 'admin-wa-bar-heading');
+      var name = el('span', 'admin-wa-bar-name', label);
+      name.title = isGa4 ? label : label + ' · ' + row.landing_page;
+      heading.appendChild(name);
+      heading.appendChild(el('span', 'admin-wa-bar-number', String(row[field])));
+      entry.appendChild(heading);
+      if (!isGa4) entry.appendChild(el('small', 'admin-wa-bar-page', row.landing_page));
+      var track = el('div', 'admin-wa-bar-track');
+      track.setAttribute('aria-hidden', 'true');
+      var bar = el('div', 'admin-wa-bar-fill');
+      bar.style.width = (max > 0 ? Number(row[field]) / max * 100 : 0) + '%';
+      track.appendChild(bar); entry.appendChild(track); chart.appendChild(entry);
+    });
+    panel.appendChild(chart);
+  }
+
   function renderSnapshot(panel, evidence, isGa4) {
     if (evidence.state === 'property_not_configured') {
       panel.appendChild(el('p', 'admin-wa-evidence-context', (isGa4 ? 'GA4_PROPERTY_ID' : 'GSC_SITE_URL') + ' is not configured on the admin runtime — snapshot evidence is hidden rather than shown unscoped across properties.'));
@@ -473,6 +517,9 @@ document.addEventListener('DOMContentLoaded', function () {
       var events = snap.metadata.events || [];
       panel.appendChild(el('p', 'admin-wa-evidence-meta', snap.metadata.eventStatus === 'collection_failed' ? 'Lead event counts: collection failed.' : 'Tracked event counts: ' + (events.map(function (e) { return e.event + ': ' + e.count; }).join(' · ') || 'zero matching events')));
     }
+    renderSnapshotVisuals(panel, evidence, isGa4);
+    var details = el('details', 'admin-wa-raw-evidence');
+    details.appendChild(el('summary', '', 'Inspect raw evidence rows'));
     var wrap = el('div', 'admin-wa-snapshot-scroll');
     var table = el('table', 'admin-wa-snapshot-table');
     var head = el('thead'); var header = el('tr');
@@ -484,7 +531,7 @@ document.addEventListener('DOMContentLoaded', function () {
       var values = isGa4 ? [r.landing_page, r.organic_users, r.organic_sessions, r.engaged_sessions, percent(r.engagement_rate), r.key_events] : [r.query, r.clicks, r.impressions, percent(r.ctr), Number(r.position).toFixed(1), r.landing_page];
       values.forEach(function (v) { tr.appendChild(el('td', '', String(v))); }); body.appendChild(tr);
     });
-    table.appendChild(body); wrap.appendChild(table); panel.appendChild(wrap);
+    table.appendChild(body); wrap.appendChild(table); details.appendChild(wrap); panel.appendChild(details);
     if (!(evidence.rows || []).length) panel.appendChild(el('p', 'admin-wa-muted', 'Successful collection returned zero rows.'));
     panel.appendChild(el('p', 'admin-wa-evidence-limitations', snap.metadata.limitations || ''));
     panel.appendChild(el('p', 'admin-wa-evidence-meta', 'Raw Google evidence, not an Agent conclusion. Metrics alone do not justify a website change.'));
@@ -567,9 +614,29 @@ document.addEventListener('DOMContentLoaded', function () {
       + (data.excludedLowEvidenceCount ? ' · ' + data.excludedLowEvidenceCount + ' excluded as low-evidence' : '')
       + (data.previousPeriod ? ' · trend vs. ' + data.previousPeriod.start + ' – ' + data.previousPeriod.end : ' · no prior-period trend available');
 
+    var filters = el('div', 'admin-wa-kw-filters');
+    filters.setAttribute('role', 'group');
+    filters.setAttribute('aria-label', 'Filter keyword opportunities');
+    var filterButtons = [];
+    ['all'].concat(KW_CATEGORY_ORDER).forEach(function (key) {
+      var group = data.categories && data.categories[key];
+      var button = el('button', 'admin-wa-kw-filter', key === 'all' ? 'All opportunities' : KW_CATEGORY_LABELS[key] + ' (' + (group ? group.total : 0) + ')');
+      button.type = 'button';
+      button.setAttribute('aria-pressed', key === 'all' ? 'true' : 'false');
+      button.addEventListener('click', function () {
+        filterButtons.forEach(function (other) { other.setAttribute('aria-pressed', other === button ? 'true' : 'false'); });
+        Array.prototype.forEach.call(groupsEl.querySelectorAll('[data-kw-category]'), function (section) {
+          section.hidden = key !== 'all' && section.getAttribute('data-kw-category') !== key;
+        });
+      });
+      filterButtons.push(button); filters.appendChild(button);
+    });
+    groupsEl.appendChild(filters);
+
     KW_CATEGORY_ORDER.forEach(function (key) {
       var group = data.categories && data.categories[key];
       var section = el('div', 'admin-wa-kw-group');
+      section.setAttribute('data-kw-category', key);
       var header = el('div', 'admin-wa-kw-group-header');
       header.appendChild(el('span', 'admin-wa-kw-group-title', KW_CATEGORY_LABELS[key]));
       header.appendChild(el('span', 'admin-wa-section-count', group ? '(' + group.total + ')' : '(0)'));
@@ -676,10 +743,12 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!dash.connected) {
           notConnectedEl.style.display = 'block';
           bodyEl.style.display = 'none';
+          operationsEl.style.display = 'none';
           return;
         }
         notConnectedEl.style.display = 'none';
         bodyEl.style.display = 'block';
+        operationsEl.style.display = 'block';
 
         var proposals = (propBody && propBody.proposals) || [];
         var proposed = proposals.filter(function (p) { return p.status === 'proposed'; });

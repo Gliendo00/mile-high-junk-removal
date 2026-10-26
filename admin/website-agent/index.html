@@ -7,7 +7,7 @@
 <title>Mile High Admin — Website Agent</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Work+Sans:wght@400;600;700&display=swap">
 <link rel="icon" href="../../images/favicon.png" type="image/png">
 <link rel="stylesheet" href="../../styles.css">
 <link rel="stylesheet" href="../admin.css">
@@ -46,7 +46,7 @@
       <div>
         <div class="admin-wa-eyebrow">Site Intelligence &amp; Monitoring</div>
         <h1>Website Agent<span class="admin-wa-title-mark" aria-hidden="true">&gt;_</span></h1>
-        <p class="admin-wa-intro">Your website. A little sharper, every day.</p>
+        <p class="admin-wa-intro">Search telemetry. Keyword opportunities. Your next move.</p>
       </div>
       <div class="admin-wa-status-wrap">
         <div class="admin-wa-status-pill" id="wa-status-pill">
@@ -93,6 +93,25 @@
       </div>
     </div>
 
+  </div>
+
+    <!-- Search intelligence --------------------------------------------------- -->
+    <div class="admin-wa-section-label">Search Intelligence <span class="admin-wa-section-hint">Stored Google evidence</span></div>
+    <div class="admin-wa-evidence-grid">
+      <div class="admin-wa-panel" id="wa-evidence-gsc"></div>
+      <div class="admin-wa-panel" id="wa-evidence-ga4"></div>
+    </div>
+
+    <!-- Keyword opportunities (Phase 2) — explainable classification of
+         real Search Console queries into action categories. Evidence only;
+         see agent/lib/keyword-opportunities.js. -->
+    <div class="admin-wa-section-label">Keyword Opportunities <span class="admin-wa-section-hint">Investigate → review → act</span></div>
+    <div class="admin-wa-panel" id="wa-kw-panel">
+      <p class="admin-wa-muted" id="wa-kw-meta"></p>
+      <div id="wa-kw-groups"></div>
+    </div>
+
+  <div id="wa-operations" style="display:none">
     <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
          two numbers reflect the latest run / live queue, never a sum
          across history, so they can sit beside "NEEDS ATTENTION"
@@ -129,24 +148,7 @@
     <div class="admin-wa-panel admin-wa-activity-panel">
       <div id="wa-activity-list" class="admin-wa-activity-list"></div>
     </div>
-
-
   </div>
-    <!-- Search intelligence --------------------------------------------------- -->
-    <div class="admin-wa-section-label">Search Intelligence</div>
-    <div class="admin-wa-evidence-grid">
-      <div class="admin-wa-panel" id="wa-evidence-gsc"></div>
-      <div class="admin-wa-panel" id="wa-evidence-ga4"></div>
-    </div>
-
-    <!-- Keyword opportunities (Phase 2) — explainable classification of
-         real Search Console queries into action categories. Evidence only;
-         see agent/lib/keyword-opportunities.js. -->
-    <div class="admin-wa-section-label">Keyword Opportunities</div>
-    <div class="admin-wa-panel" id="wa-kw-panel">
-      <p class="admin-wa-muted" id="wa-kw-meta"></p>
-      <div id="wa-kw-groups"></div>
-    </div>
 
 </main>
 
