@@ -491,6 +491,105 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
+  // Keyword Opportunities (Phase 2) — explainable classification of real
+  // Search Console queries, computed server-side by agent/lib/keyword-
+  // opportunities.js (see api/admin/bookings.js's handleAgentDashboard()).
+  // Evidence/recommendations only — this panel never triggers a website
+  // change; the existing proposal queue above is still the only path to
+  // one. Honest empty/unavailable states, same spirit as renderSnapshot().
+  // -----------------------------------------------------------------
+  var KW_CATEGORY_ORDER = ['priority-now', 'near-page-1', 'ctr-opportunity', 'content-gap', 'protect-maintain'];
+  var KW_PRIORITY_CLASS = { HIGH: 'admin-wa-kw-priority-high', MEDIUM: 'admin-wa-kw-priority-medium', LOW: 'admin-wa-kw-priority-low', MAINTAIN: 'admin-wa-kw-priority-maintain' };
+  var KW_CONFIDENCE_CLASS = { HIGH: 'admin-wa-kw-confidence-high', MEDIUM: 'admin-wa-kw-confidence-medium', LOW: 'admin-wa-kw-confidence-low' };
+
+  function percent1(n) { return (Number(n || 0) * 100).toFixed(2) + '%'; }
+
+  // Card layout is deliberately operational, not a debug log (independent-
+  // review feedback): query+priority first, then how much to TRUST that
+  // priority (evidence confidence — a separate axis, never folded into
+  // priority itself), then the suggested action (the one thing a reader
+  // actually needs to decide on), then the raw metrics, and finally the
+  // scoring "reasons" as supporting detail at the bottom, not the headline.
+  function buildKwCard(item) {
+    var card = el('div', 'admin-wa-kw-card' + (item.likelyLocalPack ? ' admin-wa-kw-card-localpack' : ''));
+
+    var top = el('div', 'admin-wa-kw-card-top');
+    top.appendChild(el('span', 'admin-wa-kw-query', item.query));
+    top.appendChild(el('span', 'admin-wa-kw-priority ' + (KW_PRIORITY_CLASS[item.priority] || ''), item.priority));
+    card.appendChild(top);
+
+    var confRow = el('div', 'admin-wa-kw-confidence-row');
+    confRow.appendChild(el('span', 'admin-wa-kw-confidence ' + (KW_CONFIDENCE_CLASS[item.evidenceConfidence] || ''), (item.evidenceConfidence || '—') + ' confidence'));
+    if (item.likelyLocalPack) confRow.appendChild(el('span', 'admin-wa-kw-tag admin-wa-kw-tag-localpack', 'Possible local-pack effect'));
+    if (item.contentGapSeverityLabel) confRow.appendChild(el('span', 'admin-wa-kw-tag', item.contentGapSeverityLabel));
+    card.appendChild(confRow);
+
+    card.appendChild(el('p', 'admin-wa-kw-action', item.recommendedAction));
+
+    card.appendChild(el('p', 'admin-wa-evidence-meta',
+      item.metrics.impressions + ' impressions · ' + item.metrics.clicks + ' clicks · ' + percent1(item.metrics.ctr) + ' CTR · position ' + Number(item.metrics.position).toFixed(1)));
+    card.appendChild(el('p', 'admin-wa-evidence-meta', 'Landing page: ' + item.landingPage.label));
+    if (item.trend && item.trend.landingPageChanged) {
+      card.appendChild(el('p', 'admin-wa-muted', 'Note: the ranking page changed since the prior period, so trend was not scored.'));
+    }
+    if (item.alsoQualifiesFor && item.alsoQualifiesFor.length) {
+      var labels = item.alsoQualifiesFor.map(function (k) { return KW_CATEGORY_LABELS[k] || k; }).join(', ');
+      card.appendChild(el('p', 'admin-wa-muted', 'Also relevant to: ' + labels));
+    }
+
+    var reasons = el('ul', 'admin-wa-kw-reasons');
+    (item.reasons || []).forEach(function (r) { reasons.appendChild(el('li', '', r)); });
+    card.appendChild(reasons);
+
+    return card;
+  }
+
+  var KW_CATEGORY_LABELS = { 'priority-now': 'Priority Now', 'near-page-1': 'Near Page 1', 'ctr-opportunity': 'CTR Opportunity', 'content-gap': 'Content Gap', 'protect-maintain': 'Protect / Maintain' };
+
+  function renderKeywordOpportunities(data) {
+    var metaEl = document.getElementById('wa-kw-meta');
+    var groupsEl = document.getElementById('wa-kw-groups');
+    clear(groupsEl);
+
+    if (!data || !data.available) {
+      var state = data && data.state;
+      metaEl.textContent = state === 'property_not_configured'
+        ? 'GSC_SITE_URL is not configured on the admin runtime — keyword opportunities are hidden rather than shown unscoped.'
+        : state === 'not_collected'
+          ? 'Not yet collected — no successful Search Console snapshot stored.'
+          : state === 'failed'
+            ? 'Latest Search Console collection failed — keyword opportunities need a successful snapshot.'
+            : 'Keyword-opportunity evidence unavailable — check database setup.';
+      return;
+    }
+
+    metaEl.textContent = data.period.start + ' – ' + data.period.end + ' · ' + data.totalQueriesAnalyzed + ' queries analyzed'
+      + (data.excludedLowEvidenceCount ? ' · ' + data.excludedLowEvidenceCount + ' excluded as low-evidence' : '')
+      + (data.previousPeriod ? ' · trend vs. ' + data.previousPeriod.start + ' – ' + data.previousPeriod.end : ' · no prior-period trend available');
+
+    KW_CATEGORY_ORDER.forEach(function (key) {
+      var group = data.categories && data.categories[key];
+      var section = el('div', 'admin-wa-kw-group');
+      var header = el('div', 'admin-wa-kw-group-header');
+      header.appendChild(el('span', 'admin-wa-kw-group-title', KW_CATEGORY_LABELS[key]));
+      header.appendChild(el('span', 'admin-wa-section-count', group ? '(' + group.total + ')' : '(0)'));
+      section.appendChild(header);
+
+      if (!group || !group.items.length) {
+        section.appendChild(el('p', 'admin-wa-empty-note', 'Nothing in this category right now.'));
+      } else {
+        var list = el('div', 'admin-wa-kw-list');
+        group.items.forEach(function (item) { list.appendChild(buildKwCard(item)); });
+        section.appendChild(list);
+        if (group.total > group.items.length) {
+          section.appendChild(el('p', 'admin-wa-muted', '+' + (group.total - group.items.length) + ' more not shown.'));
+        }
+      }
+      groupsEl.appendChild(section);
+    });
+  }
+
+  // -----------------------------------------------------------------
   // Agent activity — the dashboard's own flattened run/finding feed,
   // merged with APPROVED/REJECTED events read from the live proposals
   // fetch (those live in Supabase, not the history log — see
@@ -573,6 +672,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         renderEvidencePanel('wa-evidence-gsc', 'SEARCH CONSOLE', dash.searchIntelligence && dash.searchIntelligence.searchConsole);
         renderEvidencePanel('wa-evidence-ga4', 'GA4', dash.searchIntelligence && dash.searchIntelligence.ga4);
+        renderKeywordOpportunities(dash.keywordOpportunities);
         if (!dash.connected) {
           notConnectedEl.style.display = 'block';
           bodyEl.style.display = 'none';

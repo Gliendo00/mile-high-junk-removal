@@ -131,4 +131,28 @@ async function latestSnapshots(db) {
   const [searchConsole, ga4] = await Promise.all([latestSource(db, 'gsc'), latestSource(db, 'ga4')]);
   return { searchConsole, ga4 };
 }
-module.exports = { periods, normalizeGsc, normalizeGa4, failure, collectSource, collect, latestSource, latestSnapshots, EVENTS };
+// Phase 2 (keyword-opportunities.js) needs more than latestSource()'s
+// top-20-row sample — a real classification pass over the query list, plus
+// the PRIOR period for trend evidence. Same fail-closed per-property
+// scoping and error handling as latestSource(); a sibling, not a
+// replacement — latestSource()'s single-snapshot/top-20 contract for the
+// existing raw-evidence admin panel is unchanged.
+async function recentQueryRows(db, source, { limit = 500, periodsCount = 2 } = {}) {
+  const property = process.env[source === 'gsc' ? 'GSC_SITE_URL' : 'GA4_PROPERTY_ID'];
+  if (!property) return { available: false, state: 'property_not_configured', periods: [] };
+  try {
+    const scoped = table => db.from(table).select('*').eq('source', source).eq('property', property);
+    const snaps = await scoped('search_snapshots').order('period_end', { ascending: false }).limit(periodsCount);
+    if (snaps.error) throw snaps.error;
+    if (!snaps.data.length) return { available: false, state: 'not_collected', periods: [] };
+    const table = source === 'gsc' ? 'search_console_queries' : 'ga4_landing_pages';
+    const periodsOut = [];
+    for (const snap of snaps.data) {
+      const rows = await db.from(table).select('*').eq('snapshot_id', snap.id).order(source === 'gsc' ? 'impressions' : 'organic_sessions', { ascending: false }).limit(limit);
+      if (rows.error) throw rows.error;
+      periodsOut.push({ snapshot: snap, rows: rows.data });
+    }
+    return { available: true, state: 'success', periods: periodsOut };
+  } catch (_) { return { available: false, state: 'storage_error', periods: [] }; }
+}
+module.exports = { periods, normalizeGsc, normalizeGa4, failure, collectSource, collect, latestSource, latestSnapshots, recentQueryRows, EVENTS };

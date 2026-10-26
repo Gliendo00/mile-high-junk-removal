@@ -759,8 +759,21 @@ async function safeLatestSearchSnapshots() {
   }
 }
 
+// Same defensive posture as safeLatestSearchSnapshots() above — a problem
+// in the Phase 2 keyword-opportunity engine must never break the rest of
+// the Website Agent dashboard.
+async function safeKeywordOpportunities() {
+  try {
+    return await require("../../agent/lib/keyword-opportunities").analyzeKeywordOpportunities();
+  } catch (e) {
+    console.error("Admin agent-dashboard failed to compute keyword opportunities", e);
+    return { available: false, state: "storage_error" };
+  }
+}
+
 async function handleAgentDashboard(req, res) {
   const searchSnapshots = await safeLatestSearchSnapshots();
+  const keywordOpportunities = await safeKeywordOpportunities();
   const history = loadAgentHistoryModule(res);
   if (!history) return;
 
@@ -790,6 +803,7 @@ async function handleAgentDashboard(req, res) {
         weekly: { lastRun: null },
         activity: [],
         searchIntelligence: searchSnapshots,
+        keywordOpportunities,
       });
       return;
     }
@@ -832,6 +846,7 @@ async function handleAgentDashboard(req, res) {
       weekly: { lastRun: dashboardRunSummary(latestWeekly) },
       activity: dashboardActivityFeed(sorted),
       searchIntelligence: searchSnapshots,
+      keywordOpportunities,
     });
   } catch (e) {
     console.error("Admin agent-dashboard failed to read/summarize agent/history/log.ndjson", e);
@@ -846,6 +861,7 @@ async function handleAgentDashboard(req, res) {
       weekly: { lastRun: null },
       activity: [],
       searchIntelligence: searchSnapshots,
+      keywordOpportunities,
     });
   }
 }
