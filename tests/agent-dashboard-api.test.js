@@ -1,15 +1,15 @@
 // Website Agent dashboard — tests for api/admin/bookings.js's new
 // ?view=agent-dashboard branch (handleAgentDashboard()). Same offline test
-// harness convention as tests/agent-reports-api.test.js: this view never
-// touches Supabase (not even to check configuration — it reads
-// process.env directly, see the handler's own comment), but requireAdmin()
-// still gates every /api/admin/* route, so a fake auth-only anon client is
-// needed, and any unexpected createClient() call with a non-anon key fails
-// the test loudly rather than silently succeeding.
+// harness convention as tests/agent-reports-api.test.js. Snapshot reads
+// are injected below; requireAdmin() still gates every request. The fake
+// auth client rejects any unexpected database connection in this unit test.
 //
 // Run with:  node tests/agent-dashboard-api.test.js
 
 const Module = require("module");
+let snapshotResult = { searchConsole: { available: false, state: "not_collected" }, ga4: { available: false, state: "not_collected" } };
+const snapshotPath = require.resolve("../agent/lib/search-snapshots");
+require.cache[snapshotPath] = { id: snapshotPath, filename: snapshotPath, loaded: true, exports: { latestSnapshots: async () => snapshotResult } };
 const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
@@ -326,7 +326,7 @@ async function main() {
       assert.strictEqual(res.body.searchIntelligence.ga4.available, false);
     });
 
-    await test("?view=agent-dashboard surfaces REAL persisted first-party search evidence when a finding carries it, never fabricated", async () => {
+    await test("?view=agent-dashboard surfaces stored snapshots independently of finding evidence and preserves partial source failure", async () => {
       installSeededLog([
         {
           runId: "r1",
@@ -359,12 +359,33 @@ async function main() {
         },
       ]);
       const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+      snapshotResult = { searchConsole: { available: true, snapshot: { property: "sc-domain:milehighjunkremoval.net" }, rows: [{ query: "junk removal aurora", clicks: 12 }] }, ga4: { available: false, state: "failed" } };
+      const storedResponse = await run(makeReq({ query: { view: "agent-dashboard" } }));
+      res.body = storedResponse.body;
       const gsc = res.body.searchIntelligence.searchConsole;
       assert.strictEqual(gsc.available, true);
       assert.strictEqual(gsc.rows.length, 1);
       assert.strictEqual(gsc.rows[0].clicks, 12);
-      assert.strictEqual(gsc.scope.value, "Aurora");
+      assert.strictEqual(gsc.snapshot.property, "sc-domain:milehighjunkremoval.net");
+      assert.strictEqual(res.body.searchIntelligence.ga4.state, "failed");
       assert.strictEqual(res.body.searchIntelligence.ga4.available, false, "no ga4 evidence was seeded");
+    });
+
+    await test("?view=agent-dashboard never 500s when search-snapshots.latestSnapshots() itself throws — one subsystem's failure must not take down the whole dashboard", async () => {
+      const originalLatestSnapshots = require.cache[snapshotPath].exports.latestSnapshots;
+      require.cache[snapshotPath].exports.latestSnapshots = async () => { throw new Error("boom: simulated module/read failure"); };
+      try {
+        const res = await run(makeReq({ query: { view: "agent-dashboard" } }));
+        assert.strictEqual(res.statusCode, 200);
+        assert.strictEqual(res.body.ok, true);
+        assert.strictEqual(res.body.connected, true, "the rest of the dashboard must still render normally");
+        assert.strictEqual(res.body.searchIntelligence.searchConsole.state, "storage_error");
+        assert.strictEqual(res.body.searchIntelligence.searchConsole.available, false);
+        assert.strictEqual(res.body.searchIntelligence.ga4.state, "storage_error");
+        assert.strictEqual(res.body.searchIntelligence.ga4.available, false);
+      } finally {
+        require.cache[snapshotPath].exports.latestSnapshots = originalLatestSnapshots;
+      }
     });
 
     await test("a FAILED run is reported honestly as status:'failed', never pretending success", async () => {

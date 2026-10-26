@@ -40,7 +40,7 @@ function isGa4Configured() {
  * @param {number} [args.limit]
  * @param {function} [args.fetchImpl] - injectable for tests
  */
-async function runReport({ startDate, endDate, dimensions, metrics, dimensionFilter, limit, fetchImpl } = {}) {
+async function runReport({ startDate, endDate, dimensions, metrics, dimensionFilter, limit, offset = 0, fetchImpl } = {}) {
   const propertyId = process.env.GA4_PROPERTY_ID;
   if (!propertyId) {
     return { skipped: true, reason: "GA4_PROPERTY_ID not configured — GA4 evidence not available" };
@@ -54,6 +54,7 @@ async function runReport({ startDate, endDate, dimensions, metrics, dimensionFil
     dimensions: (dimensions || []).map((name) => ({ name })),
     metrics: (metrics || []).map((name) => ({ name })),
     limit: limit || 25,
+    offset,
     ...(dimensionFilter ? { dimensionFilter } : {}),
   };
 
@@ -66,10 +67,12 @@ async function runReport({ startDate, endDate, dimensions, metrics, dimensionFil
     });
     const json = await res.json();
     if (!res.ok) {
-      return { skipped: true, reason: `GA4 Data API error: ${(json && json.error && json.error.message) || res.status}` };
+      return { skipped: true, status: res.status, reason: `GA4 Data API error: ${(json && json.error && json.error.message) || res.status}` };
     }
     return {
       skipped: false,
+      rowCount: json.rowCount || 0,
+      metadata: json.metadata || {},
       dimensionHeaders: (json && json.dimensionHeaders) || [],
       metricHeaders: (json && json.metricHeaders) || [],
       rows: (json && json.rows) || [],

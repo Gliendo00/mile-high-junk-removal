@@ -434,55 +434,60 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------
-  // Search intelligence — real, persisted first-party evidence only
-  // (see api/admin/bookings.js's dashboardSearchIntelligence()). An
-  // honest "not yet collected" state when nothing has ever been gathered
-  // — never a fabricated chart. Clearly labeled as raw Google evidence,
-  // distinct from any Agent conclusion.
+  // Search intelligence — stored Supabase snapshots only (see
+  // api/admin/bookings.js's handleAgentDashboard() / agent/lib/search-
+  // snapshots.js's latestSnapshots()). An honest "not yet collected" /
+  // "property not configured" / "storage unavailable" state when there's
+  // nothing real to show — never a fabricated chart. Clearly labeled as
+  // raw Google evidence, distinct from any Agent conclusion.
   // -----------------------------------------------------------------
-  function renderEvidencePanel(containerId, title, evidence, rowColumns) {
+  function renderEvidencePanel(containerId, title, evidence) {
     var panel = document.getElementById(containerId);
     clear(panel);
     panel.appendChild(el('div', 'admin-wa-panel-title', title));
-
-    if (!evidence || !evidence.available) {
-      panel.appendChild(el('p', 'admin-wa-muted', 'Not yet collected — the Agent hasn’t gathered this evidence yet.'));
+    renderSnapshot(panel, evidence || { available: false, state: 'storage_error' }, title === 'GA4');
+  }
+  function renderSnapshot(panel, evidence, isGa4) {
+    if (evidence.state === 'property_not_configured') {
+      panel.appendChild(el('p', 'admin-wa-evidence-context', (isGa4 ? 'GA4_PROPERTY_ID' : 'GSC_SITE_URL') + ' is not configured on the admin runtime — snapshot evidence is hidden rather than shown unscoped across properties.'));
       return;
     }
-
-    panel.appendChild(el('p', 'admin-wa-evidence-meta', evidence.window ? evidence.window.label : ''));
-    panel.appendChild(el('p', 'admin-wa-evidence-meta', 'Scope: ' + (evidence.scope ? evidence.scope.type + ' — ' + evidence.scope.value : '—')));
-    panel.appendChild(el('p', 'admin-wa-evidence-context', evidence.context));
-
-    if (Array.isArray(evidence.rows) && evidence.rows.length) {
-      var table = el('div', 'admin-wa-evidence-rows');
-      evidence.rows.forEach(function (row) {
-        table.appendChild(rowColumns(row));
-      });
-      panel.appendChild(table);
-    } else {
-      panel.appendChild(el('p', 'admin-wa-muted', 'No rows returned for this query.'));
+    if (evidence.state === 'failed' || evidence.state === 'storage_error') {
+      panel.appendChild(el('p', 'admin-wa-evidence-context', evidence.state === 'storage_error' ? 'Snapshot storage unavailable — check database setup.' : 'Latest collection failed: ' + (evidence.attempt && evidence.attempt.error_category || 'API error') + '.'));
     }
-
-    panel.appendChild(el('p', 'admin-wa-evidence-limitations', evidence.limitations));
-    panel.appendChild(el('p', 'admin-wa-evidence-meta', 'Gathered ' + formatRelative(evidence.gatheredAt) + ' · ' + (evidence.freshness || 'unknown') + ' · raw Google evidence, not an Agent conclusion'));
-  }
-  function gscRow(row) {
-    var line = el('div', 'admin-wa-evidence-row');
-    var key = Array.isArray(row.keys) ? row.keys.join(' / ') : '—';
-    line.appendChild(el('span', 'admin-wa-evidence-row-key', key));
-    line.appendChild(el('span', 'admin-wa-evidence-row-val', (row.clicks || 0) + ' clicks'));
-    line.appendChild(el('span', 'admin-wa-evidence-row-val', (row.impressions || 0) + ' impr.'));
-    line.appendChild(el('span', 'admin-wa-evidence-row-val', typeof row.position === 'number' ? 'pos ' + row.position.toFixed(1) : '—'));
-    return line;
-  }
-  function ga4Row(row) {
-    var line = el('div', 'admin-wa-evidence-row');
-    var dims = Array.isArray(row.dimensions) ? row.dimensions.join(' / ') : '—';
-    var mets = Array.isArray(row.metrics) ? row.metrics.join(' / ') : '—';
-    line.appendChild(el('span', 'admin-wa-evidence-row-key', dims));
-    line.appendChild(el('span', 'admin-wa-evidence-row-val', mets));
-    return line;
+    if (!evidence.available) {
+      panel.appendChild(el('p', 'admin-wa-muted', evidence.state === 'not_collected' ? 'Not yet collected — no successful snapshot stored.' : 'No successful snapshot available. Collection did not return a valid empty report.'));
+      return;
+    }
+    var snap = evidence.snapshot;
+    var totals = snap.totals;
+    function percent(n) { return (Number(n || 0) * 100).toFixed(2) + '%'; }
+    panel.appendChild(el('p', 'admin-wa-evidence-meta', snap.period_start + ' – ' + snap.period_end + ' · ' + snap.property));
+    panel.appendChild(el('p', 'admin-wa-evidence-meta', 'Last successful collection: ' + new Date(snap.collected_at).toLocaleString()));
+    if (Date.now() - new Date(snap.collected_at).getTime() > 36 * 3600000) panel.appendChild(el('p', 'admin-wa-muted', 'Stored evidence is stale; awaiting a successful refresh.'));
+    panel.appendChild(el('p', 'admin-wa-snapshot-totals', isGa4
+      ? totals.organic_users + ' organic users · ' + totals.organic_sessions + ' sessions · ' + totals.engaged_sessions + ' engaged · ' + percent(totals.engagement_rate) + ' engagement rate · ' + totals.key_events + ' property key events'
+      : totals.clicks + ' clicks · ' + totals.impressions + ' impressions · ' + percent(totals.ctr) + ' CTR · ' + Number(totals.position).toFixed(1) + ' average position'));
+    if (isGa4) {
+      panel.appendChild(el('p', 'admin-wa-muted', 'Conversion mapping unresolved — property key events are not verified booking conversions.'));
+      var events = snap.metadata.events || [];
+      panel.appendChild(el('p', 'admin-wa-evidence-meta', snap.metadata.eventStatus === 'collection_failed' ? 'Lead event counts: collection failed.' : 'Tracked event counts: ' + (events.map(function (e) { return e.event + ': ' + e.count; }).join(' · ') || 'zero matching events')));
+    }
+    var wrap = el('div', 'admin-wa-snapshot-scroll');
+    var table = el('table', 'admin-wa-snapshot-table');
+    var head = el('thead'); var header = el('tr');
+    (isGa4 ? ['Landing page', 'Users', 'Sessions', 'Engaged', 'Engagement', 'Key events'] : ['Query', 'Clicks', 'Impressions', 'CTR', 'Position', 'Ranking landing page']).forEach(function (label) { header.appendChild(el('th', '', label)); });
+    head.appendChild(header); table.appendChild(head);
+    var body = el('tbody');
+    (evidence.rows || []).forEach(function (r) {
+      var tr = el('tr');
+      var values = isGa4 ? [r.landing_page, r.organic_users, r.organic_sessions, r.engaged_sessions, percent(r.engagement_rate), r.key_events] : [r.query, r.clicks, r.impressions, percent(r.ctr), Number(r.position).toFixed(1), r.landing_page];
+      values.forEach(function (v) { tr.appendChild(el('td', '', String(v))); }); body.appendChild(tr);
+    });
+    table.appendChild(body); wrap.appendChild(table); panel.appendChild(wrap);
+    if (!(evidence.rows || []).length) panel.appendChild(el('p', 'admin-wa-muted', 'Successful collection returned zero rows.'));
+    panel.appendChild(el('p', 'admin-wa-evidence-limitations', snap.metadata.limitations || ''));
+    panel.appendChild(el('p', 'admin-wa-evidence-meta', 'Raw Google evidence, not an Agent conclusion. Metrics alone do not justify a website change.'));
   }
 
   // -----------------------------------------------------------------
@@ -566,6 +571,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
         loadingEl.style.display = 'none';
 
+        renderEvidencePanel('wa-evidence-gsc', 'SEARCH CONSOLE', dash.searchIntelligence && dash.searchIntelligence.searchConsole);
+        renderEvidencePanel('wa-evidence-ga4', 'GA4', dash.searchIntelligence && dash.searchIntelligence.ga4);
         if (!dash.connected) {
           notConnectedEl.style.display = 'block';
           bodyEl.style.display = 'none';
@@ -586,8 +593,6 @@ document.addEventListener('DOMContentLoaded', function () {
         renderLatestRun(dash.latestRun);
         renderQueue(proposed);
         renderExecutionStatus(proposals);
-        renderEvidencePanel('wa-evidence-gsc', 'SEARCH CONSOLE', dash.searchIntelligence && dash.searchIntelligence.searchConsole, gscRow);
-        renderEvidencePanel('wa-evidence-ga4', 'GA4', dash.searchIntelligence && dash.searchIntelligence.ga4, ga4Row);
         renderActivity(dash.activity, proposals);
       })
       .catch(function (err) {

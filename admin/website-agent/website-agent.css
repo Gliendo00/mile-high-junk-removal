@@ -161,3 +161,9 @@
   .admin-wa-radar { right: -95px; top: 55px; width: 260px; height: 260px; opacity: .1; }
   .admin-wa-instrument-footer { gap: 10px; font-size: 8px; flex-wrap: wrap; }
 }
+/* Snapshot tables stay inside their cards on phones, tablets and desktop. */
+.admin-wa-snapshot-scroll { max-width: 100%; overflow-x: auto; }
+.admin-wa-snapshot-table { width: 100%; border-collapse: collapse; font-size: .78rem; text-align: left; }
+.admin-wa-snapshot-table th, .admin-wa-snapshot-table td { padding: .65rem .5rem; border-bottom: 1px solid var(--admin-border, #d9dee5); vertical-align: top; }
+.admin-wa-snapshot-table td:first-child, .admin-wa-snapshot-table td:last-child { overflow-wrap: anywhere; min-width: 8rem; max-width: 20rem; }
+.admin-wa-snapshot-totals { font-size: .88rem; line-height: 1.7; font-weight: 600; }
