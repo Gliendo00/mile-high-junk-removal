@@ -981,11 +981,38 @@ const ACTIVITY_TYPE_BY_ICON = {
 // still never written by any code path (see sql/2026-10-12_phase3-
 // agent-proposals.sql's own header) — left in place rather than removed
 // as unrelated cleanup. 'failed' is now reused by execute-proposal.js.
+// Phase 16 — three more owner-decision states (see sql/2026-10-28_
+// phase16-proposal-decision-states.sql's own header for why these three
+// and why Dismiss reuses 'rejected' instead of adding a fourth).
 const AGENT_PROPOSAL_STATUSES = [
   "proposed", "approved", "rejected", "applied", "validated", "failed",
-  "applying", "validating", "deploying", "deployed", "needs_review"
+  "applying", "validating", "deploying", "deployed", "needs_review",
+  "no_change", "needs_revision", "recheck"
 ];
 const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
+// Phase 16 — the full set of owner actions resource:"agent-proposal"'s
+// PATCH accepts, each mapping 1:1 to the `status` it writes. "approve"
+// and "reject" are the ORIGINAL Phase 3 actions, unchanged (never
+// renamed — tests/agent-proposals-ui.test.js and several others assert
+// the literal strings 'approve'/'reject'); "dismiss" is the new Phase 16
+// button LABEL for the exact same 'reject'/'rejected' action/status pair
+// (see the SQL migration's header) — not a new action name, just a new
+// place that calls the existing one, so it isn't listed again here.
+const AGENT_PROPOSAL_ACTION_TO_STATUS = {
+  approve: "approved",
+  reject: "rejected",
+  no_change: "no_change",
+  needs_revision: "needs_revision",
+  recheck: "recheck",
+};
+// Every status an owner decision can land a proposal on (i.e. every
+// value AGENT_PROPOSAL_ACTION_TO_STATUS can produce) — 'proposed' is
+// deliberately excluded (that's the UN-decided default, not a decision).
+// Used by the stale-detection check below; agent/lib/proposals-sync.js
+// keeps its own equivalent list for the fingerprint-reset mechanism
+// (same values, different module, same reasoning — see that file's
+// header).
+const AGENT_PROPOSAL_DECIDED_STATUSES = Object.values(AGENT_PROPOSAL_ACTION_TO_STATUS);
 const AGENT_PROPOSAL_SELECT =
   "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at, proposed_fix, execution, opportunity_classification, claude_handoff_report";
 
@@ -1095,7 +1122,12 @@ async function handleListAgentProposals(req, res) {
     // stays false in that case, never guessed true.
     const reviewKeys = currentOwnerReviewKeys();
     const proposals = (data || []).map((row) => {
-      const stillActive = row.status === "proposed" || row.status === "approved" || row.status === "rejected";
+      // Phase 16 — the three new decision states are just as capable of
+      // going stale as proposed/approved/rejected always were (e.g. a
+      // 'recheck'-ed proposal whose underlying finding then disappears
+      // entirely) — extended here, never left to silently fall through
+      // to "not active" just because they're new.
+      const stillActive = AGENT_PROPOSAL_DECIDED_STATUSES.indexOf(row.status) !== -1 || row.status === "proposed";
       const stale = stillActive && reviewKeys !== null && !reviewKeys.has(row.finding_key);
       return mapAgentProposal(row, { stale });
     });
@@ -1107,7 +1139,11 @@ async function handleListAgentProposals(req, res) {
   }
 }
 
-// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject", note }
+// PATCH body: { resource: "agent-proposal", id, action: "approve"|"reject"|
+// "no_change"|"needs_revision"|"recheck", note }
+// Phase 16 — three new actions alongside the original approve/reject
+// (see AGENT_PROPOSAL_ACTION_TO_STATUS's own header for the full set and
+// why Dismiss isn't a fourth new action name).
 async function handleReviewAgentProposal(req, res, session) {
   const supabase = getServiceClient();
   if (!supabase) {
@@ -1125,8 +1161,8 @@ async function handleReviewAgentProposal(req, res, session) {
     res.status(400).json({ error: "A proposal id is required." });
     return;
   }
-  if (action !== "approve" && action !== "reject") {
-    res.status(400).json({ error: "action must be 'approve' or 'reject'." });
+  if (!Object.prototype.hasOwnProperty.call(AGENT_PROPOSAL_ACTION_TO_STATUS, action)) {
+    res.status(400).json({ error: "action must be one of: " + Object.keys(AGENT_PROPOSAL_ACTION_TO_STATUS).join(", ") + "." });
     return;
   }
 
@@ -1141,7 +1177,7 @@ async function handleReviewAgentProposal(req, res, session) {
       return;
     }
 
-    const newStatus = action === "approve" ? "approved" : "rejected";
+    const newStatus = AGENT_PROPOSAL_ACTION_TO_STATUS[action];
     // The literal update payload, built here — never the request body —
     // same mass-assignment discipline every other admin write endpoint
     // in this project already follows. This can only ever move a

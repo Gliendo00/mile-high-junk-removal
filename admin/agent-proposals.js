@@ -30,10 +30,15 @@
 // insertAdjacentHTML with a concatenated string), matching every other
 // admin script's discipline.
 document.addEventListener('DOMContentLoaded', function () {
+  // Phase 16 — 'rejected' is now labeled "Dismissed" here (the Dismiss
+  // button writes this exact same status — see sql/2026-10-28_phase16-
+  // proposal-decision-states.sql's own header for why it reuses
+  // 'rejected' rather than adding a new value). The three genuinely new
+  // statuses (no_change/needs_revision/recheck) get their own labels.
   var STATUS_LABELS = {
     proposed: 'Needs review',
     approved: 'Approved / Pending execution',
-    rejected: 'Rejected',
+    rejected: 'Dismissed',
     applied: 'Applied',
     validated: 'Validated',
     failed: 'Failed',
@@ -42,6 +47,9 @@ document.addEventListener('DOMContentLoaded', function () {
     deploying: 'Deploying…',
     deployed: 'Deployed',
     needs_review: 'Needs review (execution stopped)',
+    no_change: 'Verified — No Change Needed',
+    needs_revision: 'Needs Revision',
+    recheck: 'Recheck Later',
   };
   // Same breakpoint admin.css's .admin-proposal-execute-btn media query
   // uses — kept in one place here so the JS gate and the CSS gate never
@@ -59,6 +67,22 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var currentStatusFilter = '';
   var actionInFlight = false;
+
+  // Phase 16 — "Open Proposal" deep-linking from admin/website-agent.js's
+  // queue/execution cards: /admin/agent-proposals/?id=<proposal.id>.
+  // Read once at load; the matching card gets a stable DOM id (see
+  // buildCard() below) so it can be scrolled into view and briefly
+  // outlined once the list has rendered. Reusing the EXISTING
+  // proposal.id/finding_key relationship already returned by ?view=
+  // agent-proposals — no new identifier, no duplicate lookup, never a
+  // reason to create a second proposal row for the same finding.
+  var deepLinkProposalId = (function () {
+    try {
+      return new URLSearchParams(window.location.search).get('id') || null;
+    } catch (e) {
+      return null;
+    }
+  })();
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -155,6 +179,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function buildCard(proposal) {
     var card = el('div', 'admin-proposal-card');
+    // Phase 16 — a stable, deep-linkable id for every card (see
+    // deepLinkProposalId above and highlightDeepLinkedCard() below).
+    card.id = 'proposal-' + proposal.id;
 
     var top = el('div', 'admin-proposal-card-top');
     var badge = el('span', 'admin-status-badge admin-proposal-status-' + proposal.status, STATUS_LABELS[proposal.status] || proposal.status);
@@ -300,13 +327,20 @@ document.addEventListener('DOMContentLoaded', function () {
       card.appendChild(execPanel);
     }
 
-    var RETRYABLE_STATUSES = ['proposed', 'failed', 'needs_review'];
+    // Phase 16 — RETRYABLE_STATUSES widened to include the two new
+    // non-terminal decision states (needs_revision/recheck): both mean
+    // "not resolved yet, still open for any of the 5 actions below" —
+    // the same posture 'proposed'/'failed'/'needs_review' already had.
+    // 'no_change' and 'rejected' (Dismiss) are deliberately NOT in this
+    // list — see the final `else` branch below: those are resolved
+    // outcomes that read as reviewed history, not unfinished work.
+    var RETRYABLE_STATUSES = ['proposed', 'failed', 'needs_review', 'needs_revision', 'recheck'];
     var IN_PROGRESS_STATUSES = ['applying', 'validating', 'deploying'];
 
     if (RETRYABLE_STATUSES.indexOf(proposal.status) !== -1) {
       var noteInput = el('textarea', 'admin-proposal-card-note-input');
       noteInput.rows = 2;
-      noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this)';
+      noteInput.placeholder = 'Optional note (e.g. why you chose this)';
       card.appendChild(noteInput);
 
       // Phase 4 hardening — stated right at the point of action, not
@@ -319,24 +353,53 @@ document.addEventListener('DOMContentLoaded', function () {
       // it does not retry anything by itself.
       var reviewNoteText = proposal.status === 'proposed'
         ? 'Approve/Reject only records your decision here — it does not change the website.'
-        : 'Approve again to make this eligible for Execute once more. Reject to stop it for good.';
+        : 'Choosing any action below only updates this proposal’s decision here — it does not, by itself, change the website.';
       card.appendChild(el('p', 'admin-proposal-card-reviewed-note', reviewNoteText));
 
+      // Phase 16 — five actions, one click each (no confirmation dialog
+      // for any of them — see the spec's own UX requirement). Visual
+      // hierarchy: Approve & Execute is the sole solid/primary button;
+      // No Change and Recheck are neutral outlines; Needs Revision gets
+      // its own warm-outline color (admin-btn-warn, admin.css) so it
+      // reads as distinct from a plain neutral choice; Dismiss reuses
+      // the existing danger-outline style Reject always had (same
+      // status, same meaning — see sql/2026-10-28_phase16-proposal-
+      // decision-states.sql's header).
       var actions = el('div', 'admin-proposal-card-actions');
-      var approveBtn = el('button', 'admin-btn admin-btn-primary', proposal.status === 'proposed' ? 'Approve' : 'Approve again');
+      var approveBtn = el('button', 'admin-btn admin-btn-primary', 'Approve & Execute');
       approveBtn.type = 'button';
-      var rejectBtn = el('button', 'admin-btn admin-btn-danger', 'Reject');
-      rejectBtn.type = 'button';
+      var noChangeBtn = el('button', 'admin-btn admin-btn-outline', 'Verified — No Change Needed');
+      noChangeBtn.type = 'button';
+      var needsRevisionBtn = el('button', 'admin-btn admin-btn-warn', 'Needs Revision');
+      needsRevisionBtn.type = 'button';
+      var recheckBtn = el('button', 'admin-btn admin-btn-outline', 'Recheck Later');
+      recheckBtn.type = 'button';
+      var dismissBtn = el('button', 'admin-btn admin-btn-danger', 'Dismiss');
+      dismissBtn.type = 'button';
+
+      var decisionButtons = [approveBtn, noChangeBtn, needsRevisionBtn, recheckBtn, dismissBtn];
 
       approveBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'approve', noteInput.value, [approveBtn, rejectBtn]);
+        reviewProposal(proposal.id, 'approve', noteInput.value, decisionButtons);
       });
-      rejectBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'reject', noteInput.value, [approveBtn, rejectBtn]);
+      noChangeBtn.addEventListener('click', function () {
+        reviewProposal(proposal.id, 'no_change', noteInput.value, decisionButtons);
+      });
+      needsRevisionBtn.addEventListener('click', function () {
+        reviewProposal(proposal.id, 'needs_revision', noteInput.value, decisionButtons);
+      });
+      recheckBtn.addEventListener('click', function () {
+        reviewProposal(proposal.id, 'recheck', noteInput.value, decisionButtons);
+      });
+      dismissBtn.addEventListener('click', function () {
+        reviewProposal(proposal.id, 'reject', noteInput.value, decisionButtons);
       });
 
       actions.appendChild(approveBtn);
-      actions.appendChild(rejectBtn);
+      actions.appendChild(noChangeBtn);
+      actions.appendChild(needsRevisionBtn);
+      actions.appendChild(recheckBtn);
+      actions.appendChild(dismissBtn);
       card.appendChild(actions);
     } else if (proposal.status === 'approved') {
       card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approved — ready to execute.'));
@@ -391,6 +454,26 @@ document.addEventListener('DOMContentLoaded', function () {
     proposals.forEach(function (p) {
       listEl.appendChild(buildCard(p));
     });
+    highlightDeepLinkedCard();
+  }
+
+  // Phase 16 — scrolls the ?id=-matched card into view and briefly
+  // outlines it (admin.css's .admin-proposal-card-linked), then clears
+  // deepLinkProposalId so a later reload (after taking an action on some
+  // OTHER card) doesn't keep jumping the page back to this one. Silently
+  // does nothing if the id isn't found (e.g. a stale/bad link, or the
+  // owner is viewing a status filter that happens to exclude it) —
+  // never an error, since this is a pure navigation convenience.
+  function highlightDeepLinkedCard() {
+    if (!deepLinkProposalId) return;
+    var target = document.getElementById('proposal-' + deepLinkProposalId);
+    deepLinkProposalId = null;
+    if (!target) return;
+    target.scrollIntoView({ block: 'center' });
+    target.classList.add('admin-proposal-card-linked');
+    setTimeout(function () {
+      target.classList.remove('admin-proposal-card-linked');
+    }, 4000);
   }
 
   function load() {

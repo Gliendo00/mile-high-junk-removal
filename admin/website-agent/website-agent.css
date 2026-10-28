@@ -14,6 +14,17 @@
 }
 .admin-wa-list-toggle-btn:hover { box-shadow: 0 3px 9px #2f6f134d; }
 
+/* Phase 16 — the always-visible "Agent Proposals" button (index.html,
+   right after error-banner, outside wa-loading/wa-not-connected/wa-body
+   so it survives every page state). Reuses .admin-btn/.admin-btn-outline
+   as-is; this wrapper just right-aligns it, matching the existing
+   .admin-list-heading-actions convention used elsewhere in /admin/. */
+.admin-wa-top-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 /* Website Agent presentation. Scoped to this dashboard; no shared CRM overrides. */
 .admin-wa-main {
   --wa-ink: #143829;

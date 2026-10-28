@@ -114,11 +114,11 @@ test("Phase 14: STATUS_LABELS covers every new execution-lifecycle status (apply
   }
 });
 
-test("Phase 14: a 'failed' or 'needs_review' proposal can still be re-approved/rejected (RETRYABLE_STATUSES includes them alongside 'proposed')", () => {
+test("Phase 14/16: a 'failed', 'needs_review', 'needs_revision', or 'recheck' proposal can still have any of the 5 decision actions taken on it (RETRYABLE_STATUSES includes them alongside 'proposed')", () => {
   const retryableMatch = proposalsJs.match(/var RETRYABLE_STATUSES = \[([^\]]*)\];/);
   assert.ok(retryableMatch);
   const values = retryableMatch[1].split(",").map((s) => s.trim().replace(/^'|'$/g, ""));
-  assert.deepStrictEqual(values.sort(), ["failed", "needs_review", "proposed"].sort());
+  assert.deepStrictEqual(values.sort(), ["failed", "needs_review", "needs_revision", "proposed", "recheck"].sort());
 });
 
 // --- Phase 15: Claude handoff report UI ------------------------------------

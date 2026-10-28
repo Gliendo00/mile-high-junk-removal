@@ -457,6 +457,19 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
+    // Phase 16 — "Open Proposal": deep-links to THIS exact proposal on
+    // the full review page (reuses proposal.id, the exact identifier
+    // already returned by ?view=agent-proposals and already sent on
+    // this card's own Approve/Reject below — never a new lookup, never
+    // a duplicate record). Always shown, independent of whether a
+    // handoff report exists. Plain navigation (an <a>, no click handler)
+    // so it can never interfere with Approve/Reject/Copy Claude Report.
+    var openProposalActions = el('div', 'admin-proposal-card-actions');
+    var openProposalLink = el('a', 'admin-btn admin-btn-outline', 'Open Proposal');
+    openProposalLink.href = '/admin/agent-proposals/?id=' + encodeURIComponent(proposal.id);
+    openProposalActions.appendChild(openProposalLink);
+    card.appendChild(openProposalActions);
+
     var noteInput = el('textarea', 'admin-proposal-card-note-input');
     noteInput.rows = 2;
     noteInput.placeholder = 'Optional note (e.g. why you approved/rejected this)';
@@ -519,8 +532,11 @@ document.addEventListener('DOMContentLoaded', function () {
       card.appendChild(el('p', 'admin-proposal-card-meta', 'Commit: ' + exec.commitSha.slice(0, 12) + (exec.filesChanged ? ' (' + exec.filesChanged.join(', ') + ')' : '')));
     }
 
+    // Phase 16 — deep-linked to this exact proposal (was a generic link
+    // to the list; see buildQueueCard()'s own comment above for why this
+    // is safe to do here too — same proposal.id, no new lookup).
     var link = el('a', 'admin-wa-more-link', 'View / act on this in the full proposals list →');
-    link.href = '/admin/agent-proposals/';
+    link.href = '/admin/agent-proposals/?id=' + encodeURIComponent(proposal.id);
     card.appendChild(link);
     return card;
   }

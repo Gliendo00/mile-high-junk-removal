@@ -61,6 +61,16 @@ const phase15Sql = fs.readFileSync(
   path.join(__dirname, "..", "sql", "2026-10-26_phase15-opportunity-classification.sql"),
   "utf8"
 );
+// Phase 16 (proposal decision states: no_change/needs_revision/recheck) —
+// another additive migration, this time widening the `status` CHECK
+// constraint only (no new columns, so the grant-column-list tests below
+// still read phase15Sql for that). Now the AUTHORITATIVE/current source
+// for the status enum specifically — same "superseded by" pattern
+// phase14 established over phase3's own status list.
+const phase16Sql = fs.readFileSync(
+  path.join(__dirname, "..", "sql", "2026-10-28_phase16-proposal-decision-states.sql"),
+  "utf8"
+);
 
 function extractCheckInList(sql, column) {
   const re = new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`, "i");
@@ -117,11 +127,11 @@ test("agent_proposals.sql: decision CHECK constraint matches exactly decision.js
   assert.deepStrictEqual(sqlDecisions, appDecisions);
 });
 
-test("agent_proposals.sql (as superseded by phase14): status CHECK constraint matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
-  // Phase 14's migration DROPs and recreates this constraint with a
+test("agent_proposals.sql (as superseded by phase16): status CHECK constraint matches exactly api/admin/bookings.js's AGENT_PROPOSAL_STATUSES list", () => {
+  // Phase 16's migration DROPs and recreates this constraint with a
   // superset of values (see that file's own header) — it is now the
-  // authoritative current constraint, not the original phase3 one.
-  const sqlStatuses = extractCheckInList(phase14Sql, "status").sort();
+  // authoritative current constraint, not phase14's.
+  const sqlStatuses = extractCheckInList(phase16Sql, "status").sort();
   const bookingsJs = fs.readFileSync(path.join(__dirname, "..", "api", "admin", "bookings.js"), "utf8");
   const m = bookingsJs.match(/const AGENT_PROPOSAL_STATUSES = \[([^\]]*)\];/);
   assert.ok(m, "expected AGENT_PROPOSAL_STATUSES in api/admin/bookings.js");
@@ -190,6 +200,32 @@ test("phase15 migration: its re-issued GRANT UPDATE still excludes identity colu
 test("phase15 migration: rollback section is commented out (reference-only), never part of the executable statement", () => {
   const executable = stripSqlComments(phase15Sql);
   assert.ok(!/DROP COLUMN IF EXISTS opportunity_classification/i.test(executable) || phase15Sql.includes("-- ALTER TABLE public.agent_proposals DROP COLUMN IF EXISTS opportunity_classification;"));
+});
+
+test("phase16 migration: additive/idempotent only (DROP CONSTRAINT IF EXISTS before recreating it, no new columns — never DROP TABLE/TRUNCATE/DELETE/DROP COLUMN)", () => {
+  const executable = stripSqlComments(phase16Sql);
+  assert.ok(!/\bDROP\s+TABLE\b/i.test(executable));
+  assert.ok(!/\bTRUNCATE\b/i.test(executable));
+  assert.ok(!/\bDELETE\s+FROM\b/i.test(executable));
+  assert.ok(!/\bDROP\s+COLUMN\b/i.test(executable));
+  assert.ok(/DROP CONSTRAINT IF EXISTS agent_proposals_status_check/i.test(phase16Sql), "the status CHECK constraint must be dropped-if-exists before being recreated, so this migration is safe to re-run");
+});
+
+test("phase16 migration: the widened status CHECK constraint is a strict SUPERSET of phase14's (nothing removed, three values added)", () => {
+  const phase14Statuses = extractCheckInList(phase14Sql, "status");
+  const phase16Statuses = extractCheckInList(phase16Sql, "status");
+  for (const s of phase14Statuses) {
+    assert.ok(phase16Statuses.includes(s), `phase16 must not drop existing status value '${s}'`);
+  }
+  assert.deepStrictEqual(
+    [...phase16Statuses].sort(),
+    [...new Set([...phase14Statuses, "no_change", "needs_revision", "recheck"])].sort()
+  );
+});
+
+test("phase16 migration: rollback section is commented out (reference-only), never part of the executable statement", () => {
+  const executable = stripSqlComments(phase16Sql);
+  assert.ok(!/ADD CONSTRAINT agent_proposals_status_check\s*\n\s*CHECK \(status IN \(\s*\n\s*'proposed', 'approved', 'rejected', 'applied', 'validated', 'failed',\s*\n\s*'applying', 'validating', 'deploying', 'deployed', 'needs_review'\s*\n\s*\)\);/i.test(executable), "the OLD (pre-phase16) constraint definition must only appear in the commented-out rollback section");
 });
 
 test("phase14 migration: additive/idempotent only (ADD COLUMN IF NOT EXISTS, DROP CONSTRAINT IF EXISTS before recreating it — never DROP TABLE/TRUNCATE/DELETE)", () => {

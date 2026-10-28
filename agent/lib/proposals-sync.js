@@ -74,6 +74,23 @@ const { getServiceClient } = require("../../api/_lib/supabase-admin");
 const { pickLatestResearch } = require("./decision");
 const { buildHandoffReport } = require("./claude-handoff-report");
 
+// Phase 16 — the fingerprint-reset mechanism below (see this file's own
+// header) originally only guarded 'approved'/'rejected'. The admin UI
+// now offers three more owner decisions on a proposal — 'no_change'
+// (Verified — No Change Needed), 'needs_revision', and 'recheck' (see
+// sql/2026-10-28_phase16-proposal-decision-states.sql's own header for
+// the full action/status list). All five are "a human looked at this
+// and decided something" states, so all five get the SAME protection:
+// a re-sync with unchanged content never silently resets the decision
+// back to 'proposed' — it only resets when the finding's content has
+// materially changed, or the finding_key reappears after a run where it
+// stopped needing owner review entirely. This is exactly how the spec's
+// "an identical no_change proposal must not immediately come back"
+// requirement is satisfied, with no new/separate suppression system —
+// the EXISTING Phase 4 hardening mechanism, simply applied to a wider
+// set of statuses.
+const DECIDED_STATUSES = ["approved", "rejected", "no_change", "needs_revision", "recheck"];
+
 // Only findings that actually need an owner's eyes get synced — this is
 // deliberately narrower than "every finding", matching the Home
 // dashboard's own "concise, not a dump of every observation" posture.
@@ -355,7 +372,7 @@ async function syncProposals(findings, runId, options = {}) {
 
       if (existingRes.data) {
         const row = updatableFields(finding, runId, context);
-        const wasReviewed = existingRes.data.status === "approved" || existingRes.data.status === "rejected";
+        const wasReviewed = DECIDED_STATUSES.indexOf(existingRes.data.status) !== -1;
         const contentChanged = computeReviewContentFingerprint(existingRes.data) !== computeReviewContentFingerprint(finding);
         const reappearedAfterAbsence = Boolean(previousOwnerReviewKeys) && !previousOwnerReviewKeys.has(finding.key);
         if (wasReviewed && (contentChanged || reappearedAfterAbsence)) {
@@ -390,4 +407,4 @@ async function syncProposals(findings, runId, options = {}) {
   return { skipped: false, synced, total: toSync.length, errors, statusByKey };
 }
 
-module.exports = { syncProposals, needsOwnerReview, needsProposal, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot, canonicalizeForFingerprint };
+module.exports = { syncProposals, needsOwnerReview, needsProposal, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot, canonicalizeForFingerprint, DECIDED_STATUSES };

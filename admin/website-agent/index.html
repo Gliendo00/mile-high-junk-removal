@@ -20,6 +20,15 @@
 <main class="admin-main admin-wa-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
+  <!-- Phase 16 — always visible regardless of loading/connected/loaded
+       state (a sibling of those three, not nested inside any of them):
+       pure navigation to the existing Agent Proposals page, same
+       href="/admin/agent-proposals/" the "View all proposals" link
+       further down already uses. No new page, no new endpoint. -->
+  <div class="admin-wa-top-actions">
+    <a href="/admin/agent-proposals/" class="admin-btn admin-btn-outline">Agent Proposals</a>
+  </div>
+
   <!-- Presentation only; all dashboard IDs and agent actions are preserved. -->
   <div id="wa-loading" class="admin-loading">Loading Website Agent…</div>
   <div id="wa-not-connected" class="admin-empty" style="display:none">

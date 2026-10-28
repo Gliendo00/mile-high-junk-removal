@@ -1221,6 +1221,18 @@ button.admin-financial-card:focus-visible {
   min-height: 44px;
 }
 .admin-btn-danger:hover { background: #fdecea; }
+/* Phase 16 — "Needs Revision"'s button: outline-shaped like
+   .admin-btn-outline/.admin-btn-danger above (never a solid fill — this
+   is a secondary decision button, not the card's primary action) but in
+   the same orange family as .admin-proposal-status-needs_revision, so
+   the button and the status it produces read as the same concept. */
+.admin-btn-warn {
+  background: #fff;
+  border-color: #c2410c;
+  color: #c2410c;
+  min-height: 44px;
+}
+.admin-btn-warn:hover { background: #fef3ec; }
 .admin-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* Login page — solid black wrapper/card with neon-green lettering
@@ -4192,6 +4204,20 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-proposal-status-deployed { background: #0f766e; color: #fff; }
 .admin-proposal-status-needs_review { background: #b45309; color: #fff; }
 
+/* Phase 16 — three new owner-decision states, each a genuinely distinct
+   hue (never reusing proposed/approved/rejected's colors — those three
+   keep meaning exactly what they always meant, including 'rejected'
+   itself, whose admin-UI LABEL is now "Dismissed" but whose color/value
+   are unchanged, see admin/agent-proposals.js's STATUS_LABELS). no_change
+   gets a settled teal (reviewed, intentionally left alone — calmer than
+   a warning color); needs_revision gets a distinct orange (related to
+   but not the same amber as "needs review"); recheck gets violet (a
+   genuinely different kind of "not done yet" — parked for later, not
+   currently awaiting a decision). */
+.admin-proposal-status-no_change { background: #0e7490; color: #fff; }
+.admin-proposal-status-needs_revision { background: #c2410c; color: #fff; }
+.admin-proposal-status-recheck { background: #7c3aed; color: #fff; }
+
 /* Pre-acceptance hardening (audit finding #4) — a deliberately NEUTRAL/
    outline pill (never a solid fill like the status badges above): this
    is a derived, read-time annotation about the underlying FINDING
@@ -4216,6 +4242,19 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   padding: 12px 14px;
   margin-bottom: 12px;
   box-shadow: 0 1px 3px rgba(20, 21, 15, 0.06);
+}
+/* Phase 16 — "Open Proposal" deep-linking (admin/website-agent.js's
+   queue/execution cards -> /admin/agent-proposals/?id=...). Briefly
+   outlines the matched card after admin/agent-proposals.js scrolls it
+   into view, purely so the owner can SEE which card the link landed on
+   — never a permanent style, never the only way to tell (the card's own
+   content already identifies it). Removed by that script after a few
+   seconds; CSS-only fallback (no animation dependency) via a plain
+   outline rather than a changed background, so it never fights the
+   status-badge colors underneath it. */
+.admin-proposal-card-linked {
+  outline: 3px solid var(--color-accent-700, #2f6f13);
+  outline-offset: 2px;
 }
 .admin-proposal-card-top {
   display: flex;
