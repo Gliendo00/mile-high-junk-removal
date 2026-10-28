@@ -34,7 +34,13 @@ function stripComments(text) {
 async function main() {
   assert.ok(fs.existsSync(WORKFLOW_PATH), `expected a workflow file at ${WORKFLOW_PATH}`);
   const raw = fs.readFileSync(WORKFLOW_PATH, "utf8");
-  const code = stripComments(raw);
+  // Normalize CRLF -> LF before any regex matching below — see the
+  // identical comment in tests/github-actions-workflow.test.js. On a
+  // CRLF checkout (git's core.autocrlf, on by default on Windows, as
+  // in this environment), the leftover "\r" makes the permissions-block
+  // regex's "\s{2,}" span the blank-line boundary and over-match deep
+  // into unrelated later sections.
+  const code = stripComments(raw.replace(/\r\n/g, "\n"));
 
   await test("defines workflow_dispatch with a required proposal_id string input, never a schedule trigger", () => {
     assert.ok(/\bworkflow_dispatch:/.test(code));

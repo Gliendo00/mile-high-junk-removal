@@ -55,7 +55,7 @@ class FakeQueryBuilder {
   }
   is(field, val) {
     this._filters.push((row) => (row[field] === undefined ? null : row[field]) === val);
-    if (field === "status") this._statusValue = val; // null here means the "websiteRequests" (IS NULL) query
+    if (field === "status") this._statusValue = val; // "new" here means the "websiteRequests" query
     return this;
   }
   order(field, opts) {
@@ -192,13 +192,16 @@ const AUTH_COOKIE = "mhjr_admin_at=at-good";
 
 // ---------------------------------------------------------------------
 // Fixture: one real customer + one booking per bookings.status value
-// (null/contacted/quoted/booked/rental_out/completed/lost), plus one
-// archived booking (status null) that must stay excluded everywhere —
-// exactly as it's already excluded from Requests today. Also a small
-// `leads` table with one row per leads.status value and every `source`.
+// (new/contacted/quoted/booked/rental_out/completed/lost — "new" IS a
+// stored literal string, never NULL; bookings.status is `NOT NULL
+// DEFAULT 'new'`, confirmed against production, 2026-10-18 schema audit
+// — see commit 91eec05), plus one archived booking (status "new") that
+// must stay excluded everywhere — exactly as it's already excluded from
+// Requests today. Also a small `leads` table with one row per
+// leads.status value and every `source`.
 // ---------------------------------------------------------------------
 const CUST_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-const STATUSES = [null, "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
+const STATUSES = ["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
 
 function makeBookingId(status) {
   return "bbbbbbbb-bbbb-bbbb-bbbb-" + Buffer.from(String(status)).toString("hex").padEnd(12, "0").slice(0, 12);
@@ -220,7 +223,7 @@ function freshDb() {
     customer_id: CUST_ID,
     service_type: "junk_removal",
     service_city: "Denver",
-    status: null,
+    status: "new",
     archived_at: "2026-09-01T00:00:00Z",
     created_at: "2026-08-01T10:00:00Z",
     updated_at: "2026-08-01T10:00:00Z",
@@ -300,13 +303,13 @@ test("parity: the archived booking — already excluded from Requests today — 
 // 2. Bucket placement — website-origin bookings land in the bucket the
 //    proposal's status-mapping table specified.
 // ---------------------------------------------------------------------
-test("?view=leads: a website booking with status NULL lands in 'websiteRequests', tagged source=website", async () => {
+test("?view=leads: a website booking with status \"new\" lands in 'websiteRequests', tagged source=website", async () => {
   adminAuthed();
   const db = freshDb();
   currentFakeService = createFakeServiceClient(db);
   const res = await run(makeReq({ cookie: AUTH_COOKIE, query: { view: "leads" } }));
   const card = res.body.sections.websiteRequests.find((c) => c.id === makeBookingId("new"));
-  assert.ok(card, "the NULL-status booking must appear in websiteRequests");
+  assert.ok(card, "the status=\"new\" booking must appear in websiteRequests");
   assert.strictEqual(card.kind, "booking");
   assert.strictEqual(card.source, "website");
   assert.strictEqual(card.name, "Jamie Rivera");

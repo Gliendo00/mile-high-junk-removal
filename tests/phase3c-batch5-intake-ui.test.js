@@ -102,10 +102,10 @@ test("admin/intakes/index.html: list container, loads intakes-list.js, and reach
   assert.ok(/src="\.\.\/intakes-list\.js"/.test(html));
 });
 
-test("admin/admin-chrome.js: Drop a Lead links to the existing /admin/intake-new/ intake route", () => {
+test("admin/admin-chrome.js: the header's LEAD button (formerly \"Drop a Lead\", renamed by commit 2df4647) links to the existing /admin/intake-new/ intake route", () => {
   const src = readNormalized("admin/admin-chrome.js");
   assert.ok(/href="\/admin\/intake-new\/"/.test(src));
-  assert.ok(/Drop a Lead/.test(src));
+  assert.ok(/admin-drop-lead-btn">LEAD/.test(src));
 });
 
 test("admin/intakes-list.js: links each card to /admin/intake/?id=", () => {
@@ -423,7 +423,12 @@ test("admin/intake-detail.js: createBooking() derives notes and price live from 
   const body = src.slice(start, end === -1 ? start + 2500 : end);
 
   assert.ok(/internalNotes:\s*\[liveFieldValue\('internalNotes'\), liveFieldValue\('clientConstraints'\)\]/.test(body), "internalNotes must be built live from internalNotes + clientConstraints");
-  assert.ok(/guessPrice\(liveFieldValue\('quotedAmount'\)\)/.test(body), "estimatedPrice must be parsed from the LIVE quotedAmount field, not a stale prefill");
+  // Commit e6bdb8d ("preserve estimate ranges through lead->booking
+  // conversion") replaced the single-value guessPrice() parse with
+  // parseQuotedAmountRange(), which can produce a real {min,max} range
+  // (e.g. "$200-$275") instead of collapsing to one guessed number —
+  // still read live from quotedAmount, never a stale prefill.
+  assert.ok(/parseQuotedAmountRange\(liveFieldValue\('quotedAmount'\)\)/.test(body), "estimatedPrice/estimatedPriceMax must be parsed from the LIVE quotedAmount field, not a stale prefill");
   assert.ok(!/confirmBookingPriceInput|confirmBookingNotesInput/.test(body), "must not reference the removed stale price/notes inputs");
 });
 

@@ -238,7 +238,14 @@ function freshDb() {
         service_type: "junk_removal",
         appointment_date: "2026-01-15",
         time_window: "w_0800_1000",
-        status: null,
+        // Literal "new", not null — commit 91eec05 (production schema
+        // audit, 2026-10-18) confirmed bookings.status is `NOT NULL
+        // DEFAULT 'new'`, enforced by bookings_status_check; NULL is not
+        // actually possible here. A fixture using null for a "new" row
+        // would silently stop exercising api/admin/bookings.js's real
+        // ?status=new filter (a plain .eq("status", "new")) the same way
+        // that bug once hid real rows from it.
+        status: "new",
         description: "Old couch and mattress",
         estimated_price: 250,
         final_price: null,
@@ -296,7 +303,7 @@ test("PATCH booking-status: no cookies at all -> 401, no data touched", async ()
   const db = freshDb();
   const res = await patchStatus(db, "", { id: REAL_ID, status: "booked" });
   assert.strictEqual(res.statusCode, 401);
-  assert.strictEqual(db.bookings[0].status, null, "an unauthenticated request must never write anything");
+  assert.strictEqual(db.bookings[0].status, "new", "an unauthenticated request must never write anything");
 });
 
 test("PATCH booking-status: garbage/forged access token -> 401", async () => {
@@ -304,7 +311,7 @@ test("PATCH booking-status: garbage/forged access token -> 401", async () => {
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=not-a-real-token", { id: REAL_ID, status: "booked" });
   assert.strictEqual(res.statusCode, 401);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test("PATCH booking-status: real Supabase session but non-allowlisted email -> 401, no write", async () => {
@@ -312,7 +319,7 @@ test("PATCH booking-status: real Supabase session but non-allowlisted email -> 4
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-nonadmin", { id: REAL_ID, status: "booked" });
   assert.strictEqual(res.statusCode, 401);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test("PATCH booking-status: response is always Cache-Control: no-store", async () => {
@@ -335,7 +342,7 @@ test("PATCH booking-status: missing booking id -> 400, no write", async () => {
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { status: "booked" });
   assert.strictEqual(res.statusCode, 400);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test("PATCH booking-status: malformed id -> safe 404, never reaches the database", async () => {
@@ -343,7 +350,7 @@ test("PATCH booking-status: malformed id -> safe 404, never reaches the database
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: "'; drop table bookings; --", status: "booked" });
   assert.strictEqual(res.statusCode, 404);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test("PATCH booking-status: well-formed but nonexistent id -> safe 404, no row created or modified", async () => {
@@ -360,7 +367,7 @@ test("PATCH booking-status: missing status -> 400, no write", async () => {
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: REAL_ID });
   assert.strictEqual(res.statusCode, 400);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test("PATCH booking-status: unknown status string -> 400, rejected, no write", async () => {
@@ -369,7 +376,7 @@ test("PATCH booking-status: unknown status string -> 400, rejected, no write", a
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: REAL_ID, status: "archived" });
   assert.strictEqual(res.statusCode, 400);
   assert.strictEqual(res.body.error, "Invalid status.");
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 test('PATCH booking-status: case-manipulated status ("BOOKED") is rejected, not silently normalized', async () => {
@@ -377,7 +384,7 @@ test('PATCH booking-status: case-manipulated status ("BOOKED") is rejected, not 
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: REAL_ID, status: "BOOKED" });
   assert.strictEqual(res.statusCode, 400);
-  assert.strictEqual(db.bookings[0].status, null, "the row must be untouched — case variants are not accepted");
+  assert.strictEqual(db.bookings[0].status, "new", "the row must be untouched — case variants are not accepted");
 });
 
 test("PATCH booking-status: extra unexpected fields in the body are ignored, only status is written", async () => {
@@ -404,7 +411,7 @@ test("PATCH booking-status: non-string id/status (e.g. numbers/objects) are reje
   const db = freshDb();
   const res = await patchStatus(db, "mhjr_admin_at=at-good", { id: 12345, status: { toString: () => "booked" } });
   assert.strictEqual(res.statusCode, 400);
-  assert.strictEqual(db.bookings[0].status, null);
+  assert.strictEqual(db.bookings[0].status, "new");
 });
 
 // 3. Valid transitions along the documented happy path + the lost exit/re-entry
@@ -564,7 +571,7 @@ test("PATCH booking-status: a Supabase update error returns 500 and never claims
   assert.strictEqual(res.statusCode, 500);
   assert.strictEqual(res.body.ok, undefined, "an error response must never carry ok:true");
   assert.ok(!JSON.stringify(res.body).toLowerCase().includes("simulated connection reset"), "the raw Supabase error must never reach the client");
-  assert.strictEqual(db.bookings[0].status, null, "status must be unchanged when the underlying write failed");
+  assert.strictEqual(db.bookings[0].status, "new", "status must be unchanged when the underlying write failed");
 });
 
 // 7. Repeated / duplicate submissions at the API level are safe and
@@ -618,9 +625,9 @@ test("GET bookings: unfiltered list and summary counts are unaffected by the new
   assert.strictEqual(res.body.bookings.length, 2);
 });
 
-test("GET bookings: ?status=new returns only NULL-status rows, filtered correctly", async () => {
+test("GET bookings: ?status=new returns only literal status='new' rows, filtered correctly", async () => {
   adminAuthed();
-  const db = freshDb(); // REAL_ID is NULL-status ("new"), OTHER_ID is "lost"
+  const db = freshDb(); // REAL_ID has status: "new" literally, OTHER_ID is "lost"
   currentFakeService = createFakeServiceClient(db);
   const res = await run(bookingsHandler, makeReq({ cookie: "mhjr_admin_at=at-good", query: { status: "new" } }));
   assert.strictEqual(res.statusCode, 200);
@@ -737,6 +744,12 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // insert then fails (mirrors api/book.js's own safeDelete()). See
       // tests/phase3c-dumpster-rental-admin.test.js.
       "api/admin/booking.js: .delete(",
+      // The invoicing feature (?resource=invoice, handlePatchInvoice's
+      // action:"removeLineItem") added exactly one new delete — removing
+      // one invoice_line_items row from a still-draft invoice. Covered
+      // alongside every other invoice write below. See
+      // tests/phase2-invoice-workflow.test.js.
+      "api/admin/booking.js: .delete(",
       "api/admin/booking.js: .insert(",
       // Phase 3C Stage 2.5-v2's ?resource=charges workflow (originally
       // built on Braintree, switched to Stripe before any production
@@ -778,6 +791,39 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // row into the (separate, never-revenue-counted) `estimates` table,
       // reachable only via ?resource=estimate POST. See
       // tests/estimate-workflow.test.js.
+      "api/admin/booking.js: .insert(",
+      // The invoicing feature (?resource=invoice POST/PATCH) added exactly
+      // three new inserts: handleCreateInvoice()'s two draft-invoice paths
+      // (standalone-by-customerId, and from-a-booking with its own
+      // 23505-unique-conflict fallback to the existing row rather than a
+      // duplicate), and handlePatchInvoice()'s action:"addLineItem" insert.
+      // Every invoice total_amount this produces is always recomputed from
+      // invoice_line_items by recomputeInvoiceTotal(), never written
+      // directly. See tests/phase2-invoice-workflow.test.js.
+      "api/admin/booking.js: .insert(",
+      "api/admin/booking.js: .insert(",
+      "api/admin/booking.js: .insert(",
+      // ?resource=invoice-payment POST (handleCreateInvoicePayment) added
+      // exactly one new insert — a manual job_payments row tied to an
+      // invoice, the same manual-payment path handleCreateJobPayment()
+      // above uses for a plain booking, never a second ledger
+      // implementation. See tests/phase3-invoice-delivery.test.js.
+      "api/admin/booking.js: .insert(",
+      // handleInvoiceCharges() — the ?resource=charges action:"invoice"
+      // step that bundles one or more already-approved charges onto an
+      // invoice — added exactly two new inserts: reusing
+      // handleCreateInvoice()'s own draft-invoice-if-none-exists path, and
+      // one invoice_line_items row per charge being bundled in. See
+      // tests/phase3d-stage-b-invoice-centric.test.js.
+      "api/admin/booking.js: .insert(",
+      "api/admin/booking.js: .insert(",
+      // The mid-rental dumpster swap/exchange workflow (ensurePickupBooking(),
+      // called from handleUpdate() when a rental's dumpster is swapped)
+      // added exactly one new insert — the new pickup-leg booking row
+      // (service_type: "dumpster_pickup") created the first time a swap is
+      // recorded; a second swap reuses the existing pickup booking instead
+      // of inserting another one. See
+      // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
       "api/admin/booking.js: .insert(",
       // Phase 3C "Existing Job Editing" added exactly one new write call —
       // PATCH's handleUpdate() — deliberately, not a side effect. See
@@ -842,6 +888,55 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // The invoicing feature (?resource=invoice POST/PATCH) added exactly
+      // eleven new updates: recomputeInvoiceTotal()'s total_amount write
+      // (called once by every line-item write below, so total_amount can
+      // never drift from the line items that produced it); handlePatchInvoice()'s
+      // action:"updateDetails" field edit, action:"updateLineItem" edit,
+      // action:"finalize" status flip, and action:"void" write (void is
+      // allowed from draft or finalized, never touches payments); and
+      // handleSendInvoice()'s send_claim_token acquire plus its five
+      // separate release-on-exit paths (success, each distinct early-return,
+      // and the catch block) that all release the same claim so a failed
+      // send can always be retried rather than leaving the invoice locked.
+      // See tests/phase2-invoice-workflow.test.js and
+      // tests/phase3-invoice-delivery.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      // handleInvoiceCharges() (?resource=charges action:"invoice") added
+      // exactly three new updates: marking the bundled booking
+      // status:"invoiced", linking each bundled charge's own
+      // invoice_line_item_id back to the line item it produced, and
+      // marking each bundled charge's own status (mirrors
+      // handleApprove()'s existing charge-status pattern above — never a
+      // second charge-state-machine implementation). See
+      // tests/phase3d-stage-b-invoice-centric.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      // The mid-rental dumpster swap/exchange workflow added exactly four
+      // new updates: ensurePickupBooking()'s own link of the new pickup
+      // leg's pickup_booking_id back onto the original rental booking,
+      // syncPickupBookingDate() (keeps the pickup leg's appointment_date
+      // in step with the rental's), propagatePickupCancellation() (marks
+      // the linked pickup leg lost when the rental itself is marked lost,
+      // so a swap's pickup leg can never outlive the rental it belongs
+      // to), and propagatePickupArchive() (same propagation for
+      // archive/restore). See
+      // tests/phase4-stage1-dumpster-pickup-auto-job.test.js.
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
+      "api/admin/booking.js: .update(",
       // Batch 2C added exactly one new upsert — handleUpdate()'s
       // dumpster_rentals write, keyed onConflict: "booking_id" (a real
       // UNIQUE constraint, Phase 1) so one call correctly handles both
@@ -849,6 +944,12 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       // dumpster_rental on this save, no row exists yet." A booking that
       // is not (or no longer) a dumpster rental never reaches this code at
       // all. See tests/phase3c-dumpster-rental-admin.test.js.
+      "api/admin/booking.js: .upsert(",
+      // handleRefundJobPayment()'s Stripe-refund job_payments row added
+      // exactly one new upsert, keyed onConflict: "stripe_refund_id" with
+      // ignoreDuplicates: true — a retried refund request (same Stripe
+      // refund already recorded) can never create a second ledger row.
+      // See tests/phase5-dumpster-charges-refunds.test.js.
       "api/admin/booking.js: .upsert(",
       // Phase 3C Stage 2.4 addendum (Daily Quick Expense Tracking) added
       // exactly one new write call — handleCreateExpense()'s insert into

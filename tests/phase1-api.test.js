@@ -370,26 +370,33 @@ async function main() {
     assert.strictEqual(currentFakeSupabase.calls.length, 0, "an invalid booking must never reach the database");
   });
 
-  // 7. Honeypot submission
-  test("book: honeypot-filled submission returns fake success and touches no data", async function () {
+  // 7. Honeypot submission — commit 4b73905 ("honest spam rejection")
+  // deliberately replaced the old faked-200 response with an honest,
+  // generic 400 (same shape/wording as any other validation failure,
+  // never mentioning spam/honeypot) so a real human whose honeypot
+  // field got populated by an overzealous browser extension sees that
+  // their request needs a retry, instead of a lying success screen —
+  // see api/book.js's own comment just above this check.
+  test("book: honeypot-filled submission is honestly rejected with 400 and touches no data", async function () {
     currentFakeSupabase = createFakeSupabase();
     const fetchCallsBefore = fetchCalls.length;
     const payload = validJunkRemovalPayload({ hp: "http://spammy.example" });
     const res = await run(bookHandler, makeReq(payload, null, "198.51.100.15"));
-    assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(res.body.ok, true);
+    assert.strictEqual(res.statusCode, 400);
+    assert.ok(res.body.error, "expected a generic error message, same shape as any other validation failure");
     assert.strictEqual(res.body.uploadToken, undefined, "a honeypot-caught request must not get a real upload token");
     assert.strictEqual(currentFakeSupabase.calls.length, 0);
     assert.strictEqual(fetchCalls.length, fetchCallsBefore, "no notification email should be sent for a caught bot");
   });
 
   // 6b. Too-fast submission (fill-time check), same code path as honeypot
-  test("book: implausibly fast submission (0ms) returns fake success and touches no data", async function () {
+  // — same honest-400 behavior change as the honeypot test above.
+  test("book: implausibly fast submission (0ms) is honestly rejected with 400 and touches no data", async function () {
     currentFakeSupabase = createFakeSupabase();
     const fetchCallsBefore = fetchCalls.length;
     const payload = validJunkRemovalPayload({ elapsedMs: 0 });
     const res = await run(bookHandler, makeReq(payload, null, "198.51.100.16"));
-    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.statusCode, 400);
     assert.strictEqual(currentFakeSupabase.calls.length, 0);
     assert.strictEqual(fetchCalls.length, fetchCallsBefore);
   });
@@ -509,7 +516,9 @@ async function main() {
     assert.strictEqual(fetchCalls.length, before + 1);
   });
 
-  test("contact: honeypot-filled submission returns fake success without calling Resend", async function () {
+  // Same "honest spam rejection" change as api/book.js (commit
+  // 4b73905) — see api/contact.js's own comment at this check.
+  test("contact: honeypot-filled submission is honestly rejected with 400 without calling Resend", async function () {
     const before = fetchCalls.length;
     const payload = {
       name: "Bot Name",
@@ -519,7 +528,8 @@ async function main() {
       elapsedMs: 10000,
     };
     const res = await run(contactHandler, makeReq(payload, null, "198.51.100.31"));
-    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.statusCode, 400);
+    assert.ok(res.body.error, "expected a generic error message, same shape as any other validation failure");
     assert.strictEqual(fetchCalls.length, before, "no Resend call should be made for a caught bot");
   });
 

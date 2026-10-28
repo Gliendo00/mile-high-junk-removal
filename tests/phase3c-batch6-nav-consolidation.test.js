@@ -390,7 +390,12 @@ test("?view=leads still merges website-origin bookings and leads-table rows into
   adminAuthed();
   currentFakeService = createFakeServiceClient({
     customers: [{ id: "c1", first_name: "Jamie", last_name: "Rivera", city: "Denver", phone: "303-555-0100" }],
-    bookings: [{ id: "b1", customer_id: "c1", service_type: "junk_removal", service_city: "Denver", status: null, archived_at: null, created_at: "2026-10-01T00:00:00Z" }],
+    // status: "new" (a literal stored string, never NULL — bookings.status
+    // is `NOT NULL DEFAULT 'new'`, confirmed against production,
+    // 2026-10-18 schema audit — see commit 91eec05) is what
+    // api/admin/bookings.js's ?view=leads websiteRequests query actually
+    // matches against (.eq("status", "new")).
+    bookings: [{ id: "b1", customer_id: "c1", service_type: "junk_removal", service_city: "Denver", status: "new", archived_at: null, created_at: "2026-10-01T00:00:00Z" }],
     leads: [{ id: "l1", source: "manual", status: "new", first_name: "Alex", last_name: "Doe", phone: "303-555-0199", city: "Aurora", service_type: "junk_removal", created_at: "2026-10-02T00:00:00Z" }],
   });
   const res = await run(bookingsHandler, makeReq({ cookie: AUTH_COOKIE, query: { view: "leads" } }));

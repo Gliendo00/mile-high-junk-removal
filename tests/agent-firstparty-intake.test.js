@@ -244,17 +244,47 @@ try {
     const loaded = loadFirstPartyEvidence();
     const goldenDiagnosticStillOnDisk = fs
       .readFileSync(path.join(__dirname, "..", "agent", "research", "firstparty", "search-console-search-analytics__golden-1792071840456.json"), "utf8");
-    assert.ok(JSON.parse(goldenDiagnosticStillOnDisk)[0].purpose === "diagnostic", "sanity check: the real file on disk is marked diagnostic");
+    const diagnosticRaw = JSON.parse(goldenDiagnosticStillOnDisk)[0];
+    assert.strictEqual(diagnosticRaw.purpose, "diagnostic", "sanity check: the real file on disk is marked diagnostic");
 
     const goldenPick = { slug: "golden", name: "Golden", hasPage: false };
     const { picks: outPicks } = attachRotationEvidence([goldenPick], loaded);
-    assert.deepStrictEqual(outPicks[0].firstPartyEvidence, [], "the real Golden diagnostic must never attach to the real Golden rotation pick — Controlled Weekly #12's exact contamination");
+    // Not deepStrictEqual([]) anymore: a genuine, non-diagnostic
+    // --refresh-rotation-evidence fetch for golden has since run for
+    // real (see the freshness test below) and legitimately attaches
+    // here too — that's correct, not contamination. What this test
+    // actually guards is narrower and still fully true: the diagnostic
+    // file's own fetchedAt must never be among whatever DOES attach.
+    const attachedFetchTimes = outPicks[0].firstPartyEvidence.map((e) => e.fetchedAt);
+    assert.ok(
+      !attachedFetchTimes.includes(diagnosticRaw.fetchedAt),
+      "the real Golden diagnostic must never attach to the real Golden rotation pick — Controlled Weekly #12's exact contamination"
+    );
   });
 
-  test("THE REAL Golden Search Console diagnostic can no longer satisfy Golden rotation freshness — a genuine --refresh-rotation-evidence fetch for Golden is no longer suppressed", () => {
+  test("THE REAL Golden Search Console diagnostic can no longer satisfy Golden rotation freshness — a genuine --refresh-rotation-evidence fetch for Golden, once no longer suppressed, actually ran and is what satisfies freshness now", () => {
+    // At the time this test was first written, no genuine weekly
+    // --refresh-rotation-evidence fetch had happened for Golden yet, so
+    // excluding the diagnostic left Golden with NO operational evidence
+    // at all (freshSlugs.has("golden") === false). Since then — exactly
+    // as this test's own title predicted — a real fetch ran and
+    // committed genuine operational evidence (see
+    // search-console-search-analytics__golden-*-2d32db.json,
+    // purpose:"operational", fetchedAt 2026-10-18). So Golden now
+    // legitimately reads as fresh again; the invariant this test
+    // actually guards — that the diagnostic itself can never be the
+    // thing satisfying freshness — is proven below directly, by showing
+    // the diagnostic's own entry never even reaches the operational set
+    // freshlyEvidencedRotationSlugs reads from (loadFirstPartyEvidence()
+    // already excludes purpose:"diagnostic" entries, proven earlier in
+    // this file) and that a genuine, non-diagnostic entry is what's
+    // actually present for "golden".
     const loaded = loadFirstPartyEvidence();
+    const goldenEntries = loaded.entries.filter((e) => e.rotationSlug === "golden");
+    assert.ok(goldenEntries.length > 0, "expected at least the real genuine post-fix fetch's operational entry for golden");
+    assert.ok(goldenEntries.every((e) => e.purpose !== "diagnostic"), "no diagnostic-purpose entry should ever reach loadFirstPartyEvidence()'s operational entries, for golden or any other slug");
     const freshSlugs = freshlyEvidencedRotationSlugs(loaded.entries);
-    assert.strictEqual(freshSlugs.has("golden"), false, "with the diagnostic excluded from operational entries, Golden must read as having NO operational evidence, making it eligible for a real fetch again");
+    assert.strictEqual(freshSlugs.has("golden"), true, "a genuine, non-diagnostic operational entry now exists for golden, so it correctly reads as having real evidence");
   });
 
   test("THE REAL Golden GA4 diagnostic is likewise excluded from operational intake", () => {

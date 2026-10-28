@@ -51,6 +51,7 @@ const { writeFirstPartyEvidence, EVIDENCE_DIR } = require("../agent/lib/firstpar
 const { makeFirstPartyEvidence } = require("../agent/lib/firstparty-evidence");
 const { computePriorities } = require("../agent/lib/research-rotation");
 const { SOURCE: ROTATION_SOURCE } = require("../agent/lib/rotation-evidence");
+const { loadCompletedJobEvidence, summarizeByCity } = require("../agent/lib/completed-job-intake");
 
 function test(name, fn) {
   return Promise.resolve()
@@ -281,13 +282,20 @@ async function main() {
 
     // Determine THIS repo's real #1 rotation pick deterministically —
     // same inputs runner.js's own weekly path will use a moment later
-    // (fresh empty state, the real current findings, no completed-job
-    // signal): staleness/no-page/open-findings/completed-job are all
-    // pure functions of those inputs, so the same inputs always produce
-    // the same #1 pick.
+    // (fresh empty state, the real current findings, and the REAL
+    // completed-job evidence summary — agent/research/completed-jobs/
+    // is no longer guaranteed empty now that real evidence is
+    // genuinely intaken over time, see
+    // tests/agent-completed-job-intake.test.js's own updated test, so
+    // this must read the same real directory runner.run() itself reads
+    // rather than assuming {}): staleness/no-page/open-findings/
+    // completed-job are all pure functions of those inputs, so the
+    // same inputs always produce the same #1 pick.
     const { gatherFindings } = runner;
     const { findings } = gatherFindings();
-    const [top] = computePriorities({ state: { byCitySlug: {} }, currentFindings: findings, completedJobCitySummary: {}, limit: 1 });
+    const { evidence: completedJobEvidence } = loadCompletedJobEvidence();
+    const completedJobCitySummary = summarizeByCity(completedJobEvidence);
+    const [top] = computePriorities({ state: { byCitySlug: {} }, currentFindings: findings, completedJobCitySummary, limit: 1 });
     assert.ok(top, "expected at least one rotation pick to exist");
 
     await withIsolatedRotationSlugEvidence(top.slug, async () => {

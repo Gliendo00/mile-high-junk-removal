@@ -8,8 +8,8 @@
 // Four things Rocky asked to have proven before Preview:
 //   1. a single website booking can never appear in more than one Leads
 //      bucket at the same time;
-//   2. archived bookings stay excluded — for EVERY status, not just NULL;
-//   3. NULL/contacted/quoted/lost/booked/rental_out/completed each map
+//   2. archived bookings stay excluded — for EVERY status, not just "new";
+//   3. new/contacted/quoted/lost/booked/rental_out/completed each map
 //      deterministically to exactly one bucket (no status silently
 //      dropped, none silently duplicated);
 //   4. (documented in this file's own comments, not a test — see the
@@ -155,13 +155,15 @@ const AUTH_COOKIE = "mhjr_admin_at=at-good";
 
 const CUST_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 // All 7 real bookings.status values this project's status machine has —
-// see api/admin/booking.js's own STATUS_ALLOWED_STATUSES (minus "new",
-// which is never stored as a literal string — see that constant's own
-// surrounding comments — represented here as JS `null`, the actual
-// column value).
-const ALL_STATUSES = [null, "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
+// see api/admin/booking.js's own STATUS_ALLOWED_STATUSES. "new" IS a
+// stored literal string, never NULL — bookings.status is `NOT NULL
+// DEFAULT 'new'` (confirmed against production, 2026-10-18 schema audit;
+// see commit 91eec05 and the identical note above handleLeadsView()'s own
+// "new" query in api/admin/bookings.js). NULL is not actually possible
+// for this column.
+const ALL_STATUSES = ["new", "contacted", "quoted", "booked", "rental_out", "completed", "lost"];
 const EXPECTED_BUCKET = {
-  "null": "websiteRequests", // JSON.stringify(null) === "null", used as a map key below
+  new: "websiteRequests",
   contacted: "contacted",
   quoted: "estimateSent",
   booked: "bookedWon",
@@ -252,9 +254,9 @@ test("audit 1b: the bookedWon section itself contains no duplicate ids, even tho
 });
 
 // =======================================================================
-// 2. Archived exclusion — every one of the 7 statuses, not just NULL.
+// 2. Archived exclusion — every one of the 7 statuses, not just "new".
 // =======================================================================
-test("audit 2: an archived booking is excluded from every section, for ALL 7 status values (not just NULL)", async () => {
+test('audit 2: an archived booking is excluded from every section, for ALL 7 status values (not just "new")', async () => {
   adminAuthed();
   const db = freshDb({ includeArchived: true });
   currentFakeService = createFakeServiceClient(db);
@@ -290,7 +292,7 @@ test("audit 3: all 7 real bookings.status values are covered, each by exactly on
   // double-counting); a missing one would mean a status is silently
   // dropped from every Leads section.
   const PREDICATES = {
-    "null": /\.is\("status", null\)/g,
+    new: /\.eq\("status", "new"\)/g,
     contacted: /\.eq\("status", "contacted"\)/g,
     quoted: /\.eq\("status", "quoted"\)/g,
     booked: /\.eq\("status", "booked"\)/g,

@@ -43,7 +43,17 @@ function stripComments(text) {
 async function main() {
   assert.ok(fs.existsSync(WORKFLOW_PATH), `expected a workflow file at ${WORKFLOW_PATH}`);
   const raw = fs.readFileSync(WORKFLOW_PATH, "utf8");
-  const code = stripComments(raw);
+  // Normalize CRLF -> LF before any regex matching below. git's
+  // core.autocrlf (on by default on Windows checkouts, as it is in
+  // this environment) checks this file out with CRLF line endings;
+  // every regex in this file assumes a bare "\n" between lines (e.g.
+  // the concurrency-block matcher below), so on a CRLF checkout the
+  // leftover "\r" either breaks a match that should succeed or
+  // (combined with "\s{2,}" spanning the blank-line boundary) makes
+  // one over-match into unrelated later sections. Normalizing here
+  // keeps every downstream regex working identically regardless of
+  // the checkout's line-ending setting.
+  const code = stripComments(raw.replace(/\r\n/g, "\n"));
 
   await test("defines workflow_dispatch with a daily/weekly run_type input, defaulted to daily", () => {
     assert.ok(/\bworkflow_dispatch:/.test(code));

@@ -15,7 +15,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { loadCompletedJobEvidence, summarizeByCity, DEFAULT_DIR } = require("../agent/lib/completed-job-intake");
-const { fromCompletedBooking } = require("../agent/lib/business-context");
+const { fromCompletedBooking, PUBLICATION_SAFE_FIELDS } = require("../agent/lib/business-context");
 
 function test(name, fn) {
   try {
@@ -41,9 +41,21 @@ test("a missing directory degrades to zero evidence, never throws (the real agen
   assert.deepStrictEqual(warnings, []);
 });
 
-test("agent/research/completed-jobs/ in THIS repo is real and readable (empty on a fresh checkout — no evidence manufactured just to fill it)", () => {
-  const { evidence } = loadCompletedJobEvidence(DEFAULT_DIR);
-  assert.deepStrictEqual(evidence, []);
+test("agent/research/completed-jobs/ in THIS repo is real and readable, and whatever real evidence has been intaken so far is genuinely publication-safe (no field outside the allowlist, no warning)", () => {
+  // This directory starts empty on a fresh checkout, but — as designed —
+  // accumulates real completed-job evidence over time as it's intaken
+  // (see the module header above and this directory's own README.md).
+  // So this no longer asserts emptiness; it re-asserts the actual
+  // privacy invariant this test exists to guard: every real entry that
+  // has landed here, however many there are right now, must pass the
+  // same publication-safe allowlist check the loader itself enforces.
+  const { evidence, warnings } = loadCompletedJobEvidence(DEFAULT_DIR);
+  assert.deepStrictEqual(warnings, [], "no file in the real directory should fail to parse or contain an unsafe field");
+  for (const entry of evidence) {
+    for (const key of Object.keys(entry)) {
+      assert.ok(PUBLICATION_SAFE_FIELDS.has(key), `real entry has non-allowlisted field "${key}"`);
+    }
+  }
 });
 
 test("a file containing only publication-safe fields (the real output shape of fromCompletedBooking()) loads successfully", () => {
