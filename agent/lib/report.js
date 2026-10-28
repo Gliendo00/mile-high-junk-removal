@@ -592,6 +592,48 @@ function buildReport({
       })
     : null;
 
+  // Phase 15 — "no proposal" can still mean the Agent did useful work:
+  // DISCOVER -> RESEARCH -> CLASSIFY produced a real, recorded
+  // conclusion for every researched opportunity, even the ones that
+  // never became a proposal (WATCH/LOW_SUPPRESS/PROTECT) — see
+  // agent/lib/opportunity-classification.js's header and the spec's own
+  // "Daily Agent Report" example. `record.opportunityClassifications` is
+  // populated by runner.js from every finding's `.opportunityClassification`
+  // (including the ones that bypass classification entirely —
+  // APPLY_SAFE_FIX, observation-tier NO_CHANGE — which simply never
+  // appear in this list at all, same bypass this whole phase follows
+  // throughout).
+  const opportunityClassifications = Array.isArray(record.opportunityClassifications) ? record.opportunityClassifications : [];
+  const classificationCounts = { IMPORTANT: 0, WATCH: 0, LOW_SUPPRESS: 0, PROTECT: 0 };
+  for (const c of opportunityClassifications) {
+    if (c && classificationCounts[c.classification] !== undefined) classificationCounts[c.classification] += 1;
+  }
+  // A proposal is only ever "created" here in the sense this section
+  // means — synced to agent_proposals this run (proposalStatus set,
+  // same signal `proposals.items` above already uses) AND the reason it
+  // synced was an IMPORTANT classification, not the pre-Phase-15 path
+  // (a legacy caller of syncProposals() that never classified at all —
+  // see proposals-sync.js's needsProposal() fallback).
+  const proposalsCreatedFromClassification = findings.filter(
+    (f) => f.opportunityClassification && f.opportunityClassification.classification === "IMPORTANT" && f.proposalStatus
+  ).length;
+  const opportunityResearch = {
+    researchedCount: opportunityClassifications.length,
+    important: classificationCounts.IMPORTANT,
+    watch: classificationCounts.WATCH,
+    suppressed: classificationCounts.LOW_SUPPRESS,
+    protect: classificationCounts.PROTECT,
+    proposalsCreated: proposalsCreatedFromClassification,
+    // Bounded — same "never a raw dump" discipline every other section
+    // here follows (evidence-dossier.js's boundedSummary(), etc.).
+    examples: opportunityClassifications.slice(0, 10).map((c) => ({
+      key: c.key,
+      type: c.type,
+      classification: c.classification,
+      reason: c.reason,
+    })),
+  };
+
   const status = computeRunStatus({
     failure,
     hasUnresolvedResearch: questionsPending.length > 0,
@@ -644,6 +686,7 @@ function buildReport({
       })),
     },
     changeDetection,
+    opportunityResearch,
     firstPartyEvidence,
     firstPartySignals,
     localSourceEvidence: localSourceEvidenceSection,

@@ -29,6 +29,18 @@ const SOURCE_TYPES = [
   // Claude reading comprehension judgment, so it carries the additional
   // `familyBreakdown`/`sufficiency` fields below for full inspectability.
   "cross-source-synthesis",
+  // Phase 15 — a deterministic "challenge" read over already-gathered
+  // first-party evidence (GSC/GA4 snapshots, keyword-opportunities.js's
+  // own scoring, evidence-dossier family votes), produced automatically
+  // by agent/lib/opportunity-classification.js so decision.js's existing
+  // category-C branch (needsExternalResearch()) has something to decide
+  // on without a human/Claude session writing a file first. Like
+  // cross-source-synthesis, this is code combining evidence that already
+  // exists — never a new network fetch — so it always carries the
+  // additional evidenceFor/evidenceAgainst/risks/protectedSignals/
+  // missingEvidence fields below (see their own doc comments) rather than
+  // a single human-authored verdict.
+  "automatic-first-party-evidence",
 ];
 
 // Phase 13a — the bounded categorical status of one evidence family
@@ -198,6 +210,32 @@ function makeResearchResult(args) {
     assertNonEmptyString(args.synthesisFingerprint, "synthesisFingerprint");
   }
 
+  // Phase 15 — the "challenge" fields: optional on EVERY sourceType (not
+  // just automatic-first-party-evidence) so a human/Claude-authored
+  // research file can carry them too, but never required — every
+  // pre-Phase-15 research file, and every existing caller
+  // (cross-source-synthesis.js included), keeps validating byte-for-byte
+  // unchanged. When present, each is a non-empty array of non-empty
+  // strings — bounded, inspectable, never a raw payload dump, same
+  // discipline familyBreakdown already follows.
+  const CHALLENGE_FIELDS = ["evidenceFor", "evidenceAgainst", "risks", "protectedSignals", "missingEvidence"];
+  for (const field of CHALLENGE_FIELDS) {
+    // `null` (this module's own default for an absent challenge field —
+    // see the constructed return object below) must round-trip through
+    // a written-then-reread file exactly like `undefined` does — a
+    // written file always has these keys present-but-null when unset,
+    // never omitted, so treating only `undefined` as "absent" broke
+    // re-validating cross-source-synthesis's own output the moment it
+    // existed on disk (caught by tests/agent-run-synthesis.test.js).
+    if (args[field] === undefined || args[field] === null) continue;
+    if (!Array.isArray(args[field])) {
+      throw new Error(`research result ${field} must be an array when present`);
+    }
+    for (const item of args[field]) {
+      assertNonEmptyString(item, `${field}[]`);
+    }
+  }
+
   return {
     findingKey: args.findingKey,
     question: args.question,
@@ -226,6 +264,16 @@ function makeResearchResult(args) {
     familyBreakdown: args.familyBreakdown || null,
     sufficiency: args.sufficiency || null,
     synthesisFingerprint: args.synthesisFingerprint || null,
+    // Phase 15 — see CHALLENGE_FIELDS validation above. `null` (never an
+    // empty array) when absent, so a consumer can tell "this result
+    // never considered the question" apart from "considered it and
+    // found nothing" — same empty-vs-null discipline familyBreakdown
+    // already uses.
+    evidenceFor: args.evidenceFor || null,
+    evidenceAgainst: args.evidenceAgainst || null,
+    risks: args.risks || null,
+    protectedSignals: args.protectedSignals || null,
+    missingEvidence: args.missingEvidence || null,
   };
 }
 

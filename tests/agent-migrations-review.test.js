@@ -51,6 +51,16 @@ const phase14Sql = fs.readFileSync(
   path.join(__dirname, "..", "sql", "2026-10-21_phase14-agent-proposal-execution.sql"),
   "utf8"
 );
+// Phase 15 (opportunity research/classification + Claude handoff report)
+// — another additive migration, re-issuing GRANT UPDATE with two more
+// columns (opportunity_classification, claude_handoff_report) added to
+// phase14's list. Now the AUTHORITATIVE/current source for the grant
+// column list — same "superseded by" pattern phase14 already
+// established over phase3 (see that test's own comment below).
+const phase15Sql = fs.readFileSync(
+  path.join(__dirname, "..", "sql", "2026-10-26_phase15-opportunity-classification.sql"),
+  "utf8"
+);
 
 function extractCheckInList(sql, column) {
   const re = new RegExp(`CHECK \\(${column} IN \\(([^)]*)\\)\\)`, "i");
@@ -134,7 +144,7 @@ test("agent_proposals.sql: service_role grants are REVOKE-first (deterministic e
   }
 });
 
-test("agent_proposals.sql (as superseded by phase14): the GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus the review-state columns the approve/reject PATCH writes", () => {
+test("agent_proposals.sql (as superseded by phase15): the GRANT UPDATE column list matches EXACTLY proposals-sync.js's updatableFields() output, plus the review-state columns the approve/reject PATCH writes", () => {
   const { updatableFields } = require("../agent/lib/proposals-sync");
   const sampleFinding = { category: "A", riskLevel: "low", decision: "PROPOSE_CHANGE", reason: "x", summary: "x", evidence: [], research: [] };
   const syncColumns = Object.keys(updatableFields(sampleFinding, "run-1"));
@@ -145,16 +155,41 @@ test("agent_proposals.sql (as superseded by phase14): the GRANT UPDATE column li
   // two lists above.
   const executionColumns = ["execution"];
 
-  // Phase 14's migration re-issues this GRANT with the full current
-  // column list (original columns + proposed_fix/execution) — read
-  // THAT file, not the original phase3 one, as the authoritative
-  // current grant (see this file's phase14Sql comment above).
-  const grantUpdateMatch = phase14Sql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
-  assert.ok(grantUpdateMatch, "expected a GRANT UPDATE (...) ON public.agent_proposals statement in the phase14 migration");
+  // Phase 15's migration re-issues this GRANT with the full current
+  // column list (phase3 + phase14 + opportunity_classification/
+  // claude_handoff_report) — read THAT file, not phase14's, as the
+  // authoritative current grant (see this file's phase15Sql comment
+  // above).
+  const grantUpdateMatch = phase15Sql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  assert.ok(grantUpdateMatch, "expected a GRANT UPDATE (...) ON public.agent_proposals statement in the phase15 migration");
   const sqlColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean).sort();
 
   const expected = [...new Set([...syncColumns, ...reviewColumns, ...executionColumns])].sort();
   assert.deepStrictEqual(sqlColumns, expected, "the SQL grant must cover exactly what the sync step's UPDATE and the approve/reject PATCH actually write — no more, no less");
+});
+
+test("phase15 migration: additive/idempotent only (ADD COLUMN IF NOT EXISTS, never DROP TABLE/TRUNCATE/DELETE/DROP COLUMN)", () => {
+  const executable = stripSqlComments(phase15Sql);
+  assert.ok(!/\bDROP\s+TABLE\b/i.test(executable));
+  assert.ok(!/\bTRUNCATE\b/i.test(executable));
+  assert.ok(!/\bDELETE\s+FROM\b/i.test(executable));
+  assert.ok(!/\bDROP\s+COLUMN\b/i.test(executable));
+  assert.ok(/ADD COLUMN IF NOT EXISTS opportunity_classification jsonb NULL/i.test(phase15Sql));
+  assert.ok(/ADD COLUMN IF NOT EXISTS claude_handoff_report text NULL/i.test(phase15Sql));
+});
+
+test("phase15 migration: its re-issued GRANT UPDATE still excludes identity columns (finding_key/finding_type/pages/created_at/id)", () => {
+  const grantUpdateMatch = phase15Sql.match(/GRANT UPDATE \(([\s\S]*?)\) ON public\.agent_proposals/i);
+  assert.ok(grantUpdateMatch);
+  const updatableColumns = grantUpdateMatch[1].split(",").map((s) => s.trim().replace(/\n/g, "")).filter(Boolean);
+  for (const protectedCol of ["finding_key", "finding_type", "pages", "created_at", "id"]) {
+    assert.ok(!updatableColumns.includes(protectedCol), `${protectedCol} must never be in the UPDATE grant's column list`);
+  }
+});
+
+test("phase15 migration: rollback section is commented out (reference-only), never part of the executable statement", () => {
+  const executable = stripSqlComments(phase15Sql);
+  assert.ok(!/DROP COLUMN IF EXISTS opportunity_classification/i.test(executable) || phase15Sql.includes("-- ALTER TABLE public.agent_proposals DROP COLUMN IF EXISTS opportunity_classification;"));
 });
 
 test("phase14 migration: additive/idempotent only (ADD COLUMN IF NOT EXISTS, DROP CONSTRAINT IF EXISTS before recreating it — never DROP TABLE/TRUNCATE/DELETE)", () => {

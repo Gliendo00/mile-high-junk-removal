@@ -527,6 +527,56 @@ test("an INVALID workflowStartedAt (garbage string) degrades safely to existing 
   assert.strictEqual(item.gatheredByWorkflow, false, "a fresh, single-pass run (no resume) correctly reads as reused, not newly gathered, same as gatheredDuringThisRun always has");
 });
 
+// --- Phase 15: opportunityResearch section ---------------------------------
+
+test("Phase 15: report.opportunityResearch tallies classification counts correctly, even when nothing becomes a proposal", () => {
+  const record = baseRecord({
+    findings: [
+      { key: "a", type: "keyword-opportunity-ctr-opportunity", decision: "REJECT_OPPORTUNITY", opportunityClassification: { classification: "WATCH", reason: "local pack" } },
+      { key: "b", type: "keyword-opportunity-protect-maintain", decision: "REJECT_OPPORTUNITY", opportunityClassification: { classification: "PROTECT", reason: "strong performer" } },
+      { key: "c", type: "totally-unknown-type", decision: "NO_CHANGE", opportunityClassification: { classification: "LOW_SUPPRESS", reason: "unrecognized" } },
+    ],
+    opportunityClassifications: [
+      { key: "a", classification: "WATCH", reason: "local pack" },
+      { key: "b", classification: "PROTECT", reason: "strong performer" },
+      { key: "c", classification: "LOW_SUPPRESS", reason: "unrecognized" },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null });
+  assert.strictEqual(report.opportunityResearch.researchedCount, 3);
+  assert.strictEqual(report.opportunityResearch.watch, 1);
+  assert.strictEqual(report.opportunityResearch.protect, 1);
+  assert.strictEqual(report.opportunityResearch.suppressed, 1);
+  assert.strictEqual(report.opportunityResearch.important, 0);
+  assert.strictEqual(report.opportunityResearch.proposalsCreated, 0, "no proposal can still mean the Agent did useful work");
+});
+
+test("Phase 15: report.opportunityResearch.proposalsCreated only counts IMPORTANT findings that actually synced (proposalStatus set)", () => {
+  const record = baseRecord({
+    findings: [
+      { key: "a", type: "missing-canonical", pages: ["a.html"], decision: "PROPOSE_CHANGE", opportunityClassification: { classification: "IMPORTANT", reason: "r" }, proposalStatus: "proposed" },
+      { key: "b", type: "missing-h1", pages: ["b.html"], decision: "PROPOSE_CHANGE", opportunityClassification: { classification: "IMPORTANT", reason: "r" }, proposalStatus: null }, // sync skipped/failed
+    ],
+    opportunityClassifications: [
+      { key: "a", classification: "IMPORTANT", reason: "r" },
+      { key: "b", classification: "IMPORTANT", reason: "r" },
+    ],
+  });
+  const report = buildReport({ record, previousRun: null });
+  assert.strictEqual(report.opportunityResearch.important, 2);
+  assert.strictEqual(report.opportunityResearch.proposalsCreated, 1);
+});
+
+test("Phase 15: report.opportunityResearch defaults to all-zero counts when a run has no classifications at all (e.g. a pre-Phase-15 record)", () => {
+  const report = buildReport({ record: baseRecord(), previousRun: null });
+  assert.strictEqual(report.opportunityResearch.researchedCount, 0);
+  assert.strictEqual(report.opportunityResearch.important, 0);
+  assert.strictEqual(report.opportunityResearch.watch, 0);
+  assert.strictEqual(report.opportunityResearch.suppressed, 0);
+  assert.strictEqual(report.opportunityResearch.protect, 0);
+  assert.deepStrictEqual(report.opportunityResearch.examples, []);
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

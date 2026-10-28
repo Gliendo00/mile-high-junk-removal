@@ -121,6 +121,40 @@ test("Phase 14: a 'failed' or 'needs_review' proposal can still be re-approved/r
   assert.deepStrictEqual(values.sort(), ["failed", "needs_review", "proposed"].sort());
 });
 
+// --- Phase 15: Claude handoff report UI ------------------------------------
+
+test("Phase 15: a 'Copy Claude Report' button is rendered, gated on proposal.claudeHandoffReport existing", () => {
+  assert.ok(/proposal\.claudeHandoffReport/.test(proposalsJs), "expected the card builder to gate on claudeHandoffReport");
+  assert.ok(/Copy Claude Report/.test(proposalsJs));
+});
+
+test("Phase 15: clicking Copy Claude Report writes to the clipboard, never to innerHTML/document.write (defense-in-depth, on top of the file-wide check above)", () => {
+  assert.ok(/navigator\.clipboard/.test(proposalsJs));
+  assert.ok(/writeText/.test(proposalsJs));
+});
+
+test("Phase 15: 'View Research' is only offered when there is actual research detail to show (evidenceFor/evidenceAgainst/risks/protectedSignals/missingEvidence) — never an empty panel", () => {
+  assert.ok(/hasResearchDetail/.test(proposalsJs));
+  assert.ok(/View Research/.test(proposalsJs));
+});
+
+test("Phase 15: importance and evidence-confidence are rendered as two SEPARATE badges, never collapsed into one pill", () => {
+  assert.ok(/admin-proposal-importance-/.test(proposalsJs));
+  assert.ok(/admin-proposal-confidence-badge/.test(proposalsJs));
+});
+
+test("Phase 15: a legacy proposal (no opportunityClassification) renders a plain note instead of a misleading blank classification badge", () => {
+  const legacyMatch = proposalsJs.match(/if \(proposal\.opportunityClassification\) \{([\s\S]*?)\} else \{([\s\S]*?)\}/);
+  assert.ok(legacyMatch, "expected an if/else branching on proposal.opportunityClassification");
+  assert.ok(/Legacy proposal/.test(legacyMatch[2]));
+});
+
+test("Phase 15: Execute remains fully present/functional (never removed) but is labeled as the legacy path, not the new default workflow", () => {
+  assert.ok(/'Execute'/.test(proposalsJs), "the Execute button itself must still exist");
+  assert.ok(/legacy auto-apply path/i.test(proposalsJs));
+  assert.ok(/Copy Claude Report/.test(proposalsJs));
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

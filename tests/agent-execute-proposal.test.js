@@ -1204,6 +1204,47 @@ async function main() {
     }
   });
 
+  await test("Phase 15: a matching opportunityClassification on the fresh finding and the stored row's opportunity_classification does NOT cause a false drift/needs_review (regression lock for the computeReviewContentFingerprint fix)", async () => {
+    const before = '<html><head><link rel="canonical" href="https://www.milehighjunkremoval.net/wrong-canonical.html"></head><body></body></html>';
+    writeFixture(before);
+    try {
+      const classification = { classification: "IMPORTANT", evidenceConfidence: "high", reason: "r" };
+      const db = { agent_proposals: [makeCanonicalClaimedRow({ row: { opportunity_classification: classification } })] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        // The fresh re-scan's finding carries the SAME classification a
+        // real gatherFindings() call would attach — see runner.js's
+        // classifyAllOpportunities() wiring.
+        gatherFindings: queuedGatherFindings([makeCanonicalFinding({ opportunityClassification: classification })], []),
+        runTests: () => ({ passed: true, summary: "ok" }),
+        git: fakeGit([]),
+      });
+      assert.strictEqual(result.status, "deployed", "a matching classification on both sides must never be read as a material change");
+    } finally {
+      cleanupFixture();
+    }
+  });
+
+  await test("Phase 15: a DIFFERENT classification between the fresh finding and the stored row correctly triggers needs_review (proves the check is live, not a no-op)", async () => {
+    writeFixture('<html><head><link rel="canonical" href="https://www.milehighjunkremoval.net/wrong-canonical.html"></head><body></body></html>');
+    try {
+      const db = { agent_proposals: [makeCanonicalClaimedRow({ row: { opportunity_classification: { classification: "IMPORTANT", evidenceConfidence: "high", reason: "r" } } })] };
+      const client = makeFakeClient(db);
+      const result = await executeProposal("prop-1", {
+        client,
+        isWorkingTreeClean: alwaysCleanTree,
+        gatherFindings: queuedGatherFindings([makeCanonicalFinding({ opportunityClassification: { classification: "WATCH", evidenceConfidence: "low", reason: "weakened" } })]),
+        runTests: () => ({ passed: true, summary: "ok" }),
+      });
+      assert.strictEqual(result.status, "needs_review");
+      assert.ok(/site has changed since this proposal was approved/i.test(result.reason));
+    } finally {
+      cleanupFixture();
+    }
+  });
+
   await test("canonical-mismatch: the wrong canonical href is already gone from the file (zero occurrences) -> refuses, needs_review, nothing written", async () => {
     // The approved fix's `from` string simply isn't in the file anymore
     // (e.g. hand-edited since approval) — same pattern as the existing

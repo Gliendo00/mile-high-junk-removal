@@ -68,6 +68,9 @@ const { attachResearch } = require("./lib/research-intake");
 const { decideAll } = require("./lib/decision");
 const { attachFirstPartyEvidence, attachRotationEvidence } = require("./lib/firstparty-intake");
 const { attachFirstPartySignals } = require("./lib/firstparty-signals");
+const { analyzeKeywordOpportunities } = require("./lib/keyword-opportunities");
+const { buildKeywordOpportunityFindings, attachAutomaticResearch } = require("./lib/keyword-opportunity-findings");
+const { classifyAllOpportunities } = require("./lib/opportunity-classification");
 const { loadLocalSourceEvidence } = require("./lib/local-source-intake");
 const { getEntries, loadRegistry } = require("./lib/local-source-registry");
 const { loadLocalSourceCandidateLog } = require("./lib/local-source-candidate-log");
@@ -98,7 +101,17 @@ function isWorkingTreeClean() {
 // The full scan->audit->classify->research->decide pipeline, with no
 // side effects — safe to call as many times in one process as needed
 // (the runner calls it again, post-apply, purely to validate).
-function gatherFindings() {
+//
+// Phase 15 — `options.keywordOpportunityAnalysis`, when supplied, is
+// keyword-opportunities.js's analyzeKeywordOpportunities() result,
+// FETCHED BY THE CALLER before this (otherwise-synchronous) function
+// runs, since that engine reads from Supabase (see runLocked() below —
+// the one real production call site). Omitted/absent (every other
+// caller: the apply-safe re-scan callback below, tests, the failure-
+// path call) simply means zero keyword-opportunity findings this call —
+// never a thrown error, and never a behavior change for anything else
+// in this pipeline.
+function gatherFindings(options = {}) {
   const pages = scanAllPages();
   const findings = [
     ...auditLinks(pages),
@@ -111,9 +124,23 @@ function gatherFindings() {
     ...auditCoverage(pages),
     ...auditUx(pages),
     ...auditFactualConsistency(pages),
+    // Phase 15 — Search Intelligence keyword opportunities, reshaped
+    // into ordinary Findings (see keyword-opportunity-findings.js's own
+    // header on why this never recomputes keyword-opportunities.js's
+    // own scoring).
+    ...buildKeywordOpportunityFindings(options.keywordOpportunityAnalysis),
   ];
   const classified = classifyAll(findings);
   const { findings: withResearch, warnings: researchWarnings } = attachResearch(classified);
+  // Phase 15 — appends (never replaces) an automatic, first-party-only
+  // research result to every keyword-opportunity-* finding that doesn't
+  // already have one, so decision.js's existing, UNMODIFIED category-C
+  // branch can resolve them exactly like every other category-C finding
+  // — see attachAutomaticResearch()'s own header for why this is scoped
+  // to keyword-opportunity-* types only (the five original category-C
+  // types already have their own research mechanisms — human/Claude
+  // files, or the separate --run-synthesis step).
+  attachAutomaticResearch(withResearch);
   const decided = decideAll(withResearch);
   // Phase 6 — attached strictly AFTER decideAll() has already produced
   // every finding's `.decision`, so first-party evidence (Search
@@ -130,6 +157,13 @@ function gatherFindings() {
   // agent/lib/firstparty-signals.js's header and
   // tests/agent-firstparty-signals-safety.test.js).
   const withFirstPartySignals = attachFirstPartySignals(withFirstParty);
+  // Phase 15 — the new importance-classification layer, strictly AFTER
+  // decideAll() (reads `.decision`/`.category`/`.tier`, all already
+  // final) and AFTER research attachment (reads `.research`). Never
+  // read by decision.js itself — see opportunity-classification.js's
+  // own header for why this is a new, separate axis layered on top,
+  // not a replacement for decision.js's existing, unmodified logic.
+  classifyAllOpportunities(withFirstPartySignals, options.classificationContext);
   return { pages, findings: withFirstPartySignals, researchWarnings, firstPartyWarnings };
 }
 
@@ -228,6 +262,26 @@ async function run(options = {}) {
 }
 
 async function runLocked({ options, mode, runType, runId, sequence, priorRecord }) {
+  // Phase 15 — fetched once per run, BEFORE the otherwise-synchronous
+  // scan/audit/classify/decide pipeline (gatherFindings() itself stays
+  // synchronous — see its own header), since keyword-opportunities.js
+  // reads from Supabase. Same defensive posture as api/admin/bookings.js's
+  // own safeKeywordOpportunities(): a problem here must never break the
+  // rest of the run — falls back to zero keyword-opportunity findings,
+  // same as when Supabase simply isn't configured. `options.keywordOpportunityAnalysis`
+  // lets a test (or a future caller) inject a fixture directly instead
+  // of hitting a live Supabase client — `undefined` (the normal case)
+  // means "fetch for real"; an explicit value (including `null`) is
+  // used as-is.
+  let keywordOpportunityAnalysis = options.keywordOpportunityAnalysis;
+  if (keywordOpportunityAnalysis === undefined) {
+    try {
+      keywordOpportunityAnalysis = await analyzeKeywordOpportunities();
+    } catch (e) {
+      keywordOpportunityAnalysis = null;
+    }
+  }
+
   // Failure safety (agent/README.md): if the scan/audit/decide pipeline
   // itself throws, this run must still produce an honest, persisted
   // record saying so — never silently nothing, and never a record that
@@ -237,7 +291,7 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
   // outer guard around the whole pipeline.
   let pipelineResult;
   try {
-    pipelineResult = gatherFindings();
+    pipelineResult = gatherFindings({ keywordOpportunityAnalysis });
   } catch (e) {
     const failure = { message: e && e.message ? e.message : String(e) };
     const failedRecord = {
@@ -349,11 +403,34 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
   // configured — never thrown, never affects whether the run succeeds.
   const proposalsSync = options.syncProposals === false
     ? { skipped: true, reason: "sync disabled for this run", synced: 0, total: 0, errors: [], statusByKey: {} }
-    : await syncProposals(findings, runId, { client: options.proposalsSyncClient, previousOwnerReviewKeys });
+    // Phase 15 — `pages` (this run's own scanAllPages() output) lets
+    // proposals-sync.js's generated Claude handoff report fill in
+    // CURRENT PAGE STATE with real values — see that file's own header.
+    : await syncProposals(findings, runId, { client: options.proposalsSyncClient, previousOwnerReviewKeys, pages });
   const statusByKey = proposalsSync.statusByKey || {};
   for (const f of findings) {
     f.proposalStatus = statusByKey[f.key] || null;
   }
+
+  // Phase 15 — every finding this run actually classified (bypassed
+  // findings — APPLY_SAFE_FIX, observation-tier NO_CHANGE — never carry
+  // `.opportunityClassification` at all, so they're correctly absent
+  // here too). This is the ONLY persisted record for a WATCH/
+  // LOW_SUPPRESS/PROTECT finding, since none of those ever reach
+  // agent_proposals (see proposals-sync.js's needsProposal()) — see
+  // history.js's latestClassificationByKey() for how a later run reads
+  // this back.
+  const opportunityClassifications = findings
+    .filter((f) => f.opportunityClassification)
+    .map((f) => ({
+      key: f.key,
+      type: f.type,
+      classification: f.opportunityClassification.classification,
+      evidenceConfidence: f.opportunityClassification.evidenceConfidence,
+      reason: f.opportunityClassification.reason,
+      fingerprint: f.opportunityClassification.fingerprint,
+      researchedAt: f.opportunityClassification.researchedAt,
+    }));
 
   const record = {
     runId,
@@ -418,6 +495,15 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       // gatherFindings()). Investigation-only; see
       // agent/lib/firstparty-signals.js's header.
       firstPartySignals: f.firstPartySignals && f.firstPartySignals.length ? f.firstPartySignals : undefined,
+      // Phase 15 — the full classification record for THIS finding
+      // (undefined for a bypassed finding — APPLY_SAFE_FIX,
+      // observation-tier NO_CHANGE — same as every other optional field
+      // here). The top-level `record.opportunityClassifications` below
+      // is the compact, cross-finding list the daily-report counts and
+      // history.js's latestClassificationByKey() actually read; this
+      // per-finding copy is for anyone inspecting one specific finding
+      // directly in the log.
+      opportunityClassification: f.opportunityClassification || undefined,
       recommendation: f.recommendation,
       appliedResult: f.appliedResult || null,
       applyRefusedReason: f.applyRefusedReason || null,
@@ -429,6 +515,10 @@ async function runLocked({ options, mode, runType, runId, sequence, priorRecord 
       proposalStatus: f.proposalStatus || null,
     })),
     researchQuestions,
+    // Phase 15 — see opportunityClassifications' own construction above
+    // for exactly what this is and why it's the authoritative source
+    // for WATCH/LOW_SUPPRESS/PROTECT memory (never agent_proposals).
+    opportunityClassifications,
     researchWarnings: researchWarnings.length ? researchWarnings : undefined,
     firstPartyWarnings: firstPartyWarnings && firstPartyWarnings.length ? firstPartyWarnings : undefined,
     validation: {

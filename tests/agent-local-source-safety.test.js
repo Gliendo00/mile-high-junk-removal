@@ -213,8 +213,19 @@ async function main() {
       // runner.run() calls within the SAME test process, regardless of
       // local-source evidence — stripped before comparing so this test
       // isn't a false negative on that unrelated, expected drift.
+      // Phase 15 — `opportunityClassification.researchedAt` is a real
+      // wall-clock timestamp (agent/lib/opportunity-classification.js),
+      // the same category of unavoidable, legitimate drift between two
+      // separate runner.run() calls a few milliseconds apart — stripped
+      // for the same reason `id` is, never because its presence/shape
+      // itself is in question (every OTHER field of it, including the
+      // deterministic `fingerprint`, is still compared as-is).
       const stripId = (finding) => {
         const { id, ...rest } = finding;
+        if (rest.opportunityClassification) {
+          const { researchedAt, ...classificationRest } = rest.opportunityClassification;
+          rest.opportunityClassification = classificationRest;
+        }
         return rest;
       };
       assert.deepStrictEqual(recordWith.findings.map(stripId), recordWithout.findings.map(stripId), "findings/decisions must be completely unaffected by the presence of local-source evidence on disk");

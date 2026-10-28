@@ -97,6 +97,62 @@ document.addEventListener('DOMContentLoaded', function () {
     return parts.join(' ') || JSON.stringify(item);
   }
 
+  // Site Improvement Agent, Phase 15 — the new default workflow's core
+  // UI surface: a classification badge, and a "Copy Claude Report"
+  // action that puts the pre-generated handoff report (see
+  // agent/lib/claude-handoff-report.js) on the clipboard so Gerardo can
+  // paste it straight into Claude. Added to the EXISTING proposal card
+  // — no new admin page, per the spec's own "do not build another admin
+  // page" instruction.
+  var RESEARCH_DETAIL_FIELDS = ['evidenceFor', 'evidenceAgainst', 'protectedSignals', 'risks', 'missingEvidence'];
+  var RESEARCH_DETAIL_LABELS = {
+    evidenceFor: 'Evidence for',
+    evidenceAgainst: 'Evidence against',
+    protectedSignals: 'Protected signals',
+    risks: 'Risks',
+    missingEvidence: 'Missing evidence',
+  };
+
+  function hasResearchDetail(classification) {
+    return RESEARCH_DETAIL_FIELDS.some(function (key) {
+      return Array.isArray(classification[key]) && classification[key].length > 0;
+    });
+  }
+
+  function buildResearchPanel(classification) {
+    var panel = el('div', 'admin-proposal-research-panel');
+    RESEARCH_DETAIL_FIELDS.forEach(function (key) {
+      var items = classification[key];
+      if (!Array.isArray(items) || !items.length) return;
+      panel.appendChild(el('p', 'admin-proposal-card-meta', RESEARCH_DETAIL_LABELS[key] + ':'));
+      var list = el('ul', null);
+      items.forEach(function (item) {
+        list.appendChild(el('li', null, item));
+      });
+      panel.appendChild(list);
+    });
+    return panel;
+  }
+
+  function copyClaudeReport(text, button) {
+    var original = button.textContent;
+    function settle(ok) {
+      button.textContent = ok ? 'Copied!' : 'Could not copy';
+      setTimeout(function () {
+        button.textContent = original;
+      }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        settle(true);
+      }).catch(function () {
+        settle(false);
+      });
+    } else {
+      settle(false);
+    }
+  }
+
   function buildCard(proposal) {
     var card = el('div', 'admin-proposal-card');
 
@@ -116,6 +172,25 @@ document.addEventListener('DOMContentLoaded', function () {
       top.appendChild(el('span', 'admin-proposal-stale-badge', 'Stale — finding no longer needs review'));
     }
     card.appendChild(top);
+
+    // Phase 15 — importance and evidence confidence are deliberately
+    // two SEPARATE badges (see admin.css's own header: an IMPORTANT
+    // finding with MEDIUM confidence is not the same as one with HIGH
+    // confidence, and this UI never collapses the two into one pill).
+    // Absent entirely for a legacy proposal (synced before this
+    // workflow existed) — shown as a plain note instead, never a
+    // misleading blank badge.
+    if (proposal.opportunityClassification) {
+      var classificationRow = el('div', 'admin-proposal-card-top');
+      var importance = proposal.opportunityClassification.classification || 'UNKNOWN';
+      classificationRow.appendChild(el('span', 'admin-status-badge admin-proposal-importance-' + importance.toLowerCase(), importance));
+      if (proposal.opportunityClassification.evidenceConfidence) {
+        classificationRow.appendChild(el('span', 'admin-proposal-confidence-badge', proposal.opportunityClassification.evidenceConfidence.toUpperCase() + ' confidence'));
+      }
+      card.appendChild(classificationRow);
+    } else {
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Legacy proposal — predates the research/classification workflow.'));
+    }
 
     card.appendChild(el('p', 'admin-proposal-card-summary', proposal.summary));
     card.appendChild(el(
@@ -163,6 +238,39 @@ document.addEventListener('DOMContentLoaded', function () {
           }
         }
       });
+    }
+
+    // Phase 15 — the primary new-workflow action. Only rendered when a
+    // handoff report actually exists (IMPORTANT-classified proposals
+    // only — see proposals-sync.js's buildHandoffReportIfImportant()) —
+    // never a disabled button for a proposal that has none. "View
+    // Research" is the optional secondary action the spec calls for,
+    // only added when there's actually something to show.
+    if (proposal.claudeHandoffReport) {
+      var handoffActions = el('div', 'admin-proposal-card-actions');
+      var copyBtn = el('button', 'admin-btn admin-btn-primary', 'Copy Claude Report');
+      copyBtn.type = 'button';
+      copyBtn.addEventListener('click', function () {
+        copyClaudeReport(proposal.claudeHandoffReport, copyBtn);
+      });
+      handoffActions.appendChild(copyBtn);
+
+      if (proposal.opportunityClassification && hasResearchDetail(proposal.opportunityClassification)) {
+        var researchPanel = buildResearchPanel(proposal.opportunityClassification);
+        researchPanel.style.display = 'none';
+        var viewResearchBtn = el('button', 'admin-btn admin-btn-outline', 'View Research');
+        viewResearchBtn.type = 'button';
+        viewResearchBtn.addEventListener('click', function () {
+          var hidden = researchPanel.style.display === 'none';
+          researchPanel.style.display = hidden ? 'block' : 'none';
+          viewResearchBtn.textContent = hidden ? 'Hide Research' : 'View Research';
+        });
+        handoffActions.appendChild(viewResearchBtn);
+        card.appendChild(handoffActions);
+        card.appendChild(researchPanel);
+      } else {
+        card.appendChild(handoffActions);
+      }
     }
 
     // Phase 14 — execution details (commit/files/validation/test/
@@ -232,6 +340,12 @@ document.addEventListener('DOMContentLoaded', function () {
       card.appendChild(actions);
     } else if (proposal.status === 'approved') {
       card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Approved — ready to execute.'));
+      // Phase 15 — Execute remains fully functional (legacy
+      // functionality, per the spec: "do not remove existing execute
+      // infrastructure"), but the new default workflow is Copy Claude
+      // Report above, not Execute — labeled here so it's clear without
+      // removing or disabling anything.
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Execute is a legacy auto-apply path (today, only a single mechanical link-rewrite fixer). The current default workflow is Copy Claude Report above.'));
 
       // Desktop-only (requirement: execution must never be offered on
       // mobile) — both an explicit viewport check (so the button is
