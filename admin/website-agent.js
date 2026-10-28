@@ -91,6 +91,62 @@ document.addEventListener('DOMContentLoaded', function () {
     return parts.join(' ') || JSON.stringify(item);
   }
 
+  // Site Improvement Agent, Phase 15 — the classification badge / Copy
+  // Claude Report / View Research block, duplicated from
+  // admin/agent-proposals.js's own copy (same per-page-duplication
+  // convention this file's header already follows for the rest of the
+  // proposal-card rendering) so this dashboard's "Needs Your Review"
+  // queue shows the same new-workflow UI as the dedicated review page,
+  // instead of silently staying on the pre-Phase-15 card forever.
+  var RESEARCH_DETAIL_FIELDS = ['evidenceFor', 'evidenceAgainst', 'protectedSignals', 'risks', 'missingEvidence'];
+  var RESEARCH_DETAIL_LABELS = {
+    evidenceFor: 'Evidence for',
+    evidenceAgainst: 'Evidence against',
+    protectedSignals: 'Protected signals',
+    risks: 'Risks',
+    missingEvidence: 'Missing evidence',
+  };
+
+  function hasResearchDetail(classification) {
+    return RESEARCH_DETAIL_FIELDS.some(function (key) {
+      return Array.isArray(classification[key]) && classification[key].length > 0;
+    });
+  }
+
+  function buildResearchPanel(classification) {
+    var panel = el('div', 'admin-proposal-research-panel');
+    RESEARCH_DETAIL_FIELDS.forEach(function (key) {
+      var items = classification[key];
+      if (!Array.isArray(items) || !items.length) return;
+      panel.appendChild(el('p', 'admin-proposal-card-meta', RESEARCH_DETAIL_LABELS[key] + ':'));
+      var list = el('ul', null);
+      items.forEach(function (item) {
+        list.appendChild(el('li', null, item));
+      });
+      panel.appendChild(list);
+    });
+    return panel;
+  }
+
+  function copyClaudeReport(text, button) {
+    var original = button.textContent;
+    function settle(ok) {
+      button.textContent = ok ? 'Copied!' : 'Could not copy';
+      setTimeout(function () {
+        button.textContent = original;
+      }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        settle(true);
+      }).catch(function () {
+        settle(false);
+      });
+    } else {
+      settle(false);
+    }
+  }
+
   // -----------------------------------------------------------------
   // Overall status pill
   // -----------------------------------------------------------------
@@ -297,6 +353,24 @@ document.addEventListener('DOMContentLoaded', function () {
     top.appendChild(el('span', 'admin-status-badge admin-proposal-status-' + proposal.status, 'Needs review'));
     card.appendChild(top);
 
+    // Phase 15 — importance and evidence confidence as two SEPARATE
+    // badges (see admin.css's own header on this page's twin,
+    // admin/agent-proposals.js, for why they're never collapsed into
+    // one). Absent entirely for a legacy proposal (synced before this
+    // workflow existed) — a plain note instead, never a misleading
+    // blank badge.
+    if (proposal.opportunityClassification) {
+      var classificationRow = el('div', 'admin-proposal-card-top');
+      var importance = proposal.opportunityClassification.classification || 'UNKNOWN';
+      classificationRow.appendChild(el('span', 'admin-status-badge admin-proposal-importance-' + importance.toLowerCase(), importance));
+      if (proposal.opportunityClassification.evidenceConfidence) {
+        classificationRow.appendChild(el('span', 'admin-proposal-confidence-badge', proposal.opportunityClassification.evidenceConfidence.toUpperCase() + ' confidence'));
+      }
+      card.appendChild(classificationRow);
+    } else {
+      card.appendChild(el('p', 'admin-proposal-card-reviewed-note', 'Legacy proposal — predates the research/classification workflow.'));
+    }
+
     card.appendChild(el('p', 'admin-proposal-card-summary', proposal.summary));
     card.appendChild(el(
       'p',
@@ -317,6 +391,38 @@ document.addEventListener('DOMContentLoaded', function () {
         evidenceList.appendChild(el('li', null, evidenceLine(item)));
       });
       card.appendChild(evidenceList);
+    }
+
+    // Phase 15 — the primary new-workflow action. Only rendered when a
+    // handoff report actually exists (IMPORTANT-classified proposals
+    // only — see proposals-sync.js's buildHandoffReportIfImportant()).
+    // "View Research" is the optional secondary action, only added when
+    // there's actually something to show.
+    if (proposal.claudeHandoffReport) {
+      var handoffActions = el('div', 'admin-proposal-card-actions');
+      var copyBtn = el('button', 'admin-btn admin-btn-primary', 'Copy Claude Report');
+      copyBtn.type = 'button';
+      copyBtn.addEventListener('click', function () {
+        copyClaudeReport(proposal.claudeHandoffReport, copyBtn);
+      });
+      handoffActions.appendChild(copyBtn);
+
+      if (proposal.opportunityClassification && hasResearchDetail(proposal.opportunityClassification)) {
+        var researchPanel = buildResearchPanel(proposal.opportunityClassification);
+        researchPanel.style.display = 'none';
+        var viewResearchBtn = el('button', 'admin-btn admin-btn-outline', 'View Research');
+        viewResearchBtn.type = 'button';
+        viewResearchBtn.addEventListener('click', function () {
+          var hidden = researchPanel.style.display === 'none';
+          researchPanel.style.display = hidden ? 'block' : 'none';
+          viewResearchBtn.textContent = hidden ? 'Hide Research' : 'View Research';
+        });
+        handoffActions.appendChild(viewResearchBtn);
+        card.appendChild(handoffActions);
+        card.appendChild(researchPanel);
+      } else {
+        card.appendChild(handoffActions);
+      }
     }
 
     var noteInput = el('textarea', 'admin-proposal-card-note-input');

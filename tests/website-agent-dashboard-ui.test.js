@@ -146,6 +146,54 @@ test("Phase 14 hotfix: the execution-status card is read-only here (no Approve/R
   assert.ok(/\/admin\/agent-proposals\//.test(fnBody), "must link back to the full proposals page for whatever action comes next");
 });
 
+// =======================================================================
+// Phase 15 regression — live bug, 2026-10-28: a newly-created, IMPORTANT-
+// classified keyword-opportunity proposal showed correctly on
+// /admin/agent-proposals/ (classification badge, confidence badge, Copy
+// Claude Report, View Research — see admin/agent-proposals.js, already
+// updated for Phase 15) but NOT on this dashboard's own "Needs Your
+// Review" queue card (buildQueueCard() below), which still rendered the
+// pre-Phase-15 card only. Root cause: this page duplicates
+// admin/agent-proposals.js's card-rendering code (this file's own header
+// above says so), and that duplication was never updated when Phase 15
+// added the new UI to the other copy — NOT a data/API bug (DB rows and
+// the API response both carried opportunityClassification/
+// claudeHandoffReport correctly the whole time; confirmed directly
+// against the live API response and the live Supabase table for the
+// exact proposal that exposed this). These checks guard against the two
+// copies drifting apart again.
+// =======================================================================
+
+test("Phase 15: buildQueueCard renders a classification badge + separate confidence badge when proposal.opportunityClassification exists, same as admin/agent-proposals.js", () => {
+  const fnMatch = waJs.match(/function buildQueueCard[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "expected a buildQueueCard function");
+  const fnBody = fnMatch[0];
+  assert.ok(/proposal\.opportunityClassification/.test(fnBody), "buildQueueCard must read proposal.opportunityClassification");
+  assert.ok(/admin-proposal-importance-/.test(fnBody), "expected the same importance-badge class admin/agent-proposals.js uses");
+  assert.ok(/admin-proposal-confidence-badge/.test(fnBody), "expected a SEPARATE confidence badge, never collapsed into the importance pill");
+  assert.ok(/Legacy proposal/.test(fnBody), "a legacy proposal (no opportunityClassification) must get a plain note, never a misleading blank badge");
+});
+
+test("Phase 15: buildQueueCard renders 'Copy Claude Report', gated on proposal.claudeHandoffReport existing", () => {
+  const fnMatch = waJs.match(/function buildQueueCard[\s\S]*?\n  \}/);
+  const fnBody = fnMatch[0];
+  assert.ok(/if\s*\(\s*proposal\.claudeHandoffReport\s*\)/.test(fnBody), "the handoff-report button block must be gated on proposal.claudeHandoffReport, never rendered unconditionally");
+  assert.ok(/Copy Claude Report/.test(fnBody));
+  assert.ok(/copyClaudeReport\(proposal\.claudeHandoffReport/.test(fnBody));
+});
+
+test("Phase 15: buildQueueCard offers 'View Research' only when there is actual research detail to show, never an empty panel", () => {
+  const fnMatch = waJs.match(/function buildQueueCard[\s\S]*?\n  \}/);
+  const fnBody = fnMatch[0];
+  assert.ok(/hasResearchDetail\(proposal\.opportunityClassification\)/.test(fnBody));
+  assert.ok(/View Research/.test(fnBody));
+});
+
+test("Phase 15: copyClaudeReport writes to the clipboard, never to innerHTML/document.write (defense-in-depth, on top of the file-wide check above)", () => {
+  assert.ok(/function copyClaudeReport/.test(waJs));
+  assert.ok(/navigator\.clipboard/.test(waJs));
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }
