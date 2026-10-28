@@ -987,7 +987,7 @@ const AGENT_PROPOSAL_STATUSES = [
 ];
 const AGENT_PROPOSAL_REVIEW_NOTE_MAX = 500;
 const AGENT_PROPOSAL_SELECT =
-  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at, proposed_fix, execution";
+  "id, finding_key, finding_type, category, risk_level, decision, decision_reason, summary, pages, evidence, research, status, reviewed_by, reviewed_at, review_note, last_run_id, created_at, updated_at, proposed_fix, execution, opportunity_classification, claude_handoff_report";
 
 function mapAgentProposal(row, options = {}) {
   return {
@@ -1017,6 +1017,13 @@ function mapAgentProposal(row, options = {}) {
     // nothing has ever been attempted (the DB column's own default).
     proposedFix: row.proposed_fix || null,
     execution: row.execution || {},
+    // Phase 15 — null for every legacy proposal (see
+    // sql/2026-10-26_phase15-opportunity-classification.sql's own
+    // header) — the admin UI treats that as "pre-dates the research/
+    // handoff workflow" and hides the classification badges/Copy Claude
+    // Report button accordingly (see admin/agent-proposals.js).
+    opportunityClassification: row.opportunity_classification || null,
+    claudeHandoffReport: row.claude_handoff_report || null,
     // Pre-acceptance hardening (audit finding #4, baseline 2bff317) —
     // see currentOwnerReviewKeys() below for exactly what this means and
     // why it's computed fresh at READ time rather than stored on the row

@@ -50,6 +50,34 @@ function readAllRuns(logPath = config.HISTORY_LOG_PATH) {
 // current state, never as two confusing "before research"/"after
 // research" entries. A record with no `sequence` field (every pre-
 // Phase-5B record) is treated as sequence 1, so old history still works.
+// Phase 15 — "do not repeatedly research the exact same suppressed
+// opportunity every day... reconsider only when evidence materially
+// changes." WATCH/LOW_SUPPRESS/PROTECT findings never reach
+// agent_proposals (see proposals-sync.js's needsProposal()), so this
+// git-tracked, append-only log IS their only persisted memory — exactly
+// the "log-only, re-derive each run" design: nothing here is ever
+// mutated, a later run simply reads back the most recent entry for a
+// given finding key and compares its `fingerprint`
+// (opportunity-classification.js's computeClassificationFingerprint())
+// to decide whether anything material has actually changed, rather than
+// re-flagging an unchanged suppressed item as newly surfaced every run.
+// Returns `null` (never throws) when the key has no classification
+// recorded in any run, or `runs` is empty/malformed — same fail-safe
+// posture every other reader of this log already follows.
+function latestClassificationByKey(runs, key) {
+  try {
+    const sorted = [...(Array.isArray(runs) ? runs : [])].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    for (const run of sorted) {
+      const list = Array.isArray(run.opportunityClassifications) ? run.opportunityClassifications : [];
+      const match = list.find((c) => c && c.key === key);
+      if (match) return match;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function latestByRunId(runs) {
   const byId = new Map();
   for (const run of runs) {
@@ -149,6 +177,21 @@ function buildDashboardSummary(runs, limit = 10) {
     if (pagesScanned !== null) {
       lines.push({ icon: "check", text: `Checked ${pagesScanned} page${pagesScanned === 1 ? "" : "s"}` });
     }
+    // Phase 15 — "no proposal" can still mean the Agent did useful work
+    // (see report.js's opportunityResearch section, this run's richer
+    // counterpart) — one terse line here so Home's activity feed shows
+    // that too, not just whatever became a proposal.
+    const classifications = Array.isArray(run.opportunityClassifications) ? run.opportunityClassifications : [];
+    if (classifications.length > 0) {
+      const counts = { IMPORTANT: 0, WATCH: 0, LOW_SUPPRESS: 0, PROTECT: 0 };
+      for (const c of classifications) {
+        if (c && counts[c.classification] !== undefined) counts[c.classification] += 1;
+      }
+      lines.push({
+        icon: "research",
+        text: `Opportunities researched: ${classifications.length} (${counts.IMPORTANT} important, ${counts.WATCH} watch, ${counts.LOW_SUPPRESS} suppressed, ${counts.PROTECT} protect)`,
+      });
+    }
     if (findings.length === 0) {
       lines.push({ icon: "check", text: "No worthwhile change today." });
     } else {
@@ -163,4 +206,13 @@ function buildDashboardSummary(runs, limit = 10) {
   });
 }
 
-module.exports = { appendRun, readAllRuns, latestByRunId, buildDashboardSummary, describeFinding, iconForFinding, activityLine };
+module.exports = {
+  appendRun,
+  readAllRuns,
+  latestByRunId,
+  latestClassificationByKey,
+  buildDashboardSummary,
+  describeFinding,
+  iconForFinding,
+  activityLine,
+};

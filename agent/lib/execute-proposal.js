@@ -250,6 +250,19 @@ function proposalAsFindingShape(row) {
     evidence: row.evidence,
     research: row.research,
     autoFix: row.proposed_fix,
+    // Phase 15 — computeReviewContentFingerprint() now also considers a
+    // finding's importance classification (see that function's own
+    // header: importance can change even when decision/summary/
+    // evidence/research all stay identical, e.g. a stale-analytics
+    // freshness flag clearing). Without this, `fresh` (a live, freshly
+    // reclassified finding from gatherFindings()) would always carry a
+    // real classification while this DB-row shim always carried `null`
+    // — a permanent, spurious "material change" on every single
+    // execution attempt. Reading the row's own already-stored
+    // `opportunity_classification` (set by proposals-sync.js at the
+    // same sync that wrote this row) keeps both sides comparing the
+    // SAME thing, exactly like every other field here already does.
+    opportunityClassification: row.opportunity_classification || null,
   };
 }
 

@@ -72,6 +72,7 @@
 
 const { getServiceClient } = require("../../api/_lib/supabase-admin");
 const { pickLatestResearch } = require("./decision");
+const { buildHandoffReport } = require("./claude-handoff-report");
 
 // Only findings that actually need an owner's eyes get synced — this is
 // deliberately narrower than "every finding", matching the Home
@@ -82,6 +83,37 @@ const { pickLatestResearch } = require("./decision");
 // decide on.
 function needsOwnerReview(finding) {
   return finding.decision === "PROPOSE_CHANGE" || finding.decision === "REJECT_OPPORTUNITY";
+}
+
+// Phase 15 — the importance gate: "not every finding deserves a
+// proposal." Only an IMPORTANT-classified finding (agent/lib/
+// opportunity-classification.js) that also needs owner review ever
+// becomes/updates an agent_proposals row — WATCH/LOW_SUPPRESS/PROTECT
+// findings are recorded in agent/history/log.ndjson only (see
+// agent/runner.js), never here.
+//
+// FAILS CLOSED: `finding.opportunityClassification` missing — never
+// classified at all, a classification step skipped by a future
+// refactor, or anything else that isn't an explicit classification
+// object — is treated exactly like a non-IMPORTANT classification and
+// does NOT sync. This gate's first draft treated a missing
+// classification as "unknown, proceed as before `needsOwnerReview()`
+// alone", which in practice meant "unknown -> assume IMPORTANT" — a
+// production safety gate must never default to permissive on absent
+// input, so that fallback was removed (code review finding, 2026-10-26).
+// agent/runner.js, the only real production caller, ALWAYS classifies
+// every finding before calling syncProposals() (see its
+// gatherFindings()/classifyAllOpportunities() call), so this never
+// excludes a finding that should sync in a real run. A caller that
+// genuinely needs the pre-Phase-15 behavior (a direct/legacy test, say)
+// must attach its own `.opportunityClassification` before calling
+// syncProposals() — see tests/agent-proposals-sync.test.js's
+// decidedFinding() helper, which does exactly that rather than relying
+// on this function to guess.
+function needsProposal(finding) {
+  if (!needsOwnerReview(finding)) return false;
+  if (!finding.opportunityClassification) return false;
+  return finding.opportunityClassification.classification === "IMPORTANT";
 }
 
 // The columns genuinely mutable on an EXISTING row — notably excludes
@@ -95,7 +127,30 @@ function needsOwnerReview(finding) {
 // column-level grant and this module's actual UPDATE statement stay in
 // lockstep, instead of silently drifting the way an earlier draft of
 // this migration did (caught by tests/agent-migrations-review.test.js).
-function updatableFields(finding, runId) {
+// Phase 15 — generates the copy-ready Claude handoff report at sync time
+// (never at read time: admin/agent-proposals.js's "Copy Claude Report"
+// button just copies this stored text, it never recomputes it) only for
+// a finding this run actually classified IMPORTANT. `context.pages` is
+// agent/lib/scan.js's scanAllPages() output for this run, passed through
+// from runner.js so CURRENT PAGE STATE can be filled with real values —
+// omitted (never a placeholder) when not supplied, same discipline
+// claude-handoff-report.js's own section() helper follows for every
+// section.
+function buildHandoffReportIfImportant(finding, context) {
+  const classification = finding.opportunityClassification;
+  if (!classification || classification.classification !== "IMPORTANT") return null;
+  try {
+    return buildHandoffReport(finding, classification, context);
+  } catch (e) {
+    // A report-generation bug must never block the underlying proposal
+    // from syncing — same fail-safe posture every other optional
+    // enrichment in this pipeline follows (research-intake.js's
+    // malformed-file handling, etc.).
+    return null;
+  }
+}
+
+function updatableFields(finding, runId, context = {}) {
   return {
     category: finding.category,
     risk_level: finding.riskLevel || null,
@@ -113,6 +168,12 @@ function updatableFields(finding, runId) {
     // why no current PROPOSE_CHANGE finding has one) — this is forward
     // wiring, not a behavior change for any existing finding.
     proposed_fix: finding.autoFix || null,
+    // Phase 15 — null for every legacy proposal (a finding this run
+    // didn't classify, or classified anything other than IMPORTANT never
+    // reaches this far — see needsProposal() above), never backfilled
+    // for an existing row that already synced before Phase 15 existed.
+    opportunity_classification: finding.opportunityClassification || null,
+    claude_handoff_report: buildHandoffReportIfImportant(finding, context),
     last_run_id: runId,
     updated_at: new Date().toISOString(),
   };
@@ -121,11 +182,11 @@ function updatableFields(finding, runId) {
 // The full row for a brand-new finding_key — includes the two identity
 // fields updatableFields() deliberately omits, since an INSERT is the
 // only time they're ever written.
-function toRow(finding, runId) {
+function toRow(finding, runId, context = {}) {
   return {
     finding_type: finding.type,
     pages: finding.pages,
-    ...updatableFields(finding, runId),
+    ...updatableFields(finding, runId, context),
   };
 }
 
@@ -215,7 +276,26 @@ function computeReviewContentFingerprint(finding) {
     // key reordering of this object can never falsely look like a
     // material change.
     proposedFix: canonicalizeForFingerprint(finding.autoFix || null),
+    // Phase 15 — a finding's own IMPORTANCE can change (e.g. a stale
+    // analytics snapshot becoming fresh again) even when decision/
+    // summary/evidence/research all stay byte-identical — see
+    // opportunity-classification.js's freshness guard. That's still a
+    // material change an owner's prior review should not silently carry
+    // forward across, so it's included here too. Accepts either the
+    // camelCase shape a live finding carries (`opportunityClassification`)
+    // or the raw snake_case column name a Supabase row comes back as
+    // when the caller passes a DB row directly (see this file's own
+    // `existingRes.data` call site, which selects this column, and
+    // execute-proposal.js's proposalAsFindingShape(), which renames it
+    // itself). Absent on either side reads as `null` — never treated as
+    // a material change on its own.
+    importanceClassification: classificationFromEither(finding),
   });
+}
+
+function classificationFromEither(finding) {
+  const c = finding.opportunityClassification || finding.opportunity_classification || null;
+  return c ? c.classification : null;
 }
 
 /**
@@ -243,8 +323,18 @@ async function syncProposals(findings, runId, options = {}) {
     return { skipped: true, reason: "Supabase not configured — proposals not synced to the CRM", synced: 0, total: 0, errors: [], statusByKey: {} };
   }
 
-  const toSync = findings.filter(needsOwnerReview);
+  // Phase 15 — only an IMPORTANT-classified finding ever syncs (see
+  // needsProposal()'s own header).
+  const toSync = findings.filter(needsProposal);
   const previousOwnerReviewKeys = options.previousOwnerReviewKeys || null;
+  // Phase 15 — agent/lib/scan.js's scanAllPages() output for this run
+  // (runner.js passes it through), used only to fill in a generated
+  // Claude handoff report's CURRENT PAGE STATE section — see
+  // buildHandoffReportIfImportant() above. `[]` (never undefined) so
+  // every pre-Phase-15 caller of syncProposals() (including this file's
+  // own existing tests) keeps working unmodified; the report simply
+  // omits that one section when pages aren't supplied.
+  const context = { pages: options.pages || [] };
   let synced = 0;
   const errors = [];
   // Phase 5 — the status each synced finding_key ends up at after this
@@ -256,11 +346,15 @@ async function syncProposals(findings, runId, options = {}) {
 
   for (const finding of toSync) {
     try {
-      const existingRes = await supabase.from("agent_proposals").select("id, status, summary, decision, evidence, research").eq("finding_key", finding.key).maybeSingle();
+      const existingRes = await supabase
+        .from("agent_proposals")
+        .select("id, status, summary, decision, evidence, research, opportunity_classification")
+        .eq("finding_key", finding.key)
+        .maybeSingle();
       if (existingRes.error) throw existingRes.error;
 
       if (existingRes.data) {
-        const row = updatableFields(finding, runId);
+        const row = updatableFields(finding, runId, context);
         const wasReviewed = existingRes.data.status === "approved" || existingRes.data.status === "rejected";
         const contentChanged = computeReviewContentFingerprint(existingRes.data) !== computeReviewContentFingerprint(finding);
         const reappearedAfterAbsence = Boolean(previousOwnerReviewKeys) && !previousOwnerReviewKeys.has(finding.key);
@@ -282,7 +376,7 @@ async function syncProposals(findings, runId, options = {}) {
         const { error } = await supabase.from("agent_proposals").insert({
           finding_key: finding.key,
           status: "proposed",
-          ...toRow(finding, runId),
+          ...toRow(finding, runId, context),
         });
         if (error) throw error;
         statusByKey[finding.key] = "proposed";
@@ -296,4 +390,4 @@ async function syncProposals(findings, runId, options = {}) {
   return { skipped: false, synced, total: toSync.length, errors, statusByKey };
 }
 
-module.exports = { syncProposals, needsOwnerReview, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot, canonicalizeForFingerprint };
+module.exports = { syncProposals, needsOwnerReview, needsProposal, toRow, updatableFields, computeReviewContentFingerprint, latestResearchSnapshot, canonicalizeForFingerprint };

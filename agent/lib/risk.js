@@ -94,6 +94,31 @@ const RULES = {
   "inconsistent-contact-info": { category: "A", riskLevel: "medium", tier: "actionable" },
   "no-next-action": { category: "B", riskLevel: "low", tier: "observation" },
   "factual-contradiction": { category: "D", riskLevel: "high", tier: "actionable" },
+
+  // Phase 15 — Search Intelligence keyword-opportunity findings (see
+  // agent/lib/keyword-opportunity-findings.js), one type per
+  // keyword-opportunities.js category. All five are category C: none of
+  // them are ever actionable from internal site evidence alone — by
+  // design, keyword-opportunities.js's own scoring (score/priority/
+  // evidenceConfidence/likelyLocalPack/intent) IS the "research" these
+  // findings need, so agent/runner.js's attachAutomaticResearch() step
+  // (NOT a human/Claude file) supplies a research.js-shaped result for
+  // every one of them before decideAll() runs — see that function's own
+  // header. Never autoApplyEligible: no mechanical fix exists for a
+  // search-opportunity finding.
+  "keyword-opportunity-priority-now": { category: "C", riskLevel: "medium", tier: "opportunity" },
+  "keyword-opportunity-near-page-1": { category: "C", riskLevel: "medium", tier: "opportunity" },
+  "keyword-opportunity-ctr-opportunity": { category: "C", riskLevel: "medium", tier: "opportunity" },
+  "keyword-opportunity-content-gap": { category: "C", riskLevel: "medium", tier: "opportunity" },
+  // Protect/Maintain findings are deliberately still "opportunity" tier,
+  // not "observation" — see decision.js's own tier:"observation" branch,
+  // which resolves to NO_CHANGE before research is ever consulted. A
+  // protect-maintain finding DOES need the research/classification layer
+  // to run (so it is logged as PROTECT, not silently dropped — see the
+  // spec's "WATCH/SUPPRESS HISTORY" requirement), it just never reaches
+  // PROPOSE_CHANGE in practice (opportunity-classification.js always
+  // classifies it PROTECT, never IMPORTANT — see that module's header).
+  "keyword-opportunity-protect-maintain": { category: "C", riskLevel: "medium", tier: "opportunity" },
 };
 
 function classify(finding) {
