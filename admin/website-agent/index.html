@@ -69,29 +69,21 @@
 
     <!-- Approval queue — moved directly under the header (was previously
          near the bottom of the page): this is the one thing on the page
-         that genuinely deserves first-look priority. Collapsible like
-         every other section below (long-scroll fix, 2026-10), but OPEN
-         by default — it's the one section that earns staying expanded. -->
-    <details class="admin-wa-collapsible" open>
-      <summary class="admin-wa-section-label">
-        Needs Your Review <span class="admin-wa-section-count" id="wa-queue-count"></span>
-        <span class="admin-wa-section-toggle-icon" aria-hidden="true">▾</span>
-      </summary>
-      <div class="admin-wa-panel admin-wa-queue-panel admin-wa-panel-priority">
-        <div id="wa-queue-list"></div>
-        <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
-        <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
-      </div>
-    </details>
+         that genuinely deserves first-look priority. ---------------- -->
+    <div class="admin-wa-section-label">
+      Needs Your Review <span class="admin-wa-section-count" id="wa-queue-count"></span>
+    </div>
+    <div class="admin-wa-panel admin-wa-queue-panel admin-wa-panel-priority">
+      <div id="wa-queue-list"></div>
+      <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
+      <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
+    </div>
 
     <!-- Phase 14 hotfix — execution-in-progress / recently-executed
          proposals (applying/validating/deploying/deployed/failed/
          needs_review). Hidden entirely when empty; shown the instant a
          proposal enters this lifecycle, so Execute never makes a
-         proposal appear to vanish. Short when shown (1-2 cards) — not
-         one of the "extra long" sections, so it stays a plain panel,
-         not collapsible (2026-10 walk-back: only the genuinely long
-         sections below get the <details> treatment). -->
+         proposal appear to vanish. ------------------------------------ -->
     <div id="wa-execution-section" hidden>
       <div class="admin-wa-section-label">
         Execution Status <span class="admin-wa-section-count" id="wa-execution-count"></span>
@@ -103,9 +95,7 @@
 
   </div>
 
-    <!-- Search intelligence — a compact 2-column grid, not a long
-         scrolling list, so it stays a plain always-visible panel
-         (2026-10 walk-back — see Execution Status above). ------------ -->
+    <!-- Search intelligence --------------------------------------------------- -->
     <div class="admin-wa-section-label">Search Intelligence <span class="admin-wa-section-hint">Stored Google evidence</span></div>
     <div class="admin-wa-evidence-grid">
       <div class="admin-wa-panel" id="wa-evidence-gsc"></div>
@@ -114,25 +104,18 @@
 
     <!-- Keyword opportunities (Phase 2) — explainable classification of
          real Search Console queries into action categories. Evidence only;
-         see agent/lib/keyword-opportunities.js. One of the genuinely long
-         sections (up to 5 categories' worth of cards) — collapsed by
-         default. -->
-    <details class="admin-wa-collapsible">
-      <summary class="admin-wa-section-label">Keyword Opportunities <span class="admin-wa-section-hint">Investigate → review → act</span>
-        <span class="admin-wa-section-toggle-icon" aria-hidden="true">▾</span>
-      </summary>
-      <div class="admin-wa-panel" id="wa-kw-panel">
-        <p class="admin-wa-muted" id="wa-kw-meta"></p>
-        <div id="wa-kw-groups"></div>
-      </div>
-    </details>
+         see agent/lib/keyword-opportunities.js. -->
+    <div class="admin-wa-section-label">Keyword Opportunities <span class="admin-wa-section-hint">Investigate → review → act</span></div>
+    <div class="admin-wa-panel" id="wa-kw-panel">
+      <p class="admin-wa-muted" id="wa-kw-meta"></p>
+      <div id="wa-kw-groups"></div>
+    </div>
 
   <div id="wa-operations" style="display:none">
     <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
          two numbers reflect the latest run / live queue, never a sum
          across history, so they can sit beside "NEEDS ATTENTION"
-         without reading as unrelated lifetime trivia. Just 2 small
-         cards — plain panel (2026-10 walk-back). -->
+         without reading as unrelated lifetime trivia. -->
     <div class="admin-wa-section-label">Current Status</div>
     <div class="admin-wa-metrics admin-wa-metrics-current" id="wa-metrics-current"></div>
 
@@ -158,18 +141,13 @@
     <div class="admin-wa-section-label">All-Time Totals</div>
     <div class="admin-wa-metrics admin-wa-metrics-lifetime" id="wa-metrics-lifetime"></div>
 
-    <!-- Agent activity — up to 40 flattened run/finding/review events
-         (ACTIVITY_FEED_LIMIT in website-agent.js): one of the genuinely
-         long sections, collapsed by default. --------------------------- -->
-    <details class="admin-wa-collapsible">
-      <summary class="admin-wa-section-label">
-        Agent Activity <a href="/admin/agent-reports/" class="admin-wa-more-link admin-wa-more-link-inline">Full report history →</a>
-        <span class="admin-wa-section-toggle-icon" aria-hidden="true">▾</span>
-      </summary>
-      <div class="admin-wa-panel admin-wa-activity-panel">
-        <div id="wa-activity-list" class="admin-wa-activity-list"></div>
-      </div>
-    </details>
+    <!-- Agent activity ----------------------------------------------------- -->
+    <div class="admin-wa-section-label">
+      Agent Activity <a href="/admin/agent-reports/" class="admin-wa-more-link admin-wa-more-link-inline">Full report history →</a>
+    </div>
+    <div class="admin-wa-panel admin-wa-activity-panel">
+      <div id="wa-activity-list" class="admin-wa-activity-list"></div>
+    </div>
   </div>
 
 </main>

@@ -194,6 +194,41 @@ test("Phase 15: copyClaudeReport writes to the clipboard, never to innerHTML/doc
   assert.ok(/navigator\.clipboard/.test(waJs));
 });
 
+// =======================================================================
+// Long-card-list fix (2026-10) — two earlier UI attempts collapsed whole
+// sections (admin-wa-collapsible <details>/<summary>), which looked
+// "boring and dead" fully collapsed, and — even scoped down to just the
+// longest three sections — made a collapsed section's header look
+// identical to a plain, non-interactive one next to it, reading as "the
+// section disappeared" rather than "click to expand." Both attempts were
+// reverted. The actual fix: show just the first card of a long list with
+// an explicit, impossible-to-miss "Show N more" button
+// (renderExpandableList()), applied to Needs Your Review, each Keyword
+// Opportunities category, and Agent Activity — never a bare disclosure
+// triangle on a section label.
+// =======================================================================
+
+test("long-card-list fix: no <details>/<summary> accordion remains on this page (both earlier whole-section-collapse attempts were reverted)", () => {
+  assert.ok(!/<details\b/i.test(waHtml), "admin/website-agent/index.html must not contain a <details> element");
+  assert.ok(!waJs.includes("admin-wa-collapsible"), "admin/website-agent.js must not reference the reverted whole-section accordion class");
+});
+
+test("long-card-list fix: a renderExpandableList() helper renders only the first `limit` item(s) with a 'Show N more' / 'Show less' toggle button, never a silent truncation", () => {
+  assert.ok(/function renderExpandableList/.test(waJs));
+  const fnMatch = waJs.match(/function renderExpandableList[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "expected a renderExpandableList function");
+  const fnBody = fnMatch[0];
+  assert.ok(/Show less/.test(fnBody));
+  assert.ok(/Show '\s*\+\s*\(items\.length - limit\)\s*\+\s*' more'/.test(fnBody) || /'Show '\s*\+/.test(fnBody), "expected a 'Show N more' label built from the actual remaining count");
+  assert.ok(/admin-wa-list-toggle-btn/.test(fnBody), "expected a dedicated, clearly-styled button class (full-width per website-agent.css), never a bare link or icon");
+});
+
+test("long-card-list fix: renderQueue, renderKeywordOpportunities, and renderActivity all route their card lists through renderExpandableList (same '1 card + button' treatment everywhere, not a one-off)", () => {
+  assert.ok(/renderExpandableList\(listEl, proposed, buildQueueCard, 1\)/.test(waJs), "expected renderQueue to use renderExpandableList with buildQueueCard");
+  assert.ok(/renderExpandableList\(list, group\.items, buildKwCard, 1\)/.test(waJs), "expected each keyword-opportunity category's list to use renderExpandableList with buildKwCard");
+  assert.ok(/renderExpandableList\(listEl, combined, buildActivityRow, 1\)/.test(waJs), "expected renderActivity to use renderExpandableList with buildActivityRow");
+});
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

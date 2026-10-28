@@ -56,6 +56,38 @@ document.addEventListener('DOMContentLoaded', function () {
   function clear(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
   }
+
+  // Long-card-list fix (2026-10, after two false starts: collapsing whole
+  // sections looked "dead" with nothing visible, and a subtle inline
+  // chevron on the section label read as "the section vanished" rather
+  // than "click to expand") — render only the first `limit` item(s) of a
+  // long card list, with an explicit, clearly-labeled button to reveal
+  // the rest (and collapse back). A real button (not a bare disclosure
+  // triangle) so "there's more here" is never ambiguous. `items.length
+  // <= limit` renders every item with no button at all — never a button
+  // that would do nothing.
+  function renderExpandableList(container, items, buildItemFn, limit) {
+    clear(container);
+    if (!items || !items.length) return;
+    var expanded = false;
+    function paint() {
+      clear(container);
+      var visible = expanded ? items : items.slice(0, limit);
+      visible.forEach(function (item) {
+        container.appendChild(buildItemFn(item));
+      });
+      if (items.length > limit) {
+        var toggleBtn = el('button', 'admin-btn admin-btn-primary admin-wa-list-toggle-btn', expanded ? 'Show less ▲' : 'Show ' + (items.length - limit) + ' more ▼');
+        toggleBtn.type = 'button';
+        toggleBtn.addEventListener('click', function () {
+          expanded = !expanded;
+          paint();
+        });
+        container.appendChild(toggleBtn);
+      }
+    }
+    paint();
+  }
   function showError(msg) {
     errorBanner.textContent = msg;
     errorBanner.style.display = 'block';
@@ -460,9 +492,7 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     emptyEl.style.display = 'none';
-    proposed.forEach(function (p) {
-      listEl.appendChild(buildQueueCard(p));
-    });
+    renderExpandableList(listEl, proposed, buildQueueCard, 1);
   }
 
   // Phase 14 hotfix — the execution-in-progress / recently-executed
@@ -752,8 +782,8 @@ document.addEventListener('DOMContentLoaded', function () {
         section.appendChild(el('p', 'admin-wa-empty-note', 'Nothing in this category right now.'));
       } else {
         var list = el('div', 'admin-wa-kw-list');
-        group.items.forEach(function (item) { list.appendChild(buildKwCard(item)); });
         section.appendChild(list);
+        renderExpandableList(list, group.items, buildKwCard, 1);
         if (group.total > group.items.length) {
           section.appendChild(el('p', 'admin-wa-muted', '+' + (group.total - group.items.length) + ' more not shown.'));
         }
@@ -814,9 +844,7 @@ document.addEventListener('DOMContentLoaded', function () {
       listEl.appendChild(el('p', 'admin-wa-muted', 'No activity recorded yet.'));
       return;
     }
-    combined.forEach(function (event) {
-      listEl.appendChild(buildActivityRow(event));
-    });
+    renderExpandableList(listEl, combined, buildActivityRow, 1);
   }
 
   // -----------------------------------------------------------------
