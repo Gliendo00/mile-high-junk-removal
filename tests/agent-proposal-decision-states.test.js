@@ -421,11 +421,12 @@ async function runUiSection() {
     assert.ok(/href="\/admin\/agent-proposals\/"/.test(topActionsMatch[1]));
     assert.ok(/Agent Proposals/.test(topActionsMatch[1]));
     assert.ok(/admin-btn/.test(topActionsMatch[1]), "must be styled as a real button, consistent with the rest of the admin UI");
-    // It must come before wa-loading in document order, i.e. not nested
-    // inside any of the three state divs that toggle visibility.
+    // Permanent navigation now sits directly after Monitoring Schedule.
+    // Its independence from conditional wrappers is checked by the layout test.
     const topActionsIndex = waHtml.indexOf('class="admin-wa-top-actions"');
-    const loadingIndex = waHtml.indexOf('id="wa-loading"');
-    assert.ok(topActionsIndex > -1 && loadingIndex > -1 && topActionsIndex < loadingIndex);
+    const monitoringIndex = waHtml.indexOf('>Monitoring Schedule<');
+    const latestIndex = waHtml.indexOf('>Latest Run<');
+    assert.ok(monitoringIndex < topActionsIndex && topActionsIndex < latestIndex);
   });
 
   await test("admin/website-agent.js's buildQueueCard renders an 'Open Proposal' button deep-linking to /admin/agent-proposals/?id=<proposal.id>", () => {

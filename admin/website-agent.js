@@ -866,6 +866,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // -----------------------------------------------------------------
   // Fetch + render
   // -----------------------------------------------------------------
+  // Moved sections retain the same connected/not-connected visibility.
+  function setConnectedSectionsVisible(visible) {
+    [bodyEl, operationsEl].concat(Array.prototype.slice.call(document.querySelectorAll('[data-wa-connected]'))).forEach(function (section) {
+      section.style.display = visible ? '' : 'none';
+    });
+  }
+
   function load() {
     Promise.all([
       adminFetch('/api/admin/bookings?view=agent-dashboard'),
@@ -892,13 +899,11 @@ document.addEventListener('DOMContentLoaded', function () {
         renderKeywordOpportunities(dash.keywordOpportunities);
         if (!dash.connected) {
           notConnectedEl.style.display = 'block';
-          bodyEl.style.display = 'none';
-          operationsEl.style.display = 'none';
+          setConnectedSectionsVisible(false);
           return;
         }
         notConnectedEl.style.display = 'none';
-        bodyEl.style.display = 'block';
-        operationsEl.style.display = 'block';
+        setConnectedSectionsVisible(true);
 
         var proposals = (propBody && propBody.proposals) || [];
         var proposed = proposals.filter(function (p) { return p.status === 'proposed'; });
