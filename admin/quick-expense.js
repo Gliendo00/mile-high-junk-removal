@@ -143,6 +143,13 @@ window.AdminQuickExpense = (function () {
     amountRow.appendChild(amountInput);
     sheet.appendChild(amountRow);
 
+    // Dump Fee Tonnage Tracking — optional weight row, Dump Fee only
+    // (admin/dump-weight.js). Guarded so a page that never loaded that
+    // helper still saves expenses exactly as before.
+    var isDumpFee = category === 'dump_fees';
+    var dumpWeight = isDumpFee && window.AdminDumpWeight ? window.AdminDumpWeight.build(null) : null;
+    if (dumpWeight) sheet.appendChild(dumpWeight.el);
+
     var noteRow = el('div', 'admin-field');
     noteRow.appendChild(el('label', null, 'Note (optional)'));
     var noteInput = document.createElement('textarea');
@@ -175,20 +182,27 @@ window.AdminQuickExpense = (function () {
         showError('Please enter an amount.');
         return;
       }
+      if (dumpWeight && !dumpWeight.isValid()) {
+        showError('Please enter a valid dump weight in pounds, or leave it blank.');
+        return;
+      }
 
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
 
+      var payload = {
+        resource: 'expense',
+        expenseDate: dateIso,
+        category: category,
+        amount: Number(amountRaw),
+        note: noteInput.value.trim(),
+      };
+      if (dumpWeight) payload.dumpWeightLbs = dumpWeight.getValue();
+
       adminFetch('/api/admin/bookings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resource: 'expense',
-          expenseDate: dateIso,
-          category: category,
-          amount: Number(amountRaw),
-          note: noteInput.value.trim(),
-        }),
+        body: JSON.stringify(payload),
       })
         .then(function (res) {
           if (res.status === 401) {

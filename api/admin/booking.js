@@ -1822,6 +1822,62 @@ async function recomputeInvoiceTotal(supabase, invoiceId, session) {
   return { invoice: updateRes.data, lineItems };
 }
 
+// Draft -> finalized, shared by PATCH action:"finalize" and (Paid Invoice /
+// Receipt, 2026-10-31) handleCreateInvoicePayment()'s "record a payment on
+// a draft" path. Same rules either way: at least one line item, a total
+// above $0, and a due date. The one difference is opts.defaultDueDate —
+// the payment path passes the payment's own date so a cash/Zelle invoice
+// that was paid on the spot never needs a due date typed in first; an
+// explicit Finalize click still requires one, exactly as before.
+// Returns { invoiceRow, lineItems } or { status, error }.
+async function finalizeDraftInvoice(supabase, current, session, opts) {
+  opts = opts || {};
+  if (current.status !== "draft") {
+    return { status: 409, error: "This invoice has already been finalized." };
+  }
+
+  const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", current.id).order("sort_order", { ascending: true });
+  if (lineItemsRes.error) throw lineItemsRes.error;
+  const lineItems = lineItemsRes.data || [];
+  const before = opts.forPayment ? "before recording a payment" : "before finalizing this invoice";
+  if (!lineItems.length) {
+    return { status: 400, error: "Add at least one line item " + before + "." };
+  }
+  const dueDate = current.due_date || opts.defaultDueDate || null;
+  if (!dueDate) {
+    return { status: 400, error: "Set a due date " + before + "." };
+  }
+  if (!(Number(current.total_amount) > 0)) {
+    return { status: 400, error: "This invoice's total must be greater than $0.00 " + (opts.forPayment ? "before recording a payment." : "before finalizing.") };
+  }
+
+  // Mints a real, permanent number — see
+  // sql/2026-10-19_invoice-workflow.sql §4's header for why a small gap
+  // here (this call succeeds but the conditional update just below
+  // matches zero rows) is an accepted, documented cost, never
+  // worth wrapping in a transaction or a second RPC round trip to avoid.
+  const numberRes = await supabase.rpc("next_invoice_number");
+  if (numberRes.error) throw numberRes.error;
+  const invoiceNumber = numberRes.data;
+  if (!invoiceNumber) throw new Error("next_invoice_number() returned no value.");
+
+  const finalizeUpdate = {
+    status: "finalized",
+    invoice_number: invoiceNumber,
+    finalized_at: new Date().toISOString(),
+    updated_by: session.email,
+    updated_at: new Date().toISOString(),
+  };
+  if (!current.due_date) finalizeUpdate.due_date = dueDate;
+
+  const finalizeRes = await supabase.from("invoices").update(finalizeUpdate).eq("id", current.id).eq("status", "draft").select(INVOICE_SELECT_COLS).maybeSingle();
+  if (finalizeRes.error) throw finalizeRes.error;
+  if (!finalizeRes.data) {
+    return { status: 409, error: "This invoice has already been finalized." };
+  }
+  return { invoiceRow: finalizeRes.data, lineItems };
+}
+
 // PATCH /api/admin/booking?resource=invoice — body { id, action, ... }.
 // action is one of "updateDetails" (due date/notes) | "addLineItem" |
 // "updateLineItem" | "removeLineItem" (draft only — a finalized invoice's
@@ -2018,57 +2074,12 @@ async function handlePatchInvoice(req, res, session) {
     }
 
     if (action === "finalize") {
-      if (current.status !== "draft") {
-        res.status(409).json({ error: "This invoice has already been finalized." });
+      const finalized = await finalizeDraftInvoice(supabase, current, session, {});
+      if (finalized.error) {
+        res.status(finalized.status).json({ error: finalized.error });
         return;
       }
-
-      const lineItemsRes = await supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", id).order("sort_order", { ascending: true });
-      if (lineItemsRes.error) throw lineItemsRes.error;
-      const lineItems = lineItemsRes.data || [];
-      if (!lineItems.length) {
-        res.status(400).json({ error: "Add at least one line item before finalizing this invoice." });
-        return;
-      }
-      if (!current.due_date) {
-        res.status(400).json({ error: "Set a due date before finalizing this invoice." });
-        return;
-      }
-      if (!(Number(current.total_amount) > 0)) {
-        res.status(400).json({ error: "This invoice's total must be greater than $0.00 before finalizing." });
-        return;
-      }
-
-      // Mints a real, permanent number — see
-      // sql/2026-10-19_invoice-workflow.sql §4's header for why a small gap
-      // here (this call succeeds but the conditional update just below
-      // matches zero rows) is an accepted, documented cost, never
-      // worth wrapping in a transaction or a second RPC round trip to avoid.
-      const numberRes = await supabase.rpc("next_invoice_number");
-      if (numberRes.error) throw numberRes.error;
-      const invoiceNumber = numberRes.data;
-      if (!invoiceNumber) throw new Error("next_invoice_number() returned no value.");
-
-      const finalizeRes = await supabase
-        .from("invoices")
-        .update({
-          status: "finalized",
-          invoice_number: invoiceNumber,
-          finalized_at: new Date().toISOString(),
-          updated_by: session.email,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id)
-        .eq("status", "draft")
-        .select(INVOICE_SELECT_COLS)
-        .maybeSingle();
-      if (finalizeRes.error) throw finalizeRes.error;
-      if (!finalizeRes.data) {
-        res.status(409).json({ error: "This invoice has already been finalized." });
-        return;
-      }
-
-      res.status(200).json({ ok: true, invoice: mapInvoice(finalizeRes.data), lineItems: lineItems.map(mapLineItem) });
+      res.status(200).json({ ok: true, invoice: mapInvoice(finalized.invoiceRow), lineItems: finalized.lineItems.map(mapLineItem) });
       return;
     }
 
@@ -2373,7 +2384,10 @@ async function handleSendInvoice(req, res, session, invoiceId) {
           body: JSON.stringify({
             from: process.env.RESEND_FROM_EMAIL || "Mile High Junk Removal <billing@milehighjunkremoval.net>",
             to: [emailRecipient],
-            subject: "Invoice " + (invoiceRow.invoice_number || "") + " from Mile High Junk Removal",
+            // Paid Invoice / Receipt: keyed off the same balance snapshot the
+            // HTML uses, so a recovered retry gets the identical subject.
+            subject:
+              (Number(emailBalanceCents) <= 0 ? "Paid Invoice / Receipt " : "Invoice ") + (invoiceRow.invoice_number || "") + " from Mile High Junk Removal",
             html: buildInvoiceSendEmailHtml(invoiceRow, emailBalanceCents, link),
           }),
           signal: controller.signal,
@@ -2512,7 +2526,15 @@ function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
   // actually something to pay. A $0 invoice (paid in full, or finalized
   // with no balance) still gets a working link, just without the
   // misleading "Pay" word.
-  const ctaLabel = Number(balanceDueCents) > 0 ? "View &amp; Pay Invoice" : "View Invoice";
+  //
+  // Paid Invoice / Receipt (2026-10-31): a $0-balance send IS the
+  // customer's receipt — same link, same page, same email, just worded as
+  // "Paid in full". Still derived only from balanceDueCents (the
+  // attempt's own snapshot on a recovered retry), so purity holds. A
+  // finalized invoice's total is always > $0, so balance <= 0 can only
+  // mean "the ledger shows it fully paid".
+  const isPaidReceipt = Number(balanceDueCents) <= 0;
+  const ctaLabel = Number(balanceDueCents) > 0 ? "View &amp; Pay Invoice" : "View Paid Invoice / Receipt";
   const FONT = "Arial, Helvetica, sans-serif";
   const PINE = "#153320";
   const GREEN = "#2f6f13";
@@ -2537,17 +2559,21 @@ function buildInvoiceSendEmailHtml(invoiceRow, balanceDueCents, link) {
 
     // Invoice number + intro line.
     '<tr><td style="padding:0 28px 4px;" align="center">' +
-    '<p style="margin:0 0 3px;font-size:14px;color:' + MUTED + ';">Invoice</p>' +
+    '<p style="margin:0 0 3px;font-size:14px;color:' + MUTED + ';">' + (isPaidReceipt ? "Paid Invoice / Receipt" : "Invoice") + '</p>' +
     '<p style="margin:0 0 12px;font-size:22px;font-weight:bold;color:' + PINE + ';">' + invoiceNumber + '</p>' +
     "</td></tr>" +
 
-    // Amount due banner.
+    // Amount due banner — or, for a paid receipt, the PAID banner.
     '<tr><td style="padding:0 28px 18px;">' +
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:' + PINE + ';border-radius:10px;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:' + (isPaidReceipt ? GREEN : PINE) + ';border-radius:10px;">' +
     '<tr><td style="padding:16px 18px;" align="center">' +
-    '<div style="font-size:12px;font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;color:#ffffff;opacity:0.85;">Balance Due</div>' +
-    '<div style="font-size:28px;font-weight:bold;color:#ffffff;margin-top:2px;">$' + amountDue + '</div>' +
-    '<div style="font-size:12.5px;color:#ffffff;opacity:0.85;margin-top:4px;">Due ' + dueDate + '</div>' +
+    (isPaidReceipt
+      ? '<div style="font-size:26px;font-weight:bold;letter-spacing:0.12em;color:#ffffff;">PAID</div>' +
+        '<div style="font-size:14px;font-weight:bold;color:#ffffff;margin-top:4px;">Balance Due: $0.00</div>' +
+        '<div style="font-size:12.5px;color:#ffffff;opacity:0.9;margin-top:4px;">Thank you for your payment! Your full payment history is on the receipt.</div>'
+      : '<div style="font-size:12px;font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;color:#ffffff;opacity:0.85;">Balance Due</div>' +
+        '<div style="font-size:28px;font-weight:bold;color:#ffffff;margin-top:2px;">$' + amountDue + '</div>' +
+        '<div style="font-size:12.5px;color:#ffffff;opacity:0.85;margin-top:4px;">Due ' + dueDate + '</div>') +
     "</td></tr></table>" +
     "</td></tr>" +
 
@@ -4061,8 +4087,10 @@ async function handleCreateJobPayment(req, res, session) {
 // Stage B: records one manual payment AGAINST A SPECIFIC INVOICE —
 // cash/Zelle/Venmo/check/card_venmo/other, same field rules as
 // handleCreateJobPayment() above (validateManualPaymentFields()). The
-// invoice must exist, be finalized, and be non-void — a draft invoice
-// has no real balance yet (nothing to pay down) and a void one is dead.
+// invoice must exist and be non-void (a void one is dead). Sending is
+// never required. A draft is finalized on the spot first (2026-10-31 —
+// see the block inside for why), so "create invoice -> record cash/Zelle
+// payment -> send paid receipt" needs no separate Finalize step.
 // booking_id mirrors the invoice's own booking_id exactly (NULL for a
 // standalone invoice, that job's id when attached) — required by
 // job_payments_validate_attribution_trg, never independently chosen.
@@ -4108,11 +4136,36 @@ async function handleCreateInvoicePayment(req, res, session) {
       res.status(409).json({ error: "This invoice has been voided — no payment can be recorded against it." });
       return;
     }
-    if (invoiceRes.data.status !== "finalized") {
+
+    // Paid Invoice / Receipt (2026-10-31): recording a payment never
+    // requires the invoice to have been SENT (it never did — only
+    // finalized), and no longer requires a separate Finalize click either.
+    // A payment against a draft finalizes it first (permanent number,
+    // line items locked — the same rules as the Finalize button, see
+    // finalizeDraftInvoice()), defaulting a missing due date to the
+    // payment date. The payment itself still lands in job_payments below
+    // exactly like any other — paid/partially-paid is derived from that
+    // ledger, never a flag. A refund can never apply to a draft (a draft
+    // has no payments to refund).
+    let invoiceRow = invoiceRes.data;
+    let autoFinalized = false;
+    if (invoiceRow.status === "draft") {
+      if (paymentType !== "payment") {
+        res.status(409).json({ error: "A draft invoice has no payments to refund." });
+        return;
+      }
+      const finalized = await finalizeDraftInvoice(supabase, invoiceRow, session, { defaultDueDate: paymentDate, forPayment: true });
+      if (finalized.error) {
+        res.status(finalized.status).json({ error: finalized.error });
+        return;
+      }
+      invoiceRow = finalized.invoiceRow;
+      autoFinalized = true;
+    } else if (invoiceRow.status !== "finalized") {
       res.status(409).json({ error: "Only a finalized invoice can receive a payment." });
       return;
     }
-    const invoice = mapInvoice(invoiceRes.data);
+    const invoice = mapInvoice(invoiceRow);
 
     if (reversesPaymentId) {
       const priorRes = await supabase.from("job_payments").select("id, invoice_id").eq("id", reversesPaymentId).maybeSingle();
@@ -4156,8 +4209,14 @@ async function handleCreateInvoicePayment(req, res, session) {
     });
 
     if (!lockResult.ok) {
-      res.status(409).json({ error: lockResult.error });
+      // An auto-finalized invoice stays finalized even if the payment
+      // itself was blocked — the admin can simply record it again.
+      res.status(409).json({ error: lockResult.error, autoFinalized: autoFinalized });
       return;
+    }
+    if (autoFinalized) {
+      lockResult.autoFinalized = true;
+      lockResult.invoiceNumber = invoiceRow.invoice_number;
     }
     res.status(200).json(lockResult);
   } catch (err) {

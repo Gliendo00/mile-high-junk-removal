@@ -309,6 +309,16 @@ document.addEventListener('DOMContentLoaded', function () {
     if (existing) amountInput.value = existing.amount;
     sheet.appendChild(fieldRow('Amount', amountInput));
 
+    // Dump Fee Tonnage Tracking — optional scale-ticket weight, shown only
+    // while the category is Dump Fee. Never affects the dollar amount.
+    var dumpWeight = window.AdminDumpWeight.build(existing && existing.dumpWeightLbs);
+    sheet.appendChild(dumpWeight.el);
+    function syncDumpWeightVisibility() {
+      dumpWeight.setVisible(categorySelect.value === 'dump_fees');
+    }
+    categorySelect.addEventListener('change', syncDumpWeightVisibility);
+    syncDumpWeightVisibility();
+
     var vendorInput = document.createElement('input');
     vendorInput.type = 'text';
     vendorInput.maxLength = 120;
@@ -364,6 +374,11 @@ document.addEventListener('DOMContentLoaded', function () {
         showFormError('Please choose a date.');
         return;
       }
+      var isDumpFee = categorySelect.value === 'dump_fees';
+      if (isDumpFee && !dumpWeight.isValid()) {
+        showFormError('Please enter a valid dump weight in pounds, or leave it blank.');
+        return;
+      }
 
       var payload = {
         resource: 'expense',
@@ -376,6 +391,9 @@ document.addEventListener('DOMContentLoaded', function () {
         note: noteInput.value.trim(),
         bookingId: jobPicker.getBookingId(),
       };
+      // Blank sends null (clears a recorded weight, never 0). Non-dump
+      // categories send nothing; the server clears any old weight itself.
+      if (isDumpFee) payload.dumpWeightLbs = dumpWeight.getValue();
       if (isEdit) payload.id = existing.id;
 
       saveBtn.disabled = true;
@@ -580,6 +598,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var metaParts = [formatDateLabel(e.expenseDate)];
     if (e.vendor) metaParts.push(e.vendor);
     if (e.paymentMethod) metaParts.push(PAYMENT_METHOD_LABELS[e.paymentMethod] || e.paymentMethod);
+    if (e.dumpWeightLbs) metaParts.push(window.AdminDumpWeight.describe(e.dumpWeightLbs));
     card.appendChild(el('div', 'admin-charge-row-meta', metaParts.join(' · ')));
 
     if (e.note) card.appendChild(el('div', 'admin-expense-note', e.note));

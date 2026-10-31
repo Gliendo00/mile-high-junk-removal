@@ -198,7 +198,25 @@ function denverTodayIso() {
   return parts.year + "-" + parts.month + "-" + parts.day;
 }
 
+// Paid Invoice / Receipt (2026-10-31) — CUSTOMER-facing method names for the
+// public /invoice/ page's payment history. Both card paths read simply
+// "Card" to a customer (how the card was processed is internal detail);
+// the admin UI keeps its own more specific labels.
+const CUSTOMER_PAYMENT_METHOD_LABELS = {
+  card_stripe: "Card",
+  card_venmo: "Card",
+  cash: "Cash",
+  zelle: "Zelle",
+  venmo: "Venmo",
+  check: "Check",
+  other: "Other",
+};
+function customerPaymentMethodLabel(method) {
+  return CUSTOMER_PAYMENT_METHOD_LABELS[method] || "Other";
+}
+
 module.exports = {
+  customerPaymentMethodLabel,
   VALID_PAYMENT_METHODS,
   VALID_PAYMENT_TYPES,
   resolveJobPaymentAttribution,

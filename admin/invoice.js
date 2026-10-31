@@ -158,6 +158,13 @@ document.addEventListener('DOMContentLoaded', function () {
   var paymentAddBtn = document.getElementById('iv-payment-add-btn');
   var paymentAddInFlight = false;
 
+  // Paid Invoice / Receipt (2026-10-31)
+  var paymentDraftHint = document.getElementById('iv-payment-draft-hint');
+  var recordPaymentJumpBtn = document.getElementById('iv-record-payment-jump-btn');
+  var paidBanner = document.getElementById('iv-paid-banner');
+  var sendReceiptBtn = document.getElementById('iv-send-receipt-btn');
+  var lastPrefilledAmount = null;
+
   function resetLineItemForm() {
     editingLineItemId = null;
     liDescriptionEl.value = '';
@@ -474,21 +481,44 @@ document.addEventListener('DOMContentLoaded', function () {
       balanceStatEl.classList.add(invoice.isOverdue ? 'is-overdue' : 'is-due');
     }
     renderPayments(jobPayments);
-    // Record Payment — only ever offered against a finalized, non-void
-    // invoice (handleCreateInvoicePayment()'s own rule: nothing to pay
-    // down on a draft, nothing to collect on a void one).
-    var canRecordPayment = invoice.status === 'finalized';
+    // Record Payment — Paid Invoice / Receipt (2026-10-31): offered on a
+    // draft too, never requiring the invoice to be sent (or separately
+    // finalized) first; handleCreateInvoicePayment() finalizes a draft on
+    // the spot. A draft needs at least one line item and a total above $0
+    // (the same rules Finalize itself enforces). Hidden once fully paid.
+    var isPaid = invoice.displayStatus === 'paid';
+    var draftPayable = isDraft && lineItems.length > 0 && Number(invoice.totalAmount) > 0;
+    var canRecordPayment = !isVoid && !isPaid && (invoice.status === 'finalized' || draftPayable);
     paymentFormSection.style.display = canRecordPayment ? 'block' : 'none';
-    paymentUnavailableHint.style.display = canRecordPayment || isVoid ? 'none' : 'block';
+    paymentDraftHint.style.display = canRecordPayment && isDraft ? 'block' : 'none';
+    paymentUnavailableHint.style.display = isDraft && !draftPayable ? 'block' : 'none';
+    recordPaymentJumpBtn.style.display = canRecordPayment ? 'inline-flex' : 'none';
     if (canRecordPayment && !paymentDateEl.value) {
       paymentDateEl.value = new Date().toISOString().slice(0, 10);
+    }
+    // Pre-fill the amount with what's still owed (full total on a draft)
+    // so a cash/Zelle job paid in full is one tap — editable for a partial
+    // or split payment. Only overwrites a value this page itself filled.
+    var owed = isDraft ? Number(invoice.totalAmount) : Number(invoice.balanceDue);
+    if (canRecordPayment && owed > 0 && (!paymentAmountEl.value || paymentAmountEl.value === lastPrefilledAmount)) {
+      lastPrefilledAmount = owed.toFixed(2);
+      paymentAmountEl.value = lastPrefilledAmount;
+    }
+
+    // PAID banner + Send Paid Invoice / Receipt — the paid invoice itself
+    // is the receipt; this is the same Send action, just labeled for it.
+    paidBanner.style.display = isPaid ? 'flex' : 'none';
+    if (isPaid) {
+      set('iv-paid-banner-sub', 'Total paid ' + (formatPrice(invoice.netCollected) || '$0.00') + ' · Balance Due $0.00');
     }
 
     // Actions — status-gated, mirroring api/admin/booking.js's own
     // handlePatchInvoice() transition rules exactly, so the UI never
     // offers a button the server would reject.
     finalizeBtn.style.display = isDraft ? 'inline-flex' : 'none';
-    sendBtn.style.display = invoice.status === 'finalized' ? 'inline-flex' : 'none';
+    // When paid, the banner's own "Send Paid Invoice / Receipt" button
+    // replaces the plain Send Invoice button (same action underneath).
+    sendBtn.style.display = invoice.status === 'finalized' && !isPaid ? 'inline-flex' : 'none';
     voidBtn.style.display = isVoid ? 'none' : 'inline-flex';
 
     renderDeliveryHistory(data.deliveryAttempts || []);
@@ -717,21 +747,30 @@ document.addEventListener('DOMContentLoaded', function () {
   // emailed link, if delivered, stays valid until a replacement is
   // actually confirmed sent (see api/admin/booking.js's handleSendInvoice).
   // ---------------------------------------------------------------------
+  // Paid Invoice / Receipt (2026-10-31): the banner's "Send Paid Invoice /
+  // Receipt" button runs this exact same send (same endpoint, same secure
+  // customer link) — the server words the email as a paid receipt itself
+  // whenever the balance is $0, so nothing about the flow differs here.
+  function setSendButtonsDisabled(disabled) {
+    sendBtn.disabled = disabled;
+    sendReceiptBtn.disabled = disabled;
+  }
   function doSend(confirmNewAttempt) {
     if (sendInFlight) return;
     sendInFlight = true;
-    sendBtn.disabled = true;
+    setSendButtonsDisabled(true);
+    var isReceipt = !!(currentInvoice && currentInvoice.displayStatus === 'paid');
     patchInvoice({ action: 'send', confirmNewAttempt: !!confirmNewAttempt })
       .then(function (body) {
         sendInFlight = false;
-        sendBtn.disabled = false;
+        setSendButtonsDisabled(false);
         if (!body) return;
-        showToast('Invoice sent to ' + body.sentTo + '.', 'success');
+        showToast((isReceipt ? 'Paid invoice / receipt sent to ' : 'Invoice sent to ') + body.sentTo + '.', 'success');
         return load();
       })
       .catch(function (err) {
         sendInFlight = false;
-        sendBtn.disabled = false;
+        setSendButtonsDisabled(false);
         var msg = err && err.message ? err.message : 'Could not send this invoice.';
         var body = err && err.body;
         var unresolvedSend = !!(body && (body.unresolvedSendExpired || body.unresolvedSendUnrecoverable));
@@ -745,6 +784,11 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   }
   sendBtn.addEventListener('click', function () { doSend(false); });
+  sendReceiptBtn.addEventListener('click', function () { doSend(false); });
+  recordPaymentJumpBtn.addEventListener('click', function () {
+    paymentFormSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    paymentAmountEl.focus();
+  });
 
   // ---------------------------------------------------------------------
   // Void — same "prompt for a required reason" pattern as
@@ -808,6 +852,11 @@ document.addEventListener('DOMContentLoaded', function () {
       showToast('Please enter a description for this payment.', 'error');
       return;
     }
+    // A draft is finalized by this same request (permanent invoice number,
+    // line items locked) — irreversible, so it gets the same confirm()
+    // the Finalize button uses.
+    var wasDraft = !!(currentInvoice && currentInvoice.status === 'draft');
+    if (wasDraft && !window.confirm('Record this ' + (formatPrice(amount) || '') + ' payment? This finalizes the invoice: it gets a permanent invoice number and its line items are locked. It does not send anything to the customer.')) return;
 
     paymentAddInFlight = true;
     paymentAddBtn.disabled = true;
@@ -830,14 +879,18 @@ document.addEventListener('DOMContentLoaded', function () {
           return body;
         });
       })
-      .then(function () {
-        showToast('Payment recorded.', 'success');
+      .then(function (body) {
+        showToast(body && body.autoFinalized ? 'Invoice ' + (body.invoiceNumber || '') + ' finalized and payment recorded.' : 'Payment recorded.', 'success');
         paymentAmountEl.value = '';
+        lastPrefilledAmount = null;
         paymentNotesEl.value = '';
         return load();
       })
       .catch(function (err) {
         showToast(err && err.message ? err.message : 'Could not save this payment.', 'error');
+        // The draft may have been finalized even if the payment itself was
+        // then blocked — refresh so the page reflects that.
+        if (wasDraft) load();
       })
       .finally(function () {
         paymentAddInFlight = false;

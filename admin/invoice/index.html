@@ -38,8 +38,19 @@
         <span id="iv-overdue-badge" class="admin-overdue-badge" style="display:none">Overdue</span>
       </div>
       <div class="admin-detail-sub" id="iv-subtitle">—</div>
+      <!-- Paid Invoice / Receipt (2026-10-31): shown once the payment
+           ledger shows this invoice fully paid. The paid invoice itself is
+           the customer's receipt — the button reuses the normal Send flow. -->
+      <div class="admin-invoice-paid-banner" id="iv-paid-banner" style="display:none">
+        <div>
+          <div class="admin-invoice-paid-banner-title">PAID</div>
+          <div class="admin-invoice-paid-banner-sub" id="iv-paid-banner-sub">Balance Due $0.00</div>
+        </div>
+        <button type="button" id="iv-send-receipt-btn" class="admin-btn admin-btn-primary admin-print-hide">Send Paid Invoice / Receipt</button>
+      </div>
       <div class="admin-detail-hero-actions admin-print-hide">
-        <button type="button" id="iv-finalize-btn" class="admin-btn admin-btn-primary">Finalize Invoice</button>
+        <button type="button" id="iv-record-payment-jump-btn" class="admin-btn admin-btn-primary" style="display:none">Record Payment</button>
+        <button type="button" id="iv-finalize-btn" class="admin-btn admin-btn-outline">Finalize Invoice</button>
         <button type="button" id="iv-send-btn" class="admin-btn admin-btn-primary">Send Invoice</button>
         <button type="button" id="iv-print-btn" class="admin-btn admin-btn-outline">Print / Save as PDF</button>
       </div>
@@ -194,7 +205,8 @@
         </div>
         <button type="button" id="iv-payment-add-btn" class="admin-btn admin-btn-outline">Record Payment</button>
       </div>
-      <p class="admin-field-hint admin-print-hide" id="iv-payment-unavailable-hint" style="display:none">Finalize this invoice before recording a payment against it.</p>
+      <p class="admin-field-hint admin-print-hide" id="iv-payment-draft-hint" style="display:none">No need to send this invoice first. Recording a payment finalizes it (assigns its invoice number and locks its line items); a missing due date is set to the payment date.</p>
+      <p class="admin-field-hint admin-print-hide" id="iv-payment-unavailable-hint" style="display:none">Add at least one line item before recording a payment against this invoice.</p>
     </section>
 
     <section class="admin-section admin-print-hide" id="iv-delivery-section" style="display:none">
