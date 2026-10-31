@@ -38,6 +38,30 @@ function addDaysIso(iso, days) {
   dt.setUTCDate(dt.getUTCDate() + days);
   return dt.getUTCFullYear() + "-" + String(dt.getUTCMonth() + 1).padStart(2, "0") + "-" + String(dt.getUTCDate()).padStart(2, "0");
 }
+// Runs fn() with the global clock pinned to a fixed instant, then restores
+// it. api/admin/booking.js reads "today" via `new Date()` (its own
+// denverTodayIso()), so a literal-date test that creates a New Job is only
+// valid while that date is still in the future — pinning makes the
+// literal cases below independent of the real calendar. Only the no-arg
+// constructor and Date.now() are frozen; date arithmetic is unaffected.
+async function withFixedNow(instantIso, fn) {
+  const RealDate = Date;
+  const fixedMs = new RealDate(instantIso).getTime();
+  class FixedDate extends RealDate {
+    constructor(...args) {
+      super(...(args.length ? args : [fixedMs]));
+    }
+    static now() {
+      return fixedMs;
+    }
+  }
+  global.Date = FixedDate;
+  try {
+    return await fn();
+  } finally {
+    global.Date = RealDate;
+  }
+}
 const TODAY_ISO = denverTodayIso();
 // Generous +30 days — comfortably future-proof without pinning a literal
 // that could itself rot, same convention tests/phase3c-dumpster-rental-admin.test.js
@@ -381,11 +405,18 @@ test("the auto-generated pickup preserves the rental's own exact_time (not a tim
 // HISTORICAL_FLOOR_ISO = 2026-01-01 floor still applies); "new" mode is
 // used for a delivery date in the future — the +5-day arithmetic under
 // test (addDaysIso()) is identical in both modes.
+//
+// Every literal case runs with "now" pinned to LITERAL_CASES_NOW (noon
+// America/Denver on 2026-10-21, the day these cases were written), so
+// cases 2-4 stay valid New Job dates and case 1 stays a valid Past Job
+// date no matter when the suite runs.
 // =======================================================================
+const LITERAL_CASES_NOW = "2026-10-21T18:00:00Z";
+
 test("literal case 1: delivery Oct 20, 2026 -> pickup Oct 25, 2026 (the exact dates from the confirmed production bug report)", async () => {
   const cust = makeCustomer();
   const db = freshDb({ customers: [cust] });
-  const res = await createRental(db, cust, { mode: "past", appointmentDate: "2026-10-20" });
+  const res = await withFixedNow(LITERAL_CASES_NOW, () => createRental(db, cust, { mode: "past", appointmentDate: "2026-10-20" }));
   assert.strictEqual(res.body.dumpster.pickupDate, "2026-10-25");
   const pickup = findPickup(db, res.body.booking.id);
   assert.strictEqual(pickup.appointment_date, "2026-10-25");
@@ -394,7 +425,7 @@ test("literal case 1: delivery Oct 20, 2026 -> pickup Oct 25, 2026 (the exact da
 test("literal case 2: delivery Oct 30, 2026 -> pickup Nov 4, 2026 (cross-month boundary)", async () => {
   const cust = makeCustomer();
   const db = freshDb({ customers: [cust] });
-  const res = await createRental(db, cust, { appointmentDate: "2026-10-30" });
+  const res = await withFixedNow(LITERAL_CASES_NOW, () => createRental(db, cust, { appointmentDate: "2026-10-30" }));
   assert.strictEqual(res.body.dumpster.pickupDate, "2026-11-04");
   const pickup = findPickup(db, res.body.booking.id);
   assert.strictEqual(pickup.appointment_date, "2026-11-04");
@@ -403,7 +434,7 @@ test("literal case 2: delivery Oct 30, 2026 -> pickup Nov 4, 2026 (cross-month b
 test("literal case 3: delivery Dec 29, 2026 -> pickup Jan 3, 2027 (cross-year boundary)", async () => {
   const cust = makeCustomer();
   const db = freshDb({ customers: [cust] });
-  const res = await createRental(db, cust, { appointmentDate: "2026-12-29" });
+  const res = await withFixedNow(LITERAL_CASES_NOW, () => createRental(db, cust, { appointmentDate: "2026-12-29" }));
   assert.strictEqual(res.body.dumpster.pickupDate, "2027-01-03");
   const pickup = findPickup(db, res.body.booking.id);
   assert.strictEqual(pickup.appointment_date, "2027-01-03");
@@ -412,7 +443,7 @@ test("literal case 3: delivery Dec 29, 2026 -> pickup Jan 3, 2027 (cross-year bo
 test("literal case 4: delivery Oct 29, 2026 -> pickup Nov 3, 2026, spanning America/Denver's Nov 1, 2026 DST 'fall back' transition — the local calendar date stays exactly +5 days, never shifted by an hour/day", async () => {
   const cust = makeCustomer();
   const db = freshDb({ customers: [cust] });
-  const res = await createRental(db, cust, { appointmentDate: "2026-10-29" });
+  const res = await withFixedNow(LITERAL_CASES_NOW, () => createRental(db, cust, { appointmentDate: "2026-10-29" }));
   assert.strictEqual(res.body.dumpster.pickupDate, "2026-11-03");
   const pickup = findPickup(db, res.body.booking.id);
   assert.strictEqual(pickup.appointment_date, "2026-11-03");
