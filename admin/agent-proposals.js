@@ -380,19 +380,19 @@ document.addEventListener('DOMContentLoaded', function () {
       var decisionButtons = [approveBtn, noChangeBtn, needsRevisionBtn, recheckBtn, dismissBtn];
 
       approveBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'approve', noteInput.value, decisionButtons);
+        reviewProposal(proposal.id, 'approve', noteInput.value, decisionButtons, card, approveBtn);
       });
       noChangeBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'no_change', noteInput.value, decisionButtons);
+        reviewProposal(proposal.id, 'no_change', noteInput.value, decisionButtons, card, noChangeBtn);
       });
       needsRevisionBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'needs_revision', noteInput.value, decisionButtons);
+        reviewProposal(proposal.id, 'needs_revision', noteInput.value, decisionButtons, card, needsRevisionBtn);
       });
       recheckBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'recheck', noteInput.value, decisionButtons);
+        reviewProposal(proposal.id, 'recheck', noteInput.value, decisionButtons, card, recheckBtn);
       });
       dismissBtn.addEventListener('click', function () {
-        reviewProposal(proposal.id, 'reject', noteInput.value, decisionButtons);
+        reviewProposal(proposal.id, 'reject', noteInput.value, decisionButtons, card, dismissBtn);
       });
 
       actions.appendChild(approveBtn);
@@ -502,10 +502,46 @@ document.addEventListener('DOMContentLoaded', function () {
       });
   }
 
-  function reviewProposal(id, action, note, buttonsToDisable) {
+  // Per-card inline feedback for a decision click. The page-level
+  // error-banner sits above the filter bar, so on a long list it's
+  // scrolled out of view when the owner clicks a card's button — a
+  // failed save used to look like "nothing happened" (the buttons just
+  // re-enabled). Every outcome is now also stated right on the card.
+  function setCardFeedback(card, kind, text) {
+    var existing = card.querySelector('.admin-proposal-card-feedback');
+    if (existing) existing.parentNode.removeChild(existing);
+    if (!text) return;
+    var note = el('p', 'admin-proposal-card-feedback admin-proposal-card-feedback-' + kind, text);
+    note.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    card.appendChild(note);
+  }
+
+  // Swaps the clicked card for one rebuilt from the server's returned
+  // row (the PATCH already responds with the updated proposal), so the
+  // new status badge shows immediately. If the active filter no longer
+  // includes the new status (e.g. "Needs review" after No Change), the
+  // card is removed from this view after a short pause — the row itself
+  // is untouched in the DB and appears under its new filter.
+  function applyReviewedProposal(oldCard, proposal) {
+    var newCard = buildCard(proposal);
+    var label = STATUS_LABELS[proposal.status] || proposal.status;
+    var leavesView = currentStatusFilter && currentStatusFilter !== proposal.status;
+    setCardFeedback(newCard, 'success', 'Saved — now "' + label + '".' + (leavesView ? ' Removing from this filter…' : ''));
+    if (oldCard.parentNode) oldCard.parentNode.replaceChild(newCard, oldCard);
+    if (!leavesView) return;
+    setTimeout(function () {
+      if (newCard.parentNode) newCard.parentNode.removeChild(newCard);
+      if (!listEl.firstChild) emptyEl.style.display = 'block';
+    }, 1800);
+  }
+
+  function reviewProposal(id, action, note, buttonsToDisable, card, clickedBtn) {
     if (actionInFlight) return;
     actionInFlight = true;
     buttonsToDisable.forEach(function (b) { b.disabled = true; });
+    var originalLabel = clickedBtn ? clickedBtn.textContent : null;
+    if (clickedBtn) clickedBtn.textContent = 'Saving…';
+    if (card) setCardFeedback(card, 'pending', null);
 
     adminFetch('/api/admin/bookings?resource=agent-proposal', {
       method: 'PATCH',
@@ -521,10 +557,18 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .then(function (body) {
         if (!body) return;
-        load();
+        clearError();
+        if (card && body.proposal && body.proposal.status) {
+          applyReviewedProposal(card, body.proposal);
+        } else {
+          load();
+        }
       })
       .catch(function (err) {
-        showError(err && err.message ? err.message : 'Could not save this review.');
+        var msg = err && err.message ? err.message : 'Could not save this review.';
+        showError(msg);
+        if (card) setCardFeedback(card, 'error', 'Not saved — ' + msg);
+        if (clickedBtn) clickedBtn.textContent = originalLabel;
         buttonsToDisable.forEach(function (b) { b.disabled = false; });
       })
       .finally(function () {

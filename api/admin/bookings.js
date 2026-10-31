@@ -1206,6 +1206,14 @@ async function handleReviewAgentProposal(req, res, session) {
     res.status(200).json({ ok: true, proposal: mapAgentProposal(data) });
   } catch (err) {
     console.error("Admin agent-proposal review failed:", err && err.stack ? err.stack : err);
+    // Postgres 23514 = CHECK violation: the DB's agent_proposals_status_check
+    // doesn't allow this status yet (i.e. sql/2026-10-28_phase16-proposal-
+    // decision-states.sql hasn't been run on this database). Said plainly
+    // so the owner isn't left guessing why the decision didn't stick.
+    if (err && err.code === "23514") {
+      res.status(500).json({ error: "Could not save this review: the database doesn't accept the \"" + AGENT_PROPOSAL_ACTION_TO_STATUS[action] + "\" status yet (Phase 16 migration not applied)." });
+      return;
+    }
     res.status(500).json({ error: "Could not save this review." });
   }
 }
