@@ -4803,3 +4803,9 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   color: var(--color-text, #201e1d);
   margin-top: 2px;
 }
+.admin-time-selector { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.admin-time-selector[hidden] { display: none; }
+.admin-time-selector label { min-width: 0; }
+.admin-time-selector select { margin-top: 5px; padding: 0 8px; }
+.admin-field label.admin-complimentary-toggle { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.admin-field .admin-complimentary-toggle input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 0; flex: 0 0 18px; accent-color: #285c19; }

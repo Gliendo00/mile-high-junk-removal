@@ -111,9 +111,9 @@
            to 0 for a complimentary job regardless of what's typed there)
            and reveals Reason/Value/Note. -->
       <div class="admin-field admin-complimentary-field">
-        <label class="admin-expense-voided-toggle">
+        <label class="admin-complimentary-toggle">
           <input type="checkbox" id="is-complimentary">
-          Mark as Complimentary (no charge to the client)
+          Complimentary job
         </label>
       </div>
       <div id="complimentary-fields" style="display:none">
@@ -146,7 +146,7 @@
         <select id="time-window">
           <option value="" selected>Time unknown / optional</option>
         </select>
-        <input type="time" id="exact-time" step="60" style="display:none">
+        <input type="hidden" id="exact-time" style="display:none">
       </div>
 
       <div class="admin-field">
@@ -181,6 +181,7 @@
 <script src="../phone-format.js"></script>
 <script src="../client-picker.js"></script>
 <script src="../address-autocomplete.js"></script>
+<script src="../time-selector.js"></script>
 <script src="../booking-past.js"></script>
 </body>
 </html>

@@ -79,6 +79,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var dateHint = document.getElementById('date-hint');
   var timeWindowSelect = document.getElementById('time-window');
   var exactTimeInput = document.getElementById('exact-time');
+  var exactTimeControl = window.AdminTimeSelector(exactTimeInput);
   var timeModeLabelEl = document.getElementById('time-mode-label');
   var timeModeToggle = document.getElementById('time-mode-toggle');
   var serviceTypeSelect = document.getElementById('service-type');
@@ -203,7 +204,7 @@ document.addEventListener('DOMContentLoaded', function () {
   setupSegmented(timeModeToggle, function (mode) {
     timeMode = mode;
     var isExact = mode === 'exact';
-    exactTimeInput.style.display = isExact ? 'block' : 'none';
+    exactTimeControl.show(isExact);
     timeWindowSelect.style.display = isExact ? 'none' : 'block';
   });
   setupSegmented(quoteModeToggle, function (mode) {
@@ -327,7 +328,7 @@ document.addEventListener('DOMContentLoaded', function () {
     timeMode = booking.exactTime ? 'exact' : 'window';
     setSegmentedActive(timeModeToggle, timeMode);
     exactTimeInput.value = booking.exactTime ? booking.exactTime.slice(0, 5) : '';
-    exactTimeInput.style.display = timeMode === 'exact' ? 'block' : 'none';
+    exactTimeControl.show(timeMode === 'exact');
     timeWindowSelect.style.display = timeMode === 'exact' ? 'none' : 'block';
 
     serviceTypeSelect.value = booking.serviceType || 'junk_removal';

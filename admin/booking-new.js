@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var timeWindowSelect = document.getElementById('time-window');
   var exactTimeInput = document.getElementById('exact-time');
+  var exactTimeControl = window.AdminTimeSelector(exactTimeInput);
   var timeModeToggle = document.getElementById('time-mode-toggle');
   var appointmentDateInput = document.getElementById('appointment-date');
 
@@ -87,7 +88,7 @@ document.addEventListener('DOMContentLoaded', function () {
   setupSegmented(timeModeToggle, function (mode) {
     timeMode = mode;
     var isExact = mode === 'exact';
-    exactTimeInput.style.display = isExact ? 'block' : 'none';
+    exactTimeControl.show(isExact);
     timeWindowSelect.style.display = isExact ? 'none' : 'block';
   });
 
