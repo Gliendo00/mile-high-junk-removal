@@ -20,15 +20,6 @@
 <main class="admin-main admin-wa-main">
   <div id="error-banner" class="admin-error-banner" style="display:none;margin-bottom:16px"></div>
 
-  <!-- Phase 16 — always visible regardless of loading/connected/loaded
-       state (a sibling of those three, not nested inside any of them):
-       pure navigation to the existing Agent Proposals page, same
-       href="/admin/agent-proposals/" the "View all proposals" link
-       further down already uses. No new page, no new endpoint. -->
-  <div class="admin-wa-top-actions">
-    <a href="/admin/agent-proposals/" class="admin-btn admin-btn-outline">Agent Proposals</a>
-  </div>
-
   <!-- Presentation only; all dashboard IDs and agent actions are preserved. -->
   <div id="wa-loading" class="admin-loading">Loading Website Agent…</div>
   <div id="wa-not-connected" class="admin-empty" style="display:none">
@@ -76,32 +67,6 @@
     <div class="admin-wa-instrument-footer" aria-hidden="true"><span>// observe · analyze · improve</span><span>MHJR / SITE OPS</span></div>
     </div>
 
-    <!-- Approval queue — moved directly under the header (was previously
-         near the bottom of the page): this is the one thing on the page
-         that genuinely deserves first-look priority. ---------------- -->
-    <div class="admin-wa-section-label">
-      Needs Your Review <span class="admin-wa-section-count" id="wa-queue-count"></span>
-    </div>
-    <div class="admin-wa-panel admin-wa-queue-panel admin-wa-panel-priority">
-      <div id="wa-queue-list"></div>
-      <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
-      <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
-    </div>
-
-    <!-- Phase 14 hotfix — execution-in-progress / recently-executed
-         proposals (applying/validating/deploying/deployed/failed/
-         needs_review). Hidden entirely when empty; shown the instant a
-         proposal enters this lifecycle, so Execute never makes a
-         proposal appear to vanish. ------------------------------------ -->
-    <div id="wa-execution-section" hidden>
-      <div class="admin-wa-section-label">
-        Execution Status <span class="admin-wa-section-count" id="wa-execution-count"></span>
-      </div>
-      <div class="admin-wa-panel admin-wa-queue-panel">
-        <div id="wa-execution-list"></div>
-      </div>
-    </div>
-
   </div>
 
     <div class="admin-wa-section-label">Business Performance</div>
@@ -114,30 +79,9 @@
       <div class="admin-wa-panel" id="wa-evidence-ga4"></div>
     </div>
 
-    <!-- Keyword opportunities (Phase 2) — explainable classification of
-         real Search Console queries into action categories. Evidence only;
-         see agent/lib/keyword-opportunities.js. -->
-    <div class="admin-wa-section-label">Keyword Opportunities <span class="admin-wa-section-hint">Investigate → review → act</span></div>
-    <div class="admin-wa-panel" id="wa-kw-panel">
-      <p class="admin-wa-muted" id="wa-kw-meta"></p>
-      <div id="wa-kw-groups"></div>
-    </div>
-
-  <div id="wa-operations" style="display:none">
-    <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
-         two numbers reflect the latest run / live queue, never a sum
-         across history, so they can sit beside "NEEDS ATTENTION"
-         without reading as unrelated lifetime trivia. -->
-    <div class="admin-wa-section-label">Current Status</div>
-    <div class="admin-wa-metrics admin-wa-metrics-current" id="wa-metrics-current"></div>
-
-    <!-- Latest run --------------------------------------------------------- -->
-    <div class="admin-wa-section-label">Latest Run</div>
-    <div class="admin-wa-panel" id="wa-latest-run"></div>
-
     <!-- Daily / Weekly ---------------------------------------------------- -->
-    <div class="admin-wa-section-label">Monitoring Schedule</div>
-    <div class="admin-wa-schedule-grid">
+    <div class="admin-wa-section-label" data-wa-connected style="display:none">Monitoring Schedule</div>
+    <div class="admin-wa-schedule-grid" data-wa-connected style="display:none">
       <div class="admin-wa-panel admin-wa-schedule-card">
         <div class="admin-wa-panel-title">Daily Monitor</div>
         <div id="wa-daily-body"></div>
@@ -147,6 +91,58 @@
         <div id="wa-weekly-body"></div>
       </div>
     </div>
+
+  <!-- Permanent navigation remains available in every dashboard state. -->
+  <div class="admin-wa-top-actions">
+    <a href="/admin/agent-proposals/" class="admin-btn admin-btn-outline">Agent Proposals</a>
+  </div>
+
+    <!-- Latest run --------------------------------------------------------- -->
+    <div class="admin-wa-section-label" data-wa-connected style="display:none">Latest Run</div>
+    <div class="admin-wa-panel" id="wa-latest-run" data-wa-connected style="display:none"></div>
+
+    <!-- Approval queue — existing review actions and links. -->
+    <div class="admin-wa-section-label" data-wa-connected style="display:none">
+      Needs Your Review <span class="admin-wa-section-count" id="wa-queue-count"></span>
+    </div>
+    <div class="admin-wa-panel admin-wa-queue-panel admin-wa-panel-priority" data-wa-connected style="display:none">
+      <div id="wa-queue-list"></div>
+      <div id="wa-queue-empty" class="admin-wa-empty-note" style="display:none">Nothing awaiting review right now.</div>
+      <a href="/admin/agent-proposals/" class="admin-wa-more-link">View all proposals (including reviewed) →</a>
+    </div>
+
+    <!-- Keyword opportunities (Phase 2) — explainable classification of
+         real Search Console queries into action categories. Evidence only;
+         see agent/lib/keyword-opportunities.js. -->
+    <div class="admin-wa-section-label">Keyword Opportunities <span class="admin-wa-section-hint">Investigate → review → act</span></div>
+    <div class="admin-wa-panel" id="wa-kw-panel">
+      <p class="admin-wa-muted" id="wa-kw-meta"></p>
+      <div id="wa-kw-groups"></div>
+    </div>
+
+    <!-- Phase 14 hotfix — execution-in-progress / recently-executed
+         proposals (applying/validating/deploying/deployed/failed/
+         needs_review). Hidden entirely when empty; shown the instant a
+         proposal enters this lifecycle, so Execute never makes a
+         proposal appear to vanish. ------------------------------------ -->
+    <div id="wa-execution-section" hidden data-wa-connected style="display:none">
+      <div class="admin-wa-section-label">
+        Execution Status <span class="admin-wa-section-count" id="wa-execution-count"></span>
+      </div>
+      <div class="admin-wa-panel admin-wa-queue-panel">
+        <div id="wa-execution-list"></div>
+      </div>
+    </div>
+
+
+
+  <div id="wa-operations" style="display:none">
+    <!-- Top metrics — CURRENT STATE first (final-polish reorg): these
+         two numbers reflect the latest run / live queue, never a sum
+         across history, so they can sit beside "NEEDS ATTENTION"
+         without reading as unrelated lifetime trivia. -->
+    <div class="admin-wa-section-label">Current Status</div>
+    <div class="admin-wa-metrics admin-wa-metrics-current" id="wa-metrics-current"></div>
 
     <!-- Lifetime/cumulative counters — clearly labeled ALL-TIME so they
          can never be mistaken for "right now" numbers. -->

@@ -26,6 +26,62 @@ const waJs = fs.readFileSync(path.join(__dirname, "..", "admin", "website-agent.
 const waHtml = fs.readFileSync(path.join(__dirname, "..", "admin", "website-agent", "index.html"), "utf8");
 const chromeJs = fs.readFileSync(path.join(__dirname, "..", "admin", "admin-chrome.js"), "utf8");
 
+test("dashboard layout preserves unique sections in the requested DOM order and permanent proposals navigation", () => {
+  const nodes = [], stack = [];
+  const voids = new Set(['meta', 'link', 'img', 'input', 'br', 'hr']);
+  const markup = waHtml.replace(/<!--[\s\S]*?-->/g, '');
+  for (const token of markup.match(/<[^>]*>|[^<]+/g)) {
+    if (token.startsWith('<!')) continue;
+    if (token.startsWith('</')) {
+      assert.equal(stack.pop().tag, token.match(/^<\/([\w-]+)/)[1], 'balanced section wrappers');
+    } else if (token.startsWith('<')) {
+      const tag = token.match(/^<([\w-]+)/)[1];
+      const attrs = {};
+      for (const match of token.slice(tag.length + 1).matchAll(/([\w:-]+)(?:\s*=\s*"([^"]*)")?/g)) attrs[match[1]] = match[2] || '';
+      const node = {tag, attrs, text: '', parent: stack[stack.length - 1], children: []};
+      if (node.parent) node.parent.children.push(node);
+      nodes.push(node);
+      if (!voids.has(tag) && !token.endsWith('/>')) stack.push(node);
+    } else if (stack.length) stack[stack.length - 1].text += token;
+  }
+  assert.equal(stack.length, 0);
+  const hasClass = (node, name) => (node.attrs.class || '').split(/\s+/).includes(name);
+  const order = nodes.filter(n => n.tag === 'h1' || hasClass(n, 'admin-wa-section-label') || hasClass(n, 'admin-wa-top-actions'));
+  assert.deepEqual(order.map(n => hasClass(n, 'admin-wa-top-actions') ? 'Agent Proposals' : n.text.trim()), [
+    'Website Agent', 'Business Performance', 'Search Intelligence', 'Monitoring Schedule',
+    'Agent Proposals', 'Latest Run', 'Needs Your Review', 'Keyword Opportunities',
+    'Execution Status', 'Current Status', 'All-Time Totals', 'Agent Activity'
+  ]);
+  const ids = nodes.filter(n => n.attrs.id).map(n => n.attrs.id);
+  assert.equal(ids.length, new Set(ids).size, 'every ID remains unique');
+  for (const id of ['wa-body', 'wa-business-performance', 'wa-evidence-gsc', 'wa-evidence-ga4', 'wa-daily-body', 'wa-weekly-body', 'wa-latest-run', 'wa-queue-list', 'wa-kw-groups', 'wa-execution-list', 'wa-metrics-current', 'wa-metrics-lifetime', 'wa-activity-list']) assert(ids.includes(id), id);
+  const actions = nodes.filter(n => hasClass(n, 'admin-wa-top-actions'));
+  assert.equal(actions.length, 1);
+  const action = actions[0];
+  assert.equal(action.parent.tag, 'main', 'button remains outside conditional groups');
+  assert.equal(action.children.length, 1);
+  assert.equal(action.children[0].attrs.href, '/admin/agent-proposals/');
+  assert.equal(action.children[0].text.trim(), 'Agent Proposals');
+  const previous = action.parent.children[action.parent.children.indexOf(action) - 1];
+  assert(hasClass(previous, 'admin-wa-schedule-grid'), 'directly after Monitoring Schedule');
+  const execution = nodes.find(n => n.attrs.id === 'wa-execution-section');
+  assert('hidden' in execution.attrs);
+  assert('data-wa-connected' in execution.attrs, 'execution retains its existing hidden flag after moving');
+});
+
+test("moved sections retain connected-state visibility without changing the execution hidden flag", () => {
+  const vm = require('node:vm');
+  const bodyEl = {style: {}}, operationsEl = {style: {}};
+  const wrappers = Array.from({length: 7}, () => ({style: {}}));
+  const helper = waJs.match(/function setConnectedSectionsVisible[\s\S]*?\n  \}/)[0];
+  const context = vm.createContext({bodyEl, operationsEl, document: {querySelectorAll: () => wrappers}});
+  vm.runInContext(helper + '; setConnectedSectionsVisible(true);', context);
+  for (const node of [bodyEl, operationsEl, ...wrappers]) assert.equal(node.style.display, '');
+  vm.runInContext('setConnectedSectionsVisible(false);', context);
+  for (const node of [bodyEl, operationsEl, ...wrappers]) assert.equal(node.style.display, 'none');
+  assert(!helper.includes('.hidden'), 'execution hidden flag stays exclusively owned by its existing renderer');
+});
+
 test("admin/website-agent.js fetches the new agent-dashboard view and the existing agent-proposals view, no new endpoints invented", () => {
   assert.ok(waJs.includes("/api/admin/bookings?view=agent-dashboard"));
   assert.ok(waJs.includes("/api/admin/bookings?view=agent-proposals"));

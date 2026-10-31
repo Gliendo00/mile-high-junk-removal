@@ -15,7 +15,7 @@
 .admin-wa-list-toggle-btn:hover { box-shadow: 0 3px 9px #2f6f134d; }
 
 /* Phase 16 — the always-visible "Agent Proposals" button (index.html,
-   right after error-banner, outside wa-loading/wa-not-connected/wa-body
+   after Monitoring Schedule, outside the connected-only wrappers
    so it survives every page state). Reuses .admin-btn/.admin-btn-outline
    as-is; this wrapper just right-aligns it, matching the existing
    .admin-list-heading-actions convention used elsewhere in /admin/. */
