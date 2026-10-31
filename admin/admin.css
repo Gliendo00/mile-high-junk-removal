@@ -4301,6 +4301,17 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
   font-style: italic;
   margin: 0 0 6px;
 }
+/* Inline result of a decision click (admin/agent-proposals.js's
+   setCardFeedback()) — same green/red families as the status badges. */
+.admin-proposal-card-feedback {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.admin-proposal-card-feedback-success { background: #eaf4e4; color: #2f6f13; }
+.admin-proposal-card-feedback-error { background: #fdecea; color: #7a1f18; }
 
 /* Phase 14 (execution pipeline) — Execute is desktop-only (requirement:
    mobile may approve/reject/view status, but must never be offered the
