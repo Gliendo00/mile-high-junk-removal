@@ -56,7 +56,7 @@
           <button type="button" class="admin-segmented-btn is-active" data-mode="window">Time Window</button>
         </div>
         <select id="time-window"></select>
-        <input type="time" id="exact-time" step="60" style="display:none">
+        <input type="hidden" id="exact-time" style="display:none">
       </div>
 
       <div class="admin-field">
@@ -154,9 +154,9 @@
            job regardless of what's typed there) and reveals Reason/Value/
            Note. -->
       <div class="admin-field" id="pricing-complimentary" style="display:none">
-        <label class="admin-expense-voided-toggle">
+        <label class="admin-complimentary-toggle">
           <input type="checkbox" id="is-complimentary">
-          Mark as Complimentary (no charge to the client)
+          Complimentary job
         </label>
         <div id="complimentary-fields" style="display:none">
           <div class="admin-field">
@@ -205,6 +205,7 @@
 <script src="../nav-badge.js"></script>
 <script src="../phone-format.js"></script>
 <script src="../address-autocomplete.js"></script>
+<script src="../time-selector.js"></script>
 <script src="../booking-edit.js"></script>
 </body>
 </html>
