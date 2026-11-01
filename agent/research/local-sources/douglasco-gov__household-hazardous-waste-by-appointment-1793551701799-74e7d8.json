@@ -1,0 +1,16 @@
+{
+  "sourceUrl": "https://www.douglasco.gov/greenworks/household/",
+  "sourceDomain": "douglasco.gov",
+  "authorityClass": "official-government",
+  "locality": "Douglas County, CO",
+  "topic": "household-hazardous-waste-by-appointment",
+  "discoveryMethod": "known-url",
+  "retrievedAt": "2026-11-01T16:48:21.499Z",
+  "extractedSnippet": "Household Hazardous Waste Biochar 🡥 Looking for something specific? Service Finder &times; 01. Help Me With... Select from list My Residential Property My Driver's License or Vehicle Registration Requesting Assistance Elections Health Department 02. Select from list My Property Valuation Understanding My Valuation Paying My Property Tax Neighborhood Sales Building Permits Vehicle Registration - New Stickers Vehicle Registration - New Vehicle Drivers License - New or Renew New Resident Vehicle Registration Adult Protection Child Welfare Child Support Child Care Financial Assistance Medical Assistance Food Assistance Register to Vote / Update Voter Registration Upcoming Election Information Ballot Drop Box Locations Voter Service and Polling Centers Birth/Death Records Restaurant Inspections Community Health Child Care Center Inspections Septic System Inspections Emergency Preparedness & Response Disease Surveillance Mental and Behavioral Health Education Community Health and Clinical Services Women, Infants and Children 03. &times; &times; Close Living Mental Health Mental Health Collaborative Mental Health Resources Driving Driver License Vehicle Registration My Property Open Data / Dougco Hub Building Permits Taxes Value Assistance Financial Food Medical Online Resource Search Roadways Gravel Roads Transportation Projects Snow and Ice Removal Traffic Getting Outdoors Parks, Trails, Historic Resources and Open Space Fund Decode DC Outdoors Open Space Properties &#038; Trails Parks Rueter-Hess Recreation Healthy Living Community Health and Clinical Services Disease Surveillance Emergency Preparedness and Response Environmental Health Vital Records Request/File Documents Colorado Open Records Act (CORA) Marriage / Civil Union Licenses Passports Business My Property Commercial Forms Commercial Property Property Tax Resources Economic Development Economic Development Reports Open Data / Dougco Hub Population & Development Report News Media Contacts / PIOs Volunteer Opp",
+  "expectedTemporality": "evergreen",
+  "limitations": "A single, bounded text snippet mechanically extracted from one retrieval of this page — not a structured fact, not a verdict, and not confirmation that this remains the program's current/correct information. A human (or Claude session) must read this snippet and the live page itself before treating anything in it as a confirmed fact for site copy. Dates/locations for a temporary program are never safe to hardcode as evergreen text from this alone.",
+  "robots": {
+    "checkedAt": "2026-11-01T16:48:21.499Z",
+    "allowed": true
+  }
+}

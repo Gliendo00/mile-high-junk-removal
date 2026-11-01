@@ -1,0 +1,28 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "lone-tree",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Lone Tree"
+    },
+    "window": {
+      "start": "2026-10-02",
+      "end": "2026-10-29",
+      "label": "28 days ending 2026-10-29"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "Weekly rotation deep-review — does this property's real Search Console query data contain any organic search query mentioning \"Lone Tree\" (a claimed service area with no dedicated page yet)?",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-11-01T16:48:20.771Z",
+    "requestFingerprint": null,
+    "purpose": "operational"
+  }
+]

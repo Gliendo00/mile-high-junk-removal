@@ -43,6 +43,18 @@
   },
   {
     "serviceType": "junk_removal",
+    "city": "Denver",
+    "accessNotes": "Client was cleaning up the yard as a start to helping clean up his entire Grandmas property. We clean up old furniture and misc items that have been weather for a long time.",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "dumpster_rental",
+    "city": "Broomfield",
+    "accessNotes": "Last of 3 dumpsters for his fix and flip. Heavy dumps",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "junk_removal",
     "city": "Parker",
     "accessNotes": "Heavy sleeper (Removed legs & put them.back)\nRemoved baby gate",
     "outcomeTag": "completed"
@@ -57,6 +69,12 @@
     "serviceType": "dumpster_rental",
     "city": "Broomfield",
     "accessNotes": "Client needed a dumpster for renovation debris for their fix and flip home",
+    "outcomeTag": "completed"
+  },
+  {
+    "serviceType": "dumpster_pickup",
+    "city": "Broomfield",
+    "accessNotes": "Client is doing a renovation on a fixed on flip home and needed another dumpster",
     "outcomeTag": "completed"
   }
 ]
