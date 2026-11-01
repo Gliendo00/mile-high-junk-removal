@@ -89,7 +89,7 @@ const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
 const { retryUpdate } = require("./_lib/db-retry");
-const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows, grossCollectedFromLedgerRows } = require("./_lib/job-payments-ledger");
+const { mirrorStripePaymentToLedger, netCollectedFromLedgerRows, grossCollectedFromLedgerRows, customerPaymentMethodLabel } = require("./_lib/job-payments-ledger");
 const { getCorrelationId, logEvent } = require("./_lib/correlation-id");
 const { hashAccessToken } = require("./_lib/invoice-crypto");
 const {
@@ -2158,20 +2158,46 @@ async function handleInvoicePublic(req, res) {
     // Phase 3D Stage B: scoped by invoice_id — never booking_id, which
     // would leak a sibling invoice's (or a generic, un-attributed)
     // payment on the same job into this invoice's own balance.
-    const [lineItemsRes, paymentsRes, customerRes] = await Promise.all([
+    //
+    // Paid Invoice / Receipt (2026-10-31): the payment rows now also carry
+    // method/date so the page can show the payment history (a paid invoice
+    // IS the receipt), and the attached job's service type/date/address
+    // are read for the "Service" block. Still never job_payments.notes,
+    // recorded_by, or any Stripe id — only amount/type/method/date.
+    const [lineItemsRes, paymentsRes, customerRes, bookingRes] = await Promise.all([
       supabase.from("invoice_line_items").select(LINE_ITEM_SELECT_COLS).eq("invoice_id", resolved.invoiceId).order("sort_order", { ascending: true }),
-      supabase.from("job_payments").select("amount, payment_type, voided_at").eq("invoice_id", resolved.invoiceId),
+      supabase.from("job_payments").select("amount, payment_type, payment_method, payment_date, voided_at, created_at").eq("invoice_id", resolved.invoiceId),
       supabase.from("customers").select("first_name, last_name, address, city, state, zip").eq("id", invoice.customerId).maybeSingle(),
+      invoice.bookingId
+        ? supabase.from("bookings").select("service_type, appointment_date, service_address, service_city, service_state, service_zip").eq("id", invoice.bookingId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ]);
     if (lineItemsRes.error) throw lineItemsRes.error;
     if (paymentsRes.error) throw paymentsRes.error;
     if (customerRes.error) throw customerRes.error;
+    if (bookingRes.error) throw bookingRes.error;
 
     const nonVoidedPaymentRows = (paymentsRes.data || []).filter(function (p) { return !p.voided_at; });
     const netCollected = netCollectedFromLedgerRows(nonVoidedPaymentRows);
     const grossCollected = grossCollectedFromLedgerRows(nonVoidedPaymentRows);
     const derived = deriveInvoiceStatus(invoice, netCollected, denverTodayIso(), grossCollected);
     const customer = customerRes.data;
+    const booking = bookingRes.data;
+    const paymentHistory = nonVoidedPaymentRows
+      .slice()
+      .sort(function (a, b) {
+        const ad = String(a.payment_date || "") + String(a.created_at || "");
+        const bd = String(b.payment_date || "") + String(b.created_at || "");
+        return ad < bd ? -1 : ad > bd ? 1 : 0;
+      })
+      .map(function (p) {
+        return {
+          date: p.payment_date,
+          method: customerPaymentMethodLabel(p.payment_method),
+          type: p.payment_type === "refund" ? "refund" : "payment",
+          amount: Number(p.amount),
+        };
+      });
 
     res.status(200).json({
       ok: true,
@@ -2188,6 +2214,17 @@ async function handleInvoicePublic(req, res) {
       balanceDue: derived.balanceDue,
       displayStatus: derived.displayStatus,
       isOverdue: derived.isOverdue,
+      payments: paymentHistory,
+      service: booking
+        ? {
+            label: SERVICE_LABELS[booking.service_type] || booking.service_type || null,
+            date: booking.appointment_date || null,
+            address: booking.service_address || null,
+            city: booking.service_city || null,
+            state: booking.service_state || null,
+            zip: booking.service_zip || null,
+          }
+        : null,
       billTo: customer
         ? {
             name: ((customer.first_name || "") + " " + (customer.last_name || "")).trim(),

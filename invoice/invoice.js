@@ -40,6 +40,15 @@
     payError: document.getElementById("pay-error"),
     paidMessage: document.getElementById("paid-message"),
     voidMessage: document.getElementById("void-message"),
+    // Paid Invoice / Receipt (2026-10-31)
+    summaryLabel: document.getElementById("summary-label"),
+    paidStamp: document.getElementById("paid-stamp"),
+    serviceCard: document.getElementById("service-card"),
+    serviceDetails: document.getElementById("service-details"),
+    paymentsCard: document.getElementById("payments-card"),
+    paymentsList: document.getElementById("payments-list"),
+    paymentsTotal: document.getElementById("payments-total"),
+    printButton: document.getElementById("print-button"),
   };
 
   function showOnly(which) {
@@ -157,18 +166,28 @@
       el.invoiceNotesCard.hidden = true;
     }
 
+    renderService(data.service);
+    renderPayments(data.payments || [], data.amountPaid);
+
     el.paySection.hidden = true;
     el.paidMessage.hidden = true;
     el.voidMessage.hidden = true;
+    el.paidStamp.hidden = true;
+    el.summaryLabel.textContent = "Invoice";
     el.balanceBanner.hidden = false;
-    el.balanceBanner.classList.remove("is-overdue");
+    el.balanceBanner.classList.remove("is-overdue", "is-paid");
 
     if (data.displayStatus === "void") {
       el.voidMessage.hidden = false;
       el.balanceBanner.hidden = true;
     } else if (data.displayStatus === "paid" || Number(data.balanceDue) <= 0) {
+      // Paid Invoice / Receipt — the paid invoice IS the receipt: PAID
+      // indicator, and the balance banner stays visible reading $0.00.
       el.paidMessage.hidden = false;
-      el.balanceBanner.hidden = true;
+      el.paidStamp.hidden = false;
+      el.summaryLabel.textContent = "Paid Invoice / Receipt";
+      el.balanceBanner.classList.add("is-paid");
+      el.balanceDue.textContent = money(0);
     } else {
       el.paySection.hidden = false;
       if (data.isOverdue) el.balanceBanner.classList.add("is-overdue");
@@ -181,6 +200,55 @@
     }
 
     showOnly("invoice");
+  }
+
+  function renderService(service) {
+    if (!service || (!service.label && !service.date && !service.address)) {
+      el.serviceCard.hidden = true;
+      return;
+    }
+    var lines = [];
+    var top = [service.label, service.date ? formatDate(service.date, true) : ""].filter(Boolean).join(" — ");
+    if (top) lines.push(top);
+    var addr = [service.address, [service.city, service.state, service.zip].filter(Boolean).join(", ")].filter(Boolean).join(", ");
+    if (addr) lines.push(addr);
+    el.serviceDetails.textContent = lines.join("\n");
+    el.serviceCard.hidden = false;
+  }
+
+  // One row per non-voided ledger entry, oldest first, e.g.
+  //   Cash — Oct 31, 2026 — $300.00
+  //   Zelle — Oct 31, 2026 — $250.00
+  // A refund shows as a negative "Refund (Cash)" row so Total Paid always
+  // reconciles with the rows above it.
+  function renderPayments(payments, amountPaid) {
+    el.paymentsList.innerHTML = "";
+    if (!payments.length) {
+      el.paymentsCard.hidden = true;
+      return;
+    }
+    payments.forEach(function (p) {
+      var li = document.createElement("li");
+      li.className = "iv-payment-row";
+      var left = document.createElement("span");
+      left.className = "iv-payment-desc";
+      var method = document.createElement("span");
+      method.className = "iv-payment-method";
+      method.textContent = p.type === "refund" ? "Refund (" + p.method + ")" : p.method;
+      left.appendChild(method);
+      var date = document.createElement("span");
+      date.className = "iv-payment-date";
+      date.textContent = formatDate(p.date, true);
+      left.appendChild(date);
+      var amt = document.createElement("span");
+      amt.className = "iv-payment-amount";
+      amt.textContent = (p.type === "refund" ? "−" : "") + money(p.amount);
+      li.appendChild(left);
+      li.appendChild(amt);
+      el.paymentsList.appendChild(li);
+    });
+    el.paymentsTotal.textContent = money(amountPaid);
+    el.paymentsCard.hidden = false;
   }
 
   function loadInvoice() {
@@ -288,5 +356,9 @@
 
   rawToken = readTokenFromFragment();
   el.payButton.addEventListener("click", startPayment);
+  // Browser print dialog — "Save as PDF" is the browser's own option there.
+  el.printButton.addEventListener("click", function () {
+    window.print();
+  });
   loadInvoice();
 })();

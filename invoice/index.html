@@ -32,7 +32,10 @@
   unavailable-message, invoice-state, invoice-number, status-badge,
   bill-to, line-items-body, total-amount, amount-paid, balance-due,
   due-date-line, finalized-date-line, invoice-notes, pay-section,
-  pay-button, payment-element, pay-error, paid-message, void-message. Only
+  pay-button, payment-element, pay-error, paid-message, void-message
+  (plus, for the 2026-10-31 Paid Invoice / Receipt pass: summary-label,
+  paid-stamp, service-card, service-details, payments-card, payments-list,
+  payments-total, print-button). Only
   the markup/CSS around those ids has changed for the Oct 2026 visual
   redesign (real branding/logo/colors) — none of the token/Stripe/fetch
   logic above moved.
@@ -70,11 +73,14 @@
     <div class="iv-card iv-summary-card">
       <div class="iv-summary-top">
         <div>
-          <div class="iv-summary-label">Invoice</div>
+          <div class="iv-summary-label" id="summary-label">Invoice</div>
           <h1 class="iv-invoice-number" id="invoice-number">&nbsp;</h1>
         </div>
         <span id="status-badge" class="status-badge">&nbsp;</span>
       </div>
+      <!-- Paid Invoice / Receipt: large PAID indicator, shown only once the
+           ledger shows the invoice fully paid. -->
+      <div class="iv-paid-stamp" id="paid-stamp" hidden>PAID</div>
       <div class="iv-summary-dates">
         <div class="iv-summary-date" id="finalized-date-line" hidden></div>
         <div class="iv-summary-date iv-due-date" id="due-date-line" hidden></div>
@@ -84,6 +90,11 @@
     <div class="iv-card">
       <div class="iv-section-label">Billed To</div>
       <div class="iv-bill-to" id="bill-to">&nbsp;</div>
+    </div>
+
+    <div class="iv-card" id="service-card" hidden>
+      <div class="iv-section-label">Job</div>
+      <div class="iv-bill-to" id="service-details"></div>
     </div>
 
     <div class="iv-card iv-line-items-card">
@@ -103,8 +114,19 @@
           <span id="total-amount">$0.00</span>
         </div>
         <div class="iv-totals-row">
-          <span>Paid</span>
+          <span>Total Paid</span>
           <span id="amount-paid">$0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="iv-card" id="payments-card" hidden>
+      <div class="iv-section-label">Payment History</div>
+      <ul class="iv-payments-list" id="payments-list"></ul>
+      <div class="iv-totals">
+        <div class="iv-totals-row iv-totals-row-strong">
+          <span>Total Paid</span>
+          <span id="payments-total">$0.00</span>
         </div>
       </div>
     </div>
@@ -133,7 +155,11 @@
     <div id="paid-message" class="iv-state-card iv-state-paid" hidden>
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
       <div class="iv-state-title">Paid in Full</div>
-      <p class="iv-state-sub">Thank you for your business!</p>
+      <p class="iv-state-sub">Thank you for your business! This paid invoice is your receipt.</p>
+    </div>
+
+    <div class="iv-print-row">
+      <button id="print-button" type="button" class="iv-btn iv-btn-outline">Print / Save as PDF</button>
     </div>
 
     <div id="void-message" class="iv-state-card iv-state-void" hidden>

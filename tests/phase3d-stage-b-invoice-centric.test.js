@@ -513,12 +513,19 @@ test("Manual invoice payment (attached): booking_id on the new row mirrors the i
   assert.strictEqual(res.body.jobPayment.invoiceId, invoiceId);
 });
 
-test("Manual invoice payment: rejected against a draft invoice (nothing to pay down yet)", async () => {
+// Behavior change 2026-10-31 (Paid Invoice / Receipt): a payment against a
+// draft now finalizes it on the spot instead of being refused — but an
+// EMPTY draft (no line items, nothing to pay down) is still rejected and
+// left untouched. The positive draft path is covered in
+// tests/crm-tonnage-paid-receipt.test.js.
+test("Manual invoice payment: rejected against an empty draft invoice (nothing to pay down yet)", async () => {
   adminAuthed();
   const db = freshDb();
   const created = await createInvoice(db, { bookingId: BOOKING_A1 });
   const res = await postInvoicePayment(db, { invoiceId: created.body.invoice.id, paymentMethod: "cash", amount: 50 });
-  assert.strictEqual(res.statusCode, 409);
+  assert.strictEqual(res.statusCode, 400);
+  assert.strictEqual(db.invoices[0].status, "draft");
+  assert.strictEqual(db.job_payments.length, 0);
 });
 
 test("Manual invoice payment: rejected against a void invoice", async () => {

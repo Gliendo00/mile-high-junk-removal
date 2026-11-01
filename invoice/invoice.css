@@ -339,3 +339,52 @@ img { max-width: 100%; display: block; }
 @media (min-width: 560px) {
   .iv-wrap { gap: 16px; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Paid Invoice / Receipt (2026-10-31) — PAID stamp, payment history,   */
+/* job block, print button, and a print stylesheet so the paid invoice  */
+/* can be printed or saved as a PDF from the browser's print dialog.    */
+/* ------------------------------------------------------------------ */
+.iv-paid-stamp {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 3px solid #1e7e34;
+  border-radius: var(--iv-radius-sm);
+  color: #1e7e34;
+  background: var(--iv-green-bg);
+  font-family: var(--iv-font-heading);
+  font-weight: 800;
+  font-size: 28px;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+.iv-bill-to { white-space: pre-line; }
+.iv-payments-list { list-style: none; margin: 0; padding: 0; }
+.iv-payment-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--iv-divider);
+  font-size: 14px;
+}
+.iv-payment-desc { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.iv-payment-method { font-weight: 700; color: var(--iv-text); }
+.iv-payment-date { color: var(--iv-text-muted); }
+.iv-payment-amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.iv-totals-row-strong span:first-child { font-weight: 700; color: var(--iv-text); }
+.iv-balance-banner.is-paid { background: #1e7e34; }
+.iv-print-row { display: flex; justify-content: center; margin: 4px 0 8px; }
+
+@media print {
+  body { background: #fff !important; }
+  .iv-page { padding: 0 !important; max-width: 100% !important; }
+  .iv-card, .iv-state-card, .iv-balance-banner { box-shadow: none !important; break-inside: avoid; }
+  .iv-card { border: 1px solid var(--iv-divider); }
+  #pay-section, .iv-print-row { display: none !important; }
+  .iv-paid-stamp, .iv-balance-banner, .status-badge, .iv-state-card {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

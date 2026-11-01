@@ -16,6 +16,7 @@ const { VALID_PAYMENT_METHODS: JOB_PAYMENT_METHODS, netCollectedFromLedgerRows, 
 const { INVOICE_SELECT_COLS, mapInvoice, deriveInvoiceStatus } = require("../_lib/invoice-helpers");
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
+const { DUMP_FEE_CATEGORY, parseDumpWeightLbs, lbsToTons, roundTons, summarizeTonnage } = require("../_lib/dump-tonnage");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -256,6 +257,13 @@ module.exports = async (req, res) => {
   // other view= mode in this file.
   if (req.query.view === "expense-audit") {
     return handleExpenseAuditLog(req, res, supabase);
+  }
+
+  // Dump Fee Tonnage Tracking: ?view=tonnage — the Home dashboard's
+  // Tonnage Tracked card (month/year/all-time tons + a short history).
+  // Read-only, same folding reasoning as every other view= mode here.
+  if (req.query.view === "tonnage") {
+    return handleTonnageSummary(req, res, supabase);
   }
 
   // Phase 3C Stage 3: ?view=job-search&q=... is the small "link to a job"
@@ -1896,8 +1904,10 @@ async function handleYear(req, res, supabase, todayIso) {
 // table is missing; nothing else in this file is affected either way.
 // ---------------------------------------------------------------------
 
+// dump_weight_lbs: Dump Fee Tonnage Tracking (sql/2026-10-31_dump-fee-tonnage.sql)
+// — that migration must be applied before this code is deployed.
 const EXPENSE_COLS =
-  "id, expense_date, category, amount, note, vendor, payment_method, booking_id, receipt_reference, voided_at, voided_reason, created_by, updated_by, created_at, updated_at";
+  "id, expense_date, category, amount, note, vendor, payment_method, booking_id, receipt_reference, dump_weight_lbs, voided_at, voided_reason, created_by, updated_by, created_at, updated_at";
 const EXPENSE_VENDOR_MAX = 120;
 const EXPENSE_RECEIPT_REF_MAX = 120;
 const EXPENSE_VOID_REASON_MAX = 300;
@@ -1922,6 +1932,8 @@ function serializeExpense(e) {
     paymentMethod: e.payment_method,
     bookingId: e.booking_id,
     receiptReference: e.receipt_reference,
+    dumpWeightLbs: e.dump_weight_lbs === null || e.dump_weight_lbs === undefined ? null : Number(e.dump_weight_lbs),
+    dumpWeightTons: e.dump_weight_lbs === null || e.dump_weight_lbs === undefined ? null : roundTons(lbsToTons(e.dump_weight_lbs)),
     voidedAt: e.voided_at,
     voidedReason: e.voided_reason,
     isVoided: !!e.voided_at,
@@ -2100,6 +2112,49 @@ async function handleExpensesList(req, res, supabase) {
   }
 }
 
+// GET ?view=tonnage — Dump Fee Tonnage Tracking summary. Only non-voided
+// dump-fee expenses that actually carry a weight are read (an unweighed
+// dump fee is "no data", never 0 lbs). All-time is the whole weighed set,
+// bounded by TONNAGE_ROW_LIMIT as a memory guard, not a product limit (a
+// few thousand weighed tickets is years of this business's volume). Never
+// touches expense amounts' role in any revenue/net figure — `amount` is
+// returned only so the history list can show the dump fee paid.
+const TONNAGE_ROW_LIMIT = 5000;
+const TONNAGE_HISTORY_LIMIT = 50;
+async function handleTonnageSummary(req, res, supabase) {
+  try {
+    const rowsRes = await supabase
+      .from("expenses")
+      .select("id, expense_date, category, amount, booking_id, dump_weight_lbs, voided_at, created_at")
+      .eq("category", DUMP_FEE_CATEGORY)
+      .is("voided_at", null)
+      .not("dump_weight_lbs", "is", null)
+      .order("expense_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(TONNAGE_ROW_LIMIT);
+    if (rowsRes.error) throw rowsRes.error;
+    const rows = rowsRes.data || [];
+    const summary = summarizeTonnage(rows, denverTodayIso());
+
+    const historyRows = rows.slice(0, TONNAGE_HISTORY_LIMIT).map(function (r) {
+      return {
+        id: r.id,
+        expenseDate: r.expense_date,
+        amount: r.amount,
+        bookingId: r.booking_id,
+        dumpWeightLbs: Number(r.dump_weight_lbs),
+        dumpWeightTons: roundTons(lbsToTons(r.dump_weight_lbs)),
+      };
+    });
+    const history = await attachJobLabels(supabase, historyRows);
+
+    res.status(200).json(Object.assign({ ok: true }, summary, { history: history, historyTruncated: rows.length > TONNAGE_HISTORY_LIMIT }));
+  } catch (err) {
+    console.error("Admin tonnage summary failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not load tonnage." });
+  }
+}
+
 // POST /api/admin/bookings { resource: "expense", ... } — create one
 // expense row. `resource` is an explicit, allowlisted discriminator (never
 // inferred) distinguishing this from any other future POST-able resource
@@ -2183,6 +2238,19 @@ async function handleCreateExpense(req, res, session) {
     bookingId = bid;
   }
 
+  // Dump Fee Tonnage Tracking — optional scale-ticket weight, dump fees
+  // only. Any other category is always stored with NULL, even if a stale
+  // client happened to send a weight along with it.
+  let dumpWeightLbs = null;
+  if (category === DUMP_FEE_CATEGORY) {
+    const weight = parseDumpWeightLbs(body.dumpWeightLbs);
+    if (weight.error) {
+      res.status(400).json({ error: weight.error });
+      return;
+    }
+    dumpWeightLbs = weight.value;
+  }
+
   try {
     const { data: created, error } = await supabase
       .from("expenses")
@@ -2195,6 +2263,7 @@ async function handleCreateExpense(req, res, session) {
         payment_method: paymentMethod,
         booking_id: bookingId,
         receipt_reference: receiptReference,
+        dump_weight_lbs: dumpWeightLbs,
         created_by: (session && session.email) || null,
       })
       .select(EXPENSE_COLS)
@@ -2368,6 +2437,24 @@ async function handlePatchExpense(req, res, session) {
 
     if (body.bookingId !== undefined) {
       update.booking_id = body.bookingId === null || body.bookingId === "" ? null : String(body.bookingId).trim();
+    }
+
+    // Dump Fee Tonnage Tracking — weight is only ever kept on a dump-fee
+    // row. Sent weight on a dump fee: validated, blank/null clears it to
+    // NULL (never 0). Category changed away from dump fees: any recorded
+    // weight is cleared so it can't keep counting toward tonnage.
+    const effectiveCategory = update.category !== undefined ? update.category : current.category;
+    if (effectiveCategory === DUMP_FEE_CATEGORY) {
+      if (body.dumpWeightLbs !== undefined) {
+        const weight = parseDumpWeightLbs(body.dumpWeightLbs);
+        if (weight.error) {
+          res.status(400).json({ error: weight.error });
+          return;
+        }
+        update.dump_weight_lbs = weight.value;
+      }
+    } else if (current.dump_weight_lbs !== null && current.dump_weight_lbs !== undefined) {
+      update.dump_weight_lbs = null;
     }
 
     const { data: updated, error } = await supabase.from("expenses").update(update).eq("id", id).is("voided_at", null).select(EXPENSE_COLS).maybeSingle();

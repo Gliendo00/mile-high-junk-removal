@@ -4902,3 +4902,35 @@ a.admin-lead-card-view:hover { color: var(--color-neutral-700, #645c50); }
 .admin-time-selector select { margin-top: 5px; padding: 0 8px; }
 .admin-field label.admin-complimentary-toggle { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
 .admin-field .admin-complimentary-toggle input[type="checkbox"] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 0; flex: 0 0 18px; accent-color: #285c19; }
+
+/* -----------------------------------------------------------------
+   Dump Fee Tonnage Tracking (2026-10-31) — the optional Dump Weight row
+   in the expense sheets (admin/dump-weight.js) and the Home dashboard's
+   bottom-of-page Tonnage Tracked card.
+   ----------------------------------------------------------------- */
+.admin-dump-weight-input { display: flex; align-items: center; gap: 8px; }
+.admin-dump-weight-input input { flex: 1 1 auto; min-width: 0; }
+.admin-dump-weight-unit { font-weight: 600; color: var(--color-neutral-700, #4b463d); }
+.admin-dump-weight-preview { margin-top: 4px; font-variant-numeric: tabular-nums; }
+.admin-dump-weight-preview.is-error { color: #b91c1c; }
+
+.admin-home-tonnage-card { padding: 12px 14px 13px; margin-top: 12px; }
+.admin-home-tonnage-card .admin-home-card-header { margin-bottom: 6px; padding-bottom: 8px; }
+.admin-home-tonnage-card .admin-home-pulse-value { font-variant-numeric: tabular-nums; }
+.admin-home-tonnage-history { margin-top: 10px; }
+.admin-home-tonnage-history summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 4px 0; }
+.admin-home-tonnage-history > div { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.admin-home-tonnage-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.admin-home-tonnage-table th, .admin-home-tonnage-table td { text-align: left; padding: 6px 6px; border-bottom: 1px solid rgba(0, 0, 0, 0.08); white-space: nowrap; }
+.admin-home-tonnage-table th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.75; }
+
+/* -----------------------------------------------------------------
+   Paid Invoice / Receipt (2026-10-31) — admin invoice page PAID banner.
+   ----------------------------------------------------------------- */
+.admin-invoice-paid-banner {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  margin: 12px 0 4px; padding: 12px 14px; border-radius: 10px;
+  background: #e8f5e3; border: 1px solid #9bd08a; color: #1f4d12;
+}
+.admin-invoice-paid-banner-title { font-weight: 800; letter-spacing: 0.06em; font-size: 1.05rem; }
+.admin-invoice-paid-banner-sub { font-size: 0.85rem; opacity: 0.85; }

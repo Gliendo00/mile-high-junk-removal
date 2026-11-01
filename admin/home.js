@@ -756,6 +756,64 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
+  // -----------------------------------------------------------------
+  // Tonnage Tracked (Dump Fee Tonnage Tracking) — its own independent
+  // fetch, rendered into its own bottom-of-page card. Deliberately NOT part
+  // of render()/sectionFailures above: it never feeds Revenue/Expenses/Net,
+  // and a failure here just leaves the card hidden instead of adding noise
+  // to the dashboard's error banner.
+  // -----------------------------------------------------------------
+  function formatTons(n) {
+    return (Number(n) || 0).toFixed(2) + ' tons';
+  }
+  function renderTonnage(body) {
+    var card = document.getElementById('tonnage-card');
+    if (!card || !body) return;
+    set('tonnage-month', formatTons(body.thisMonthTons));
+    set('tonnage-year', formatTons(body.thisYearTons));
+    set('tonnage-all', formatTons(body.allTimeTons));
+
+    var historyBody = document.getElementById('tonnage-history-body');
+    clear(historyBody);
+    var history = body.history || [];
+    if (!history.length) {
+      historyBody.appendChild(el('div', 'admin-home-empty-note', 'No dump weights recorded yet. Add one on a Dump Fee expense.'));
+    } else {
+      var table = el('table', 'admin-home-tonnage-table');
+      var thead = el('thead');
+      var headRow = el('tr');
+      ['Date', 'Job', 'Dump Fee', 'Weight', 'Tons'].forEach(function (h) { headRow.appendChild(el('th', null, h)); });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+      var tbody = el('tbody');
+      history.forEach(function (h) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, h.expenseDate || '—'));
+        var jobTd = el('td');
+        if (h.bookingId && h.job) {
+          var a = document.createElement('a');
+          a.href = '/admin/booking/?id=' + encodeURIComponent(h.bookingId);
+          a.textContent = h.job.label;
+          jobTd.appendChild(a);
+        } else {
+          jobTd.textContent = '—';
+        }
+        tr.appendChild(jobTd);
+        tr.appendChild(el('td', null, formatMoneyFixed(h.amount)));
+        tr.appendChild(el('td', null, Number(h.dumpWeightLbs).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' lbs'));
+        tr.appendChild(el('td', null, (Number(h.dumpWeightTons) || 0).toFixed(2)));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      historyBody.appendChild(table);
+      if (body.historyTruncated) {
+        historyBody.appendChild(el('div', 'admin-home-empty-note', 'Showing the ' + history.length + ' most recent weighed dump fees.'));
+      }
+    }
+    card.hidden = false;
+  }
+  fetchJson('/api/admin/bookings?view=tonnage').then(renderTonnage).catch(function () {});
+
   window.addEventListener('pageshow', function (e) {
     if (e.persisted) window.location.reload();
   });
