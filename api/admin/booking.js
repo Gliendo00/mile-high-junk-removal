@@ -2303,7 +2303,21 @@ async function handleSendInvoice(req, res, session, invoiceId) {
         });
         return;
       }
+      // Paid Invoice / Receipt (2026-10-31): a pending attempt is only
+      // recovered while its snapshot still matches the invoice's live
+      // paid/unpaid state. If an unpaid send was interrupted and the
+      // invoice has since been paid in full (or a payment was voided the
+      // other way), recovering would re-send the stale wording under the
+      // old Idempotency-Key — so a fresh generation is started instead,
+      // worded from the live balance. The stale pending row is left for the
+      // existing accept RPC to supersede, exactly like the expired-retry
+      // path below.
+      let snapshotStale = false;
       if (ageMs < SEND_RECOVERY_WINDOW_MS) {
+        const liveBalanceCents = await computeInvoiceBalanceCents(supabase, mapInvoice(invoiceRow));
+        snapshotStale = (Number(liveBalanceCents) <= 0) !== (Number(latest.balance_due_cents) <= 0);
+      }
+      if (ageMs < SEND_RECOVERY_WINDOW_MS && !snapshotStale) {
         // Recover: decrypt and reuse the identical generation/token/snapshot.
         rawToken = decryptAccessToken(latest.access_token_ciphertext, invoiceId, latest.id);
         if (rawToken === null) {

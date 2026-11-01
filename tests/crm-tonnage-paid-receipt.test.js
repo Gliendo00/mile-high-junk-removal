@@ -269,7 +269,7 @@ function createFakeServiceClient(db) {
         const attempt = (db.invoice_delivery_attempts || []).find((a) => a.id === params.p_attempt_id);
         if (!invoice || !attempt || invoice.send_claim_token !== params.p_send_claim_token) return { data: null, error: { message: "cannot accept" } };
         db.invoice_delivery_attempts.forEach((a) => {
-          if (a.invoice_id === invoice.id && a.id !== attempt.id && a.status === "accepted") {
+          if (a.invoice_id === invoice.id && a.id !== attempt.id && ["accepted", "pending", "unrecoverable"].indexOf(a.status) !== -1) {
             a.status = "superseded";
             a.resolved_at = nowIso();
           }
@@ -419,8 +419,13 @@ async function finalizedInvoiceWithTotal(db, total) {
 
 // Stub Resend: records every email payload; returns a provider id.
 const sentEmails = [];
+let failNextResend = false; // simulates a network timeout (ambiguous send)
 global.fetch = async function (url, init) {
   if (String(url).indexOf("https://api.resend.com/emails") === 0) {
+    if (failNextResend) {
+      failNextResend = false;
+      throw new Error("simulated network timeout");
+    }
     const payload = JSON.parse(init.body);
     sentEmails.push({ headers: init.headers, payload: payload });
     return { ok: true, status: 200, json: async () => ({ id: "email_" + sentEmails.length }), text: async () => "" };
@@ -751,6 +756,49 @@ test("Send Paid Invoice / Receipt uses the existing send flow + secure /invoice/
   // Exactly one delivery attempt, snapshotting a $0 balance.
   assert.strictEqual(db.invoice_delivery_attempts.length, 1);
   assert.strictEqual(db.invoice_delivery_attempts[0].balance_due_cents, 0);
+  assert.strictEqual(db.invoice_delivery_attempts[0].status, "accepted");
+});
+
+test("interrupted unpaid send, then paid in full: retry starts a FRESH send worded as a paid receipt (not the stale unpaid snapshot)", async () => {
+  const db = freshDb();
+  const id = await finalizedInvoiceWithTotal(db, 550);
+  failNextResend = true;
+  const first = await patchInvoice(db, { id: id, action: "send" });
+  assert.strictEqual(first.statusCode, 502, "ambiguous outcome reported");
+  assert.strictEqual(db.invoice_delivery_attempts.length, 1);
+  assert.strictEqual(db.invoice_delivery_attempts[0].status, "pending");
+  assert.strictEqual(db.invoice_delivery_attempts[0].balance_due_cents, 55000);
+
+  await postInvoicePayment(db, { invoiceId: id, amount: 300, paymentMethod: "cash" });
+  await postInvoicePayment(db, { invoiceId: id, amount: 250, paymentMethod: "zelle" });
+
+  const retry = await patchInvoice(db, { id: id, action: "send" });
+  assert.strictEqual(retry.statusCode, 200, JSON.stringify(retry.body));
+  const email = sentEmails[sentEmails.length - 1];
+  assert.ok(/^Paid Invoice \/ Receipt /.test(email.payload.subject), email.payload.subject);
+  assert.ok(email.payload.html.indexOf("Balance Due: $0.00") !== -1);
+  assert.strictEqual(email.headers["Idempotency-Key"], "invoice-send:" + id + ":2", "new generation, so Resend can't dedupe it into the stale email");
+  assert.strictEqual(db.invoice_delivery_attempts.length, 2);
+  assert.strictEqual(db.invoice_delivery_attempts[0].status, "superseded");
+  assert.strictEqual(db.invoice_delivery_attempts[1].status, "accepted");
+  assert.strictEqual(db.invoice_delivery_attempts[1].balance_due_cents, 0);
+  const pub = await viewPublic(db, tokenFromLastEmail());
+  assert.strictEqual(pub.body.displayStatus, "paid");
+});
+
+test("interrupted send with NO paid-state change still recovers the same generation (existing idempotent retry unchanged)", async () => {
+  const db = freshDb();
+  const id = await finalizedInvoiceWithTotal(db, 550);
+  failNextResend = true;
+  await patchInvoice(db, { id: id, action: "send" });
+  // A partial payment doesn't flip paid/unpaid — the original send is recovered.
+  await postInvoicePayment(db, { invoiceId: id, amount: 100, paymentMethod: "cash" });
+  const retry = await patchInvoice(db, { id: id, action: "send" });
+  assert.strictEqual(retry.statusCode, 200, JSON.stringify(retry.body));
+  const email = sentEmails[sentEmails.length - 1];
+  assert.strictEqual(email.headers["Idempotency-Key"], "invoice-send:" + id + ":1");
+  assert.ok(/^Invoice INV-/.test(email.payload.subject));
+  assert.strictEqual(db.invoice_delivery_attempts.length, 1);
   assert.strictEqual(db.invoice_delivery_attempts[0].status, "accepted");
 });
 
