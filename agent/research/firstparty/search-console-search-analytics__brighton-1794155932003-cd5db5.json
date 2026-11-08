@@ -1,0 +1,65 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "brighton",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Brighton"
+    },
+    "window": {
+      "start": "2026-10-09",
+      "end": "2026-11-05",
+      "label": "28 days ending 2026-11-05"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 4,
+      "topRows": [
+        {
+          "keys": [
+            "brighton junk removal"
+          ],
+          "clicks": 0,
+          "impressions": 4,
+          "ctr": 0,
+          "position": 78
+        },
+        {
+          "keys": [
+            "hauling services brighton co"
+          ],
+          "clicks": 0,
+          "impressions": 5,
+          "ctr": 0,
+          "position": 64.2
+        },
+        {
+          "keys": [
+            "junk removal brighton"
+          ],
+          "clicks": 0,
+          "impressions": 7,
+          "ctr": 0,
+          "position": 60.42857142857143
+        },
+        {
+          "keys": [
+            "rubbish removal brighton"
+          ],
+          "clicks": 0,
+          "impressions": 3,
+          "ctr": 0,
+          "position": 95.33333333333333
+        }
+      ]
+    },
+    "context": "Weekly rotation deep-review — does this property's real Search Console query data contain any organic search query mentioning \"Brighton\" (a claimed service area with no dedicated page yet)?",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-11-08T16:38:52.003Z",
+    "requestFingerprint": null,
+    "purpose": "operational"
+  }
+]
