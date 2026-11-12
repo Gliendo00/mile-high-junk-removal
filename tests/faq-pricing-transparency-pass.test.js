@@ -193,6 +193,14 @@ test("furniture-removal.html: 'What affects the price' body copy no longer names
   assert.ok(/how many pieces you have/i.test(text) && /disassembled/i.test(text), "must preserve the other two existing price factors unchanged");
 });
 
+test("littleton-junk-removal.html: visible FAQ text matches FAQPage schema exactly, and the cost FAQ uses the verified $100-$600 trailer pricing", () => {
+  const content = readPage("littleton-junk-removal.html");
+  const faq = assertVisibleMatchesSchema("littleton-junk-removal.html", content);
+  const answer = faq.mainEntity.find((q) => q.name === "How much does junk removal in Littleton cost?").acceptedAnswer.text;
+  assert.ok(answer.includes("$100 minimum") && answer.includes("$600 full load"), "cost FAQ must state the $100 minimum / $600 full load range");
+  assert.ok(/up to 1 hour of labor included/i.test(answer), "cost FAQ must state the included labor allowance");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   let failed = 0;
