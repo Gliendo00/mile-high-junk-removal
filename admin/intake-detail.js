@@ -648,6 +648,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
     renderFieldGroup(clientFieldsEl, CLIENT_FIELDS, intake.fields);
     renderFieldGroup(jobFieldsEl, JOB_FIELDS, intake.fields);
+    // Shared Google Places autocomplete on the Job fields' Address — the
+    // same component every other CRM address form uses. renderFieldGroup()
+    // builds fresh inputs on every render, so this re-attaches each time.
+    if (window.AdminAddressAutocomplete && fieldInputs.address) {
+      window.AdminAddressAutocomplete.attach({
+        address: fieldInputs.address.el,
+        city: fieldInputs.city && fieldInputs.city.el,
+        state: fieldInputs.state && fieldInputs.state.el,
+        zip: fieldInputs.zip && fieldInputs.zip.el,
+      });
+    }
     renderFieldGroup(schedulingFieldsEl, SCHEDULING_FIELDS, intake.fields);
     renderFieldGroup(notesFieldsEl, NOTES_FIELDS, intake.fields);
 

@@ -655,12 +655,17 @@ test("admin/address-autocomplete.js: the ZIP-in-dropdown-preview addendum is com
   assert.ok(!/toEnrich/.test(src), "there must be no per-suggestion enrichment queue left over");
 });
 
-test("admin/address-autocomplete.js: restored to exactly the approved Stage 2.4.1 file (production baseline ee2585f) — content-identical (line-ending-normalized: `git show` returns the raw LF blob, the working tree checks out CRLF under this repo's core.autocrlf=true)", () => {
-  const { execFileSync } = require("child_process");
-  const baseline = execFileSync("git", ["show", "ee2585fc35b5d6153ad5a5fa5eb50c5be4ed18e7:admin/address-autocomplete.js"], { cwd: path.join(__dirname, ".."), encoding: "utf8" });
-  const current = read("admin/address-autocomplete.js");
-  const normalize = (s) => s.replace(/\r\n/g, "\n");
-  assert.strictEqual(normalize(current), normalize(baseline), "admin/address-autocomplete.js must match the ee2585f baseline exactly (content, not just line endings) — any difference means the revert was incomplete or something new leaked in");
+// The byte-identical-to-ee2585f check that used to live here guarded this
+// stage's revert. It was intentionally superseded by the 2026-11 CRM
+// address-autocomplete audit (keyboard navigation, idempotent attach for
+// dynamic modals, retry after a failed load), whose behavior is covered by
+// tests/crm-address-autocomplete-audit.test.js. What this stage actually
+// cared about — the ZIP-preview addendum staying gone — is still asserted
+// by the test above and the eager-Details check below.
+test("admin/address-autocomplete.js: later changes since the ee2585f revert are the documented CRM address audit, not the removed ZIP-preview addendum", () => {
+  const src = read("admin/address-autocomplete.js");
+  assert.ok(/CRM address audit \(2026-11\)/.test(src), "any change after the ee2585f baseline must be the documented audit");
+  assert.ok(!/admin-address-autocomplete-item-zip/.test(src) && !/addressCache/.test(src));
 });
 
 test("admin/address-autocomplete.js: selecting a suggestion still populates street/city/state/ZIP exactly as before — one Place Details fetch (addressComponents only) per selection, applySelection() maps it and fills all four fields", () => {
@@ -672,23 +677,26 @@ test("admin/address-autocomplete.js: selecting a suggestion still populates stre
   assert.ok(/if \(fields\.city && mapped\.city\) fields\.city\.value = mapped\.city;/.test(applySelectionBody));
   assert.ok(/if \(fields\.state && mapped\.state\) fields\.state\.value = mapped\.state;/.test(applySelectionBody));
 
+  // Since the CRM address audit, mouse/touch (click) and keyboard (Enter)
+  // selection share one selectPrediction() — still a single Details fetch
+  // per selection.
   const clickBody = src.slice(src.indexOf("btn.addEventListener(\"click\""), src.indexOf("panel.appendChild(btn)"));
-  assert.ok(/prediction\.toPlace\(\)/.test(clickBody));
-  assert.ok(/fetchFields\(\{ fields: \["addressComponents"\] \}\)/.test(clickBody), "the click handler's own Details fetch must request only addressComponents — no unnecessary/costlier field");
-  assert.ok(/\.then\(applySelection\)/.test(clickBody), "the fetched place must be passed straight to applySelection(), no intermediate mapping step");
+  assert.ok(/selectPrediction\(prediction\)/.test(clickBody), "the click handler must go through selectPrediction()");
+  const selectBody = src.slice(src.indexOf("function selectPrediction("), src.indexOf("function ensureSessionToken("));
+  assert.ok(/prediction\.toPlace\(\)/.test(selectBody));
+  assert.ok(/fetchFields\(\{ fields: \["addressComponents"\] \}\)/.test(selectBody), "the selection's own Details fetch must request only addressComponents — no unnecessary/costlier field");
+  assert.ok(/\.then\(applySelection\)/.test(selectBody), "the fetched place must be passed straight to applySelection(), no intermediate mapping step");
 });
 
 test("admin/address-autocomplete.js: suggestions render immediately from the lightweight prediction alone (mainText/secondaryText) — the only toPlace()/fetchFields() call is inside the click handler, never a separate eager loop over the rendered list", () => {
   const src = read("admin/address-autocomplete.js");
   const renderBody = src.slice(src.indexOf("function renderSuggestions("), src.indexOf("function runSearch("));
-  // The click handler (which legitimately contains toPlace()/fetchFields(),
-  // since it's defined inside this function) is the ONLY place that text
-  // may appear — strip it out first, then confirm nothing else in
-  // renderSuggestions() touches Place Details.
-  const withoutClickHandler = renderBody.replace(/btn\.addEventListener\("click"[\s\S]*?\}\);/, "");
-  assert.ok(!/toPlace\(\)/.test(withoutClickHandler), "only the click handler may call toPlace() — nothing else in renderSuggestions() should fetch Place Details merely to build the list");
-  assert.ok(!/fetchFields/.test(withoutClickHandler));
-  assert.ok(/toPlace\(\)/.test(renderBody), "sanity check: the click handler's own toPlace() call must still be there (removing this test's exclusion pattern would make it vacuous)");
+  // Place Details are fetched only by selectPrediction(), on an actual
+  // selection — renderSuggestions() must never fetch them to build the list.
+  assert.ok(!/toPlace\(\)/.test(renderBody), "nothing in renderSuggestions() should fetch Place Details merely to build the list");
+  assert.ok(!/fetchFields/.test(renderBody));
+  assert.ok(/selectPrediction\(prediction\)/.test(renderBody), "sanity check: rows still select via selectPrediction()");
+  assert.strictEqual((src.match(/\.toPlace\(\)/g) || []).length, 1, "exactly one toPlace() call site in the whole file (selectPrediction)");
 });
 
 test("admin/address-autocomplete.js: lazy Google loading, the panel-reopen suppression fix, and manual-entry fallback are all preserved", () => {

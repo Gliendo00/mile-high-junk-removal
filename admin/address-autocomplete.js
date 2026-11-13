@@ -1,7 +1,16 @@
 // Shared Google Places address-autocomplete helper — Phase 3C Stage 2.4.
-// Used by admin/booking-new.js, admin/booking-past.js, and
-// admin/booking-edit.js's Service Address fields (three plain <input>s:
-// street address / city / state / zip — same ids on every page).
+// Used by every CRM screen that collects a physical address:
+// admin/booking-new.js, admin/booking-past.js, admin/booking-edit.js and
+// admin/estimate-new.js (static Service Address fields), plus the
+// dynamically built Edit Client sheet (admin/client-detail.js) and the
+// Intake review's Job fields (admin/intake-detail.js). Each passes its own
+// street address / city / state / zip <input>s to attach().
+//
+// CRM address audit (2026-11): attach() is idempotent per input (safe to
+// call again after a modal/form re-renders), the dropdown supports
+// ArrowUp/ArrowDown/Enter/Escape as an ARIA combobox, and a failed key/
+// script load is no longer cached for the rest of the page's life — the
+// next keystroke retries.
 //
 // Architecture (see docs/phase-3/stage2.4-calendar-address-proposal.md
 // "Google Address Autocomplete" for the full writeup):
@@ -54,6 +63,8 @@ window.AdminAddressAutocomplete = (function () {
 
   var placesLibraryPromise = null;
   var apiKeyPromise = null;
+  var instanceCount = 0;
+  var permissionHintLogged = false;
 
   // Fetches the restricted Google Maps browser key from the existing
   // authenticated endpoint, exactly once per page load however many
@@ -80,6 +91,13 @@ window.AdminAddressAutocomplete = (function () {
         var key = body && typeof body.googleMapsApiKey === "string" ? body.googleMapsApiKey.trim() : "";
         if (!key) throw new Error("Google Maps API key not configured");
         return key;
+      })
+      .catch(function (err) {
+        // Not cached: a transient failure (e.g. a 401 while a sibling
+        // request is mid-refresh) must not disable autocomplete for the
+        // rest of this page load — the next search simply retries.
+        apiKeyPromise = null;
+        throw err;
       });
     return apiKeyPromise;
   }
@@ -96,6 +114,12 @@ window.AdminAddressAutocomplete = (function () {
         try {
           if (window.google && window.google.maps && window.google.maps.places) {
             resolve(window.google.maps.places);
+            return;
+          }
+          // A retry after an earlier attempt already loaded the bootstrap
+          // script — never append the script a second time.
+          if (window.google && window.google.maps && typeof window.google.maps.importLibrary === "function") {
+            window.google.maps.importLibrary("places").then(resolve, reject);
             return;
           }
           var script = document.createElement("script");
@@ -147,6 +171,9 @@ window.AdminAddressAutocomplete = (function () {
           reject(err);
         }
       });
+    }).catch(function (err) {
+      placesLibraryPromise = null; // see fetchApiKey()'s matching comment
+      throw err;
     });
 
     return placesLibraryPromise;
@@ -189,22 +216,37 @@ window.AdminAddressAutocomplete = (function () {
   function attach(fields) {
     var addressInput = fields && fields.address;
     if (!addressInput) return;
+    // Idempotent: a page that re-renders a form, or reopens a modal around
+    // the same input, can call attach() again without stacking a second
+    // dropdown or a second set of listeners.
+    if (addressInput.getAttribute("data-address-autocomplete") === "on") return;
 
     // Manual typing/editing always works from the very first render —
     // everything below is a progressive-enhancement layer added on top,
     // never a replacement for the plain <input>.
     var wrapper = addressInput.parentNode;
-    if (wrapper) wrapper.style.position = "relative";
+    if (!wrapper) return; // no parent to anchor the dropdown to — never touch the input itself
+    wrapper.style.position = "relative";
+    addressInput.setAttribute("data-address-autocomplete", "on");
 
+    var panelId = "admin-address-autocomplete-" + ++instanceCount;
     var panel = el("div", "admin-address-autocomplete-panel");
+    panel.id = panelId;
+    panel.setAttribute("role", "listbox");
     panel.setAttribute("hidden", "");
-    if (wrapper) wrapper.appendChild(panel);
-    else return; // no parent to anchor the dropdown to — never touch the input itself
+    wrapper.appendChild(panel);
+
+    addressInput.setAttribute("role", "combobox");
+    addressInput.setAttribute("aria-autocomplete", "list");
+    addressInput.setAttribute("aria-controls", panelId);
+    addressInput.setAttribute("aria-expanded", "false");
 
     var debounceTimer = null;
     var sessionToken = null;
     var currentRequestId = 0;
     var suggestions = []; // the current AutocompleteSuggestion[]
+    var items = []; // [{ btn, prediction }] for the rendered rows
+    var activeIndex = -1;
     // applySelection() dispatches a synthetic "input" event on addressInput
     // itself so external listeners (a form's own change tracking) see the
     // populated value — but that same event also reaches this component's
@@ -221,6 +263,39 @@ window.AdminAddressAutocomplete = (function () {
       panel.setAttribute("hidden", "");
       while (panel.firstChild) panel.removeChild(panel.firstChild);
       suggestions = [];
+      items = [];
+      activeIndex = -1;
+      addressInput.setAttribute("aria-expanded", "false");
+      addressInput.removeAttribute("aria-activedescendant");
+    }
+
+    function setActive(index) {
+      activeIndex = index;
+      items.forEach(function (item, i) {
+        var on = i === index;
+        item.btn.classList.toggle("is-active", on);
+        item.btn.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      if (index >= 0 && items[index]) {
+        addressInput.setAttribute("aria-activedescendant", items[index].btn.id);
+        if (typeof items[index].btn.scrollIntoView === "function") items[index].btn.scrollIntoView({ block: "nearest" });
+      } else {
+        addressInput.removeAttribute("aria-activedescendant");
+      }
+    }
+
+    function selectPrediction(prediction) {
+      Promise.resolve(prediction.toPlace())
+        .then(function (place) {
+          return place.fetchFields({ fields: ["addressComponents"] }).then(function () {
+            return place;
+          });
+        })
+        .then(applySelection)
+        .catch(function (err) {
+          console.error("Address autocomplete: failed to fetch place details", err);
+          closePanel();
+        });
     }
 
     function ensureSessionToken(placesLib) {
@@ -258,16 +333,19 @@ window.AdminAddressAutocomplete = (function () {
 
     function renderSuggestions(placesLib, list) {
       while (panel.firstChild) panel.removeChild(panel.firstChild);
-      if (!list.length) {
-        panel.setAttribute("hidden", "");
-        return;
-      }
+      items = [];
+      activeIndex = -1;
+      addressInput.removeAttribute("aria-activedescendant");
       list.forEach(function (suggestion) {
         var prediction = suggestion.placePrediction;
         if (!prediction) return;
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "admin-address-autocomplete-item";
+        btn.id = panelId + "-option-" + items.length;
+        btn.tabIndex = -1; // keyboard focus stays in the input; arrows move the highlight
+        btn.setAttribute("role", "option");
+        btn.setAttribute("aria-selected", "false");
         var mainText = (prediction.mainText && prediction.mainText.text) || (prediction.text && prediction.text.text) || "";
         var secondaryText = (prediction.secondaryText && prediction.secondaryText.text) || "";
         var mainSpan = document.createElement("span");
@@ -281,21 +359,17 @@ window.AdminAddressAutocomplete = (function () {
           btn.appendChild(secSpan);
         }
         btn.addEventListener("click", function () {
-          Promise.resolve(prediction.toPlace())
-            .then(function (place) {
-              return place.fetchFields({ fields: ["addressComponents"] }).then(function () {
-                return place;
-              });
-            })
-            .then(applySelection)
-            .catch(function (err) {
-              console.error("Address autocomplete: failed to fetch place details", err);
-              closePanel();
-            });
+          selectPrediction(prediction);
         });
         panel.appendChild(btn);
+        items.push({ btn: btn, prediction: prediction });
       });
+      if (!items.length) {
+        closePanel();
+        return;
+      }
       panel.removeAttribute("hidden");
+      addressInput.setAttribute("aria-expanded", "true");
     }
 
     function runSearch(placesLib, term) {
@@ -318,6 +392,14 @@ window.AdminAddressAutocomplete = (function () {
         .catch(function (err) {
           if (requestId !== currentRequestId) return;
           console.error("Address autocomplete: suggestion request failed", err);
+          // A permission error is a Google Cloud configuration problem, not
+          // a code bug — say so once, in plain words, without the key.
+          if (!permissionHintLogged && /permission|PERMISSION_DENIED|403/i.test(String(err && (err.message || err)))) {
+            permissionHintLogged = true;
+            console.error(
+              "Address autocomplete: Google denied the request. Check that \"Places API (New)\" is enabled for the Google Cloud project and allowed in the browser key's API restrictions, and that this site's domain is in the key's website restrictions."
+            );
+          }
           closePanel();
         });
     }
@@ -347,12 +429,45 @@ window.AdminAddressAutocomplete = (function () {
     });
 
     addressInput.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closePanel();
+      var open = !panel.hasAttribute("hidden") && items.length > 0;
+      if (e.key === "Escape") {
+        if (open) {
+          // Inside a modal (e.g. Edit Client's sheet, which closes on a
+          // document-level Escape), close only the dropdown first — never
+          // throw away the owner's in-progress edit along with it.
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        closePanel();
+        return;
+      }
+      if (!open) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive(activeIndex < items.length - 1 ? activeIndex + 1 : 0);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive(activeIndex > 0 ? activeIndex - 1 : items.length - 1);
+      } else if (e.key === "Enter" && activeIndex >= 0) {
+        // Only swallows Enter when a suggestion is highlighted — with
+        // nothing highlighted, Enter keeps its normal form behavior.
+        e.preventDefault();
+        selectPrediction(items[activeIndex].prediction);
+      } else if (e.key === "Tab") {
+        closePanel();
+      }
     });
 
-    document.addEventListener("click", function (e) {
-      if (wrapper && !wrapper.contains(e.target)) closePanel();
-    });
+    // Removes itself once the input leaves the DOM (a closed modal or a
+    // re-rendered form), so dynamic screens never accumulate listeners.
+    function onDocumentClick(e) {
+      if (!addressInput.isConnected) {
+        document.removeEventListener("click", onDocumentClick);
+        return;
+      }
+      if (!wrapper.contains(e.target)) closePanel();
+    }
+    document.addEventListener("click", onDocumentClick);
 
     // Warms the script load on first focus (not on page load) so a page
     // that never touches the address field never pays the Google script

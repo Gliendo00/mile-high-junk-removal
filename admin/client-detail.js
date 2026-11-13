@@ -338,6 +338,18 @@ document.addEventListener('DOMContentLoaded', function () {
     sheet.appendChild(fieldRow('State', stateInput));
     sheet.appendChild(fieldRow('ZIP', zipInput));
 
+    // Same shared Google Places autocomplete as the job/estimate forms.
+    // The sheet is rebuilt on every open, so this attaches to the fresh
+    // inputs each time; manual entry and the save payload are unchanged.
+    if (window.AdminAddressAutocomplete) {
+      window.AdminAddressAutocomplete.attach({
+        address: addressInput,
+        city: cityInput,
+        state: stateInput,
+        zip: zipInput,
+      });
+    }
+
     var actions = el('div', 'admin-duplicate-card-actions');
     sheet.appendChild(actions);
 
