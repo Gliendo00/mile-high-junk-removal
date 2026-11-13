@@ -201,6 +201,14 @@ test("littleton-junk-removal.html: visible FAQ text matches FAQPage schema exact
   assert.ok(/up to 1 hour of labor included/i.test(answer), "cost FAQ must state the included labor allowance");
 });
 
+test("castle-rock-junk-removal.html: visible FAQ text matches FAQPage schema exactly, and the cost FAQ uses the verified $100-$600 trailer pricing", () => {
+  const content = readPage("castle-rock-junk-removal.html");
+  const faq = assertVisibleMatchesSchema("castle-rock-junk-removal.html", content);
+  const answer = faq.mainEntity.find((q) => q.name === "How much does junk removal in Castle Rock cost?").acceptedAnswer.text;
+  assert.ok(answer.includes("$100 minimum") && answer.includes("$600 full load"), "cost FAQ must state the $100 minimum / $600 full load range");
+  assert.ok(/up to 1 hour of labor included/i.test(answer), "cost FAQ must state the included labor allowance");
+});
+
 // ---------------------------------------------------------------------
 async function main() {
   let failed = 0;
