@@ -244,7 +244,6 @@ window.AdminAddressAutocomplete = (function () {
     var debounceTimer = null;
     var sessionToken = null;
     var currentRequestId = 0;
-    var suggestions = []; // the current AutocompleteSuggestion[]
     var items = []; // [{ btn, prediction }] for the rendered rows
     var activeIndex = -1;
     // applySelection() dispatches a synthetic "input" event on addressInput
@@ -262,7 +261,6 @@ window.AdminAddressAutocomplete = (function () {
     function closePanel() {
       panel.setAttribute("hidden", "");
       while (panel.firstChild) panel.removeChild(panel.firstChild);
-      suggestions = [];
       items = [];
       activeIndex = -1;
       addressInput.setAttribute("aria-expanded", "false");
@@ -386,8 +384,7 @@ window.AdminAddressAutocomplete = (function () {
       placesLib.AutocompleteSuggestion.fetchAutocompleteSuggestions(request)
         .then(function (result) {
           if (requestId !== currentRequestId) return; // superseded by a newer keystroke
-          suggestions = (result && result.suggestions) || [];
-          renderSuggestions(placesLib, suggestions);
+          renderSuggestions(placesLib, (result && result.suggestions) || []);
         })
         .catch(function (err) {
           if (requestId !== currentRequestId) return;
