@@ -593,6 +593,16 @@ a.tag-outline:hover { background: var(--color-neon-deep); }
   .services-grid, .price-grid, .blog-grid { grid-template-columns: 1fr !important; }
   h1 { font-size: 34px !important; }
 }
+/* Nine-tier trailer price grid: stays 3x3 down to tablet, then 2-up on
+   phones with the final (Full Load) card spanning the row, instead of
+   stacking nine single cards. Opt-in via .price-grid-9 only. */
+@media (max-width: 860px) {
+  .price-grid.price-grid-9 { grid-template-columns: repeat(3, 1fr) !important; }
+}
+@media (max-width: 560px) {
+  .price-grid.price-grid-9 { grid-template-columns: repeat(2, 1fr) !important; }
+  .price-grid.price-grid-9 > :last-child { grid-column: 1 / -1; }
+}
 
 /* — sticky mobile call/text bar — */
 .sticky-cta-bar {
