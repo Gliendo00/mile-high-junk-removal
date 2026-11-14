@@ -34,7 +34,7 @@ test("loadProfile() returns a validated object with every required section", () 
 test("getCitiesWithPages() matches page-groups.js's pre-existing CITY_SLUGS exactly (same count, same order) — the refactor changed WHERE the data comes from, never WHAT it is", () => {
   const slugs = businessProfile.getCitySlugs();
   assert.deepStrictEqual(slugs, pageGroups.CITY_SLUGS);
-  assert.strictEqual(slugs.length, 13);
+  assert.strictEqual(slugs.length, 15);
 });
 
 test("getServicePageFiles() matches page-groups.js's pre-existing SERVICE_PAGE_FILES exactly", () => {

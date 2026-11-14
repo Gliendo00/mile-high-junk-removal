@@ -29,7 +29,9 @@
       { "file": "dumpster-rental.html", "label": "Dumpster Rental" },
       { "file": "demolition-services.html", "label": "Demolition Services" },
       { "file": "yard-waste-removal.html", "label": "Yard Waste Removal" },
-      { "file": "foreclosure-cleanouts.html", "label": "Foreclosure Cleanouts" }
+      { "file": "foreclosure-cleanouts.html", "label": "Foreclosure Cleanouts" },
+      { "file": "garage-cleanouts.html", "label": "Garage Cleanouts" },
+      { "file": "hot-tub-removal.html", "label": "Hot Tub Removal" }
     ],
     "_specialtyPagesNote": "These real pages exist and serve real audiences but deliberately are not modeled as one of the ten general 'item removed' service pages above (page-groups.js's long-standing reasoning, preserved as-is): hoa-junk-removal.html, commercial-junk-removal.html, office-junk-removal.html, contractor-remodeler-junk-removal.html, property-management-junk-removal.html, same-day-junk-removal.html. The agent should not assume every audit that iterates `services.pages` also needs to cover these.",
     "specialtyPages": [
@@ -63,15 +65,15 @@
       { "slug": "englewood", "name": "Englewood" },
       { "slug": "parker", "name": "Parker" },
       { "slug": "highlands-ranch", "name": "Highlands Ranch" },
-      { "slug": "centennial", "name": "Centennial" }
+      { "slug": "centennial", "name": "Centennial" },
+      { "slug": "brighton", "name": "Brighton" },
+      { "slug": "commerce-city", "name": "Commerce City" }
     ],
     "claimedCitiesWithoutPages": [
       { "slug": "golden", "name": "Golden" },
-      { "slug": "brighton", "name": "Brighton" },
       { "slug": "morrison", "name": "Morrison" },
       { "slug": "lone-tree", "name": "Lone Tree" },
       { "slug": "wheat-ridge", "name": "Wheat Ridge" },
-      { "slug": "commerce-city", "name": "Commerce City" },
       { "slug": "sterling-ranch", "name": "Sterling Ranch" }
     ]
   },

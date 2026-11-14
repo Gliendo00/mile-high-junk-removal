@@ -17,7 +17,7 @@ const assert = require("assert");
 const SITE_DIR = path.join(__dirname, "..");
 
 // The exact 52-file target set the rollout used: every top-level .html page
-// (50 pre-existing pages + about.html) plus book/index.html. admin/ and
+// (50 pre-existing pages + about.html + 4 SEO-expansion pages) plus book/index.html. admin/ and
 // .vercel/ are intentionally out of scope (no shared nav there).
 const topLevelHtml = fs.readdirSync(SITE_DIR)
   .filter((f) => f.endsWith(".html"))
@@ -25,7 +25,7 @@ const topLevelHtml = fs.readdirSync(SITE_DIR)
 const files = topLevelHtml.concat(["book/index.html"]);
 
 assert.ok(files.includes("about.html"), "about.html must exist in the target set");
-assert.strictEqual(files.length, 52, `expected exactly 52 target files, found ${files.length}: ${files.join(", ")}`);
+assert.strictEqual(files.length, 56, `expected exactly 56 target files, found ${files.length}: ${files.join(", ")}`);
 
 let checked = 0;
 
@@ -60,7 +60,7 @@ for (const rel of files) {
   }
 }
 
-assert.strictEqual(checked, 52, `expected to check 52 files, checked ${checked}`);
+assert.strictEqual(checked, 56, `expected to check 56 files, checked ${checked}`);
 
 // --- Homepage #why-us section must remain completely intact ---------------
 
