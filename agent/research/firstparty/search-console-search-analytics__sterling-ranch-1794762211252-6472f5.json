@@ -1,0 +1,28 @@
+[
+  {
+    "findingKey": null,
+    "rotationSlug": "sterling-ranch",
+    "source": "search-console-search-analytics",
+    "metric": "clicks-impressions-ctr-position",
+    "dimension": "query",
+    "scope": {
+      "type": "city",
+      "value": "Sterling Ranch"
+    },
+    "window": {
+      "start": "2026-10-16",
+      "end": "2026-11-12",
+      "label": "28 days ending 2026-11-12"
+    },
+    "comparisonWindow": null,
+    "observed": {
+      "totalRowsReturned": 0,
+      "topRows": []
+    },
+    "context": "Weekly rotation deep-review — does this property's real Search Console query data contain any organic search query mentioning \"Sterling Ranch\" (a claimed service area with no dedicated page yet)?",
+    "limitations": "Search Console clicks/impressions/CTR/position reflect search-result behavior only — not visitor intent, conversion value, or site quality — and do not by themselves establish that a page change is warranted.",
+    "fetchedAt": "2026-11-15T17:03:31.252Z",
+    "requestFingerprint": null,
+    "purpose": "operational"
+  }
+]
