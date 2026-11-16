@@ -1,0 +1,290 @@
+/* Interactive Pricing Calculator (/admin/pricing-calculator/).
+   Own file so the shared admin.css is untouched; builds on its tokens
+   (--admin-tint, --color-accent-700, neutrals) and components
+   (.admin-btn, .admin-sheet, .admin-field). Everything is prefixed pc-. */
+
+.pc-main { max-width: 1180px; padding-bottom: 170px; }
+
+.pc-toolbar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin: 2px 0 12px;
+}
+/* Same page-title style as .admin-list-heading h1. !important only to beat
+   styles.css's mobile `h1 { font-size: 34px !important }` — the same fix
+   admin.css's .admin-wa-heading h1 uses. */
+.pc-toolbar h1 { margin: 0; font-family: var(--font-heading); font-weight: 900; font-style: italic; font-size: 22px !important; line-height: 1.2; }
+.pc-job-chip { margin-top: 4px; font-size: 13px; color: var(--color-neutral-700, #4f6a53); }
+.pc-job-chip a { color: var(--color-accent-700, #2f6f13); font-weight: 700; text-decoration: none; }
+.pc-job-chip-label { font-weight: 700; margin-right: 4px; }
+.pc-focus-btn { flex: none; }
+
+/* ---------------- Layout ---------------- */
+.pc-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.pc-controls { display: grid; gap: 12px; min-width: 0; }
+
+@media (min-width: 760px) {
+  .pc-main { padding-bottom: 88px; }
+  .pc-layout {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-areas: "controls receipt";
+    align-items: start;
+  }
+  .pc-controls { grid-area: controls; }
+  .pc-receipt { grid-area: receipt; position: sticky; top: 12px; }
+}
+@media (min-width: 860px) { .pc-main { padding-bottom: 40px; } }
+@media (min-width: 1024px) { .pc-layout { grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; } }
+
+/* ---------------- Cards ---------------- */
+.pc-card {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #dfeade);
+  border-radius: 14px;
+  padding: 14px;
+  min-width: 0;
+}
+.pc-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 10px; }
+.pc-card-head h2 {
+  margin: 0; font-size: 12px; font-weight: 800; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--color-accent-700, #2f6f13);
+}
+.pc-card-sub { font-size: 12.5px; color: var(--color-neutral-600, #6c8a70); }
+
+/* ---------------- Load tiers ---------------- */
+.pc-tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pc-tier {
+  position: relative;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  gap: 2px; min-height: 66px; padding: 10px 10px 14px;
+  background: #fff;
+  border: 1.5px solid var(--color-neutral-300, #c7d9c9);
+  border-radius: 12px;
+  font-family: var(--font-body); color: var(--color-text, #1b2b20);
+  cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.pc-tier:hover { border-color: var(--color-neutral-500, #8ba88e); }
+.pc-tier:focus-visible { outline: 3px solid var(--color-accent-400, #a6d48a); outline-offset: 2px; }
+.pc-tier-name { font-weight: 800; font-size: 17px; line-height: 1.1; }
+.pc-tier-price { font-size: 14px; font-weight: 600; color: var(--color-neutral-700, #4f6a53); font-variant-numeric: tabular-nums; }
+.pc-tier-fill { position: absolute; left: 10px; right: 10px; bottom: 7px; height: 4px; border-radius: 2px; background: var(--color-neutral-100, #eef6f1); overflow: hidden; }
+.pc-tier-fill-inner { display: block; height: 100%; background: var(--color-neutral-400, #a9c2ac); }
+.pc-tier.is-selected {
+  border-color: var(--color-accent-700, #2f6f13);
+  background: var(--color-accent-100, #e6f3df);
+  box-shadow: inset 0 0 0 1px var(--color-accent-700, #2f6f13);
+}
+.pc-tier.is-selected .pc-tier-price { color: var(--color-accent-800, #2b5714); }
+.pc-tier.is-selected .pc-tier-fill-inner { background: var(--color-accent-700, #2f6f13); }
+
+/* ---------------- Steppers ---------------- */
+.pc-steppers { display: grid; }
+.pc-stepper-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 0; border-top: 1px solid var(--color-neutral-100, #eef6f1);
+}
+.pc-steppers .pc-stepper-row:first-child { border-top: 0; padding-top: 0; }
+.pc-stepper-row.is-active .pc-stepper-name { color: var(--color-accent-800, #2b5714); }
+.pc-stepper-label { display: flex; flex-direction: column; min-width: 0; }
+.pc-stepper-name { font-weight: 700; font-size: 15px; }
+.pc-stepper-price { font-size: 12.5px; color: var(--color-neutral-600, #6c8a70); font-variant-numeric: tabular-nums; }
+.pc-stepper { display: flex; align-items: center; gap: 6px; flex: none; }
+.pc-step-btn {
+  width: 44px; height: 44px; border-radius: 10px;
+  border: 1.5px solid var(--color-neutral-300, #c7d9c9); background: #fff;
+  font-size: 22px; font-weight: 700; line-height: 1; color: var(--color-text, #1b2b20);
+  cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.pc-step-btn:active:not(:disabled) { background: var(--admin-tint, #f4f8f2); }
+.pc-step-btn:disabled { opacity: 0.35; cursor: default; }
+.pc-step-btn:focus-visible, .pc-chip:focus-visible, .pc-adjust-remove:focus-visible { outline: 3px solid var(--color-accent-400, #a6d48a); outline-offset: 1px; }
+.pc-step-value {
+  width: 44px; height: 44px; padding: 0; border-radius: 10px;
+  border: 1px solid var(--color-neutral-200, #dfeade); background: var(--admin-tint, #f4f8f2);
+  text-align: center; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums;
+  font-family: var(--font-body); color: var(--color-text, #1b2b20);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.pc-step-value-wide { width: 72px; font-size: 15px; }
+.pc-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pc-chip {
+  min-height: 38px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--color-neutral-300, #c7d9c9); background: #fff;
+  font-family: var(--font-body); font-weight: 700; font-size: 13.5px; cursor: pointer;
+  color: var(--color-text, #1b2b20); touch-action: manipulation;
+}
+.pc-chip.is-selected { background: var(--color-text, #1b2b20); border-color: var(--color-text, #1b2b20); color: #fff; }
+
+/* ---------------- Custom charges / discounts ---------------- */
+.pc-add-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pc-add-btn { width: 100%; }
+.pc-adjust-form { margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--admin-tint, #f4f8f2); }
+.pc-adjust-form .admin-field { margin-bottom: 10px; }
+.pc-adjust-title { font-weight: 800; margin-bottom: 8px; }
+.pc-adjust-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.pc-customer-sees { font-weight: 400; color: var(--color-neutral-600, #6c8a70); }
+.pc-field-error { color: #b91c1c; font-size: 13.5px; font-weight: 600; margin: 4px 0 10px; }
+.pc-adjust-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.pc-adjust-list:empty { display: none; }
+.pc-adjust-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
+  padding: 6px 6px 6px 12px; border: 1px solid var(--color-neutral-200, #dfeade); border-radius: 10px;
+}
+.pc-adjust-item-desc { overflow-wrap: anywhere; font-weight: 600; }
+.pc-adjust-discount .pc-adjust-item-amount { color: var(--color-accent-800, #2b5714); }
+.pc-adjust-remove {
+  min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid transparent; background: transparent;
+  color: #b91c1c; font-weight: 700; font-family: var(--font-body); font-size: 13.5px; cursor: pointer;
+}
+.pc-adjust-remove:hover { background: #fdecea; }
+
+/* ---------------- Receipt (customer-facing) ---------------- */
+.pc-receipt {
+  background: #fff;
+  border: 1px solid var(--color-neutral-200, #dfeade);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(20, 21, 15, 0.06);
+  min-width: 0;
+}
+.pc-receipt-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--color-neutral-200, #dfeade); }
+.pc-receipt-logo { width: 44px; height: 44px; object-fit: contain; flex: none; }
+.pc-receipt-brand { flex: 1; min-width: 0; }
+.pc-receipt-company { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent-700, #2f6f13); }
+.pc-receipt-title { margin: 0; font-size: 18px !important; line-height: 1.2; }
+.pc-status-pill {
+  flex: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: var(--color-neutral-100, #eef6f1); color: var(--color-neutral-800, #37493a);
+  border: 1px solid var(--color-neutral-200, #dfeade); white-space: nowrap;
+}
+.pc-status-pill.is-confirmed { background: var(--color-accent-100, #e6f3df); color: var(--color-accent-800, #2b5714); border-color: var(--color-accent-300, #bfe1aa); }
+.pc-receipt-empty { margin: 16px 0 6px; color: var(--color-neutral-600, #6c8a70); font-size: 15px; }
+
+.pc-lines { list-style: none; margin: 4px 0 0; padding: 0; }
+.pc-line {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start;
+  padding: 10px 6px; margin: 0 -6px; border-bottom: 1px solid var(--color-neutral-100, #eef6f1);
+  border-radius: 8px;
+}
+.pc-line-desc { display: flex; flex-direction: column; min-width: 0; }
+.pc-line-name { font-weight: 700; font-size: 15.5px; overflow-wrap: anywhere; }
+.pc-line-meta { font-size: 13px; color: var(--color-neutral-600, #6c8a70); font-variant-numeric: tabular-nums; }
+.pc-line-amount { font-weight: 700; font-size: 15.5px; white-space: nowrap; }
+.pc-line-labor_included .pc-line-name, .pc-line-labor_included .pc-line-amount { font-weight: 600; color: var(--color-neutral-700, #4f6a53); }
+.pc-line-discount .pc-line-amount { color: var(--color-accent-800, #2b5714); }
+.pc-line.is-changed { animation: pc-flash 1.2s ease-out; }
+@keyframes pc-flash { from { background: var(--color-accent-200, #d2eac4); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .pc-line.is-changed { animation: none; background: var(--color-accent-100, #e6f3df); }
+}
+.pc-num { font-variant-numeric: tabular-nums; text-align: right; }
+
+.pc-sums { padding: 10px 0 0; }
+.pc-sum-row { display: flex; justify-content: space-between; font-size: 14.5px; padding: 2px 0; color: var(--color-neutral-800, #37493a); }
+.pc-sum-discount { color: var(--color-accent-800, #2b5714); font-weight: 600; }
+
+.pc-total {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding: 14px 0 4px; border-top: 2px solid var(--color-text, #1b2b20);
+}
+.pc-total-label { font-size: 13px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.pc-total-value { font-size: 38px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.pc-disclaimer { margin: 10px 0 0; font-size: 13px; line-height: 1.45; color: var(--color-neutral-700, #4f6a53); }
+
+/* ---------------- Staff tray ---------------- */
+.pc-staff {
+  margin-top: 12px; padding: 14px;
+  background: var(--admin-tint, #f4f8f2);
+  border: 1px dashed var(--color-neutral-300, #c7d9c9);
+  border-radius: 14px;
+}
+@media (min-width: 760px) { .pc-staff { max-width: calc(100% - 352px); } }
+@media (min-width: 1024px) { .pc-staff { max-width: calc(100% - 406px); } }
+.pc-staff h2 { margin: 0 0 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; color: var(--color-neutral-700, #4f6a53); }
+.pc-staff .admin-field { margin-bottom: 10px; }
+.pc-confirm-row { margin-bottom: 10px; }
+.pc-staff-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pc-save-btn { min-height: 48px; padding: 0 22px; font-size: 15px; }
+.pc-save-btn.is-saved { background: var(--color-neutral-700, #4f6a53); }
+.pc-staff-actions .admin-btn-outline { min-height: 48px; }
+.pc-save-status { margin: 8px 0 0; font-size: 13px; font-weight: 600; color: var(--color-neutral-700, #4f6a53); }
+.pc-save-status:empty { display: none; }
+
+/* ---------------- Mobile sticky total ---------------- */
+.pc-totalbar {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(61px + env(safe-area-inset-bottom, 0px));
+  z-index: 19; padding: 0 10px 8px; pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.pc-total-visible .pc-totalbar { opacity: 0; transform: translateY(8px); }
+.pc-total-visible .pc-totalbar-btn { pointer-events: none; }
+.pc-totalbar-btn {
+  pointer-events: auto;
+  width: 100%; max-width: 560px; margin: 0 auto; display: block;
+  border: 0; border-radius: 14px; padding: 8px 14px 10px;
+  background: var(--color-text, #1b2b20); color: #fff; text-align: left;
+  font-family: var(--font-body); cursor: pointer;
+  box-shadow: 0 8px 24px rgba(20, 21, 15, 0.25);
+}
+.pc-totalbar-change { display: block; font-size: 12.5px; color: #c9f2b4; min-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-totalbar-change.is-shown { animation: pc-bar-flash 0.9s ease-out; }
+@keyframes pc-bar-flash { from { color: #fff; } to { color: #c9f2b4; } }
+.pc-totalbar-main { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pc-totalbar-label { font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.85; }
+.pc-totalbar-value { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+@media (min-width: 760px) { .pc-totalbar { display: none; } }
+
+/* ---------------- Sheet ---------------- */
+.pc-sheet { max-width: 520px; }
+.pc-sheet-body { padding: 0 12px 4px; }
+.pc-sheet-text { margin: 4px 0 12px; font-size: 14.5px; line-height: 1.45; }
+.pc-sheet-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 12px; }
+.pc-sheet-actions .admin-btn { min-height: 46px; }
+.pc-save-summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--admin-tint, #f4f8f2); margin-bottom: 12px; }
+.pc-save-summary-job { font-weight: 700; font-size: 14.5px; min-width: 0; overflow-wrap: anywhere; }
+.pc-save-summary-total { font-weight: 800; font-size: 22px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-save-warn { padding: 10px 12px; border-radius: 10px; background: #fff7e6; border: 1px solid #f0c36d; color: #6b4a00; font-size: 14px; margin-bottom: 12px; }
+.pc-quote-row { margin: 4px 0 8px; }
+.pc-job-list { display: grid; gap: 2px; margin-top: 10px; }
+.pc-job-option-main { display: block; }
+.pc-job-option-sub { display: block; font-size: 13px; font-weight: 600; color: var(--color-neutral-600, #6c8a70); }
+.pc-link-btn { margin-top: 10px; border: 0; background: none; padding: 8px 0; color: var(--color-accent-700, #2f6f13); font-weight: 700; font-family: var(--font-body); font-size: 14px; cursor: pointer; }
+.pc-picker-mount { margin-bottom: 6px; }
+
+/* ---------------- Customer View (focus mode) ----------------
+   Same live, interactive screen — just without CRM chrome, staff tray,
+   or job info. */
+.pc-exit-focus {
+  position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); right: 10px; z-index: 30;
+  min-height: 40px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--color-neutral-300, #c7d9c9); background: rgba(255, 255, 255, 0.95);
+  font-family: var(--font-body); font-weight: 700; font-size: 13px; color: var(--color-neutral-800, #37493a); cursor: pointer;
+}
+.pc-focus #admin-chrome, .pc-focus .admin-bottom-nav, .pc-focus .pc-staff-only { display: none !important; }
+/* Staff-facing messages (errors, save toasts, sheets) never surface while
+   the customer is looking. */
+.pc-focus #error-banner, .pc-focus #admin-toast, .pc-focus #pc-sheet-overlay, .pc-focus #admin-more-overlay { display: none !important; }
+.pc-focus .pc-main { padding-top: 58px; padding-bottom: 120px; }
+.pc-focus .pc-totalbar { bottom: env(safe-area-inset-bottom, 0px); }
+.pc-focus .pc-total-value { font-size: 44px; }
+.pc-focus .pc-receipt-title { font-size: 20px !important; }
+@media (min-width: 760px) {
+  .pc-focus .pc-main { padding-bottom: 32px; }
+  .pc-focus .pc-line-name, .pc-focus .pc-line-amount { font-size: 16.5px; }
+  .pc-focus .pc-total-value { font-size: 52px; }
+}
+
+@media (max-width: 380px) {
+  .pc-tier-name { font-size: 16px; }
+  .pc-tier { padding-left: 8px; padding-right: 8px; }
+  .pc-total-value { font-size: 34px; }
+}
+
+/* The receipt title always gets the full width; the status pill sits
+   under it, aligned with the title (the receipt column is narrow on both
+   phones and tablets). */
+.pc-receipt-head { flex-wrap: wrap; row-gap: 6px; }
+.pc-status-pill { order: 3; margin-left: 54px; }
+.pc-receipt-brand { flex-basis: calc(100% - 54px); }

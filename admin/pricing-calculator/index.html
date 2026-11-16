@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Mile High Admin — Pricing Calculator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=Figtree:wght@400;600;700&display=swap">
+<link rel="icon" href="../../images/favicon.png" type="image/png">
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="../admin.css">
+<link rel="stylesheet" href="../pricing-calculator.css">
+</head>
+<body class="admin-body pc-body">
+
+<div id="admin-chrome"></div>
+
+<main class="admin-main pc-main">
+  <!-- Staff-only toolbar: hidden in Customer View. -->
+  <div class="pc-toolbar pc-staff-only">
+    <div class="pc-toolbar-title">
+      <h1>Pricing Calculator</h1>
+      <div class="pc-job-chip" id="pc-job-chip" hidden>
+        <span class="pc-job-chip-label">Job:</span>
+        <a id="pc-job-chip-link" href="#"></a>
+      </div>
+    </div>
+    <button type="button" class="admin-btn admin-btn-outline pc-focus-btn" id="pc-focus-btn" aria-pressed="false">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      Customer View
+    </button>
+  </div>
+
+  <div id="error-banner" class="admin-error-banner" role="alert" style="display:none"></div>
+
+  <div class="pc-layout">
+
+    <!-- ============ Live estimate (customer-facing) ============ -->
+    <aside class="pc-receipt" id="pc-receipt" aria-labelledby="pc-receipt-title">
+      <div class="pc-receipt-head">
+        <img class="pc-receipt-logo" src="/images/mile-high-junk-removal-logo.webp" alt="" width="44" height="44">
+        <div class="pc-receipt-brand">
+          <div class="pc-receipt-company">Mile High Junk Removal</div>
+          <h2 class="pc-receipt-title" id="pc-receipt-title">Junk Removal Estimate</h2>
+        </div>
+        <span class="pc-status-pill" id="pc-status-pill">Preliminary estimate</span>
+      </div>
+
+      <p class="pc-receipt-empty" id="pc-receipt-empty">Choose a load size to start the estimate.</p>
+
+      <ul class="pc-lines" id="pc-lines" aria-label="Itemized charges"></ul>
+
+      <div class="pc-sums" id="pc-sums" hidden>
+        <div class="pc-sum-row" id="pc-subtotal-row"><span>Subtotal</span><span class="pc-num" id="pc-subtotal">$0.00</span></div>
+        <div class="pc-sum-row pc-sum-discount" id="pc-discount-row" hidden><span>Discounts</span><span class="pc-num" id="pc-discount-total">−$0.00</span></div>
+      </div>
+
+      <div class="pc-total" aria-live="polite" aria-atomic="true">
+        <span class="pc-total-label">Estimated total</span>
+        <span class="pc-total-value" id="pc-total">$0.00</span>
+      </div>
+
+      <p class="pc-disclaimer" id="pc-disclaimer">Final pricing is confirmed on-site before loading. Additional charges may apply if the scope changes. Pricing includes taxes.</p>
+    </aside>
+
+    <!-- ============ Controls ============ -->
+    <div class="pc-controls">
+
+      <section class="pc-card" aria-labelledby="pc-load-heading">
+        <div class="pc-card-head">
+          <h2 id="pc-load-heading">Load size</h2>
+          <span class="pc-card-sub">14' × 7' × 4' trailer · first hour of labor included</span>
+        </div>
+        <div class="pc-tier-grid" id="pc-tier-grid" role="radiogroup" aria-labelledby="pc-load-heading"></div>
+      </section>
+
+      <section class="pc-card" aria-labelledby="pc-items-heading">
+        <div class="pc-card-head">
+          <h2 id="pc-items-heading">Special item disposal</h2>
+        </div>
+        <div class="pc-steppers" id="pc-disposal-list"></div>
+      </section>
+
+      <section class="pc-card" aria-labelledby="pc-labor-heading">
+        <div class="pc-card-head">
+          <h2 id="pc-labor-heading">Additional labor</h2>
+          <span class="pc-card-sub">$125/hour beyond the included first hour · 15-minute steps</span>
+        </div>
+        <div class="pc-stepper-row">
+          <div class="pc-stepper-label">
+            <span class="pc-stepper-name">Extra time</span>
+            <span class="pc-stepper-price" id="pc-labor-amount">$0.00</span>
+          </div>
+          <div class="pc-stepper" role="group" aria-label="Additional labor">
+            <button type="button" class="pc-step-btn" id="pc-labor-minus" aria-label="Remove 15 minutes of labor">−</button>
+            <output class="pc-step-value pc-step-value-wide" id="pc-labor-value" aria-live="polite">0 hrs</output>
+            <button type="button" class="pc-step-btn" id="pc-labor-plus" aria-label="Add 15 minutes of labor">+</button>
+          </div>
+        </div>
+        <div class="pc-chip-row" id="pc-labor-chips" aria-label="Quick labor amounts"></div>
+      </section>
+
+      <section class="pc-card" aria-labelledby="pc-other-heading">
+        <div class="pc-card-head">
+          <h2 id="pc-other-heading">Other charges &amp; discounts</h2>
+        </div>
+        <div class="pc-add-row">
+          <button type="button" class="admin-btn admin-btn-outline pc-add-btn" id="pc-add-custom-btn" aria-expanded="false" aria-controls="pc-adjust-form">+ Custom charge</button>
+          <button type="button" class="admin-btn admin-btn-outline pc-add-btn" id="pc-add-discount-btn" aria-expanded="false" aria-controls="pc-adjust-form">+ Discount</button>
+        </div>
+        <form class="pc-adjust-form" id="pc-adjust-form" novalidate hidden>
+          <div class="pc-adjust-title" id="pc-adjust-title">Custom charge</div>
+          <div class="admin-field">
+            <label for="pc-adjust-desc">Description <span class="pc-customer-sees">(customer sees this)</span></label>
+            <input type="text" id="pc-adjust-desc" maxlength="80" autocomplete="off" placeholder="e.g. Hot tub cut-up">
+          </div>
+          <div class="admin-field">
+            <label for="pc-adjust-amount">Amount</label>
+            <div class="admin-quote-input-wrap">
+              <span class="admin-quote-dollar">$</span>
+              <input type="text" id="pc-adjust-amount" inputmode="decimal" autocomplete="off" placeholder="0.00">
+            </div>
+          </div>
+          <p class="pc-field-error" id="pc-adjust-error" role="alert" hidden></p>
+          <div class="pc-adjust-actions">
+            <button type="button" class="admin-btn admin-btn-outline" id="pc-adjust-cancel">Cancel</button>
+            <button type="submit" class="admin-btn admin-btn-primary" id="pc-adjust-submit">Add</button>
+          </div>
+        </form>
+        <ul class="pc-adjust-list" id="pc-adjust-list" aria-label="Added charges and discounts"></ul>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============ Staff tray (hidden in Customer View) ============ -->
+  <section class="pc-staff pc-staff-only" aria-labelledby="pc-staff-heading">
+    <h2 id="pc-staff-heading">Staff</h2>
+    <label class="admin-checkbox-row pc-confirm-row">
+      <input type="checkbox" id="pc-confirmed">
+      <span>Price confirmed on-site with the customer</span>
+    </label>
+    <div class="admin-field">
+      <label for="pc-notes">Staff notes <span class="pc-customer-sees">(never shown to the customer)</span></label>
+      <textarea id="pc-notes" rows="2" maxlength="2000" placeholder="Access, items, anything to remember"></textarea>
+    </div>
+    <div class="pc-staff-actions">
+      <button type="button" class="admin-btn admin-btn-primary pc-save-btn" id="pc-save-btn">Save to Job</button>
+      <button type="button" class="admin-btn admin-btn-outline" id="pc-reset-btn">New Estimate</button>
+    </div>
+    <p class="pc-save-status" id="pc-save-status" aria-live="polite"></p>
+    <p class="admin-field-hint">Saving stores this breakdown on the job only. It never creates an invoice, charges a card, records a payment, or messages the customer.</p>
+  </section>
+</main>
+
+<!-- Mobile sticky total — always visible while tapping controls. -->
+<div class="pc-totalbar" id="pc-totalbar">
+  <button type="button" class="pc-totalbar-btn" id="pc-totalbar-btn" aria-controls="pc-receipt">
+    <span class="pc-totalbar-change" id="pc-totalbar-change" aria-live="polite"></span>
+    <span class="pc-totalbar-main">
+      <span class="pc-totalbar-label">Estimated total <span id="pc-totalbar-count"></span></span>
+      <span class="pc-totalbar-value" id="pc-totalbar-total">$0.00</span>
+    </span>
+  </button>
+</div>
+
+<button type="button" class="pc-exit-focus" id="pc-exit-focus" hidden>Exit Customer View</button>
+
+<!-- Save / confirm sheet -->
+<div class="admin-sheet-overlay" id="pc-sheet-overlay" hidden>
+  <div class="admin-sheet pc-sheet" role="dialog" aria-modal="true" aria-labelledby="pc-sheet-title">
+    <div class="admin-sheet-title" id="pc-sheet-title">Save to Job</div>
+    <div class="pc-sheet-body" id="pc-sheet-body"></div>
+  </div>
+</div>
+
+<div id="admin-toast" class="admin-toast" role="status" aria-live="polite"></div>
+
+<script src="../admin-chrome.js"></script>
+<script src="../admin-fetch.js"></script>
+<script src="../nav-badge.js"></script>
+<script src="../phone-format.js"></script>
+<script src="../client-picker.js"></script>
+<script src="../pricing-calculator-core.js"></script>
+<script src="../pricing-calculator.js"></script>
+</body>
+</html>

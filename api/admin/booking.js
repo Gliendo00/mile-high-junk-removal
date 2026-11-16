@@ -42,6 +42,7 @@ const {
 } = require("../_lib/invoice-helpers");
 const { hashAccessToken, encryptAccessToken, decryptAccessToken, generateRawAccessToken, getLinkSecretKey } = require("../_lib/invoice-crypto");
 const { centsToDecimalString, decimalDollarsToPositiveCents } = require("../_lib/money");
+const priceEstimate = require("../_lib/price-estimate");
 
 const RESEND_REQUEST_TIMEOUT_MS = 10000; // >= half of PAYMENT_CLAIM_TTL_MS's own 2x-provider-timeout rule, matched to SEND_CLAIM_TTL_MS (20s) the same way
 const SEND_RECOVERY_WINDOW_MS = 23 * 60 * 60 * 1000; // conservative 1h margin under Resend's 24h idempotency-key retention
@@ -186,6 +187,17 @@ module.exports = async (req, res) => {
     if (req.method === "GET") return handleGetEstimate(req, res);
     if (req.method === "POST") return handleCreateEstimate(req, res, session);
     if (req.method === "PATCH") return handlePatchEstimate(req, res, session);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Interactive Pricing Calculator — "Save to Job". Saves an itemized,
+  // server-recomputed price breakdown to public.job_price_estimates and,
+  // only when explicitly asked, the job's existing Quoted Amount. Never
+  // creates an invoice, payment, or charge — see api/_lib/price-estimate.js.
+  if (req.query.resource === "price-estimate") {
+    if (req.method === "GET") return priceEstimate.handleGetPriceEstimate(req, res);
+    if (req.method === "POST") return priceEstimate.handleSavePriceEstimate(req, res, session);
     res.status(405).json({ error: "Method not allowed" });
     return;
   }

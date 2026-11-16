@@ -105,7 +105,9 @@ test("admin/admin-chrome.js: nav is exactly Home, Schedule, Leads, Clients, Expe
   const labels = Array.from(sectionsMatch[1].matchAll(/label:\s*'([^']+)'/g)).map((m) => m[1]);
   // Phase 2 (Core Invoicing) added "Invoices" as an eighth section — see
   // tests/phase2-invoice-workflow.test.js for its endpoint coverage.
-  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Expenses", "Other Revenue", "Website Agent", "Invoices"]);
+  // Interactive Pricing Calculator added "Pricing" as a ninth section,
+  // placed after Clients so it stays visible on laptop-width desktops.
+  assert.deepStrictEqual(labels, ["Home", "Schedule", "Leads", "Clients", "Pricing", "Expenses", "Other Revenue", "Website Agent", "Invoices"]);
   assert.ok(!/\/admin\/requests\//.test(sectionsMatch[1]), "Requests must not be a nav destination");
   assert.ok(!/\/admin\/intakes\//.test(sectionsMatch[1]), "Intakes must not be a nav destination");
 });
@@ -133,10 +135,10 @@ test("admin/admin-chrome.js: every mascot-backed SECTIONS key has an image in MA
   const keys = Array.from(sectionsMatch[1].matchAll(/key:\s*'([^']+)'/g)).map((m) => m[1]);
   // Phase 2 (Core Invoicing) added "invoices" as a second plain-icon
   // section, same no-mascot-asset posture as website-agent.
-  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "expenses", "other-revenue", "website-agent", "invoices"]);
+  assert.deepStrictEqual(keys, ["home", "schedule", "leads", "clients", "pricing-calculator", "expenses", "other-revenue", "website-agent", "invoices"]);
   const mascotSrcMatch = src.match(/var MASCOT_SRC = \{([\s\S]*?)\n\s*\};/);
   assert.ok(mascotSrcMatch, "admin-chrome.js must define MASCOT_SRC");
-  const PLAIN_ICON_KEYS = ["website-agent", "invoices"];
+  const PLAIN_ICON_KEYS = ["website-agent", "invoices", "pricing-calculator"];
   keys.filter((key) => PLAIN_ICON_KEYS.indexOf(key) === -1).forEach((key) => {
     assert.ok(new RegExp("'?\\b" + key + "\\b'?:\\s*'/images/").test(mascotSrcMatch[1]), key + " must map to a mascot image in MASCOT_SRC");
   });
