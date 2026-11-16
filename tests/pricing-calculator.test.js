@@ -328,6 +328,13 @@ test("nav: Pricing section is registered and marked active on its own page", () 
   assert.ok(src.includes("{ key: 'pricing-calculator', href: '/admin/pricing-calculator/', label: 'Pricing' }"));
   assert.ok(/MORE_SHEET_KEYS = \['pricing-calculator'/.test(src));
   assert.ok(src.includes("if (path.indexOf('/admin/pricing-calculator/') === 0) return 'pricing-calculator';"));
+  // Desktop: placed right after Clients so it stays visible on laptops.
+  assert.ok(/label: 'Clients' \},[\s\S]{0,600}key: 'pricing-calculator'[\s\S]{0,200}key: 'expenses'/.test(src));
+});
+
+test("nav: desktop row is compacted at 860-1599px so 9 items overflow no more than 8 did", () => {
+  const css = fs.readFileSync(path.join(ROOT, "admin/admin.css"), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(/@media \(min-width: 860px\) and \(max-width: 1599px\) \{\n  \.admin-header-left \{ gap: 16px; \}\n  \.admin-nav-item \{ padding: 0 9px; gap: 6px; \}\n\}/.test(css));
 });
 
 test("server module imports nothing that can move money or send messages", () => {

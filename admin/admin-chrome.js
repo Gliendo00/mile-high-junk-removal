@@ -99,6 +99,11 @@
     { key: 'schedule', href: '/admin/', label: 'Schedule' },
     { key: 'leads', href: '/admin/leads/', label: 'Leads' },
     { key: 'clients', href: '/admin/clients/', label: 'Clients' },
+    // Interactive Pricing Calculator — placed right after the 4 core sections
+    // so it stays visible on laptop-width desktops, where the later items
+    // scroll off this row (see admin.css .admin-header-nav). On mobile it is
+    // the first More-sheet item (MORE_SHEET_KEYS below), not a bottom-nav slot.
+    { key: 'pricing-calculator', href: '/admin/pricing-calculator/', label: 'Pricing' },
     { key: 'expenses', href: '/admin/expenses/', label: 'Expenses' },
     { key: 'other-revenue', href: '/admin/other-revenue/', label: 'Other Revenue' },
     // Website Agent dashboard — UI-organization pass around the existing
@@ -110,10 +115,7 @@
     // Phase 2 — Core Invoicing. Same "no free mobile bottom-nav slot" posture
     // as Website Agent just above: desktop shows it inline, mobile joins the
     // More sheet.
-    { key: 'invoices', href: '/admin/invoices/', label: 'Invoices' },
-    // Interactive Pricing Calculator — same desktop-inline / mobile-More
-    // placement as Invoices just above.
-    { key: 'pricing-calculator', href: '/admin/pricing-calculator/', label: 'Pricing' }
+    { key: 'invoices', href: '/admin/invoices/', label: 'Invoices' }
   ];
 
   // Mobile bottom nav shows only these 4 as direct links; the rest live in

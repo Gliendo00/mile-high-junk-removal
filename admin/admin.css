@@ -185,6 +185,15 @@
   background: rgba(57, 255, 20, 0.12);
   color: #39ff14;
 }
+/* Pricing Calculator pass: the 9th destination made this row ~95px wider.
+   Between the desktop breakpoint and 1600px (where the row is tighter than
+   its content) item padding and the brand-to-nav gap are trimmed just
+   enough that 9 items overflow no more than the previous 8 did at every
+   width; wider screens are untouched. Same scroll fallback as above. */
+@media (min-width: 860px) and (max-width: 1599px) {
+  .admin-header-left { gap: 16px; }
+  .admin-nav-item { padding: 0 9px; gap: 6px; }
+}
 
 .admin-header-right {
   display: flex;
