@@ -76,8 +76,8 @@ CREATE TABLE IF NOT EXISTS public.job_price_estimates (
   CONSTRAINT job_price_estimates_discount_check CHECK (discount_cents <= subtotal_cents),
   -- Shape + size guards. The server already bounds these (max 10 custom
   -- lines, 5 discounts, 80-char descriptions); these are defense in depth.
-  CONSTRAINT job_price_estimates_input_shape CHECK (jsonb_typeof(input) = 'object' AND pg_column_size(input) <= 16384),
-  CONSTRAINT job_price_estimates_lines_shape CHECK (jsonb_typeof(line_items) = 'array' AND pg_column_size(line_items) <= 32768)
+  CONSTRAINT job_price_estimates_input_shape CHECK (jsonb_typeof(input) = 'object' AND octet_length(input::text) <= 16384),
+  CONSTRAINT job_price_estimates_lines_shape CHECK (jsonb_typeof(line_items) = 'array' AND octet_length(line_items::text) <= 32768)
 );
 
 ALTER TABLE public.job_price_estimates ENABLE ROW LEVEL SECURITY;
