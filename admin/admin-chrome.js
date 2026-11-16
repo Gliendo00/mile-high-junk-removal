@@ -51,7 +51,10 @@
     // Invoices (Phase 2 — Core Invoicing) — also no mascot asset: a plain
     // document-with-lines glyph, same stroke language as Website Agent's
     // own plain-icon fallback above.
-    invoices: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><line x1="9.5" y1="12" x2="14.5" y2="12"/><line x1="9.5" y1="15.5" x2="14.5" y2="15.5"/>'
+    invoices: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><line x1="9.5" y1="12" x2="14.5" y2="12"/><line x1="9.5" y1="15.5" x2="14.5" y2="15.5"/>',
+    // Pricing Calculator — also no mascot asset: a plain calculator glyph,
+    // same stroke language as the other plain icons above.
+    calculator: '<rect x="5" y="3" width="14" height="18" rx="2"/><rect x="8" y="6" width="8" height="3.5" rx="0.8"/><circle cx="9" cy="13" r="0.9" fill="currentColor" stroke="none"/><circle cx="12" cy="13" r="0.9" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="0.9" fill="currentColor" stroke="none"/><circle cx="9" cy="17" r="0.9" fill="currentColor" stroke="none"/><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"/><circle cx="15" cy="17" r="0.9" fill="currentColor" stroke="none"/>'
   };
 
   function icon(name, cls) {
@@ -80,7 +83,7 @@
   // .admin-sheet-option-icon/.admin-nav-item-icon/.admin-bottom-nav-item-icon
   // already size both identically — see admin.css) — "More"/"Website
   // Agent" are the only sections with no mascot asset.
-  var PLAIN_ICON_BY_KEY = { 'website-agent': 'websiteAgent', 'invoices': 'invoices' };
+  var PLAIN_ICON_BY_KEY = { 'website-agent': 'websiteAgent', 'invoices': 'invoices', 'pricing-calculator': 'calculator' };
   function sectionIcon(key, cls) {
     if (MASCOT_SRC[key]) return mascotIcon(key, cls);
     return icon(PLAIN_ICON_BY_KEY[key] || 'moreGrid', cls);
@@ -107,14 +110,17 @@
     // Phase 2 — Core Invoicing. Same "no free mobile bottom-nav slot" posture
     // as Website Agent just above: desktop shows it inline, mobile joins the
     // More sheet.
-    { key: 'invoices', href: '/admin/invoices/', label: 'Invoices' }
+    { key: 'invoices', href: '/admin/invoices/', label: 'Invoices' },
+    // Interactive Pricing Calculator — same desktop-inline / mobile-More
+    // placement as Invoices just above.
+    { key: 'pricing-calculator', href: '/admin/pricing-calculator/', label: 'Pricing' }
   ];
 
   // Mobile bottom nav shows only these 4 as direct links; the rest live in
   // the More sheet. Desktop's inline nav still shows the full SECTIONS list
   // via buildDesktopNav() below, untouched.
   var BOTTOM_NAV_KEYS = ['home', 'schedule', 'leads', 'clients'];
-  var MORE_SHEET_KEYS = ['expenses', 'other-revenue', 'website-agent', 'invoices'];
+  var MORE_SHEET_KEYS = ['pricing-calculator', 'expenses', 'other-revenue', 'website-agent', 'invoices'];
 
   // Which section is "current" — by URL path, so no page needs a data
   // attribute or any other per-page marker. Booking/intake/request/lead
@@ -142,6 +148,7 @@
     // /admin/invoices/ (list) in one prefix test, since 'invoice' is itself
     // a prefix of 'invoices'.
     if (path.indexOf('/admin/invoice') === 0) return 'invoices';
+    if (path.indexOf('/admin/pricing-calculator/') === 0) return 'pricing-calculator';
     return 'schedule'; // /admin/, /admin/booking*/
   }
 

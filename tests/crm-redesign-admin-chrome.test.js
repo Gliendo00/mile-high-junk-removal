@@ -80,7 +80,9 @@ test("admin-chrome.js: the More sheet contains Expenses + Other Revenue + Websit
   const keys = Array.from(moreKeysMatch[1].matchAll(/'([^']+)'/g)).map((m) => m[1]);
   // Phase 2 (Core Invoicing) joined the More sheet the same way Website
   // Agent did — no free mobile bottom-nav slot for an 8th section.
-  assert.deepStrictEqual(keys, ["expenses", "other-revenue", "website-agent", "invoices"]);
+  // Interactive Pricing Calculator added "pricing-calculator" first in the
+  // More sheet (the crew's most-used extra on a phone).
+  assert.deepStrictEqual(keys, ["pricing-calculator", "expenses", "other-revenue", "website-agent", "invoices"]);
   assert.ok(
     /admin-sheet-overlay/.test(chromeSrc) && /admin-sheet-option/.test(chromeSrc) && /admin-sheet-cancel/.test(chromeSrc),
     "the More sheet must reuse the existing .admin-sheet-overlay/.admin-sheet-option/.admin-sheet-cancel chrome, not a new modal pattern"
