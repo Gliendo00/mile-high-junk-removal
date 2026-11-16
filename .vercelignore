@@ -1,0 +1,5 @@
+# Never upload database migration files. They document the production
+# schema and are only run by hand in the Supabase SQL editor; no page,
+# API function, or the Website Agent reads them at runtime.
+# (vercel.json also redirects /sql/* as a second layer.)
+/sql
