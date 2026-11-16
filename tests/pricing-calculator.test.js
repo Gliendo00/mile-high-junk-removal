@@ -83,6 +83,9 @@ process.env.SUPABASE_URL = "https://mock.supabase.co";
 process.env.SUPABASE_ANON_KEY = "mock-anon-key";
 process.env.SUPABASE_SECRET_KEY = "mock-secret-key";
 process.env.ADMIN_ALLOWED_EMAILS = "owner@milehighjunkremoval.net";
+// The API tests below exercise saving itself, so the rollout gate is on;
+// the gate's own tests switch it and always restore "on".
+process.env.PRICE_ESTIMATE_SAVE_MODE = "on";
 
 const bookingHandler = require("../api/admin/booking.js");
 
@@ -590,6 +593,53 @@ test("write audit: only job_price_estimates and bookings' quote fields are ever 
   assert.strictEqual(db.job_payments.length, 0);
   assert.strictEqual(db.invoices.length, 0);
   assert.strictEqual(db.invoice_line_items.length, 0);
+});
+
+test("rollout gate: unset/off/invalid disables saving before ANY database access", async () => {
+  freshDb();
+  let reads = 0;
+  const origFrom = fakeService.from;
+  fakeService.from = (t) => { reads++; return origFrom(t); };
+  try {
+    for (const v of [undefined, "", "off", "OFF", "yes", "true", "test:", "test:not-a-uuid", "test:" + BOOKED + ",nope"]) {
+      if (v === undefined) delete process.env.PRICE_ESTIMATE_SAVE_MODE; else process.env.PRICE_ESTIMATE_SAVE_MODE = v;
+      const r = await call({ method: "POST", body: saveBody() });
+      assert.strictEqual(r.statusCode, 503, String(v));
+      assert.strictEqual(r.body.code, "save_disabled");
+    }
+    assert.strictEqual(reads, 0, "a disabled save must not touch the database");
+    assert.strictEqual(writes.length, 0);
+    delete process.env.PRICE_ESTIMATE_SAVE_MODE;
+    const g = await call({ query: { bookingId: BOOKED } });
+    assert.strictEqual(g.statusCode, 200, "reading still works while saving is off");
+    assert.strictEqual(g.body.save.allowed, false);
+  } finally {
+    fakeService.from = origFrom;
+    process.env.PRICE_ESTIMATE_SAVE_MODE = "on";
+  }
+});
+
+test("rollout gate: test:<job id> allows ONLY the designated test job", async () => {
+  freshDb();
+  process.env.PRICE_ESTIMATE_SAVE_MODE = "test:" + BOOKED.toUpperCase();
+  try {
+    const ok = await call({ method: "POST", body: saveBody() });
+    assert.strictEqual(ok.statusCode, 200);
+    const other = await call({ method: "POST", body: saveBody({ bookingId: QUOTED }) });
+    assert.strictEqual(other.statusCode, 503);
+    assert.strictEqual(other.body.code, "save_disabled");
+    assert.strictEqual(db.job_price_estimates.length, 1);
+    assert.strictEqual(db.job_price_estimates[0].booking_id, BOOKED);
+    assert.strictEqual((await call({ query: { bookingId: BOOKED } })).body.save.allowed, true);
+    assert.strictEqual((await call({ query: { bookingId: QUOTED } })).body.save.allowed, false);
+  } finally {
+    process.env.PRICE_ESTIMATE_SAVE_MODE = "on";
+  }
+});
+
+test("rollout gate: the screen shows the disabled reason instead of a Save button", () => {
+  const js = fs.readFileSync(path.join(ROOT, "admin/pricing-calculator.js"), "utf8");
+  assert.ok(js.includes("if (binding.save && !binding.save.allowed) {"));
 });
 
 test("other methods are refused", async () => {

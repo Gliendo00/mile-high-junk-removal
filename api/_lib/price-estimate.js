@@ -22,6 +22,9 @@
 //     invoice_line_items, job_payments, Stripe, or sends any email/SMS.
 //     Nothing in this file imports any of those modules.
 //
+// Rollout: saving is OFF unless PRICE_ESTIMATE_SAVE_MODE enables it (see
+// saveMode() below) — "test:<job id>" limits it to a designated test job.
+//
 // Overwrite + duplicate protection:
 //   - expectedRevision: null means "create the first saved breakdown"; a
 //     job that already has one gets 409 estimate_exists (the UI then asks
@@ -48,6 +51,39 @@ const PRICEABLE_SERVICE_TYPES = ["junk_removal", "light_demo"];
 // Statuses where the job's Quoted Amount may be set from a saved
 // breakdown — i.e. the job has not happened yet. See header.
 const QUOTE_WRITABLE_STATUSES = ["new", "contacted", "quoted", "booked"];
+
+// Controlled rollout switch for Save to Job — server-side, fails closed.
+// PRICE_ESTIMATE_SAVE_MODE (Vercel env var; a change takes effect on the
+// next deployment):
+//   unset / "off" / anything unrecognized -> saving disabled for every job
+//   "test:<job uuid>[,<job uuid>...]"       -> saving allowed for ONLY those jobs
+//   "on"                                    -> saving allowed for every job
+// The calculator itself, and reading a saved estimate, never depend on it.
+// Checked before any database access, so a disabled save touches nothing.
+function saveMode() {
+  const raw = String(process.env.PRICE_ESTIMATE_SAVE_MODE || "").trim();
+  if (raw.toLowerCase() === "on") return { mode: "on", testIds: [] };
+  const m = /^test:(.+)$/i.exec(raw);
+  if (m) {
+    const ids = m[1].split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (ids.length && ids.every((id) => UUID_RE.test(id))) return { mode: "test", testIds: ids };
+  }
+  return { mode: "off", testIds: [] };
+}
+function saveGate(bookingId) {
+  const s = saveMode();
+  if (s.mode === "on") return { allowed: true, mode: s.mode, reason: null };
+  if (s.mode === "test") {
+    const ok = s.testIds.indexOf(String(bookingId || "").toLowerCase()) !== -1;
+    return { allowed: ok, mode: s.mode, reason: ok ? null : "Saving estimates is in a limited test and isn't enabled for this job yet. Nothing was saved." };
+  }
+  return { allowed: false, mode: s.mode, reason: "Saving estimates to jobs isn't turned on yet. Nothing was saved." };
+}
+
+function saveInfo(bookingId) {
+  const g = saveGate(bookingId);
+  return { allowed: g.allowed, mode: g.mode, reason: g.reason };
+}
 
 function isMissingTableError(err) {
   if (!err) return false;
@@ -136,12 +172,12 @@ async function handleGetPriceEstimate(req, res) {
     const eRes = await supabase.from("job_price_estimates").select(ESTIMATE_COLS).eq("booking_id", bookingId).maybeSingle();
     if (eRes.error) {
       if (isMissingTableError(eRes.error)) {
-        res.status(200).json({ ok: true, booking: mapBooking(booking, customer), estimate: null, storageReady: false });
+        res.status(200).json({ ok: true, booking: mapBooking(booking, customer), estimate: null, storageReady: false, save: saveInfo(bookingId) });
         return;
       }
       throw eRes.error;
     }
-    res.status(200).json({ ok: true, booking: mapBooking(booking, customer), estimate: mapEstimate(eRes.data), storageReady: true });
+    res.status(200).json({ ok: true, booking: mapBooking(booking, customer), estimate: mapEstimate(eRes.data), storageReady: true, save: saveInfo(bookingId) });
   } catch (err) {
     console.error("Price estimate load failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not load this job's saved estimate." });
@@ -159,6 +195,11 @@ async function handleSavePriceEstimate(req, res, session) {
   const bookingId = typeof body.bookingId === "string" ? body.bookingId.trim() : "";
   if (!UUID_RE.test(bookingId)) {
     res.status(400).json({ error: "Choose a job to save this estimate to." });
+    return;
+  }
+  const gate = saveGate(bookingId);
+  if (!gate.allowed) {
+    res.status(503).json({ error: gate.reason, code: "save_disabled", saveMode: gate.mode });
     return;
   }
   const requestKey = typeof body.requestKey === "string" ? body.requestKey : "";
@@ -353,6 +394,7 @@ async function handleSavePriceEstimate(req, res, session) {
 }
 
 module.exports = {
+  saveGate,
   handleGetPriceEstimate,
   handleSavePriceEstimate,
   PRICEABLE_SERVICE_TYPES,

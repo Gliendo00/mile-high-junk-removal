@@ -607,6 +607,7 @@ document.addEventListener('DOMContentLoaded', function () {
     binding.revision = data.estimate ? data.estimate.revision : null;
     binding.existing = data.estimate || null;
     binding.storageReady = data.storageReady !== false;
+    binding.save = data.save || { allowed: false, reason: 'Saving estimates to jobs isn’t turned on yet.' };
     if (data.estimate && opts.loadSaved) {
       state = stateFromSaved(data.estimate);
       syncStaffInputs();
@@ -728,6 +729,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (!booking.priceable) {
         sheetText(body, 'This is a ' + booking.serviceLabel + ' job, which has its own pricing. Choose a junk removal job instead.', 'pc-field-error');
         sheetButtons(body, [{ label: 'Close', onClick: closeSheet }, { label: 'Choose another job', primary: true, onClick: function () { binding.booking = null; binding.bookingId = null; renderJobChip(); openJobPicker(); } }]);
+        return;
+      }
+      if (binding.save && !binding.save.allowed) {
+        sheetText(body, (binding.save.reason || 'Saving estimates to jobs isn’t turned on yet.') + ' You can keep using the calculator.', 'pc-field-error');
+        sheetButtons(body, [{ label: 'Close', onClick: closeSheet }]);
         return;
       }
       if (binding.storageReady === false) {
