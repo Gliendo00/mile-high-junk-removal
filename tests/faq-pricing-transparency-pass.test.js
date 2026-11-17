@@ -209,6 +209,18 @@ test("castle-rock-junk-removal.html: visible FAQ text matches FAQPage schema exa
   assert.ok(/up to 1 hour of labor included/i.test(answer), "cost FAQ must state the included labor allowance");
 });
 
+for (const [slug, city] of [["arvada", "Arvada"], ["englewood", "Englewood"], ["westminster", "Westminster"], ["parker", "Parker"], ["broomfield", "Broomfield"]]) {
+  test(`${slug}-junk-removal.html: visible FAQ text matches FAQPage schema exactly, and the cost FAQ uses the verified $100-$600 trailer pricing`, () => {
+    const rel = `${slug}-junk-removal.html`;
+    const content = readPage(rel);
+    const faq = assertVisibleMatchesSchema(rel, content);
+    const answer = faq.mainEntity.find((q) => q.name === `How much does junk removal in ${city} cost?`).acceptedAnswer.text;
+    assert.ok(answer.includes("$100 minimum") && answer.includes("$600 full load"), "cost FAQ must state the $100 minimum / $600 full load range");
+    assert.ok(/up to 1 hour of labor included/i.test(answer), "cost FAQ must state the included labor allowance");
+    assert.ok(/confirmed on-site before anything is loaded/i.test(answer), "cost FAQ must say the price is confirmed on-site");
+  });
+}
+
 // ---------------------------------------------------------------------
 async function main() {
   let failed = 0;
