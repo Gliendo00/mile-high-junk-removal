@@ -497,6 +497,36 @@ module.exports = async (req, res) => {
   }
 };
 
+// Returning-client address fix — a client created from the CRM's
+// "+ Create Client" sheet never has an address on file (that sheet only
+// asks for name/phone/email), and a job's service address was only ever
+// written onto the job itself, so the client record stayed blank forever
+// and every later job for them had to be retyped. After a NEW job or
+// estimate is created, copy its service address onto the client — but
+// ONLY when the client has no address on file yet (`.is("address", null)`
+// is part of the UPDATE's own filter, so an existing address is never
+// overwritten, even under a race). The booking's own service_* snapshot is
+// untouched. Best-effort: a failure here is logged and never fails or
+// rolls back the job/estimate that was already created.
+async function backfillCustomerAddressIfMissing(supabase, customerId, row) {
+  if (!customerId || !row || !row.service_address) return;
+  try {
+    const { error } = await supabase
+      .from("customers")
+      .update({
+        address: row.service_address,
+        city: row.service_city || null,
+        state: row.service_state || null,
+        zip: row.service_zip || null,
+      })
+      .eq("id", customerId)
+      .is("address", null);
+    if (error) console.error("Admin create: could not backfill client address:", error);
+  } catch (err) {
+    console.error("Admin create: could not backfill client address:", err && err.stack ? err.stack : err);
+  }
+}
+
 // ---------------------------------------------------------------------
 // Create a job — POST /api/admin/booking. Creates one bookings row for an
 // already-identified client (see api/admin/client.js for finding/creating
@@ -1046,6 +1076,7 @@ async function handleCreate(req, res, session) {
           leadUpdateError = "The job was created, but the originating lead could not be updated.";
         }
       }
+      await backfillCustomerAddressIfMissing(supabase, effectiveCustomerId, created);
     }
 
     let dumpsterResponse = null;
@@ -1422,6 +1453,8 @@ async function handleCreateEstimate(req, res, session) {
       .select(ESTIMATE_SELECT_COLS)
       .single();
     if (insertRes.error) throw insertRes.error;
+
+    await backfillCustomerAddressIfMissing(supabase, customerId, insertRes.data);
 
     res.status(200).json({ ok: true, estimate: mapEstimate(insertRes.data) });
   } catch (err) {

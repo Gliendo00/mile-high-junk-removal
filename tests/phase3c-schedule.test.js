@@ -927,6 +927,9 @@ test("write-audit: exactly the known .update(/.insert(/.upsert(/.delete( calls â
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
       "api/admin/booking.js: .update(",
+      // Returning-client address fix added exactly one more: backfillCustomerAddressIfMissing()'s
+      // customers address write (only when the client has no address yet).
+      "api/admin/booking.js: .update(",
       // Batch 2C added exactly one new upsert â€” handleUpdate()'s
       // dumpster_rentals write, keyed onConflict: "booking_id" (a real
       // UNIQUE constraint, Phase 1). See

@@ -216,6 +216,28 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // Returning-client address prefill (admin/client-address-prefill.js):
+  // loads the selected client's address on file (or their last job's
+  // service address) and fills the empty Service Address fields. When the
+  // client genuinely has an address on file, it's also copied onto
+  // selectedClient so the "Same as client's address on file" checkbox
+  // below can be enabled — search results alone never carry it.
+  var prefillClientAddress = window.AdminClientAddressPrefill
+    ? window.AdminClientAddressPrefill.attach(
+        { address: serviceAddressInput, city: serviceCityInput, state: serviceStateInput, zip: serviceZipInput },
+        {
+          onLoaded: function (addr) {
+            if (!addr || addr.source !== 'file' || !selectedClient) return;
+            selectedClient.address = addr.address;
+            selectedClient.city = addr.city;
+            selectedClient.state = addr.state;
+            selectedClient.zip = addr.zip;
+            sameAsClientRow.disabled = false;
+          },
+        }
+      )
+    : function () {};
+
   function onClientSelect(client, warnings) {
     selectedClient = client;
     if (client && warnings && warnings.length) {
@@ -228,6 +250,7 @@ document.addEventListener('DOMContentLoaded', function () {
       sameAsClientRow.disabled = true;
       sameAsClientRow.checked = false;
     }
+    prefillClientAddress(client);
   }
 
   // Estimate workflow — Lead -> Job direct ("Book Job" on Lead Detail,

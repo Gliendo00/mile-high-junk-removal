@@ -210,12 +210,18 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // Returning-client address prefill — see admin/client-address-prefill.js.
+  var prefillClientAddress = window.AdminClientAddressPrefill
+    ? window.AdminClientAddressPrefill.attach({ address: serviceAddressInput, city: serviceCityInput, state: serviceStateInput, zip: serviceZipInput })
+    : function () {};
+
   window.AdminClientPicker.mount(clientPickerMount, {
     onSelect: function (client, warnings) {
       selectedClient = client;
       if (client && warnings && warnings.length) {
         showToast('Note: this client shares contact info with an existing client.', 'error');
       }
+      prefillClientAddress(client);
     },
   });
 

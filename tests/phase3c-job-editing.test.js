@@ -1111,10 +1111,12 @@ test("admin/booking.js write-audit stays exact: this stage's one new .update( ca
   // its own invoice (NOT via the shared finalize action) auto-finalize —
   // all three only reachable from the new ?resource=charges PATCH
   // {action:"invoice"} path. See tests/phase5-dumpster-charges-refunds.test.js.
+  // The returning-client address fix added one more: backfillCustomerAddressIfMissing()'s
+  // customers address write, only when the client has no address on file yet.
   assert.strictEqual(
     updateCalls,
-    41,
-    "booking.js must have exactly 41 .update( calls (32 as of Phase 2 Core Invoicing + 6 Phase 3 handleSendInvoice claim acquire/release sites + 3 Phase 5 closeout-invoicing writes) — anything else needs deliberate review"
+    42,
+    "booking.js must have exactly 42 .update( calls (32 as of Phase 2 Core Invoicing + 6 Phase 3 handleSendInvoice claim acquire/release sites + 3 Phase 5 closeout-invoicing writes + 1 returning-client address backfill) — anything else needs deliberate review"
   );
 });
 

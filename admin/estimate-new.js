@@ -141,6 +141,24 @@ document.addEventListener('DOMContentLoaded', function () {
   var leadId = getQueryParam('leadId');
   var sourceLead = null; // the full lead record, once fetched — only set when leadId is present
 
+  // Returning-client address prefill — see admin/client-address-prefill.js
+  // and admin/booking-new.js's identical wiring.
+  var prefillClientAddress = window.AdminClientAddressPrefill
+    ? window.AdminClientAddressPrefill.attach(
+        { address: serviceAddressInput, city: serviceCityInput, state: serviceStateInput, zip: serviceZipInput },
+        {
+          onLoaded: function (addr) {
+            if (!addr || addr.source !== 'file' || !selectedClient) return;
+            selectedClient.address = addr.address;
+            selectedClient.city = addr.city;
+            selectedClient.state = addr.state;
+            selectedClient.zip = addr.zip;
+            sameAsClientRow.disabled = false;
+          },
+        }
+      )
+    : function () {};
+
   function onClientSelect(client, warnings) {
     selectedClient = client;
     if (client && warnings && warnings.length) {
@@ -153,6 +171,7 @@ document.addEventListener('DOMContentLoaded', function () {
       sameAsClientRow.disabled = true;
       sameAsClientRow.checked = false;
     }
+    prefillClientAddress(client);
   }
 
   // Carries forward everything already known about the Lead: client
