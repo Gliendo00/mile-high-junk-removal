@@ -25,7 +25,7 @@ const topLevelHtml = fs.readdirSync(SITE_DIR)
 const files = topLevelHtml.concat(["book/index.html"]);
 
 assert.ok(files.includes("about.html"), "about.html must exist in the target set");
-assert.strictEqual(files.length, 58, `expected exactly 58 target files, found ${files.length}: ${files.join(", ")}`);
+assert.strictEqual(files.length, 60, `expected exactly 60 target files, found ${files.length}: ${files.join(", ")}`);
 
 let checked = 0;
 
@@ -60,7 +60,7 @@ for (const rel of files) {
   }
 }
 
-assert.strictEqual(checked, 58, `expected to check 58 files, checked ${checked}`);
+assert.strictEqual(checked, 60, `expected to check 60 files, checked ${checked}`);
 
 // --- Homepage #why-us section must remain completely intact ---------------
 
