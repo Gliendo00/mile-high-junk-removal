@@ -294,7 +294,7 @@ module.exports = async (req, res) => {
   // Always reflects the lead's own success, never the email's — see the
   // header comment and Goal 1's "email failure behavior" requirement.
   logEvent(correlationId, "contact.success", { leadId: leadId });
-  res.status(200).json({ ok: true });
+  res.status(200).json(looksLikeSolicitation ? { ok: true, notice: "solicitation" } : { ok: true });
 };
 
 // "Jane Doe" -> { firstName: "Jane", lastName: "Doe" }. "Jane" (no space)

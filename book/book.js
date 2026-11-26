@@ -886,6 +886,15 @@ document.addEventListener('DOMContentLoaded', function () {
     reviewContent.style.display = 'none';
     successTitleEl.textContent = successTitle;
     successBodyEl.innerHTML = successBodyText; // fixed, developer-authored copy only — never customer input
+    // Likely sales pitch (see isLikelySolicitation in
+    // api/_lib/spam-protection.js): add the "customers only" notice.
+    if (body && body.notice === 'solicitation' && !document.getElementById('wizard-solicitation-notice')) {
+      var notice = document.createElement('p');
+      notice.id = 'wizard-solicitation-notice';
+      notice.style.cssText = 'margin:0;padding:10px 12px;border-left:3px solid #b45309;background:#fff7ed;border-radius:6px;font-size:14px;color:#7c2d12;margin-top:12px';
+      notice.textContent = 'Heads up: this form is only for junk removal customers. We don’t reply to sales, marketing, SEO, or partnership offers sent here. If you do need junk hauled away, we got your request and will reach out soon.';
+      successBodyEl.parentNode.insertBefore(notice, successBodyEl.nextSibling);
+    }
     successBox.classList.add('is-visible');
 
     // GA4: the most important conversion event. Fires exactly once, only

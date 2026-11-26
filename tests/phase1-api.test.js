@@ -585,6 +585,7 @@ async function main() {
     const res = await run(contactHandler, makeReq(payload, null, "198.51.100.40"));
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.ok, true);
+    assert.strictEqual(res.body.notice, "solicitation", "the form should show the customers-only notice");
     const inserts = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; });
     assert.strictEqual(inserts.length, 0, "no customer or lead should be created for a pitch");
     assert.strictEqual(fetchCalls.length, before + 1, "the pitch must still be emailed");
@@ -598,6 +599,7 @@ async function main() {
     const payload = { name: "Sam Homeowner", email: "sam@example.com", phone: "303-555-0111", message: "Old fridge and a treadmill in the basement.", hp: "", elapsedMs: 10000 };
     const res = await run(contactHandler, makeReq(payload, null, "198.51.100.41"));
     assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.notice, undefined, "real customers never see the notice");
     const tables = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; }).map(function (c) { return c.table; });
     assert.deepStrictEqual(tables, ["customers", "leads"]);
     const sentBody = JSON.parse(fetchCalls[fetchCalls.length - 1].opts.body);
@@ -614,6 +616,7 @@ async function main() {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.ok, true);
     assert.ok(!res.body.uploadToken, "no booking exists, so no upload token");
+    assert.strictEqual(res.body.notice, "solicitation");
     const inserts = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; });
     assert.strictEqual(inserts.length, 0, "no customer or booking should be created for a pitch");
     assert.strictEqual(fetchCalls.length, before + 1, "the pitch must still be emailed");

@@ -341,7 +341,7 @@ module.exports = async (req, res) => {
     )) {
       logEvent(correlationId, "book.solicitation_skipped_crm", { serviceType: data.serviceType });
       await sendBookingNotificationEmail(data, null, { solicitation: true });
-      res.status(200).json({ ok: true });
+      res.status(200).json({ ok: true, notice: "solicitation" });
       return;
     }
 

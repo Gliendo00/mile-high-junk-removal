@@ -328,6 +328,7 @@
             <div class="card-title">Got it!</div>
           </div>
           <p class="card-body">Thanks — we've got your request and will get back to you shortly. Need something faster? Call or text <a href="tel:3039901812">303-990-1812</a>.</p>
+          <p id="cf-solicitation-notice" hidden style="margin:0;padding:10px 12px;border-left:3px solid #b45309;background:#fff7ed;border-radius:6px;font-size:14px;color:#7c2d12">Heads up: this form is only for junk removal customers. We don&rsquo;t reply to sales, marketing, SEO, or partnership offers sent here. If you do need junk hauled away, we got your request and will reach out soon.</p>
         </div>
       </div>
     </div>
@@ -440,8 +441,14 @@
             err.isServerMessage = !!(body && body.error);
             throw err;
           }
+          return body;
         });
-      }).then(function () {
+      }).then(function (body) {
+        // Likely sales pitch (see isLikelySolicitation in
+        // api/_lib/spam-protection.js): show the "customers only" notice.
+        if (body && body.notice === 'solicitation') {
+          document.getElementById('cf-solicitation-notice').hidden = false;
+        }
         trackLead();
         form.style.display = 'none';
         successBox.style.display = 'flex';
