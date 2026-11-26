@@ -884,6 +884,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var paymentPanelEl = document.getElementById('payment-panel');
     if (paymentPanelEl) paymentPanelEl.hidden = true;
     reviewContent.style.display = 'none';
+    var customersOnlyEl = document.getElementById('wizard-customers-only');
+    if (customersOnlyEl) customersOnlyEl.hidden = true;
     successTitleEl.textContent = successTitle;
     successBodyEl.innerHTML = successBodyText; // fixed, developer-authored copy only — never customer input
     // Likely sales pitch (see isLikelySolicitation in
