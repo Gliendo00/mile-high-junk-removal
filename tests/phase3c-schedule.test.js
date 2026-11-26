@@ -385,10 +385,13 @@ test("GET schedule: never leaks the service-role key or anon key", async () => {
 // =======================================================================
 // 2. Which bookings appear: status/date architecture (no second status field)
 // =======================================================================
-test("GET schedule: only 'booked', 'rental_out', and 'completed' bookings ever appear — new/contacted/quoted/lost never do, even with a matching date", async () => {
+// 2026-11-26: "new" now appears too (a dated /book/ website booking arrives
+// as "new" and must be visible on the Schedule) — see SCHEDULE_VIEW_STATUSES
+// in api/admin/bookings.js. contacted/quoted/lost still never do.
+test("GET schedule: 'new', 'booked', 'rental_out', and 'completed' bookings appear — contacted/quoted/lost never do, even with a matching date", async () => {
   adminAuthed();
   const db = freshDb([
-    booking({ id: "1", status: null, appointment_date: TODAY }), // NULL = "new"
+    booking({ id: "1", status: "new", appointment_date: TODAY }),
     booking({ id: "2", status: "contacted", appointment_date: TODAY }),
     booking({ id: "3", status: "quoted", appointment_date: TODAY }),
     booking({ id: "4", status: "lost", appointment_date: TODAY }),
@@ -402,7 +405,10 @@ test("GET schedule: only 'booked', 'rental_out', and 'completed' bookings ever a
   const res = await getSchedule(db, "mhjr_admin_at=at-good", { range: "today" });
   assert.strictEqual(res.statusCode, 200);
   const ids = res.body.jobs.map((j) => j.id).sort();
-  assert.deepStrictEqual(ids, ["5", "6", "7"]);
+  assert.deepStrictEqual(ids, ["1", "5", "6", "7"]);
+  const newJob = res.body.jobs.find((j) => j.id === "1");
+  assert.strictEqual(newJob.status, "new");
+  assert.strictEqual(newJob.revenueAmount, null, "a New request is never Revenue");
 });
 
 // =======================================================================

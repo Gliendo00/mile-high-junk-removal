@@ -35,6 +35,15 @@ const MAX_LIMIT = 200;
 // same as "booked", just further along the rental lifecycle
 // (booked -> rental_out -> completed).
 const SCHEDULABLE_STATUSES = ["booked", "rental_out", "completed"];
+// 2026-11-26: "new" also shows on the Schedule (Day/Week/Month/Year and
+// Home's Today list). A /book/ junk-removal or light-demo booking arrives as
+// "new" WITH a date the client picked; hiding it until someone changed its
+// status made real website bookings look like they never reached the CRM.
+// It renders with its green "New" badge, and the Revenue/Booked totals
+// (admin/schedule-financials.js, admin/home.js) still count only
+// booked/rental_out/completed, so a New request never inflates them.
+// contacted/quoted/lost stay off the Schedule.
+const SCHEDULE_VIEW_STATUSES = ["new"].concat(SCHEDULABLE_STATUSES);
 // Phase 3C Stage 2.4: "week" became a navigable calendar week (see
 // handleSchedule below) rather than the Stage 1 rolling 7-day window: the
 // week starts on Sunday and moves with an explicit ?weekStart= param, but
@@ -1586,7 +1595,7 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
     .select(
       "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, is_complimentary, complimentary_value, complimentary_reason, complimentary_note, customer_id, service_address, service_city, service_state, service_zip"
     )
-    .in("status", SCHEDULABLE_STATUSES)
+    .in("status", SCHEDULE_VIEW_STATUSES)
     .gte("appointment_date", startDate)
     .lte("appointment_date", endDate)
     // Batch 2: archived jobs disappear from every active Schedule view —
@@ -1873,7 +1882,7 @@ async function handleYear(req, res, supabase, todayIso) {
     const bookingsRes = await supabase
       .from("bookings")
       .select("id, appointment_date, service_type")
-      .in("status", SCHEDULABLE_STATUSES)
+      .in("status", SCHEDULE_VIEW_STATUSES)
       .gte("appointment_date", startDate)
       .lte("appointment_date", endDate)
       .is("archived_at", null); // Batch 2: same exclusion as fetchScheduleJobs()
