@@ -89,4 +89,54 @@ function isSubmittedTooFast(elapsedMs, minMs) {
   return n < minMs;
 }
 
-module.exports = { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast };
+// Likely B2B sales/marketing pitches typed by a real person into a customer
+// form (SEO, web design, ad agencies, lead-gen, etc.). These are human-typed,
+// so the honeypot and fill-time checks above never catch them. Callers keep
+// matching submissions OUT of the CRM but still email them, tagged, so a real
+// customer who happens to trip a pattern is never silently lost.
+const SOLICITATION_PATTERNS = [
+  /\bseo\b/i,
+  /search engine optimi[sz]ation/i,
+  /backlink/i,
+  /guest post/i,
+  /link building/i,
+  /web(site)? (design|development|redesign|audit)/i,
+  /digital marketing/i,
+  /social media (marketing|management)/i,
+  /\bppc\b/i,
+  /google ads/i,
+  /google (my )?business profile/i,
+  /google maps (ranking|listing)/i,
+  /(first|1st) page (of|on) google/i,
+  /page (1|one) (of|on) google/i,
+  /marketing agency/i,
+  /increase (your )?(website )?traffic/i,
+  /(improve|boost) your (search |google )?ranking/i,
+  /rank (higher|#?1) (on|in) google/i,
+  /grow your business/i,
+  /(leads|customers|calls|jobs) for your (business|company)/i,
+  /partnership opportunity/i,
+  /collaboration opportunity/i,
+  /sponsor(ship)?/i,
+  /advertis(e|ing) (on|with)/i,
+  /email marketing/i,
+  /lead generation/i,
+  /content (writing|marketing)/i,
+  /press release/i,
+  /influencer/i,
+  /virtual assistant/i,
+  /answering service/i,
+  /merchant (services|processing)/i,
+  /business (loan|funding|financing)/i,
+];
+
+// True when any argument is a string matching a solicitation pattern.
+// Non-string values (missing optional fields) are ignored.
+function isLikelySolicitation() {
+  const texts = Array.prototype.slice.call(arguments);
+  return texts.some(function (t) {
+    return typeof t === "string" && t.length > 0 && SOLICITATION_PATTERNS.some(function (p) { return p.test(t); });
+  });
+}
+
+module.exports = { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast, isLikelySolicitation, SOLICITATION_PATTERNS };

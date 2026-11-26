@@ -33,7 +33,7 @@
 // milehighjunkremoval.net domain) and CONTACT_TO_EMAIL (defaults to
 // contact@milehighjunkremoval.net).
 const { createClient } = require("@supabase/supabase-js");
-const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
+const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast, isLikelySolicitation } = require("./_lib/spam-protection");
 const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getCorrelationId, logEvent } = require("./_lib/correlation-id");
 
@@ -130,142 +130,120 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Flag (never block) likely B2B sales/marketing pitches sent through the
-  // quote form, so they're easy to spot and filter instead of being
-  // mistaken for a real lead. Unchanged from before this commit — still
-  // affects only the notification email's subject line, never whether the
-  // lead is created.
-  const SOLICITATION_PATTERNS = [
-    /\bseo\b/i,
-    /search engine optimi[sz]ation/i,
-    /backlink/i,
-    /guest post/i,
-    /link building/i,
-    /web(site)? (design|development)/i,
-    /digital marketing/i,
-    /social media (marketing|management)/i,
-    /\bppc\b/i,
-    /google ads/i,
-    /marketing agency/i,
-    /increase (your )?(website )?traffic/i,
-    /(improve|boost) your (search )?ranking/i,
-    /rank (higher|#?1) (on|in) google/i,
-    /grow your business/i,
-    /partnership opportunity/i,
-    /collaboration opportunity/i,
-    /sponsor(ship)?/i,
-    /advertis(e|ing) (on|with)/i,
-    /email marketing/i,
-    /lead generation/i,
-    /content (writing|marketing)/i,
-    /press release/i,
-    /influencer/i,
-  ];
-  const isLikelySolicitation = SOLICITATION_PATTERNS.some(
-    (pattern) => pattern.test(cleanMessage || "") || pattern.test(cleanName || "")
-  );
-
-  const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
-
-  const phoneNorm = normalizePhone(cleanPhone);
-  const emailNorm = normalizeEmail(cleanEmail);
-
-  // Repeat-client reuse — identical rule and failure posture to api/book.js's
-  // own public lookup (see that file's Step 4a.3 header comment): only ever
-  // reuses when exactly one existing customer matches BOTH normalized phone
-  // and normalized email; any lookup failure falls open to creating a new
-  // customer rather than ever blocking the submission.
-  let customerId = null;
-  try {
-    const { data: matches, error } = await supabase
-      .from("customers")
-      .select("id")
-      .eq("phone_normalized", phoneNorm)
-      .eq("email_normalized", emailNorm);
-    if (!error && Array.isArray(matches) && matches.length === 1) {
-      customerId = matches[0].id;
-    }
-  } catch (err) {
-    console.error("[" + correlationId + "] contact.customer_lookup_failed (falling open to new customer):", err);
+  // Likely B2B sales/marketing pitch (SEO, web design, ad agencies, etc.).
+  // Kept OUT of the CRM (no customer or lead row is created) so pitches stop
+  // showing up as leads, but the notification email is still sent below,
+  // tagged "[Possible Solicitation]", so a real customer who happens to trip
+  // a pattern is never silently lost. The visitor sees the normal success
+  // response either way. See isLikelySolicitation in api/_lib/spam-protection.js.
+  const looksLikeSolicitation = isLikelySolicitation(cleanMessage, cleanName);
+  if (looksLikeSolicitation) {
+    logEvent(correlationId, "contact.solicitation_skipped_crm");
   }
 
-  if (customerId === null) {
+  let leadId = null;
+  if (!looksLikeSolicitation) {
+    const supabase = createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false } });
+
+    const phoneNorm = normalizePhone(cleanPhone);
+    const emailNorm = normalizeEmail(cleanEmail);
+
+    // Repeat-client reuse — identical rule and failure posture to api/book.js's
+    // own public lookup (see that file's Step 4a.3 header comment): only ever
+    // reuses when exactly one existing customer matches BOTH normalized phone
+    // and normalized email; any lookup failure falls open to creating a new
+    // customer rather than ever blocking the submission.
+    let customerId = null;
     try {
-      const { data: customerRow, error } = await supabase
+      const { data: matches, error } = await supabase
         .from("customers")
-        .insert({
-          first_name: splitName(cleanName).firstName,
-          last_name: splitName(cleanName).lastName,
-          phone: cleanPhone,
-          email: cleanEmail,
-          phone_normalized: phoneNorm,
-          email_normalized: emailNorm,
-        })
         .select("id")
-        .single();
-      if (error || !customerRow) {
-        console.error("[" + correlationId + "] contact.customer_create_failed:", error);
+        .eq("phone_normalized", phoneNorm)
+        .eq("email_normalized", emailNorm);
+      if (!error && Array.isArray(matches) && matches.length === 1) {
+        customerId = matches[0].id;
+      }
+    } catch (err) {
+      console.error("[" + correlationId + "] contact.customer_lookup_failed (falling open to new customer):", err);
+    }
+
+    if (customerId === null) {
+      try {
+        const { data: customerRow, error } = await supabase
+          .from("customers")
+          .insert({
+            first_name: splitName(cleanName).firstName,
+            last_name: splitName(cleanName).lastName,
+            phone: cleanPhone,
+            email: cleanEmail,
+            phone_normalized: phoneNorm,
+            email_normalized: emailNorm,
+          })
+          .select("id")
+          .single();
+        if (error || !customerRow) {
+          console.error("[" + correlationId + "] contact.customer_create_failed:", error);
+          res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
+          return;
+        }
+        customerId = customerRow.id;
+        logEvent(correlationId, "contact.customer_created", { customerId: customerId });
+      } catch (err) {
+        console.error("[" + correlationId + "] contact.customer_create_failed:", err);
         res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
         return;
       }
-      customerId = customerRow.id;
-      logEvent(correlationId, "contact.customer_created", { customerId: customerId });
-    } catch (err) {
-      console.error("[" + correlationId + "] contact.customer_create_failed:", err);
-      res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
-      return;
+    } else {
+      logEvent(correlationId, "contact.customer_reused", { customerId: customerId });
     }
-  } else {
-    logEvent(correlationId, "contact.customer_reused", { customerId: customerId });
-  }
 
-  // The lead itself — the durable CRM record. `source: "website"` is the
-  // one new value this commit adds to leads.source's CHECK constraint (see
-  // the migration referenced above); status defaults to the same 'new'
-  // every other fresh lead starts at, so it appears in the Leads
-  // workspace's existing "New" bucket with no UI changes needed.
-  // created_by has no authenticated admin session to record here (this is
-  // an unauthenticated public endpoint) — "website" is used as the fixed,
-  // literal value, parallel to how `source` already identifies the channel.
-  const { firstName, lastName } = splitName(cleanName);
-  let leadId;
-  try {
-    const { data: leadRow, error } = await supabase
-      .from("leads")
-      .insert({
-        created_by: "website",
-        source: "website",
-        status: "new",
-        first_name: firstName,
-        last_name: lastName,
-        phone: cleanPhone,
-        phone_normalized: phoneNorm,
-        email: cleanEmail,
-        service_details: cleanMessage || null,
-        matched_customer_id: customerId,
-      })
-      .select("id")
-      .single();
-    if (error || !leadRow) {
-      console.error("[" + correlationId + "] contact.lead_create_failed:", error);
+    // The lead itself — the durable CRM record. `source: "website"` is the
+    // one new value this commit adds to leads.source's CHECK constraint (see
+    // the migration referenced above); status defaults to the same 'new'
+    // every other fresh lead starts at, so it appears in the Leads
+    // workspace's existing "New" bucket with no UI changes needed.
+    // created_by has no authenticated admin session to record here (this is
+    // an unauthenticated public endpoint) — "website" is used as the fixed,
+    // literal value, parallel to how `source` already identifies the channel.
+    const { firstName, lastName } = splitName(cleanName);
+    try {
+      const { data: leadRow, error } = await supabase
+        .from("leads")
+        .insert({
+          created_by: "website",
+          source: "website",
+          status: "new",
+          first_name: firstName,
+          last_name: lastName,
+          phone: cleanPhone,
+          phone_normalized: phoneNorm,
+          email: cleanEmail,
+          service_details: cleanMessage || null,
+          matched_customer_id: customerId,
+        })
+        .select("id")
+        .single();
+      if (error || !leadRow) {
+        console.error("[" + correlationId + "] contact.lead_create_failed:", error);
+        res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
+        return;
+      }
+      leadId = leadRow.id;
+      logEvent(correlationId, "contact.lead_created", { leadId: leadId });
+    } catch (err) {
+      console.error("[" + correlationId + "] contact.lead_create_failed:", err);
       res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
       return;
     }
-    leadId = leadRow.id;
-    logEvent(correlationId, "contact.lead_created", { leadId: leadId });
-  } catch (err) {
-    console.error("[" + correlationId + "] contact.lead_create_failed:", err);
-    res.status(500).json({ error: "Could not submit your request. Please try again or call us at 303-990-1812." });
-    return;
   }
 
   // From here on, the request has definitively succeeded — the lead is
-  // durably saved. Everything below (the notification email) is
+  // durably saved (or, for a likely solicitation, deliberately not saved). Everything below (the notification email) is
   // best-effort: its failure is logged and never changes the response or
   // un-saves the lead.
   const subjectFlags = [];
   if (isSuspiciouslyFast) subjectFlags.push("[Fast Submission]");
-  if (isLikelySolicitation) subjectFlags.push("[Possible Solicitation]");
+  if (looksLikeSolicitation) subjectFlags.push("[Possible Solicitation]");
   const subjectPrefix = subjectFlags.length ? subjectFlags.join(" ") + " " : "";
 
   const attachments = Array.isArray(photos)
@@ -279,6 +257,9 @@ module.exports = async (req, res) => {
   const toEmail = process.env.CONTACT_TO_EMAIL || "contact@milehighjunkremoval.net";
 
   const html =
+    (looksLikeSolicitation
+      ? "<p><em>This looks like a sales/marketing pitch, so it was NOT added to the CRM. If it is a real customer, add them as a lead manually.</em></p>"
+      : "") +
     "<p><strong>New quote request from the website</strong></p>" +
     "<p><strong>Name:</strong> " + escapeHtml(cleanName) + "</p>" +
     "<p><strong>Phone:</strong> " + escapeHtml(cleanPhone || "—") + "</p>" +

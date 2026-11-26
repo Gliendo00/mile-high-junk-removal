@@ -575,6 +575,77 @@ async function main() {
     assert.strictEqual(last.statusCode, 429);
   });
 
+  // Solicitation handling: a human-typed sales pitch is kept out of the CRM
+  // (no customer/lead/booking rows) but still emailed, tagged, so a real
+  // customer who trips a pattern is never silently lost.
+  test("contact: sales pitch is emailed with [Possible Solicitation] but creates no CRM rows", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const before = fetchCalls.length;
+    const payload = { name: "Alex Growth", email: "alex@agency.example", phone: "303-555-0110", message: "We can get you on the first page of Google with our SEO services.", hp: "", elapsedMs: 10000 };
+    const res = await run(contactHandler, makeReq(payload, null, "198.51.100.40"));
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.ok, true);
+    const inserts = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; });
+    assert.strictEqual(inserts.length, 0, "no customer or lead should be created for a pitch");
+    assert.strictEqual(fetchCalls.length, before + 1, "the pitch must still be emailed");
+    const sentBody = JSON.parse(fetchCalls[fetchCalls.length - 1].opts.body);
+    assert.ok(sentBody.subject.indexOf("[Possible Solicitation]") !== -1);
+    assert.ok(sentBody.html.indexOf("NOT added to the CRM") !== -1);
+  });
+
+  test("contact: a real quote request still creates customer + lead rows", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const payload = { name: "Sam Homeowner", email: "sam@example.com", phone: "303-555-0111", message: "Old fridge and a treadmill in the basement.", hp: "", elapsedMs: 10000 };
+    const res = await run(contactHandler, makeReq(payload, null, "198.51.100.41"));
+    assert.strictEqual(res.statusCode, 200);
+    const tables = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; }).map(function (c) { return c.table; });
+    assert.deepStrictEqual(tables, ["customers", "leads"]);
+    const sentBody = JSON.parse(fetchCalls[fetchCalls.length - 1].opts.body);
+    assert.ok(sentBody.subject.indexOf("[Possible Solicitation]") === -1);
+  });
+
+  test("book: sales pitch in the booking wizard is emailed, tagged, and never saved as a booking", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const before = fetchCalls.length;
+    const payload = validJunkRemovalPayload({
+      jobDetails: { itemsDescription: "Not junk - we are a digital marketing agency and can send more leads for your business", location: "N/A", stairs: "none", additionalDetails: "" },
+    });
+    const res = await run(bookHandler, makeReq(payload, null, "198.51.100.42"));
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.ok, true);
+    assert.ok(!res.body.uploadToken, "no booking exists, so no upload token");
+    const inserts = currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; });
+    assert.strictEqual(inserts.length, 0, "no customer or booking should be created for a pitch");
+    assert.strictEqual(fetchCalls.length, before + 1, "the pitch must still be emailed");
+    const sentBody = JSON.parse(fetchCalls[fetchCalls.length - 1].opts.body);
+    assert.ok(sentBody.subject.indexOf("[Possible Solicitation]") === 0);
+    assert.ok(sentBody.html.indexOf("NOT added to the CRM") !== -1);
+  });
+
+  test("book: pitch in the name field (light demo) is also caught", async function () {
+    currentFakeSupabase = createFakeSupabase();
+    const customer = Object.assign(validCustomer(), { firstName: "Jordan", lastName: "(SEO Agency)" });
+    const res = await run(bookHandler, makeReq(validLightDemoPayload({ customer: customer }), null, "198.51.100.43"));
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(currentFakeSupabase.calls.filter(function (c) { return c.op === "insert"; }).length, 0);
+  });
+
+  test("solicitation patterns: ordinary junk removal requests are not flagged", async function () {
+    const { isLikelySolicitation } = require("../api/_lib/spam-protection");
+    const real = [
+      "Old couch and mattress in the garage",
+      "Cleaning out my office, desks and filing cabinets",
+      "Hot tub removal, backyard, side gate access",
+      "Estate cleanout, 3 bedroom house, lots of furniture",
+      "Construction debris from a kitchen remodel",
+      "Need a dumpster for a roof tear off",
+      "Moving out, need everything in the basement gone",
+    ];
+    real.forEach(function (t) { assert.strictEqual(isLikelySolicitation(t), false, "falsely flagged: " + t); });
+    assert.strictEqual(isLikelySolicitation(undefined, null, ""), false);
+    assert.strictEqual(isLikelySolicitation("I run a web design studio, can we chat?"), true);
+  });
+
   const settled = [];
   for (const t of registered) {
     try {

@@ -84,7 +84,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 const crypto = require("crypto");
-const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast } = require("./_lib/spam-protection");
+const { getClientIp, isRateLimited, isHoneypotTripped, isSubmittedTooFast, isLikelySolicitation } = require("./_lib/spam-protection");
 const { normalizePhone, normalizeEmail } = require("./_lib/customer-identity");
 const { getStripeClient } = require("./_lib/stripe-client");
 const rentalPricing = require("./_lib/rental-pricing");
@@ -323,6 +323,26 @@ module.exports = async (req, res) => {
     // through to the existing flow, byte-for-byte unchanged.
     if (data.serviceType === "dumpster_rental") {
       return handleDumpsterRentalBooking(res, supabase, data);
+    }
+
+    // Likely B2B sales/marketing pitch typed into the booking wizard (SEO,
+    // web design, ad agencies, etc.). No customer or booking row is created,
+    // so it never lands on the Schedule as a New booking, but the
+    // notification email is still sent, tagged "[Possible Solicitation]", so
+    // a real customer who happens to trip a pattern is never silently lost.
+    // The visitor sees the normal success screen (no uploadToken, since there
+    // is no booking to attach photos to). dumpster_rental is excluded above:
+    // it requires a real card payment, which pitches never make. See
+    // isLikelySolicitation in api/_lib/spam-protection.js.
+    const j = data.jobDetails || {};
+    if (isLikelySolicitation(
+      data.customer.firstName, data.customer.lastName,
+      j.itemsDescription, j.demoDescription, j.location, j.additionalDetails
+    )) {
+      logEvent(correlationId, "book.solicitation_skipped_crm", { serviceType: data.serviceType });
+      await sendBookingNotificationEmail(data, null, { solicitation: true });
+      res.status(200).json({ ok: true });
+      return;
     }
 
     // Goal 3 idempotency (junk_removal/light_demo) — a client-generated key,
@@ -1515,7 +1535,8 @@ function withUploadToken(bookingId, body) {
 // handleDumpsterRentalBooking(), after a successful Stripe charge —
 // junk_removal/light_demo always call this with just `data`, and the
 // subject/body render exactly as before this stage for them.
-async function sendBookingNotificationEmail(data, paymentInfo) {
+async function sendBookingNotificationEmail(data, paymentInfo, options) {
+  const solicitation = !!(options && options.solicitation);
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
     console.error("Booking notification email skipped: RESEND_API_KEY is not configured.");
@@ -1538,8 +1559,11 @@ async function sendBookingNotificationEmail(data, paymentInfo) {
       body: JSON.stringify({
         from: fromEmail,
         to: [toEmail],
-        subject: subjectPrefix + serviceLabel + " — " + customerName,
-        html: buildBookingNotificationHtml(data, serviceLabel, customerName, paymentInfo),
+        subject: (solicitation ? "[Possible Solicitation] " : "") + subjectPrefix + serviceLabel + " — " + customerName,
+        html:
+          (solicitation
+            ? "<p><em>This looks like a sales/marketing pitch, so it was NOT added to the CRM or the Schedule. If it is a real customer, add the booking manually.</em></p>"
+            : "") + buildBookingNotificationHtml(data, serviceLabel, customerName, paymentInfo),
       }),
     });
 
