@@ -81,7 +81,8 @@ document.addEventListener('DOMContentLoaded', function () {
     a.appendChild(el('div', 'admin-client-avatar', initialsFor(c.firstName, c.lastName)));
 
     var textCol = el('div', 'admin-client-row-text');
-    textCol.appendChild(el('div', 'admin-client-row-name', [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client'));
+    var nameEl = textCol.appendChild(el('div', 'admin-client-row-name', [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client'));
+    if (window.ReviewBadge) window.ReviewBadge.append(nameEl, c.reviewStatus);
 
     var contactParts = [];
     if (c.phone) contactParts.push(formatPhone(c.phone));

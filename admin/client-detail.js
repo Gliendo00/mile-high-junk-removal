@@ -163,6 +163,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var name = [client.firstName, client.lastName].filter(Boolean).join(' ');
     set('c-name', name || 'Unnamed client');
+    applyHeroReviewStar();
     currentCountableJobCount = bookings.filter(function (b) { return b.serviceType !== 'dumpster_pickup'; }).length;
     set('c-subtitle', client.city ? client.city : (currentCountableJobCount + (currentCountableJobCount === 1 ? ' job on file' : ' jobs on file')));
 
@@ -214,6 +215,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     renderArchiveState(client);
+    renderReviewState();
 
     loadingEl.style.display = 'none';
     detailEl.style.display = 'block';
@@ -256,6 +258,96 @@ document.addEventListener('DOMContentLoaded', function () {
       archivedInfoEl.textContent = '';
     }
   }
+
+  // -----------------------------------------------------------------
+  // Google review status. "Requested" comes from the per-job "review
+  // request sent" checkbox on completed jobs; "received" is this page's
+  // own toggle (PATCH action review-received / review-clear).
+  // -----------------------------------------------------------------
+  var reviewBtn = document.getElementById('c-review-btn');
+  var reviewBusy = false;
+
+  function currentReview() {
+    return (currentClient && currentClient.review) || { status: 'none', trackingAvailable: true, requestSentCount: 0 };
+  }
+
+  function applyHeroReviewStar() {
+    if (!window.ReviewBadge || !currentClient) return;
+    window.ReviewBadge.append(document.getElementById('c-name'), currentReview().status);
+  }
+
+  function renderReviewState() {
+    var review = currentReview();
+    var iconHost = document.getElementById('c-review-icon');
+    while (iconHost.firstChild) iconHost.removeChild(iconHost.firstChild);
+    if (window.ReviewBadge) window.ReviewBadge.append(iconHost, review.status);
+
+    var sentCount = review.requestSentCount || 0;
+    var text;
+    var meta = '';
+    if (review.status === 'received') {
+      text = 'Review received';
+      meta = 'Marked ' + formatDateTime(review.receivedAt) + (review.receivedBy ? ' by ' + review.receivedBy : '');
+    } else if (review.status === 'requested') {
+      text = 'Review requested, not received yet';
+      meta = 'Request marked sent on ' + sentCount + (sentCount === 1 ? ' job' : ' jobs') + '.';
+    } else {
+      text = 'No review request sent yet';
+      meta = 'Mark a request sent from a completed job’s page.';
+    }
+    if (!review.trackingAvailable) {
+      meta = (meta ? meta + ' ' : '') + 'Saving "received" needs a one-time database update first.';
+    }
+    set('c-review-text', text);
+    set('c-review-meta', meta);
+
+    reviewBtn.textContent = review.status === 'received' ? 'Undo: Not Received Yet' : 'Mark Review Received';
+    reviewBtn.disabled = reviewBusy || !review.trackingAvailable;
+  }
+
+  reviewBtn.addEventListener('click', function () {
+    if (!currentClientId || reviewBusy) return;
+    var marking = currentReview().status !== 'received';
+    reviewBusy = true;
+    reviewBtn.disabled = true;
+    reviewBtn.textContent = 'Saving…';
+    adminFetch('/api/admin/client', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentClientId, action: marking ? 'review-received' : 'review-clear' }),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          window.location.href = '/admin/login/';
+          return null;
+        }
+        return res
+          .json()
+          .catch(function () { return null; })
+          .then(function (body) {
+            if (!res.ok) throw new Error((body && body.error) || 'Could not update the review status.');
+            return body;
+          });
+      })
+      .then(function (body) {
+        if (!body) return;
+        var review = Object.assign({}, currentReview(), {
+          receivedAt: body.reviewReceivedAt || null,
+          receivedBy: body.reviewReceivedBy || null,
+        });
+        review.status = review.receivedAt ? 'received' : (review.requestSentCount > 0 ? 'requested' : 'none');
+        currentClient = Object.assign({}, currentClient, { review: review, reviewStatus: review.status });
+        applyHeroReviewStar();
+        showToast(marking ? 'Marked review received.' : 'Review marked not received.', 'success');
+      })
+      .catch(function (err) {
+        showToast(err && err.message ? err.message : 'Could not update the review status.', 'error');
+      })
+      .finally(function () {
+        reviewBusy = false;
+        renderReviewState();
+      });
+  });
 
   function formatDateTime(iso) {
     if (!iso) return '—';
@@ -435,6 +527,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function applyClientIdentity(client) {
     var name = [client.firstName, client.lastName].filter(Boolean).join(' ');
     set('c-name', name || 'Unnamed client');
+    applyHeroReviewStar();
     set('c-subtitle', client.city || (currentCountableJobCount + (currentCountableJobCount === 1 ? ' job on file' : ' jobs on file')));
 
     var callBtn = document.getElementById('c-call-btn');

@@ -205,7 +205,8 @@ document.addEventListener('DOMContentLoaded', function () {
     main.className = 'admin-schedule-card-main';
     main.href = '/admin/booking/?id=' + encodeURIComponent(job.id);
 
-    main.appendChild(el('div', 'admin-card-name', (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    var jobNameEl = main.appendChild(el('div', 'admin-card-name', (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    if (window.ReviewBadge && job.customer) window.ReviewBadge.append(jobNameEl, job.customer.reviewStatus);
 
     var serviceCityParts = [job.serviceLabel || job.serviceType || '—'];
     if (job.serviceAddress && job.serviceAddress.city) serviceCityParts.push(job.serviceAddress.city);
@@ -305,7 +306,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var main = document.createElement('a');
     main.className = 'admin-schedule-card-main';
     main.href = '/admin/estimate/?id=' + encodeURIComponent(estimate.id);
-    main.appendChild(el('div', 'admin-card-name', (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    var estimateNameEl = main.appendChild(el('div', 'admin-card-name', (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    if (window.ReviewBadge && estimate.customer) window.ReviewBadge.append(estimateNameEl, estimate.customer.reviewStatus);
 
     var serviceCityParts = [estimate.serviceLabel || 'Estimate'];
     if (estimate.serviceAddress && estimate.serviceAddress.city) serviceCityParts.push(estimate.serviceAddress.city);

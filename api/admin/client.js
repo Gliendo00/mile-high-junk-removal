@@ -13,6 +13,7 @@ const { getServiceClient } = require("../_lib/supabase-admin");
 const { serviceLabel, timeWindowLabel, effectiveTimeLabel, statusLabel, normalizedStatus } = require("../_lib/booking-format");
 const { normalizePhone, normalizeEmail } = require("../_lib/customer-identity");
 const { effectiveRevenue } = require("../_lib/job-payments-ledger");
+const { fetchReviewStatusMap, fetchClientReviewDetail } = require("../_lib/review-status");
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -97,7 +98,7 @@ module.exports = async (req, res) => {
     const bookingsRes = await supabase
       .from("bookings")
       .select(
-        "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, is_complimentary, service_address, service_city, service_state, service_zip, created_at"
+        "id, service_type, appointment_date, time_window, exact_time, status, estimated_price, estimated_price_max, final_price, is_complimentary, service_address, service_city, service_state, service_zip, created_at, review_request_sent_at"
       )
       .eq("customer_id", id)
       .order("created_at", { ascending: false });
@@ -174,6 +175,10 @@ module.exports = async (req, res) => {
       };
     });
 
+    const requestSentRows = bookingRows.filter((b) => b.review_request_sent_at);
+    const review = await fetchClientReviewDetail(supabase, id, requestSentRows.length > 0);
+    review.requestSentCount = requestSentRows.length;
+
     res.status(200).json({
       ok: true,
       client: {
@@ -193,6 +198,8 @@ module.exports = async (req, res) => {
         archivedReason: customer.archived_reason,
         archivedNote: customer.archived_note,
         archivedBy: customer.archived_by,
+        reviewStatus: review.status,
+        review: review,
       },
       bookings: bookings,
     });
@@ -313,6 +320,8 @@ async function handleList(req, res) {
         });
     }
 
+    const reviewStatusByCustomer = await fetchReviewStatusMap(supabase, customerIds);
+
     const items = clients.map((c) => {
       const jobs = (bookingsByCustomer[c.id] || []).slice().sort(listByCreatedAtDesc);
       return {
@@ -324,6 +333,7 @@ async function handleList(req, res) {
         city: c.city,
         bookingCount: jobs.length,
         lastJobDate: jobs.length ? jobs[0].appointment_date : null,
+        reviewStatus: reviewStatusByCustomer[c.id] || "none",
         archivedAt: c.archived_at,
         archivedReason: c.archived_reason,
       };
@@ -563,6 +573,7 @@ async function handlePatch(req, res, session) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const action = typeof body.action === "string" ? body.action.trim() : "edit";
   if (action === "archive" || action === "restore") return handleArchiveAction(req, res, session, body, action);
+  if (action === "review-received" || action === "review-clear") return handleReviewReceivedAction(req, res, session, body, action);
   if (action === "edit") return handleEditAction(req, res, session, body);
   res.status(400).json({ error: "Invalid action." });
 }
@@ -676,6 +687,70 @@ async function handleEditAction(req, res, session, body) {
   } catch (err) {
     console.error("Admin client edit failed:", err && err.stack ? err.stack : err);
     res.status(500).json({ error: "Could not save changes." });
+  }
+}
+
+// Client review status — "review received" toggle (PATCH action
+// "review-received" / "review-clear"). Needs
+// sql/2026-11-26_client-review-received.sql; until that has been run the
+// update fails and this returns a clear "not set up yet" message instead
+// of a generic 500. The audit-log row is best effort: the review flag is
+// informational, so an audit-insert failure never undoes the toggle.
+async function handleReviewReceivedAction(req, res, session, body, action) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    console.error("Admin client review update failed: SUPABASE_URL/SUPABASE_SECRET_KEY not configured");
+    res.status(500).json({ error: "Admin data is not available right now." });
+    return;
+  }
+
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id || !UUID_RE.test(id)) {
+    res.status(404).json({ error: "Client not found." });
+    return;
+  }
+
+  const marking = action === "review-received";
+  const nowIso = new Date().toISOString();
+
+  try {
+    const { data: updated, error } = await supabase
+      .from("customers")
+      .update(
+        marking
+          ? { review_received_at: nowIso, review_received_by: session.email }
+          : { review_received_at: null, review_received_by: null }
+      )
+      .eq("id", id)
+      .select("id, first_name, last_name, phone, review_received_at, review_received_by")
+      .maybeSingle();
+    if (error) {
+      // 42703 = undefined_column: the migration hasn't been run yet.
+      if (error.code === "42703" || /review_received/.test(error.message || "")) {
+        res.status(503).json({ error: "Review tracking isn't set up in the database yet. Run sql/2026-11-26_client-review-received.sql first." });
+        return;
+      }
+      throw error;
+    }
+    if (!updated) {
+      res.status(404).json({ error: "Client not found." });
+      return;
+    }
+
+    try {
+      await writeCustomerAuditLog(supabase, updated, id, marking ? "review_received" : "review_received_cleared", null, null, session.email);
+    } catch (auditErr) {
+      console.error("Admin client review audit log failed (toggle kept):", auditErr && auditErr.message ? auditErr.message : auditErr);
+    }
+
+    res.status(200).json({
+      ok: true,
+      reviewReceivedAt: updated.review_received_at,
+      reviewReceivedBy: updated.review_received_by,
+    });
+  } catch (err) {
+    console.error("Admin client review update failed:", err && err.stack ? err.stack : err);
+    res.status(500).json({ error: "Could not update the review status." });
   }
 }
 

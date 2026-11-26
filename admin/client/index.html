@@ -65,6 +65,21 @@
       </div>
     </section>
 
+    <!-- 2b. Google review status (admin/client-detail.js renderReviewState) -->
+    <section class="admin-section" id="c-review-section">
+      <h2>Google Review</h2>
+      <div class="admin-client-review-row">
+        <span id="c-review-icon"></span>
+        <span id="c-review-text" class="admin-client-review-text">—</span>
+      </div>
+      <div id="c-review-meta" class="admin-client-review-meta"></div>
+      <div class="admin-review-legend" aria-hidden="true">
+        <span><span class="admin-review-star admin-review-star-requested"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2.5l2.94 5.96 6.56.95-4.75 4.63 1.12 6.54L12 17.5l-5.87 3.08 1.12-6.54L2.5 9.41l6.56-.95L12 2.5z" stroke-width="2" stroke-linejoin="round"/></svg></span> Requested</span>
+        <span><span class="admin-review-star admin-review-star-received"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2.5l2.94 5.96 6.56.95-4.75 4.63 1.12 6.54L12 17.5l-5.87 3.08 1.12-6.54L2.5 9.41l6.56-.95L12 2.5z" stroke-width="2" stroke-linejoin="round"/></svg></span> Received</span>
+      </div>
+      <button type="button" id="c-review-btn" class="admin-btn admin-btn-outline">Mark Review Received</button>
+    </section>
+
     <!-- 3. Job / booking history -->
     <section class="admin-section">
       <h2>Job History</h2>
@@ -90,6 +105,7 @@
 <script src="../nav-badge.js"></script>
 <script src="../phone-format.js"></script>
 <script src="../address-autocomplete.js"></script>
+<script src="../review-badge.js"></script>
 <script src="../client-detail.js"></script>
 </body>
 </html>

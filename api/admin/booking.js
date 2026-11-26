@@ -19,6 +19,7 @@ const { HISTORICAL_FLOOR_ISO } = require("../_lib/historical-floor");
 const rentalPricing = require("../_lib/rental-pricing");
 const { getStripeClient } = require("../_lib/stripe-client");
 const { retryUpdate } = require("../_lib/db-retry");
+const { fetchReviewStatusMap } = require("../_lib/review-status");
 const {
   mirrorStripePaymentToLedger,
   resolveJobPaymentAttribution,
@@ -308,6 +309,8 @@ module.exports = async (req, res) => {
     if (jobPaymentsRes.error) throw jobPaymentsRes.error;
 
     const customer = customerRes.data || null;
+    // Client review star (api/_lib/review-status.js) — fails open, never throws.
+    const reviewStatusByCustomer = booking.customer_id ? await fetchReviewStatusMap(supabase, [booking.customer_id]) : {};
     const dumpster = dumpsterRes.data || null;
     const photoRows = photosRes.data || [];
     const payment = paymentRes.data || null;
@@ -403,6 +406,7 @@ module.exports = async (req, res) => {
             lastName: customer.last_name,
             phone: customer.phone,
             email: customer.email,
+            reviewStatus: reviewStatusByCustomer[booking.customer_id] || "none",
           }
         : null,
       // The booking's own snapshot is primary; a legacy booking created

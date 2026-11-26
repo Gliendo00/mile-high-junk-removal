@@ -152,6 +152,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var name = document.createElement('span');
         name.className = 'admin-picker-item-name';
         name.textContent = [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unnamed client';
+        if (window.ReviewBadge) window.ReviewBadge.append(name, c.reviewStatus);
         a.appendChild(name);
         var metaParts = [];
         if (c.phone) metaParts.push(typeof window.formatPhone === 'function' ? window.formatPhone(c.phone) : c.phone);
@@ -373,7 +374,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // instead of getting squeezed/clipped against the row's action icons.
     var top = el('div', 'admin-home-row-top');
     top.appendChild(el('span', 'admin-home-row-time', job.timeLabel || '—'));
-    top.appendChild(el('span', 'admin-home-row-name', jobDisplayName(job)));
+    var jobNameEl = top.appendChild(el('span', 'admin-home-row-name', jobDisplayName(job)));
+    if (window.ReviewBadge && job.customer) window.ReviewBadge.append(jobNameEl, job.customer.reviewStatus);
     top.appendChild(el('span', 'admin-status-badge admin-status-' + (job.status || 'new'), job.statusLabel || job.status || '—'));
     main.appendChild(top);
 
@@ -438,6 +440,7 @@ document.addEventListener('DOMContentLoaded', function () {
       contextLabel: [item.serviceLabel, item.city].filter(Boolean).join(' · ') || null,
       bucketKey: bucketKey,
       phone: item.phone,
+      reviewStatus: item.reviewStatus,
       createdAt: item.updatedAt,
     };
   }
@@ -447,7 +450,8 @@ document.addEventListener('DOMContentLoaded', function () {
     var main = el('div', 'admin-home-row-main');
 
     var top = el('div', 'admin-home-row-top');
-    top.appendChild(el('span', 'admin-home-row-name', row.name));
+    var rowNameEl = top.appendChild(el('span', 'admin-home-row-name', row.name));
+    if (window.ReviewBadge) window.ReviewBadge.append(rowNameEl, row.reviewStatus);
     top.appendChild(el('span', 'admin-status-badge ' + (BUCKET_CHIP_CLASS[row.bucketKey] || 'admin-lead-bucket-new'), BUCKET_LABELS[row.bucketKey] || ''));
     main.appendChild(top);
 

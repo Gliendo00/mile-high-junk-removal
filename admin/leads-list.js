@@ -234,7 +234,8 @@ document.addEventListener('DOMContentLoaded', function () {
     top.appendChild(el('span', 'admin-status-badge ' + statusChipClass, item.statusLabel || BUCKET_LABELS[bucketKey] || ''));
     main.appendChild(top);
 
-    main.appendChild(el('div', 'admin-card-name', item.name || item.phone || 'Unidentified client'));
+    var nameEl = main.appendChild(el('div', 'admin-card-name', item.name || item.phone || 'Unidentified client'));
+    if (window.ReviewBadge) window.ReviewBadge.append(nameEl, item.reviewStatus);
     main.appendChild(el('div', 'admin-card-service', item.serviceLabel || '—'));
 
     var metaRow = el('div', 'admin-metadata-row');

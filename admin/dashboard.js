@@ -141,7 +141,8 @@ document.addEventListener('DOMContentLoaded', function () {
     top.appendChild(topLeft);
     a.appendChild(top);
 
-    a.appendChild(el('div', 'admin-card-name', (b.customer ? [b.customer.firstName, b.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    var nameEl = a.appendChild(el('div', 'admin-card-name', (b.customer ? [b.customer.firstName, b.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client'));
+    if (window.ReviewBadge && b.customer) window.ReviewBadge.append(nameEl, b.customer.reviewStatus);
 
     var serviceCityParts = [b.serviceLabel || b.serviceType || '—'];
     if (b.serviceCity) serviceCityParts.push(b.serviceCity);

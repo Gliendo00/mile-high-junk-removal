@@ -313,7 +313,8 @@ window.AdminCalendarViews = (function () {
     a.appendChild(top);
 
     var name = (job.customer ? [job.customer.firstName, job.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
-    a.appendChild(el('div', 'admin-daily-job-card-name', name));
+    var jobNameEl = a.appendChild(el('div', 'admin-daily-job-card-name', name));
+    if (window.ReviewBadge && job.customer) window.ReviewBadge.append(jobNameEl, job.customer.reviewStatus);
 
     var metaParts = [job.serviceLabel || job.serviceType || '—'];
     if (job.serviceAddress && job.serviceAddress.city) metaParts.push(job.serviceAddress.city);
@@ -353,7 +354,8 @@ window.AdminCalendarViews = (function () {
     a.appendChild(top);
 
     var name = (estimate.customer ? [estimate.customer.firstName, estimate.customer.lastName].filter(Boolean).join(' ') : '') || 'Unknown client';
-    a.appendChild(el('div', 'admin-daily-job-card-name', name));
+    var estimateNameEl = a.appendChild(el('div', 'admin-daily-job-card-name', name));
+    if (window.ReviewBadge && estimate.customer) window.ReviewBadge.append(estimateNameEl, estimate.customer.reviewStatus);
 
     var metaParts = [estimate.serviceLabel || 'Estimate'];
     if (estimate.serviceAddress && estimate.serviceAddress.city) metaParts.push(estimate.serviceAddress.city);
@@ -579,6 +581,9 @@ window.AdminCalendarViews = (function () {
           var jobRow = el('div', 'admin-week-day-row-job');
           jobRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(job.timeLabel)));
           jobRow.appendChild(el('span', 'admin-week-day-row-job-name', name));
+          // Star sits after (not inside) the name so the name's ellipsis
+          // truncation never clips it.
+          if (window.ReviewBadge && job.customer) window.ReviewBadge.append(jobRow, job.customer.reviewStatus);
           jobsList.appendChild(jobRow);
         });
         if (jobs.length > WEEK_ROW_MAX_JOB_LINES) {
@@ -598,6 +603,7 @@ window.AdminCalendarViews = (function () {
           var estimateRow = el('div', 'admin-week-day-row-job admin-week-day-row-estimate');
           estimateRow.appendChild(el('span', 'admin-week-day-row-job-time', shortTimeLabel(estimate.timeLabel)));
           estimateRow.appendChild(el('span', 'admin-week-day-row-job-name', name));
+          if (window.ReviewBadge && estimate.customer) window.ReviewBadge.append(estimateRow, estimate.customer.reviewStatus);
           estimatesList.appendChild(estimateRow);
         });
         if (estimates.length > WEEK_ROW_MAX_JOB_LINES) {

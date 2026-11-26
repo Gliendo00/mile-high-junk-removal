@@ -81,6 +81,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // job that isn't a dumpster rental (see openStatusSheet() below) — set
   // from the loaded booking's own serviceType in render(), never guessed.
   var currentServiceType = null;
+  var currentCustomerReviewStatus = 'none';
   var savingInFlight = false;
   var toastTimer = null;
   // 2026-09-18-v2 pricing update — this booking's own applicable overweight
@@ -250,6 +251,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var name = customer ? [customer.firstName, customer.lastName].filter(Boolean).join(' ') : '';
     set('d-name', name || 'Unknown client');
+    currentCustomerReviewStatus = (customer && customer.reviewStatus) || 'none';
+    if (window.ReviewBadge && customer) window.ReviewBadge.append(document.getElementById('d-name'), currentCustomerReviewStatus);
 
     var viewClientLink = document.getElementById('d-view-client-link');
     if (customer && booking.customerId) {
@@ -1497,6 +1500,14 @@ document.addEventListener('DOMContentLoaded', function () {
         currentReviewRequestSentAt = body.reviewRequestSentAt || null;
         reviewRequestCheckbox.checked = !!currentReviewRequestSentAt;
         reviewRequestTextEl.textContent = currentReviewRequestSentAt ? 'Sent ' + formatDateTime(currentReviewRequestSentAt) : 'Not sent';
+        // Client star: sending a request upgrades "none" to "requested"
+        // right away. Clearing leaves the star alone (another of this
+        // client's jobs may still have a request sent); a reload shows the
+        // exact state either way.
+        if (checking && currentCustomerReviewStatus === 'none' && window.ReviewBadge) {
+          currentCustomerReviewStatus = 'requested';
+          window.ReviewBadge.append(document.getElementById('d-name'), currentCustomerReviewStatus);
+        }
         showToast(checking ? 'Marked as sent.' : 'Cleared.', 'success');
       })
       .catch(function (err) {

@@ -1018,6 +1018,10 @@ test("write-audit: exactly the known .update( / .insert( / .upsert( / .delete( c
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
       "api/admin/client.js: .update(",
+      // Client review status added exactly one update:
+      // handleReviewReceivedAction() (review_received_at/by only). See
+      // tests/crm-client-review-status.test.js.
+      "api/admin/client.js: .update(",
       // Batch 5 (5B/5C) added the new api/admin/intake.js file — 11 write
       // calls total: handleDiscard()'s and handleRemoveScreenshot()'s row
       // deletes (2), handleCreateSession()'s and handleUploadScreenshot()'s

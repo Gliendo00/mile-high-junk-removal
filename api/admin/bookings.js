@@ -17,6 +17,7 @@ const { INVOICE_SELECT_COLS, mapInvoice, deriveInvoiceStatus } = require("../_li
 const { OTHER_REVENUE_TYPES, otherRevenueTypeLabel } = require("../_lib/other-revenue-types");
 const { complimentaryReasonLabel } = require("../_lib/complimentary-reasons");
 const { DUMP_FEE_CATEGORY, parseDumpWeightLbs, lbsToTons, roundTons, summarizeTonnage } = require("../_lib/dump-tonnage");
+const { fetchReviewStatusMap } = require("../_lib/review-status");
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -478,6 +479,8 @@ module.exports = async (req, res) => {
       });
     }
 
+    const reviewStatusByCustomer = await fetchReviewStatusMap(supabase, customerIds);
+
     const items = bookings.map((b) => {
       const customer = customersById[b.customer_id] || null;
       return {
@@ -499,7 +502,7 @@ module.exports = async (req, res) => {
         // booking created before this snapshot existed (service_city is
         // NULL) falls back to the customer's current city.
         serviceCity: b.service_city || (customer && customer.city) || null,
-        customer: customer ? { firstName: customer.first_name, lastName: customer.last_name } : null,
+        customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, reviewStatus: reviewStatusByCustomer[customer.id] || "none" } : null,
         // Only meaningful on the Archived filter's cards; harmless/unused
         // elsewhere.
         archivedAt: b.archived_at,
@@ -1529,6 +1532,7 @@ async function fetchScheduleEstimates(supabase, startDate, endDate) {
       customersById[c.id] = c;
     });
   }
+  const reviewStatusByCustomer = await fetchReviewStatusMap(supabase, customerIds);
 
   const items = estimates.map((e) => {
     const customer = customersById[e.customer_id] || null;
@@ -1544,7 +1548,7 @@ async function fetchScheduleEstimates(supabase, startDate, endDate) {
       timeLabel: effectiveTimeLabel(e.time_window, e.exact_time),
       quotedAmount: e.quoted_amount,
       sourceLeadId: e.source_lead_id,
-      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
+      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone, reviewStatus: reviewStatusByCustomer[customer.id] || "none" } : null,
       serviceAddress: {
         address: e.service_address || null,
         city: e.service_city || (customer && customer.city) || null,
@@ -1630,6 +1634,8 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
   // invoice-total addition anywhere in this file, so nothing here can ever
   // double-count a payment that's also reflected in an invoice's own
   // balance (computed independently, by invoice_id, in invoice-helpers.js).
+  const reviewStatusByCustomer = await fetchReviewStatusMap(supabase, customerIds);
+
   const completedBookingIds = bookings.filter((b) => normalizedStatus(b.status) === "completed" && b.service_type !== "dumpster_pickup").map((b) => b.id);
   const ledgerRowsByBooking = {};
   if (completedBookingIds.length) {
@@ -1699,7 +1705,7 @@ async function fetchScheduleJobs(supabase, startDate, endDate) {
       complimentaryReason: b.complimentary_reason,
       complimentaryReasonLabel: b.complimentary_reason ? complimentaryReasonLabel(b.complimentary_reason) : null,
       complimentaryNote: b.complimentary_note,
-      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone } : null,
+      customer: customer ? { firstName: customer.first_name, lastName: customer.last_name, phone: customer.phone, reviewStatus: reviewStatusByCustomer[customer.id] || "none" } : null,
       serviceAddress: {
         address: b.service_address || null,
         city: b.service_city || (customer && customer.city) || null,
@@ -2988,6 +2994,8 @@ async function handleLeadsView(req, res, supabase) {
       }
     }
 
+    const reviewStatusByCustomer = await fetchReviewStatusMap(supabase, customerIds);
+
     function bookingCard(b, bucket) {
       const cust = b.customer_id ? customersById[b.customer_id] : null;
       const name = cust ? [cust.first_name, cust.last_name].filter(Boolean).join(" ") : "";
@@ -2996,6 +3004,7 @@ async function handleLeadsView(req, res, supabase) {
         kind: "booking",
         source: "website",
         name: name || null,
+        reviewStatus: (b.customer_id && reviewStatusByCustomer[b.customer_id]) || "none",
         phone: cust ? cust.phone : null,
         serviceType: b.service_type,
         serviceLabel: serviceLabel(b.service_type),
